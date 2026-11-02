@@ -13,7 +13,10 @@ impl Drop for ReleaseGate {
     }
 }
 
-fn ordered_headers(h: &OrderedHarness, binding: &OrderedDispatchBindingV2) -> Result<HeaderMap> {
+pub(super) fn ordered_headers(
+    h: &OrderedHarness,
+    binding: &OrderedDispatchBindingV2,
+) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in [
         ("authorization", format!("Bearer {}", h.token()?)),

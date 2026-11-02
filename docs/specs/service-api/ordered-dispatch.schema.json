@@ -355,7 +355,8 @@
       "required": [
         "schema_version",
         "route",
-        "candidate_indices"
+        "candidate_indices",
+        "admission_mode"
       ],
       "properties": {
         "schema_version": {
@@ -367,6 +368,20 @@
         },
         "candidate_indices": {
           "$ref": "#/$defs/CandidateIndices"
+        },
+        "admission_mode": {
+          "$ref": "#/$defs/AdmissionMode"
+        },
+        "generation_defaults_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -376,7 +391,8 @@
       "required": [
         "route",
         "inbound_protocol",
-        "candidate_indices"
+        "candidate_indices",
+        "admission_mode"
       ],
       "properties": {
         "route": {
@@ -387,6 +403,20 @@
         },
         "candidate_indices": {
           "$ref": "#/$defs/CandidateIndices"
+        },
+        "admission_mode": {
+          "$ref": "#/$defs/AdmissionMode"
+        },
+        "generation_defaults_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -396,7 +426,8 @@
       "required": [
         "candidate_index",
         "target",
-        "credential"
+        "credential",
+        "admission_profile"
       ],
       "properties": {
         "candidate_index": {
@@ -409,6 +440,16 @@
         },
         "credential": {
           "$ref": "#/$defs/CredentialRef"
+        },
+        "admission_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdmissionProfileRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -423,7 +464,9 @@
         "authority_revision",
         "route",
         "inbound_protocol",
-        "candidates"
+        "candidates",
+        "admission_mode",
+        "runtime_observation"
       ],
       "properties": {
         "schema_version": {
@@ -454,9 +497,22 @@
           "items": {
             "$ref": "#/$defs/CandidateDescriptorV1"
           }
+        },
+        "admission_mode": {
+          "$ref": "#/$defs/AdmissionMode"
+        },
+        "runtime_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeObservationV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
-      "$comment": "Maximum encoded size 1 MiB. Runtime validation enforces strictly increasing root ordinals, matching credential revisions and tenant-qualified ownership; pool access requires live service authorization."
+      "$comment": "Maximum encoded size 1 MiB. Runtime validation enforces strictly increasing root ordinals, matching credential revisions and tenant-qualified ownership; pool access requires live service authorization. Runtime validation requires profile presence exactly in profiled mode, matching observation ordinals, and unavailable authority instead of invented zero facts. Validate final serialized bytes after adding observations; producers use UTC whole seconds."
     },
     "OrderedCapabilitiesV2": {
       "type": "object",
@@ -1403,6 +1459,154 @@
         }
       ],
       "$comment": "For A accepted candidates, K=ceil(A/8): encoded bytes <=256*K KiB (maximum 2 MiB), frame bytes <=192*K KiB, 64*K KiB reserved for identities/terminal data, <=512*K frames, <=128 frames per actual attempt and <=32 quantities per frame. Runtime validation enforces byte bounds, unique attempt/quantity identities, sequence, exact receipt/selection/protocol/attempt binding and tenant ownership. Absent quantities remain absent; invalid values are explicit null with invalid=true. No auxiliary executions."
+    },
+    "AdmissionMode": {
+      "type": "string",
+      "enum": [
+        "legacy",
+        "profiled_v1"
+      ]
+    },
+    "AdmissionProfileRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "type": "string",
+          "const": "operator_pool"
+        },
+        "owner_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource_kind": {
+          "type": "string",
+          "const": "policy"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "RateObservationV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member_rpm",
+        "shared_count"
+      ],
+      "properties": {
+        "member_rpm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "shared_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "CandidateObservationV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_index",
+        "current_profile_revision",
+        "rate",
+        "health",
+        "availability"
+      ],
+      "properties": {
+        "candidate_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "current_profile_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateObservationV1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "healthy",
+            "blocked",
+            "probe_ready",
+            "unavailable"
+          ]
+        },
+        "availability": {
+          "type": "string",
+          "enum": [
+            "eligible",
+            "rate_limited",
+            "circuit_blocked",
+            "authority_denied",
+            "capacity_denied"
+          ]
+        },
+        "observed_shared_count": {
+          "description": "Count from an explicit read-only same-owner rate group; absence is unavailable or unconfigured.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "RuntimeObservationV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "observed_at",
+        "candidates"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "candidates": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/CandidateObservationV1"
+          }
+        }
+      }
     }
   }
 }

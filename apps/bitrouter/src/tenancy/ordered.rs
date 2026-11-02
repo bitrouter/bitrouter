@@ -136,7 +136,7 @@ impl Service {
             .resources
             .open_execution(&stored)
             .map_err(|_| self.unavailable())?;
-        let manifest = view
+        let mut manifest = view
             .candidate_manifest(reference, inbound, before.revision)
             .map_err(Failure::from)?;
         let after = self.current()?;
@@ -146,6 +146,8 @@ impl Service {
         if after.revision != before.revision || stored.authority_revision > after.revision {
             return Err(ErrorCode::RevisionConflict.into());
         }
+        self.observe_manifest(&after, &mut manifest)
+            .map_err(Failure::from)?;
         Ok(manifest)
     }
 }

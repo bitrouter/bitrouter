@@ -28,6 +28,7 @@ pub(crate) mod learning;
 mod model;
 mod mutation;
 pub(crate) mod oauth;
+pub(crate) mod operational;
 mod ordered;
 pub(crate) mod origin;
 pub(crate) mod ownership;
@@ -75,7 +76,7 @@ use self::{
 
 /// Current authority store format, shared by live and offline target readers.
 /// Historical migrations keep their own fixed version transitions.
-pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 2;
+pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 3;
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -142,6 +143,9 @@ pub(crate) struct Service {
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     execution_settings: crate::config::tenancy::TenancyConfig,
     routing: Arc<routing::state::Runtime>,
+    operational: Arc<operational::state::Runtime>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    operational_exporter: Arc<std::sync::OnceLock<Arc<crate::telemetry::exporter::OtelExporter>>>,
     pipelines: Arc<execution::lifecycle::Registry>,
     #[cfg(test)]
     dispatch_test_ready: Arc<AtomicBool>,
@@ -518,6 +522,9 @@ impl Service {
             executor,
             execution_settings: config.clone(),
             routing,
+            operational: Arc::default(),
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            operational_exporter: Arc::default(),
             pipelines: execution::lifecycle::Registry::with_capacity(
                 capacity.execution.instance_active,
             ),

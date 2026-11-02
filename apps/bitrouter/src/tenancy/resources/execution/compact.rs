@@ -76,6 +76,7 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
 pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
     let RouteData {
         reference: root,
+        admission,
         assessment,
         block_pricing: _,
         block: _, // Contains no opaque tenancy identifier.
@@ -90,6 +91,12 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
         choice: _, // Already normalized before the hidden child was shared.
     } = value;
     reference(root)?;
+    if let Some(attachments) = admission {
+        for attachment in attachments {
+            reference(&mut attachment.credential)?;
+            reference(&mut attachment.profile)?;
+        }
+    }
     if let Some(assessment) = assessment {
         reference(assessment)?;
     }

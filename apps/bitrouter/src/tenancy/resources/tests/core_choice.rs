@@ -180,3 +180,75 @@ async fn choice_child_cannot_be_exposed_and_minimal_profile_cannot_execute_it() 
     }
     Ok(())
 }
+
+#[cfg(all(feature = "core", feature = "harness"))]
+#[tokio::test]
+async fn mixed_profiled_format_keeps_hidden_choice_projection_and_legacy_root() -> Result<()> {
+    use bitrouter_ai::types::{ApiProtocol, ModelOperation};
+    let (db, _) = fixture().await?;
+    let authority = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
+    let resources = Resources::with_key(authority.installation, rand::random())?;
+    let mut imports = rows()?;
+    let mut profile_ref = reference("pool", ResourceKind::Policy, "operational")?;
+    profile_ref.owner_kind = OwnerKind::OperatorPool;
+    imports.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"fallback":"stop"}}}));
+    let mut profiled = route("tenant", "profiled", "generation")?;
+    profiled["definition"]["kind"] = json!("profiled_route");
+    profiled["definition"]["attachments"] = json!(["chat_completions","messages","responses"].map(|protocol| json!({"inbound_protocol":protocol,"candidate_index":0,"credential":imports[1]["reference"],"profile":profile_ref})));
+    imports.push(profiled);
+    import(&resources, &db, imports).await?;
+    let doc = document(
+        vec![
+            reference("tenant", ResourceKind::Route, "parent")?,
+            reference("tenant", ResourceKind::Route, "profiled")?,
+        ],
+        None,
+    )?;
+    let compiled = compile(&resources, &db, &doc).await?;
+    ensure!(compiled.compiler_version == PROFILED_COMPILER_VERSION);
+    let row = validation::stored(doc, compiled)?;
+    let view = resources
+        .open_execution(&row)
+        .map_err(|code| anyhow::anyhow!("open: {code:?}"))?;
+    let parent = view
+        .select_native("parent", ModelOperation::Generation)
+        .map_err(|code| anyhow::anyhow!("parent: {code:?}"))?;
+    ensure!(matches!(
+        parent.choice_route(),
+        Err(ErrorCode::AuthorityUnavailable)
+    ));
+    let weight = view
+        .retained_heap_bytes()
+        .map_err(|code| anyhow::anyhow!("weight: {code:?}"))?;
+    let cache = crate::tenancy::cache::Cache::new(1, 32 * 1024 * 1024)?;
+    let view = cache.insert(1, view, weight, 0)?;
+    let parent = view
+        .select_native("parent", ModelOperation::Generation)
+        .map_err(|code| anyhow::anyhow!("pinned parent: {code:?}"))?;
+    let child = parent
+        .choice_route()
+        .map_err(|code| anyhow::anyhow!("child: {code:?}"))?;
+    ensure!(child.reference() == &reference("tenant", ResourceKind::Route, "child")?);
+    ensure!(matches!(
+        view.select("child", &ApiProtocol::Decisions),
+        Err(ErrorCode::NotFound)
+    ));
+    let manifest = view
+        .candidate_manifest(
+            &reference("tenant", ResourceKind::Route, "profiled")?,
+            bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
+            1_u64.try_into()?,
+        )
+        .map_err(|code| anyhow::anyhow!("manifest: {code:?}"))?;
+    ensure!(
+        manifest.candidates.len() == 1
+            && manifest.candidates[0].admission_profile.as_ref() == Some(&profile_ref)
+    );
+    // Opening the same retained ciphertext cannot depend on live artifact rows.
+    db.execute_unprepared("DELETE FROM tenancy_resource_revisions")
+        .await?;
+    resources
+        .open_execution(&row)
+        .map_err(|code| anyhow::anyhow!("reopen: {code:?}"))?;
+    Ok(())
+}

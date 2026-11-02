@@ -47,12 +47,14 @@ mod count;
 pub(crate) mod deadline;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod experiment;
+mod generation_defaults;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native;
 mod oauth;
+mod operational;
 mod profile;
 pub(crate) const BLOCK_LINK_HEADER: &str = "bitrouter-capture-link";
 pub(crate) const SELECTION_HEADER: &str = "bitrouter-candidate-selection";
@@ -135,6 +137,7 @@ pub(crate) struct TenantExecution {
     learning: bitrouter_ai::tenancy::configuration::Learning,
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
+    hop: Mutex<Option<Arc<super::operational::Hop>>>,
     entered: AtomicBool,
     #[cfg(feature = "core")]
     observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
@@ -408,7 +411,12 @@ impl Service {
                 if raw_model != selection.route.resource_id.as_str() {
                     return Err(ErrorCode::InvalidRequest);
                 }
-                revision.select_ordered(&selection.route, inbound, &selection.candidate_indices)
+                revision.select_ordered(
+                    &selection.route,
+                    inbound,
+                    &selection.candidate_indices,
+                    selection.admission_mode,
+                )
             } else {
                 revision.select(raw_model, inbound)
             }
@@ -446,7 +454,7 @@ impl Service {
             .await?;
         submission.preparation = super::authority::live::DependencyIntent::Owner;
         self.with_dispatch_view(&submission, |view| {
-            authorize_route(view.facts(), &submission, route.dependencies())?;
+            authorize_effect(view.facts(), &submission, &route)?;
             self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
@@ -530,7 +538,7 @@ impl Service {
         // Waiting for capacity never extends a token/binding lifetime. The
         // exact submitted revision remains pinned even after activation changes.
         self.with_dispatch_view(&submission, |view| {
-            authorize_route(view.facts(), &submission, route.dependencies())?;
+            authorize_effect(view.facts(), &submission, &route)?;
             self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
@@ -570,6 +578,7 @@ impl Service {
             learning,
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
+            hop: Mutex::new(None),
             entered: AtomicBool::new(false),
             #[cfg(feature = "core")]
             observation: std::sync::OnceLock::new(),
@@ -595,7 +604,14 @@ impl Service {
                 revision: execution.submission.binding.execution_revision.clone(),
                 ordered: execution
                     .route
-                    .accepted_selection()
+                    .accepted_selection(
+                        execution
+                            .submission
+                            .binding
+                            .selection
+                            .as_ref()
+                            .and_then(|selection| selection.generation_defaults_digest.as_ref()),
+                    )
                     .map_err(Failure::from)?
                     .map(|selection| (selection, self.execution_settings.ordered_attempt_limit)),
             },
@@ -844,7 +860,7 @@ impl TenantExecution {
                 if let Some(code) = *rejection {
                     return Err(code);
                 }
-                authorize_route(view.facts(), &self.submission, self.route.dependencies())?;
+                authorize_effect(view.facts(), &self.submission, &self.route)?;
                 check(view)
             })
         })
@@ -888,9 +904,12 @@ impl TenantExecution {
         self.revalidate()?;
         let stamp = super::receipts::journal::TargetStamp::for_execution(self, target)
             .map_err(super::receipts::journal_error)?;
-        self.journal()?
+        let mut permit = self
+            .journal()?
             .reserve(stamp)
-            .map_err(super::receipts::journal_error)
+            .map_err(super::receipts::journal_error)?;
+        permit.bind_operational(self.bound_hop(target)?);
+        Ok(permit)
     }
 
     /// The last synchronous current-grant check and arming share one authority lock.
@@ -930,9 +949,19 @@ impl TenantExecution {
             self.block_send(target)?;
             self.validate_oauth_model(view, target, oauth)?;
             self.verify_count_send(target, counted)?;
-            permit
+            let hop = self.bound_hop(target)?;
+            if self.profiled()
+                && let Some(hop) = &hop
+            {
+                hop.consume()?;
+            }
+            let id = permit
                 .arm(authenticated)
-                .map_err(super::receipts::journal_error)
+                .map_err(super::receipts::journal_error)?;
+            if let Some(hop) = hop {
+                hop.armed(id.clone());
+            }
+            Ok(id)
         })
     }
 
@@ -972,6 +1001,53 @@ impl TenantExecution {
             .unwrap_or(DispatchState::Unknown);
         Some(failure)
     }
+}
+
+fn authorize_effect(
+    state: &Snapshot,
+    submission: &Submission,
+    route: &RetainedRoute,
+) -> Result<(), ErrorCode> {
+    use bitrouter_ai::tenancy::admission::AdmissionMode;
+    let mode = route.admission_mode();
+    if state.resource_admission.protected(route.reference()) && mode != AdmissionMode::ProfiledV1 {
+        return Err(ErrorCode::CapabilityMismatch);
+    }
+    authorize_route(state, submission, route.dependencies())?;
+    if mode == AdmissionMode::ProfiledV1 {
+        if !route.is_ordered()
+            || !submission
+                .binding
+                .selection
+                .as_ref()
+                .is_some_and(|selection| {
+                    selection.admission_mode == mode && &selection.route == route.reference()
+                })
+        {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        for pinned in route
+            .dependencies()
+            .iter()
+            .filter(|reference| reference.resource_kind == ResourceKind::Policy)
+        {
+            let revision = state
+                .resource_lifecycle
+                .head(&pinned.key())
+                .ok_or(ErrorCode::Forbidden)?;
+            let mut current = pinned.clone();
+            current.revision_id = revision.clone();
+            if state.resource_admission.profile(pinned).is_none()
+                || state.resource_admission.profile(&current).is_none()
+            {
+                return Err(ErrorCode::Forbidden);
+            }
+            authorize_route(state, submission, std::slice::from_ref(&current))?;
+        }
+        // Runtime admission is consumed separately at the actual arm boundary.
+        // Authority-only reads and queue admission never spend rate capacity.
+    }
+    Ok(())
 }
 
 fn authorize_route(

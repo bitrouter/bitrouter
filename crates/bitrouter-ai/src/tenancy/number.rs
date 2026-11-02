@@ -32,6 +32,29 @@ fn convert<T: TryFrom<u64>>(raw: &str) -> Option<T> {
 }
 
 fn exact_integer(raw: &str) -> Option<u64> {
+    bounded_integer(raw, AuthorityRevision::MAX, 16)
+}
+
+pub(super) fn full_integer<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    bounded_integer(raw.get(), u64::MAX, 20)
+        .ok_or_else(|| D::Error::custom("expected an exact nonnegative u64 integer"))
+}
+
+pub(super) fn signed_integer<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    let (negative, magnitude) = match raw.get().strip_prefix('-') {
+        Some(unsigned) => (true, unsigned),
+        None => (false, raw.get()),
+    };
+    let invalid = || D::Error::custom("expected an exact signed i64 integer");
+    let magnitude = bounded_integer(magnitude, i64::MIN.unsigned_abs(), 19).ok_or_else(invalid)?;
+    // i128 preserves the asymmetric i64 minimum without negating an i64.
+    let value = i128::from(magnitude);
+    i64::try_from(if negative { -value } else { value }).map_err(|_| invalid())
+}
+
+fn bounded_integer(raw: &str, maximum: u64, maximum_digits: i64) -> Option<u64> {
     // JSON Schema integer means a number with zero fractional part, not a
     // particular lexical spelling. Inspect raw tokens, never an f64 that may
     // already have rounded a fractional value into a privileged revision.
@@ -83,7 +106,7 @@ fn exact_integer(raw: &str) -> Option<u64> {
         .checked_add(exponent)?
         .checked_sub(i64::try_from(first).ok()?)?;
     let significant_digits = last - first + 1;
-    if !(1..=16).contains(&integer_digits)
+    if !(1..=maximum_digits).contains(&integer_digits)
         || i64::try_from(significant_digits).ok()? > integer_digits
     {
         return None;
@@ -102,5 +125,5 @@ fn exact_integer(raw: &str) -> Option<u64> {
     for _ in significant_digits..usize::try_from(integer_digits).ok()? {
         value = value.checked_mul(10)?;
     }
-    (value <= AuthorityRevision::MAX).then_some(value)
+    (value <= maximum).then_some(value)
 }

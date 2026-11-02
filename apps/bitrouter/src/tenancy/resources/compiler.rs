@@ -57,18 +57,32 @@ pub(super) struct ApprovedTarget {
 }
 
 pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
-    let Definition::Route {
-        routing,
-        selector,
-        policy: policy_ref,
-        credentials,
-        exploration,
-        core_choice: _,
-        assessment: _,
-        block,
-    } = &import.definition
-    else {
-        anyhow::bail!("route definition required");
+    let (routing, selector, policy_ref, credentials, exploration, block) = match &import.definition
+    {
+        Definition::Route {
+            routing,
+            selector,
+            policy,
+            credentials,
+            exploration,
+            block,
+            ..
+        } => (
+            routing,
+            selector,
+            policy,
+            credentials,
+            exploration.as_slice(),
+            block.as_deref(),
+        ),
+        Definition::ProfiledRoute {
+            routing,
+            selector,
+            policy,
+            credentials,
+            ..
+        } => (routing, selector, policy, credentials, &[][..], None),
+        _ => anyhow::bail!("route definition required"),
     };
     let (mut config, provider_sizes) = routing_config(routing)?;
     let resolution = config
@@ -485,6 +499,14 @@ pub(super) fn configuration_routes(
     document: &Configuration,
     artifacts: &[Artifact],
 ) -> std::result::Result<Vec<RouteEnvelope>, ErrorCode> {
+    configuration_routes_with_operation(document, artifacts, None)
+}
+
+pub(super) fn configuration_routes_with_operation(
+    document: &Configuration,
+    artifacts: &[Artifact],
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> std::result::Result<Vec<RouteEnvelope>, ErrorCode> {
     let mut routes = Vec::new();
     let mut budget = ByteBudget::new(super::MAX_ARTIFACT_BYTES);
     for reference in &document.routes {
@@ -496,9 +518,30 @@ pub(super) fn configuration_routes(
             .envelope
             .as_ref()
             .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let before = budget.remaining();
         budget
             .charge(envelope)
             .map_err(|_| ErrorCode::CapacityExceeded)?;
+        if let Some(operation) = operation {
+            // Covers the cloned projection plus the two inserted default
+            // keys/values; replacement may consume less, never more.
+            let defaults = super::manifest::bounded_bytes(
+                &(
+                    "max_output_tokens",
+                    document.generation_defaults.max_output_tokens,
+                    "temperature",
+                    document.generation_defaults.temperature,
+                ),
+                128,
+            )
+            .map_err(|_| ErrorCode::CapacityExceeded)?;
+            operation
+                .charge(0, before - budget.remaining() + defaults.len())
+                .map_err(|error| match error {
+                    crate::storage::operation_budget::Error::Rejected(code) => code,
+                    _ => ErrorCode::CapacityExceeded,
+                })?;
+        }
         if envelope.reference != *reference {
             return Err(ErrorCode::AuthorityUnavailable);
         }

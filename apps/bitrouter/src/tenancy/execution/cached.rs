@@ -173,6 +173,15 @@ impl Service {
         .map_err(Failure::from)
     }
 
+    #[cfg(test)]
+    pub(in crate::tenancy) async fn warm_retained_execution_for_test(
+        &self,
+        submission: &Submission,
+    ) -> Result<(), Failure> {
+        drop(self.retained_execution(submission).await?);
+        Ok(())
+    }
+
     pub(super) async fn retained_execution(
         &self,
         submission: &Submission,

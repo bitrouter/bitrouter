@@ -104,6 +104,8 @@ impl<'a> Injector for HeaderInjector<'a> {
 /// `context`; the most recent hop's CLIENT span (open across the upstream
 /// call) lives in `hop` when present.
 struct SpanEntry {
+    // GC only needs ownership liveness, not the recursive tenant service graph.
+    execution: Option<std::sync::Weak<dyn Send + Sync>>,
     context: Context,
     created_at: Instant,
     hop: Option<HopState>,
@@ -124,6 +126,7 @@ struct SpanEntry {
 /// response body and is consumed by `on_request_end`.
 struct HopState {
     context: Context,
+    operational: Option<std::sync::Weak<crate::tenancy::operational::Hop>>,
 }
 
 /// OpenTelemetry exporter with multi-tenant attribution.
@@ -388,8 +391,25 @@ impl OtelExporter {
     fn gc_expired_spans(&self) {
         let now = Instant::now();
         let timeout = self.span_timeout;
-        self.active_spans
-            .retain(|_, entry| now.duration_since(entry.created_at) < timeout);
+        self.active_spans.retain(|_, entry| {
+            entry
+                .execution
+                .as_ref()
+                .is_some_and(|owner| owner.strong_count() > 0)
+                || now.duration_since(entry.created_at) < timeout
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_expire_spans(&self) -> anyhow::Result<usize> {
+        let before_timeout = Instant::now()
+            .checked_sub(self.span_timeout + Duration::from_secs(1))
+            .ok_or_else(|| anyhow::anyhow!("span test clock range"))?;
+        for mut entry in self.active_spans.iter_mut() {
+            entry.created_at = before_timeout;
+        }
+        self.gc_expired_spans();
+        Ok(self.active_spans.len())
     }
 }
 
@@ -580,6 +600,10 @@ impl OtelExporter {
         if let Some(prompt) = ctx.generation_prompt() {
             attributes.extend(request_param_attrs(prompt));
         }
+        let execution = ctx.extension::<crate::tenancy::execution::TenantExecution>();
+        if let Some(execution) = &execution {
+            attributes.extend(super::tenant::scope(execution));
+        }
 
         let builder = self
             .tracer
@@ -595,6 +619,10 @@ impl OtelExporter {
         self.active_spans.insert(
             ctx.request_id().to_string(),
             SpanEntry {
+                execution: execution.map(|execution| {
+                    let owner: Arc<dyn Send + Sync> = execution;
+                    Arc::downgrade(&owner)
+                }),
                 context: Context::current_with_span(span),
                 created_at: Instant::now(),
                 hop: None,
@@ -617,6 +645,9 @@ impl OtelExporter {
         };
 
         let span = hop.context.span();
+        if let Some(operational) = hop.operational.as_ref().and_then(std::sync::Weak::upgrade) {
+            super::tenant::finish(&span, &operational);
+        }
         span.set_attribute(KeyValue::new(
             "bitrouter.upstream_duration_ms",
             i64::try_from(duration_ms).unwrap_or(i64::MAX),
@@ -735,7 +766,12 @@ impl ObserveHook for OtelExporter {
             "chat"
         };
         let span_name = format!("{operation} {}", target.service_id);
-        let attrs = build_hop_client_attrs(target);
+        let mut attrs = build_hop_client_attrs(target);
+        let execution = ctx.extension::<crate::tenancy::execution::TenantExecution>();
+        if let Some(execution) = &execution {
+            attrs.extend(super::tenant::scope(execution));
+        }
+        let operational = execution.and_then(|execution| execution.current_hop());
 
         let span = self
             .tracer
@@ -744,6 +780,9 @@ impl ObserveHook for OtelExporter {
             .with_attributes(attrs)
             .start_with_context(&self.tracer, &entry.context);
         let hop_context = entry.context.clone().with_span(span);
+        if let Some(operational) = &operational {
+            super::tenant::ordinal(&hop_context.span(), operational);
+        }
 
         // Inject W3C `traceparent` / `tracestate` into a fresh header map and
         // hand it to the SDK; the executor merges it into the upstream HTTP
@@ -756,6 +795,7 @@ impl ObserveHook for OtelExporter {
 
         let previous_hop = entry.hop.replace(HopState {
             context: hop_context,
+            operational: operational.as_ref().map(Arc::downgrade),
         });
         drop(entry);
 
@@ -764,6 +804,13 @@ impl ObserveHook for OtelExporter {
         // boundary for the previous successful CLIENT span.
         if let Some(previous_hop) = previous_hop {
             let previous_span = previous_hop.context.span();
+            if let Some(operational) = previous_hop
+                .operational
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+            {
+                super::tenant::finish(&previous_span, &operational);
+            }
             previous_span.set_status(Status::Ok);
             previous_span.end();
         }
@@ -799,6 +846,9 @@ impl ObserveHook for OtelExporter {
         // attaching the context + `get_active_span` — same effect, fewer
         // moving parts. `SpanRef`'s mutation methods are `&self`.
         let hop_span = hop.context.span();
+        if let Some(operational) = hop.operational.as_ref().and_then(std::sync::Weak::upgrade) {
+            super::tenant::finish(&hop_span, &operational);
+        }
         match outcome {
             HopOutcome::Generated(result) => {
                 set_hop_client_attrs(&hop_span, result);
@@ -920,6 +970,11 @@ impl ObserveHook for OtelExporter {
         };
 
         let _guard = entry.context.clone().attach();
+        if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
+            && let Some(hop) = execution.current_hop()
+        {
+            super::tenant::ordinal(&entry.context.span(), &hop);
+        }
         // Assistant text / reasoning assembled from streamed deltas (empty for
         // non-streaming requests, whose content is reconstructed in the IR).
         let streamed_output = entry
@@ -938,6 +993,9 @@ impl ObserveHook for OtelExporter {
         // non-standard executor that did not emit the body-terminal callback.
         if let Some(hop) = &entry.hop {
             let hop_span = hop.context.span();
+            if let Some(operational) = hop.operational.as_ref().and_then(std::sync::Weak::upgrade) {
+                super::tenant::finish(&hop_span, &operational);
+            }
             if let Some(result) = &ctx.execution_result {
                 set_hop_client_attrs(&hop_span, result);
             }
@@ -1475,7 +1533,7 @@ fn captured_decision_content_json<T: serde::Serialize + ?Sized>(
 }
 
 #[cfg(test)]
-mod hop_tests {
+pub(crate) mod hop_tests {
     //! Unit tests for the per-hop `ObserveHook` surface added by issue #477.
     //! These drive the trait methods against an in-process span processor
     //! that captures every exported [`SpanData`], so the assertions look at
@@ -1566,8 +1624,15 @@ mod hop_tests {
     /// Bypasses [`OtelExporter::new`] (which insists on an OTLP HTTP
     /// endpoint) by constructing the struct directly — possible here
     /// because the test lives in the same module and sees private fields.
-    fn make_test_exporter() -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {
+    pub(crate) fn make_test_exporter() -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {
         make_test_exporter_with(OtelConfig::default())
+    }
+
+    #[cfg(feature = "otel-http")]
+    pub(crate) fn make_http_test_exporter(config: OtelConfig) -> anyhow::Result<OtelExporter> {
+        // Explicit loopback configuration, without ambient endpoint overrides.
+        OtelExporter::build(config, None, super::ProcessorRuntime::new)
+            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
     fn make_test_exporter_with(config: OtelConfig) -> (OtelExporter, Arc<Mutex<Vec<SpanData>>>) {

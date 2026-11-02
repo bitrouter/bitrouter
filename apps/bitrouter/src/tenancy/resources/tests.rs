@@ -11,7 +11,7 @@ mod core_choice;
 mod execution;
 mod format;
 mod routing;
-mod validation;
+pub(in crate::tenancy::resources) mod validation;
 
 fn reference(owner: &str, kind: ResourceKind, name: &str) -> Result<ResourceRef> {
     Ok(ResourceRef {

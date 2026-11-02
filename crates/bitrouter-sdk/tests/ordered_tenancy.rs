@@ -54,6 +54,8 @@ fn route() -> TestResult<ResourceRef> {
 }
 fn selection(indices: Vec<u16>) -> TestResult<OrderedCandidateSelectionV1> {
     Ok(OrderedCandidateSelectionV1 {
+        generation_defaults_digest: None,
+        admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
         schema_version: 1,
         route: route()?,
         candidate_indices: indices,

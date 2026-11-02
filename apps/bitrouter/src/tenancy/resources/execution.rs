@@ -41,6 +41,30 @@ use crate::{
 use super::{Envelope, compiler};
 use native_v1::NativeChains;
 
+pub(super) fn generation_protocol(
+    inbound: &ApiProtocol,
+) -> Result<bitrouter_ai::tenancy::ordered::GenerationProtocol> {
+    use bitrouter_ai::tenancy::ordered::GenerationProtocol;
+    match inbound {
+        ApiProtocol::ChatCompletions => Ok(GenerationProtocol::ChatCompletions),
+        ApiProtocol::Messages => Ok(GenerationProtocol::Messages),
+        ApiProtocol::Responses => Ok(GenerationProtocol::Responses),
+        _ => anyhow::bail!("unsupported admission protocol"),
+    }
+}
+
+pub(super) fn qualify_profiled_target(value: &Value) -> Result<()> {
+    let (target, _) = target::decode(value.clone())?;
+    anyhow::ensure!(
+        target.model_constraints.input_token_counting.is_none()
+            && target.api_key_override.is_none()
+            && target.api_base_override.is_none()
+            && !target.headers.iter().any(|header| header.passthrough()),
+        "profiled target requires static ordered execution"
+    );
+    Ok(())
+}
+
 /// A validated retained revision. No mutable source or authority handles live here.
 pub(crate) struct RetainedExecutionRevision {
     installation: InstallationId,
@@ -352,6 +376,7 @@ pub(crate) struct RetainedRoute {
 
 struct RouteData {
     reference: ResourceRef,
+    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachmentV1>>,
     assessment: Option<ResourceRef>,
     block: Option<Box<super::block::Profile>>,
     block_pricing: Vec<Option<crate::gateway::pipeline::stream::UsagePricing>>,
@@ -386,6 +411,7 @@ pub(crate) struct ChoiceProfile {
 impl RouteData {
     fn static_assessment(&self) -> std::result::Result<(), ErrorCode> {
         if self.policy.is_some()
+            || self.admission.is_some()
             || self.block.is_some()
             || self.choice.is_some()
             || self.assessment.is_some()
@@ -518,6 +544,14 @@ impl RetainedPolicy {
 }
 
 impl RetainedRoute {
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(crate) fn inbound_protocol(&self) -> Option<&ApiProtocol> {
+        match &self.selection {
+            RouteSelection::Wire(protocol) => Some(protocol),
+            RouteSelection::Native(_) => None,
+        }
+    }
+
     /// Technical metadata for exactly the retained credential-bound target.
     pub(crate) fn routing_metadata(
         &self,

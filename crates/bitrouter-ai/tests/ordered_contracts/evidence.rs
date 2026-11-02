@@ -302,6 +302,7 @@ fn maximum_identities_and_dense_quantities_preserve_all_64_attempts() -> TestRes
     for (index, attempt) in receipt.attempts.iter_mut().enumerate() {
         attempt.attempt_id = format!("{:0>128}", index).try_into()?;
     }
+    receipt.accepted_selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
     let budget = EvidenceBudgetV2::for_attempts(64)?;
     let mut evidence = evidence(&receipt);
     evidence.frames = (0..4096)

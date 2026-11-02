@@ -51,9 +51,17 @@ fn all_ordered_wire_types_export_closed_self_contained_schemas() -> TestResult {
         assert_eq!(schema["additionalProperties"], false, "{name}");
         let properties = schema["properties"].as_object().ok_or("properties")?;
         let required = schema["required"].as_array().ok_or("required")?;
-        assert_eq!(properties.len(), required.len(), "{name}");
+        let optional = usize::from(matches!(
+            name.as_str(),
+            "OrderedCandidateSelectionV1" | "AcceptedSelectionV2"
+        ));
+        assert_eq!(properties.len(), required.len() + optional, "{name}");
         for property in properties.keys() {
-            assert!(required.contains(&json!(property)), "{name}.{property}");
+            assert_eq!(
+                required.contains(&json!(property)),
+                property != "generation_defaults_digest",
+                "{name}.{property}"
+            );
         }
     }
     // Embedding these contracts must work without leaking bundle-relative refs.

@@ -14,6 +14,7 @@
 //! and candidates later filtered by protocol/preferences). These import quotas
 //! do not claim runtime execution or OAuth qualification.
 
+pub(in crate::tenancy) mod admission;
 pub(crate) mod block;
 mod checkpoint;
 mod compiler;
@@ -53,6 +54,7 @@ use crate::{config::tenancy::TenancyConfig, runtime_crypto::DeploymentKey};
 use manifest::{Artifact, Definition, Manifest};
 
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
+const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
 const MAX_CLOSURE_BYTES: usize = 8 * 1024 * 1024;
@@ -95,6 +97,12 @@ impl Envelope {
     fn format(artifacts: &[Artifact]) -> u32 {
         if artifacts
             .iter()
+            .any(|artifact| artifact.definition.is_profiled())
+        {
+            return 4;
+        }
+        if artifacts
+            .iter()
             .any(|artifact| matches!(artifact.definition, Definition::Checkpoint { .. }))
         {
             return 3;
@@ -107,6 +115,41 @@ impl Envelope {
         } else {
             1
         }
+    }
+
+    fn persisted_bytes(&self) -> Result<Vec<u8>> {
+        if self.format != 4 {
+            return manifest::bounded_bytes(self, MAX_ARTIFACT_BYTES);
+        }
+        // The complete artifact retains the sole profiled projection. Visible
+        // profiled routes are reconstructed from it once during authenticated
+        // readback; ordinary and hidden routes retain their existing form.
+        #[derive(Serialize)]
+        struct Compact<'a> {
+            format: u32,
+            document: &'a Configuration,
+            routes: Vec<&'a compiler::RouteEnvelope>,
+            artifacts: &'a [Artifact],
+        }
+        let profiled: HashSet<_> = self
+            .artifacts
+            .iter()
+            .filter(|artifact| matches!(artifact.definition, Definition::ProfiledRoute { .. }))
+            .map(|artifact| &artifact.reference)
+            .collect();
+        manifest::bounded_bytes(
+            &Compact {
+                format: self.format,
+                document: &self.document,
+                routes: self
+                    .routes
+                    .iter()
+                    .filter(|route| !profiled.contains(&route.reference))
+                    .collect(),
+                artifacts: &self.artifacts,
+            },
+            MAX_ARTIFACT_BYTES,
+        )
     }
 
     fn validate_format(&self) -> Result<()> {
@@ -415,12 +458,13 @@ impl Resources {
             );
             resource.validate()?;
         }
+        admission::preflight_import(self, db, &manifest.resources).await?;
         self.preflight_oauth(db, &manifest.resources).await?;
         // Credentials and policy documents precede routes, independent of input order.
         for resource in manifest
             .resources
             .iter()
-            .filter(|r| !matches!(r.definition, Definition::Route { .. }))
+            .filter(|r| !r.definition.is_route())
         {
             storage::retain(
                 self,
@@ -437,7 +481,7 @@ impl Resources {
         for resource in manifest
             .resources
             .iter()
-            .filter(|r| matches!(r.definition, Definition::Route { .. }))
+            .filter(|r| r.definition.is_route())
         {
             let policy = match resource.definition.policy_reference() {
                 Some(reference) => Some(
@@ -467,7 +511,9 @@ impl Resources {
                 .await
                 .map_err(|_| anyhow::anyhow!("imported resource dependency unavailable"))?;
             core_choice::validate_graph(&closure, &[], true)?;
+            admission::validate_graph(&closure)?;
         }
+        admission::initialize_import_heads(self, db, &manifest.resources).await?;
         Ok(())
     }
 
@@ -512,11 +558,16 @@ impl Resources {
             return Err(ErrorCode::Forbidden);
         }
         let routes = compiler::configuration_routes(document, &artifacts)?;
+        let compiler_version = if Envelope::format(&artifacts) == 4 {
+            PROFILED_COMPILER_VERSION
+        } else {
+            COMPILER_VERSION
+        };
         let binding = (
             &self.installation,
             tenant,
             revision,
-            COMPILER_VERSION,
+            compiler_version,
             document,
             &dependencies,
         );
@@ -537,7 +588,8 @@ impl Resources {
                 routes,
                 artifacts,
             };
-            let bytes = manifest::bounded_bytes(&envelope, MAX_ARTIFACT_BYTES)
+            let bytes = envelope
+                .persisted_bytes()
                 .map_err(|_| ErrorCode::CapacityExceeded)?;
             // The same typed projection used by activation/GET must accept the
             // output before the caller can persist it. Consume the envelope
@@ -560,7 +612,7 @@ impl Resources {
         Ok(CompiledConfiguration {
             payload,
             dependencies,
-            compiler_version: COMPILER_VERSION.into(),
+            compiler_version: compiler_version.into(),
         })
     }
 
