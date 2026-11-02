@@ -173,24 +173,17 @@ impl Worker {
             .await
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         let body = async {
-            check().map_err(Failure::from)?;
-            let reply = store
-                .put_owned_in(&tx, &job.subject, &check)
-                .await
-                .map_err(|e| self.eval_error(e))?;
-            check().map_err(Failure::from)?;
-            Ok::<_, Failure>(reply.outcome)
+            check().map_err(OwnedError::Rejected)?;
+            let reply = store.put_owned_in(&tx, &job.subject, &check).await?;
+            check().map_err(OwnedError::Rejected)?;
+            Ok::<_, anyhow::Error>(reply.outcome)
         }
         .await;
         match body {
             Ok(SubjectInsertOutcome::Inserted) => control.commit(tx).await,
             Ok(SubjectInsertOutcome::Duplicate) => control.rollback(tx).await,
             Err(error) => {
-                control
-                    .rollback(tx)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                return Err(error);
+                return Err(self.rollback_observation(control, tx, error).await);
             }
         }
         .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
@@ -201,6 +194,52 @@ impl Worker {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
         Ok(())
+    }
+
+    /// Keep the original cause until the SQL owner acknowledges rollback. A
+    /// statement constraint still fails the observation and closes authority;
+    /// it does not prove that independent receipt storage is unhealthy.
+    pub(super) async fn rollback_observation(
+        &self,
+        control: &Control,
+        tx: sea_orm::DatabaseTransaction,
+        cause: anyhow::Error,
+    ) -> Failure {
+        use crate::storage::operation_budget::Error as BudgetError;
+        use crate::tenancy::storage::sqlite_statement_refusal;
+
+        let rejection = match cause.downcast_ref::<OwnedError>() {
+            Some(OwnedError::Rejected(code)) => Some(*code),
+            _ => match cause.downcast_ref::<BudgetError>() {
+                Some(BudgetError::Rejected(code)) => Some(*code),
+                Some(BudgetError::Capacity) => Some(ErrorCode::CapacityExceeded),
+                Some(BudgetError::Unavailable) => {
+                    self.proof.fenced();
+                    Some(ErrorCode::AuthorityUnavailable)
+                }
+                None => None,
+            },
+        };
+        if rejection.is_none() {
+            self.proof.fenced();
+            if !sqlite_statement_refusal(&cause) {
+                control.storage_failed();
+            }
+        }
+        if control.rollback(tx).await.is_err()
+            || self.proof.disposition() != Disposition::RolledBack
+        {
+            return self.unavailable(ErrorCode::StorageUnavailable);
+        }
+        if let Some(code) = rejection {
+            return code.into();
+        }
+        // Reinspect the retained typed cause only after the actual cleanup ACK.
+        if sqlite_statement_refusal(&cause) {
+            self.unavailable(ErrorCode::AuthorityUnavailable)
+        } else {
+            self.unavailable(ErrorCode::StorageUnavailable)
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 //! The private completion proof distinguishes early failure from lost evidence.
 mod closure;
+mod storage;
 
 use super::*;
 use crate::gateway::{
@@ -162,6 +163,20 @@ async fn rolled_back_required_observation_is_retained_as_failed_without_retry() 
             app.execute_native_controlled_with_headers(prompt(), CallerContext::local(), headers, request_control).await
         }));
         tokio::time::timeout(TIMEOUT, gate.entered.notified()).await.context("required observation did not reach rollback")?;
+        ensure!(fixture.service.current().is_err());
+        ensure!(fixture.service.cleanup.disposition() == crate::tenancy::transaction::Disposition::Pending);
+        #[cfg(unix)]
+        {
+            let (reserved, _, fenced) = fixture.service.admission.receipt_capacity_for_test()
+                .map_err(|error| anyhow::anyhow!("observation capacity: {error:?}"))?;
+            ensure!(reserved > 0 && !fenced);
+        }
+        #[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+        {
+            let held = fixture.service.storage_budget().calibration_observation(None)
+                .map_err(|error| anyhow::anyhow!("observation reservation: {error:?}"))?;
+            ensure!(held.physical_write_reserved > 0);
+        }
         let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
         fixture.service.cleanup.release_gate();
         ensure!(tokio::time::timeout(TIMEOUT, request).await??.is_err());

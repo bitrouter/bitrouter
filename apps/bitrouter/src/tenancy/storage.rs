@@ -219,3 +219,34 @@ pub(crate) fn storage_health_error(error: &anyhow::Error) -> bool {
             .is_some_and(|code| matches!(code & 0xff, 8 | 10 | 11 | 13 | 14 | 26))
     })
 }
+
+/// Positive evidence of a SQLite statement refusal, not an exemption for every
+/// non-health error. Logical integrity failures remain conservative even when
+/// their source happens to contain a constraint code.
+#[cfg(feature = "core")]
+pub(crate) fn sqlite_statement_refusal(error: &anyhow::Error) -> bool {
+    use crate::core::eval::store::OwnedError;
+    use sea_orm::sqlx::{Error, error::DatabaseError, sqlite::SqliteError};
+
+    if storage_health_error(error)
+        || error.chain().any(|cause| {
+            matches!(
+                cause.downcast_ref::<OwnedError>(),
+                Some(OwnedError::Integrity(_))
+            )
+        })
+    {
+        return false;
+    }
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<Error>()
+            .and_then(Error::as_database_error)
+            .and_then(|error| error.try_downcast_ref::<SqliteError>())
+            .or_else(|| cause.downcast_ref::<SqliteError>())
+            .and_then(|error| error.code())
+            .and_then(|code| code.parse::<i32>().ok())
+            // CONSTRAINT, including extended trigger/unique/check codes.
+            .is_some_and(|code| code & 0xff == 19)
+    })
+}

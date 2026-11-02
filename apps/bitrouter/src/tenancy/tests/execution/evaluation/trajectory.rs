@@ -230,10 +230,39 @@ async fn failed_atomic_publication_rolls_back_every_terminal_stage_and_retains_c
             .hold_for(Phase::RollingBack, JobTarget::TrajectoryTerminal);
         let _release = ReleaseGate(fixture.service.clone());
         let rollback = async {
-            let entered = tokio::time::timeout(TIMEOUT, gate.entered.notified()).await;
+            let held: Result<()> = async {
+                tokio::time::timeout(TIMEOUT, gate.entered.notified())
+                    .await
+                    .context("trajectory terminal did not reach rollback")?;
+                ensure!(fixture.service.current().is_err());
+                ensure!(
+                    fixture.service.cleanup.disposition()
+                        == crate::tenancy::transaction::Disposition::Pending
+                );
+                #[cfg(unix)]
+                {
+                    let (reserved, _, fenced) = fixture
+                        .service
+                        .admission
+                        .receipt_capacity_for_test()
+                        .map_err(|error| anyhow::anyhow!("trajectory capacity: {error:?}"))?;
+                    ensure!(reserved > 0 && !fenced);
+                }
+                #[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+                {
+                    let held = fixture
+                        .service
+                        .storage_budget()
+                        .calibration_observation(None)
+                        .map_err(|error| anyhow::anyhow!("trajectory reservation: {error:?}"))?;
+                    ensure!(held.physical_write_reserved > 0);
+                }
+                Ok(())
+            }
+            .await;
             let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
             fixture.service.cleanup.release_gate();
-            entered.context("trajectory terminal did not reach rollback")?;
+            held?;
             Ok::<_, anyhow::Error>(rollback_count)
         };
         // Transport may already have produced output. Required custody, not an

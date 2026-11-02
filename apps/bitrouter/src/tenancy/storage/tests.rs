@@ -16,6 +16,61 @@ fn fixture() -> (Arc<Admission>, Arc<AtomicBool>, Arc<Proof>, Budget) {
     (admission, live, proof, budget)
 }
 
+#[cfg(feature = "core")]
+#[tokio::test]
+async fn statement_refusal_requires_typed_constraint_without_integrity_or_health_failure()
+-> Result<()> {
+    use crate::core::eval::store::OwnedError;
+    use anyhow::Context;
+
+    let db = crate::db::connect("sqlite::memory:").await?;
+    db.execute_unprepared("CREATE TABLE observation_refusal (value INTEGER NOT NULL)")
+        .await?;
+    db.execute_unprepared("CREATE TRIGGER refuse_observation BEFORE INSERT ON observation_refusal BEGIN SELECT RAISE(ABORT, 'fixture FULL IOERR refusal'); END")
+        .await?;
+    for integrity in [false, true] {
+        let error: anyhow::Error = db
+            .execute_unprepared("INSERT INTO observation_refusal VALUES (1)")
+            .await
+            .err()
+            .context("trigger did not refuse actual INSERT")?
+            .into();
+        ensure!(sqlite_statement_refusal(&error));
+        ensure!(!storage_health_error(&error));
+        let error: anyhow::Error = if integrity {
+            OwnedError::Integrity(error)
+        } else {
+            OwnedError::Storage(error)
+        }
+        .into();
+        ensure!(sqlite_statement_refusal(&error.context("owned publication")) != integrity);
+    }
+    db.execute_unprepared("DROP TRIGGER refuse_observation")
+        .await?;
+    db.execute_unprepared("PRAGMA query_only=ON").await?;
+    let error: anyhow::Error = db
+        .execute_unprepared("INSERT INTO observation_refusal VALUES (1)")
+        .await
+        .err()
+        .context("query-only connection accepted an actual INSERT")?
+        .into();
+    let error = anyhow::Error::from(OwnedError::Storage(error)).context("owned publication");
+    ensure!(storage_health_error(&error) && !sqlite_statement_refusal(&error));
+    ensure!(!sqlite_statement_refusal(&anyhow::anyhow!(
+        "SQLite constraint failed (code: 1811)"
+    )));
+    let unrecognized: anyhow::Error = db
+        .execute_unprepared("SELECT missing_column FROM observation_refusal")
+        .await
+        .err()
+        .context("invalid column unexpectedly succeeded")?
+        .into();
+    ensure!(!storage_health_error(&unrecognized));
+    ensure!(!sqlite_statement_refusal(&unrecognized));
+    db.close().await?;
+    Ok(())
+}
+
 #[test]
 fn shared_estimate_checks_only_representational_overflow() -> Result<()> {
     ensure!(estimate(0) == Ok(BASE_BYTES));
