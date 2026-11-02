@@ -18,6 +18,15 @@ pub const KIND: &str = "openrouter_models";
 /// Identity evidence and provider listing both require this complete URL.
 pub const URL: &str = "https://openrouter.ai/api/v1/models?output_modalities=all";
 
+/// Identify the unsupported batch catalog variant without rewriting its ID.
+///
+/// This is OpenRouter's exact colon-delimited variant, not a substring or a
+/// convention inferred for another provider's native model IDs.
+/// <https://openrouter.ai/docs/guides/routing/model-variants/overview>
+pub fn is_batch_variant(id: &str) -> bool {
+    id.split(':').skip(1).any(|variant| variant == "batch")
+}
+
 /// Validate the strict full-list completeness contract and exact unique IDs.
 ///
 /// # Errors
@@ -112,8 +121,8 @@ fn generic_feed(feed: &Value) -> Value {
     value
 }
 
-/// Normalize only documented interfaces. Non-text model types retain empty
-/// interfaces pending their separately registered endpoint/codec contracts.
+/// Normalize only explicitly advertised interfaces, excluding batch variants.
+/// Other model types retain inventory pending registered endpoint/codec support.
 ///
 /// # Errors
 /// Invalid full-list or known metadata rejects the complete observation.
@@ -121,10 +130,19 @@ pub fn observation(feed: &Value, snapshot: &Value) -> Result<Observation, Regist
     validate(feed)?;
     identities(snapshot)?;
     let mut rows = Vec::new();
+    let mut retract_interfaces = BTreeSet::new();
     for row in snapshot["data"]
         .as_array()
         .ok_or_else(|| invalid("Missing list"))?
     {
+        let id = row["id"]
+            .as_str()
+            .ok_or_else(|| invalid("Missing model ID"))?;
+        // The full identity response stays intact; this is an importer scope
+        // restriction, not an identity rewrite or an upstream withdrawal.
+        if is_batch_variant(id) {
+            continue;
+        }
         let mut model =
             json!({"provider_model_id":row["id"],"canonical_id":row["id"],"interfaces":[]});
         for key in ["name", "description"] {
@@ -137,6 +155,20 @@ pub fn observation(feed: &Value, snapshot: &Value) -> Result<Observation, Regist
         }
         let input = modalities(row.pointer("/architecture/input_modalities"))?;
         let output = modalities(row.pointer("/architecture/output_modalities"))?;
+        let endpoints = modalities(row.get("endpoints"))?;
+        let chat_endpoint = endpoints
+            .as_ref()
+            .map(|paths| paths.iter().any(|p| p == "/api/v1/chat/completions"));
+        if chat_endpoint == Some(false)
+            || input
+                .as_ref()
+                .is_some_and(|values| !values.iter().any(|v| v == "text"))
+            || output
+                .as_ref()
+                .is_some_and(|values| values.iter().map(String::as_str).ne(["text"]))
+        {
+            retract_interfaces.insert(id);
+        }
         if input.is_some() && output.is_some() {
             model["model_types"] = json!([]);
         }
@@ -144,6 +176,13 @@ pub fn observation(feed: &Value, snapshot: &Value) -> Result<Observation, Regist
             && output == ["text"]
             && input.iter().any(|s| s == "text")
         {
+            model["model_types"] = json!(["language"]);
+            // Modalities describe data, not the endpoint that accepts requests.
+            // https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties
+            if chat_endpoint != Some(true) {
+                rows.push(model);
+                continue;
+            }
             let mut interface = json!({"protocol":"chat_completions","operation":"generation","input_modalities":input,"output_modalities":output});
             if let Some(parameters) = row.get("supported_parameters").filter(|v| !v.is_null()) {
                 let mut capabilities = Vec::new();
@@ -167,17 +206,18 @@ pub fn observation(feed: &Value, snapshot: &Value) -> Result<Observation, Regist
                 }
                 interface["limits"] = json!({"context_window":limit});
             }
-            model["model_types"] = json!(["language"]);
             model["interfaces"] = json!([interface]);
         }
         rows.push(model);
     }
     let mut observation = normalize(&generic_feed(feed), &[json!({"data":rows})])?;
     for model in &mut observation.models {
-        // A known unsupported output explicitly withdraws owned interfaces.
-        // Missing architecture remains unobserved; nonempty interfaces merge
-        // sparsely so manually verified sibling protocols are protected.
-        if model.value.get("model_types").is_none()
+        // Known unsupported output/endpoints retract only owned interfaces.
+        // Missing evidence is unobserved; nonempty interfaces merge sparsely
+        // so manually verified sibling protocols remain protected.
+        if model.value["provider_model_id"]
+            .as_str()
+            .is_none_or(|id| !retract_interfaces.contains(id))
             || model.value["interfaces"]
                 .as_array()
                 .is_some_and(|v| !v.is_empty())

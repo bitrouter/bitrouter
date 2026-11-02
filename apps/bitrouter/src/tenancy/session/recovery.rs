@@ -200,9 +200,10 @@ impl CheckedRecovery {
     }
 }
 
-// Before Choice, the isolated static pipeline acknowledges Entry, the inactive
-// HTTP continuation hook and retained selector lookup. No other callback or
-// unfinished preparation belongs to this cancellation-only recovery profile.
+// Before Choice, the isolated static pipeline acknowledges Entry, request-local
+// routing custody, the inactive HTTP continuation hook and retained selector
+// lookup. Older journals precede the routing hook. Accept only these two exact
+// prefixes; no other callback or unfinished work belongs to this recovery profile.
 fn stopped_preparation(
     records: &[crate::storage::checkpoint::snapshot::PreparationWorkRecord],
     parents: &[bitrouter_ai::tenancy::identity::ExecutionId],
@@ -213,26 +214,25 @@ fn stopped_preparation(
     if records.is_empty() {
         return true;
     }
-    let expected = [
-        NativePreparationWorkKind::PreResolutionHook,
-        NativePreparationWorkKind::PreResolutionHook,
-        NativePreparationWorkKind::RouterLookup,
-    ];
+    if !matches!(records.len(), 3 | 4) {
+        return false;
+    }
     let request = &records[0].work.request_id;
-    records.len() == expected.len()
-        && parents.iter().any(|parent| parent.as_str() == request)
-        && records
-            .iter()
-            .zip(expected)
-            .enumerate()
-            .all(|(index, (record, kind))| {
-                record.work.kind == kind
-                    && record.work.work_index == index as u32
-                    && &record.work.request_id == request
-                    && record.report.as_ref().is_some_and(|report| {
-                        report.work == record.work && report.error_code.is_none()
-                    })
-            })
+    parents.iter().any(|parent| parent.as_str() == request)
+        && records.iter().enumerate().all(|(index, record)| {
+            let kind = if index + 1 == records.len() {
+                NativePreparationWorkKind::RouterLookup
+            } else {
+                NativePreparationWorkKind::PreResolutionHook
+            };
+            record.work.kind == kind
+                && record.work.work_index == index as u32
+                && &record.work.request_id == request
+                && record
+                    .report
+                    .as_ref()
+                    .is_some_and(|report| report.work == record.work && report.error_code.is_none())
+        })
 }
 
 mod participant;
@@ -241,20 +241,16 @@ mod participant;
 mod tests {
     use super::*;
 
-    #[test]
-    fn stopped_preparation_requires_the_complete_builtin_lookup_ack() -> Result<()> {
+    fn preparation_records(
+        parent: &bitrouter_ai::tenancy::identity::ExecutionId,
+        hooks: usize,
+    ) -> Vec<crate::storage::checkpoint::snapshot::PreparationWorkRecord> {
         use crate::gateway::pipeline::native_preparation::{
             NativePreparationWork, NativePreparationWorkKind, NativePreparationWorkReport,
         };
         use crate::storage::checkpoint::snapshot::PreparationWorkRecord;
-        let parent: bitrouter_ai::tenancy::identity::ExecutionId = "parent-1".try_into()?;
-        let kinds = [
-            NativePreparationWorkKind::PreResolutionHook,
-            NativePreparationWorkKind::PreResolutionHook,
-            NativePreparationWorkKind::RouterLookup,
-        ];
-        let records: Vec<_> = kinds
-            .into_iter()
+        std::iter::repeat_n(NativePreparationWorkKind::PreResolutionHook, hooks)
+            .chain(std::iter::once(NativePreparationWorkKind::RouterLookup))
             .enumerate()
             .map(|(index, kind)| {
                 let work = NativePreparationWork {
@@ -271,71 +267,91 @@ mod tests {
                     }),
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn stopped_preparation_requires_the_complete_builtin_lookup_ack() -> Result<()> {
+        use crate::gateway::pipeline::native_preparation::NativePreparationWorkKind;
+        let parent: bitrouter_ai::tenancy::identity::ExecutionId = "parent-1".try_into()?;
         let parents = std::slice::from_ref(&parent);
         assert!(stopped_preparation(&[], parents));
-        assert!(stopped_preparation(&records, parents));
-        assert!(!stopped_preparation(&records, &[]));
-        assert!(!stopped_preparation(&records[..2], parents));
-        assert!(!stopped_preparation(&records[2..], parents));
-        let mut extra = records.clone();
-        extra.push(records[2].clone());
-        assert!(!stopped_preparation(&extra, parents));
-        for case in [
-            "pending", "error", "identity", "index", "callback", "foreign", "mixed", "order",
-        ] {
-            let mut changed = records.clone();
-            match case {
-                "pending" => changed[1].report = None,
-                "error" => {
-                    changed[1]
-                        .report
-                        .as_mut()
-                        .ok_or_else(|| anyhow::anyhow!("report"))?
-                        .error_code = Some("rejected".into())
-                }
-                "identity" => {
-                    changed[1]
-                        .report
-                        .as_mut()
-                        .ok_or_else(|| anyhow::anyhow!("report"))?
-                        .work
-                        .request_id = "another-request".into()
-                }
-                "index" => {
-                    changed[1].work.work_index = 0;
-                    changed[1]
-                        .report
-                        .as_mut()
-                        .ok_or_else(|| anyhow::anyhow!("report"))?
-                        .work
-                        .work_index = 0;
-                }
-                "callback" => {
-                    changed[1].work.kind = NativePreparationWorkKind::RequestCheck;
-                    changed[1]
-                        .report
-                        .as_mut()
-                        .ok_or_else(|| anyhow::anyhow!("report"))?
-                        .work
-                        .kind = NativePreparationWorkKind::RequestCheck;
-                }
-                "foreign" | "mixed" => {
-                    for (index, record) in changed.iter_mut().enumerate() {
-                        if case == "foreign" || index == 1 {
-                            record.work.request_id = "foreign-parent".into();
-                            record
-                                .report
-                                .as_mut()
-                                .ok_or_else(|| anyhow::anyhow!("report"))?
-                                .work = record.work.clone();
+        for hooks in [0, 1, 4] {
+            assert!(!stopped_preparation(
+                &preparation_records(&parent, hooks),
+                parents
+            ));
+        }
+        for hooks in [2, 3] {
+            let records = preparation_records(&parent, hooks);
+            assert!(stopped_preparation(&records, parents));
+            assert!(!stopped_preparation(&records, &[]));
+            assert!(!stopped_preparation(&records[..2], parents));
+            assert!(!stopped_preparation(&records[2..], parents));
+            let mut extra = records.clone();
+            extra.push(records[2].clone());
+            assert!(!stopped_preparation(&extra, parents));
+            for index in 0..records.len() {
+                let mut pending = records.clone();
+                pending[index].report = None;
+                assert!(!stopped_preparation(&pending, parents));
+            }
+            for case in [
+                "pending", "error", "identity", "index", "callback", "foreign", "mixed", "order",
+            ] {
+                let mut changed = records.clone();
+                match case {
+                    "pending" => changed[1].report = None,
+                    "error" => {
+                        changed[1]
+                            .report
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("report"))?
+                            .error_code = Some("rejected".into())
+                    }
+                    "identity" => {
+                        changed[1]
+                            .report
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("report"))?
+                            .work
+                            .request_id = "another-request".into()
+                    }
+                    "index" => {
+                        changed[1].work.work_index = 0;
+                        changed[1]
+                            .report
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("report"))?
+                            .work
+                            .work_index = 0;
+                    }
+                    "callback" => {
+                        changed[1].work.kind = NativePreparationWorkKind::RequestCheck;
+                        changed[1]
+                            .report
+                            .as_mut()
+                            .ok_or_else(|| anyhow::anyhow!("report"))?
+                            .work
+                            .kind = NativePreparationWorkKind::RequestCheck;
+                    }
+                    "foreign" | "mixed" => {
+                        for (index, record) in changed.iter_mut().enumerate() {
+                            if case == "foreign" || index == 1 {
+                                record.work.request_id = "foreign-parent".into();
+                                record
+                                    .report
+                                    .as_mut()
+                                    .ok_or_else(|| anyhow::anyhow!("report"))?
+                                    .work = record.work.clone();
+                            }
                         }
                     }
+                    "order" => changed.swap(0, 2),
+                    _ => anyhow::bail!("unknown test case"),
                 }
-                "order" => changed.swap(0, 2),
-                _ => anyhow::bail!("unknown test case"),
+                assert!(!stopped_preparation(&changed, parents), "{case}");
             }
-            assert!(!stopped_preparation(&changed, parents), "{case}");
         }
         Ok(())
     }

@@ -495,16 +495,56 @@ async fn repair_held(
     let readback = async {
         if rollback || unknown {
             ensure!(terminals(&reader).await?.is_empty() && payload(&reader).await? == before);
+            let row = reader.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+                "SELECT (SELECT COUNT(*) FROM tenancy_usage_evidence) + (SELECT COUNT(*) FROM tenancy_receipt_auxiliary) AS sidecars"))
+                .await?.context("uncommitted repair sidecars")?;
+            ensure!(row.try_get::<i64>("", "sidecars")? == 0, "uncommitted repair leaked evidence sidecars");
             Ok::<u64, anyhow::Error>(0)
         } else {
             let rows = terminals(&reader).await?;
             ensure!(rows.len() == 2);
             let row = reader.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-                "SELECT COALESCE(SUM(byte_count),0) AS bytes,COUNT(*) AS rows FROM tenancy_execution_receipts"))
+                r#"WITH retained AS (
+                    SELECT 'receipt' AS kind, byte_count,
+                        length(CAST(receipt_json AS BLOB)) + length(CAST(disposition_json AS BLOB)) AS encoded_bytes
+                    FROM tenancy_execution_receipts
+                    UNION ALL
+                    SELECT 'usage', byte_count, length(CAST(evidence_json AS BLOB)) FROM tenancy_usage_evidence
+                    UNION ALL
+                    SELECT 'auxiliary', length(CAST(evidence_json AS BLOB)), length(CAST(evidence_json AS BLOB)) FROM tenancy_receipt_auxiliary
+                ) SELECT COUNT(*) AS rows, COALESCE(SUM(encoded_bytes),0) AS bytes,
+                    COALESCE(SUM(byte_count != encoded_bytes),0) AS mismatched_bytes,
+                    COALESCE(SUM(kind = 'receipt'),0) AS receipt_rows,
+                    COALESCE(SUM(kind = 'usage'),0) AS usage_rows,
+                    COALESCE(SUM(kind = 'auxiliary'),0) AS auxiliary_rows,
+                    (SELECT COUNT(*) FROM tenancy_oauth_slots) AS oauth_slots,
+                    (SELECT COUNT(*) FROM tenancy_usage_evidence u
+                        JOIN tenancy_execution_receipts r USING (installation_id, tenant_id, execution_id)
+                        WHERE u.receipt_digest = r.content_digest
+                            AND u.evidence_digest = json_extract(r.disposition_json,'$.usage_evidence_digest')
+                            AND json_extract(u.evidence_json,'$.capture') = 'unavailable'
+                            AND json_extract(u.evidence_json,'$.attempts') = '[]'
+                            AND json_extract(u.evidence_json,'$.frames') = '[]'
+                            AND json_extract(r.receipt_json,'$.state') = 'unknown'
+                            AND json_extract(r.receipt_json,'$.outcome') = 'unknown') AS unavailable_rows
+                FROM retained"#.to_owned()))
                 .await?.context("actual durable repair bytes")?;
             let bytes = u64::try_from(row.try_get::<i64>("", "bytes")?)?;
             let rows = u64::try_from(row.try_get::<i64>("", "rows")?)?;
-            ensure!(bytes + rows * 16 * 1024 == charge, "reserved charge disagrees with actual committed rows");
+            let receipt_rows = row.try_get::<i64>("", "receipt_rows")?;
+            let usage_rows = row.try_get::<i64>("", "usage_rows")?;
+            let auxiliary_rows = row.try_get::<i64>("", "auxiliary_rows")?;
+            // Current stopped-choice seeds require explicit unavailable capture,
+            // distinct from the unversioned paid-learning recovery contract.
+            ensure!(receipt_rows == 2 && usage_rows == 2 && row.try_get::<i64>("", "unavailable_rows")? == 2,
+                "both current repair terminals require bound unavailable usage evidence");
+            ensure!(row.try_get::<i64>("", "mismatched_bytes")? == 0, "stored byte count differs from encoded bytes");
+            ensure!(row.try_get::<i64>("", "oauth_slots")? == 0, "unexpected OAuth accounting in static fixture");
+            let expected = rows.checked_mul(16 * 1024)
+                .and_then(|overhead| bytes.checked_add(overhead))
+                .context("repair receipt and sidecar accounting overflow")?;
+            ensure!(expected == charge,
+                "reserved charge disagrees with committed storage: reserved={charge}, expected={expected}, rows={rows}, receipt_rows={receipt_rows}, usage_rows={usage_rows}, auxiliary_rows={auxiliary_rows}, encoded_bytes={bytes}");
             Ok(charge)
         }
     }.await;
@@ -523,7 +563,7 @@ async fn repair_held(
     ] {
         ensure!(
             points.get(&format!("current:{field}")) == Some(&value),
-            "settled repair field {field}"
+            "settled repair field {field}: actual={points:?}, expected={value}, accounted={accounted}, reserved_charge={charge}"
         );
     }
     ensure!(

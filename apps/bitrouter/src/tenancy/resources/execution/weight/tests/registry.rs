@@ -56,6 +56,7 @@ fn cost_for_receipt(rates: [f64; 2]) -> TestResult<Option<u64>> {
     let mut data = route("chosen", "short")?;
     let candidate = data.candidates.first().context("candidate")?;
     let mut second = Candidate {
+        routing: Default::default(),
         target: candidate.target.clone(),
         projection: candidate.projection.clone(),
         credential: candidate.credential.clone(),

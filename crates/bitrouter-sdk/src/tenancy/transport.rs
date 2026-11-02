@@ -124,6 +124,15 @@ impl TenancyClient {
         &self,
         request: RequestBuilder,
     ) -> Result<T> {
+        self.send_bounded(request, self.options.max_response_bytes)
+            .await
+    }
+
+    pub(super) async fn send_bounded<T: DeserializeOwned + Validate>(
+        &self,
+        request: RequestBuilder,
+        contract_limit: usize,
+    ) -> Result<T> {
         let response = request.send().await.map_err(Error::transport)?;
         let status = response.status().as_u16();
         let headers = response.headers().clone();
@@ -147,9 +156,12 @@ impl TenancyClient {
                 Some(Error::Response("tenancy response must be unencoded JSON")),
             ));
         }
-        let bytes = crate::transport::body(response, self.options.max_response_bytes)
-            .await
-            .map_err(|error| failure(None, Some(error)))?;
+        let bytes = crate::transport::body(
+            response,
+            contract_limit.min(self.options.max_response_bytes),
+        )
+        .await
+        .map_err(|error| failure(None, Some(error)))?;
         if !(200..300).contains(&status) {
             let result: Result<TenancyError> = decode(&bytes);
             return match result {

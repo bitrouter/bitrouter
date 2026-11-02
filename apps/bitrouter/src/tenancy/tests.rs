@@ -21,6 +21,7 @@ mod http;
 mod learning_startup;
 #[cfg(not(feature = "core"))]
 mod no_core;
+mod resources;
 
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]

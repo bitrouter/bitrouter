@@ -1,0 +1,41 @@
+name: Verify the gRPC-only telemetry transport
+description: Exercise the transport excluded by HTTP-preferred all-feature builds.
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Build and require the gRPC delivery contract
+      shell: bash
+      run: |
+        mkdir -p ci-evidence/grpc
+        /usr/bin/time -v -o ci-evidence/grpc/build-resources.txt \
+          cargo nextest list --locked -p bitrouter --no-default-features \
+          --features otel-grpc --test telemetry_grpc_transport --build-jobs 2 \
+          --profile ci -E 'test(=grpc_only_delivers_spans_metrics_and_flushes)' \
+          --message-format json > ci-evidence/grpc/selection.json
+        # A cfg-disabled or renamed test must not become a successful empty run.
+        # https://nexte.st/docs/machine-readable/list/
+        jq -e '
+          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+          | length == 1 and all(.ignored == false)
+        ' ci-evidence/grpc/selection.json
+    - name: Verify gRPC spans, metrics, metadata and shutdown flushing
+      shell: bash
+      run: |
+        # Reuse the selected-profile executables compiled by the listing step.
+        /usr/bin/time -v -o ci-evidence/grpc/run-resources.txt \
+          cargo nextest run --locked -p bitrouter --no-default-features \
+          --features otel-grpc --test telemetry_grpc_transport --build-jobs 2 \
+          --profile ci --test-threads 1 --retries 0 --no-tests fail \
+          -E 'test(=grpc_only_delivers_spans_metrics_and_flushes)'
+    - name: Upload gRPC evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-grpc-evidence
+        path: |
+          ci-evidence/grpc/
+          target/nextest/ci/junit.xml
+        retention-days: 7

@@ -103,6 +103,10 @@ async fn exact(db: &sea_orm::DatabaseConnection) -> Result<Value> {
             "receipts",
             "SELECT execution_id,receipt_json,disposition_json FROM tenancy_execution_receipts ORDER BY execution_id LIMIT 129",
         ),
+        (
+            "usage",
+            "SELECT execution_id,evidence_json FROM tenancy_usage_evidence ORDER BY execution_id LIMIT 129",
+        ),
     ] {
         let rows = db
             .query_all(Statement::from_string(DatabaseBackend::Sqlite, sql))
@@ -123,6 +127,10 @@ async fn exact(db: &sea_orm::DatabaseConnection) -> Result<Value> {
                 "assessments" => json!([
                     row.try_get::<String>("", "revision_id")?,
                     row.try_get::<String>("", "revision_json")?
+                ]),
+                "usage" => json!([
+                    row.try_get::<String>("", "execution_id")?,
+                    row.try_get::<String>("", "evidence_json")?
                 ]),
                 _ => json!([
                     row.try_get::<String>("", "execution_id")?,

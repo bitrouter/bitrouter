@@ -810,7 +810,7 @@ pub struct SpawnContext<'a> {
 }
 
 /// A fail-fast routing failure, surfaced BEFORE any session side effect
-/// (`docs/SPAWN_SPEC.md` §8). Rendered as a structured NDJSON `error` line in
+/// (`docs/development/spawn.md#preflight-and-cleanup`). Rendered as a structured NDJSON `error` line in
 /// `prompt` mode, or to stderr in `serve` mode.
 #[derive(Debug)]
 pub enum RoutingError {

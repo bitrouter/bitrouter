@@ -21,6 +21,8 @@ mod core_choice;
 pub(crate) mod execution;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(in crate::tenancy) mod learned;
+pub(in crate::tenancy) mod lifecycle;
+pub(in crate::tenancy) mod management;
 mod manifest;
 mod oauth;
 mod recovery;
@@ -61,6 +63,7 @@ const MAX_CLOSURE: usize = 4096;
 pub(super) struct Resources {
     installation: InstallationId,
     key: Option<DeploymentKey>,
+    approved_origins: Vec<String>,
 }
 
 /// Safe for configuration_store.compiled_json; definitions are ciphertext only.
@@ -258,6 +261,15 @@ impl Resources {
         Ok(Self {
             installation: installation.clone(),
             key,
+            approved_origins: config
+                .resource_origins
+                .iter()
+                .map(|origin| {
+                    url::Url::parse(origin)
+                        .map(|url| url.origin().ascii_serialization())
+                        .map_err(|_| anyhow::anyhow!("invalid approved resource origin"))
+                })
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -318,6 +330,7 @@ impl Resources {
         Ok(Self {
             installation,
             key: Some(DeploymentKey::from_bytes(secret)?),
+            approved_origins: Vec::new(),
         })
     }
 

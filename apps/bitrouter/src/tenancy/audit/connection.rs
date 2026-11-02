@@ -3,10 +3,23 @@ use futures::{TryStreamExt, lock::Mutex};
 use sea_orm::sqlx::SqliteConnection;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, ExecResult, QueryResult, Statement};
 
-pub(super) struct ReadConnection<'a>(Mutex<&'a mut SqliteConnection>);
+pub(super) struct ReadConnection<'a> {
+    db: Mutex<&'a mut SqliteConnection>,
+    #[cfg(all(test, unix))]
+    hooks: Option<&'a super::tests::Hooks>,
+}
 impl<'a> ReadConnection<'a> {
     pub(super) fn new(db: &'a mut SqliteConnection) -> Self {
-        Self(Mutex::new(db))
+        Self {
+            db: Mutex::new(db),
+            #[cfg(all(test, unix))]
+            hooks: None,
+        }
+    }
+    #[cfg(all(test, unix))]
+    pub(super) fn with_test_hooks(mut self, hooks: &'a super::tests::Hooks) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 }
 fn denied() -> DbErr {
@@ -41,20 +54,31 @@ impl ConnectionTrait for ReadConnection<'_> {
     }
     async fn query_one(&self, statement: Statement) -> Result<Option<QueryResult>, DbErr> {
         let sql = sql(&statement)?;
-        let mut db = self.0.lock().await;
-        sea_orm::sqlx::query(&sql)
+        #[cfg(all(test, unix))]
+        let sql = self
+            .hooks
+            .map_or_else(|| sql.clone(), |hooks| hooks.receipt_sql(&sql));
+        let mut db = self.db.lock().await;
+        let row = sea_orm::sqlx::query(&sql)
             .fetch_optional(&mut **db)
             .await
             .map(|row| row.map(QueryResult::from))
-            .map_err(|_| query_error())
+            .map_err(|_| query_error())?;
+        #[cfg(all(test, unix))]
+        if let (Some(hooks), Some(row)) = (self.hooks, row.as_ref()) {
+            hooks.observe_receipt_row(row);
+        }
+        Ok(row)
     }
     async fn query_all(&self, statement: Statement) -> Result<Vec<QueryResult>, DbErr> {
         let sql = sql(&statement)?;
-        let mut db = self.0.lock().await;
+        let mut db = self.db.lock().await;
         let mut stream = sea_orm::sqlx::query(&sql).fetch(&mut **db);
         let mut rows = Vec::new();
         while let Some(row) = stream.try_next().await.map_err(|_| query_error())? {
-            if rows.len() == 1024 {
+            // Lifecycle metadata has 4096 retained slots plus an overflow
+            // sentinel. Every built-in query also bounds its own row cells.
+            if rows.len() == 4097 {
                 return Err(query_error());
             }
             rows.push(QueryResult::from(row));

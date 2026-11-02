@@ -439,12 +439,14 @@ struct Chain {
     selector: String,
     inbound: ApiProtocol,
     candidates: Vec<usize>,
+    sort: SortOrder,
 }
 
 struct Candidate {
     target: RoutingTarget,
     projection: Vec<u8>,
     credential: ResourceRef,
+    routing: crate::tenancy::routing::Metadata,
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -512,6 +514,26 @@ impl RetainedPolicy {
 }
 
 impl RetainedRoute {
+    /// Technical metadata for exactly the retained credential-bound target.
+    pub(crate) fn routing_metadata(
+        &self,
+        target: &RoutingTarget,
+    ) -> std::result::Result<&crate::tenancy::routing::Metadata, ErrorCode> {
+        Ok(&self.candidate(target)?.routing)
+    }
+
+    /// Sort preference belongs to the authenticated selected source, including
+    /// policy tiers. The selector is already resolved by the pipeline; public
+    /// resource IDs must not be reinterpreted here. Native selection uses the
+    /// same per-selector preferences.
+    pub(crate) fn routing_sort(&self, selector: &str) -> std::result::Result<SortOrder, ErrorCode> {
+        self.data
+            .chains
+            .iter()
+            .find(|chain| chain.selector == selector)
+            .map(|chain| chain.sort)
+            .ok_or(ErrorCode::Forbidden)
+    }
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) fn block_profile(&self) -> Option<&super::block::Profile> {
         self.data.block.as_deref()

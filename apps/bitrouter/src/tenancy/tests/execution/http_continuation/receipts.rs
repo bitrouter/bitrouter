@@ -141,6 +141,7 @@ async fn rootless_post_hook_rewrite_cannot_mint_proof_and_does_not_erase_paid_us
             let mut builder = PipelineBuilder::new();
             builder.owned_drain().routing_table(execution.route().clone()).executor(ready.fixture.service.executor.clone())
                 .pre_resolution_hook(runtime.clone()).route_hook(runtime.clone()).required_finalizer(runtime);
+            crate::tenancy::routing::install(&mut builder, &execution, ready.fixture.service.routing.clone());
             if rewrite { builder.stream_hook(ReplaceText); }
             let pipeline = Arc::new(builder.build()?);
             let mut input = body(true, None);

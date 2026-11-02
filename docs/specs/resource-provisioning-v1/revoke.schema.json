@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceRevoke",
+  "description": "Revoke one immutable revision without deleting historical execution evidence.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource provisioning format, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "operation_id": {
+      "description": "Stable command identity.",
+      "$ref": "#/$defs/OperationId"
+    },
+    "installation_id": {
+      "description": "Addressed persistent store identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "reference": {
+      "description": "Exact target; both current and older revisions may be revoked.",
+      "$ref": "#/$defs/ResourceRef"
+    },
+    "expected_authority_revision": {
+      "description": "Observed authority revision; revocation is not an implicit latest write.",
+      "$ref": "#/$defs/AuthorityRevision"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "operation_id",
+    "installation_id",
+    "reference",
+    "expected_authority_revision"
+  ],
+  "$defs": {
+    "OperationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}

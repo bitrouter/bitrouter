@@ -96,25 +96,39 @@ async fn held_ack(completed_provider: bool) -> Result<()> {
             "barrier did not follow a real committed checkpoint"
         );
         let (receipt, tasks) = fixture.service.pipelines.callback_owner_for_test(&id)?;
-        let cleanup_deadline = receipt.cleanup_deadline();
         ensure!(provider.calls() == usize::from(completed_provider));
         if completed_provider {
             ensure!(provider.receive().await?.body["model"] == "model-a");
         }
         receipt.cancel();
-        // Wait for the actual cancelled preparation task and its sole Source to
-        // finish. A sleep or receipt-cancel notification alone cannot establish
-        // that the enclosing future has been dropped.
-        tokio::time::timeout(TIMEOUT, async {
-            loop {
-                let pending = tasks.pending();
-                if pending.executions == 0 && pending.sources == 0 {
-                    break;
+        let cleanup_deadline = receipt.cleanup_deadline();
+        if completed_provider {
+            // An owed outcome waits for its original ACK even after delivery
+            // cancellation. Preparation and its Source stay owned with it;
+            // cancellation must not drop the remaining settlement path.
+            ensure!(
+                tokio::time::timeout(Duration::from_millis(100), &mut driving)
+                    .await
+                    .is_err(),
+                "cancelled driver escaped the actual outcome ACK"
+            );
+            let pending = tasks.pending();
+            ensure!(pending.executions > 0 && pending.sources > 0);
+        } else {
+            // Admission cancellation stops dispatch. Its already committed
+            // intent ACK stays retained independently after preparation exits.
+            tokio::time::timeout(TIMEOUT, async {
+                loop {
+                    let pending = tasks.pending();
+                    if pending.executions == 0 && pending.sources == 0 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
                 }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
+            })
+            .await
+            .context("cancelled admission preparation did not stop")?;
+        }
         ensure!(
             tasks.pending().settlements > 0,
             "cancelled caller lost its pending callback ACK"

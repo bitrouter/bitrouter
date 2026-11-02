@@ -12,6 +12,7 @@ pub(in crate::tenancy::tests::execution::native) mod fixture;
 #[cfg(bitrouter_capacity_tests)]
 mod headroom;
 mod inheritance;
+mod lifetime;
 #[cfg(unix)]
 mod readback;
 #[cfg(unix)]
@@ -27,6 +28,23 @@ async fn receipt(bound: &Bound, id: &str) -> Result<ExecutionReceipt> {
             bound.fixture.operator.clone(),
             bound.fixture.tenant.clone(),
             read::Request::One(id.try_into()?),
+        )
+        .await
+        .map_err(failure)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn usage_evidence(
+    bound: &Bound,
+    id: &str,
+) -> Result<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1> {
+    let bytes = bound
+        .fixture
+        .service
+        .read_receipt(
+            bound.fixture.operator.clone(),
+            bound.fixture.tenant.clone(),
+            read::Request::UsageEvidence(id.try_into()?),
         )
         .await
         .map_err(failure)?;
@@ -168,6 +186,35 @@ async fn observed(
     tokio::time::timeout(TIMEOUT, bound.fixture.service.admission.wait_drained()).await?;
     let child_receipt = receipt(bound, child).await?;
     let parent_receipt = receipt(bound, parent).await?;
+    let parent_evidence = usage_evidence(bound, parent).await?;
+    let child_evidence = usage_evidence(bound, child).await?;
+    ensure!(
+        parent_evidence.parent_execution_id.is_none()
+            && parent_evidence.child_execution_ids == vec![child_receipt.execution_id.clone()]
+            && child_evidence.parent_execution_id.as_ref() == Some(&parent_receipt.execution_id)
+            && child_evidence.child_execution_ids.is_empty(),
+        "owned Choice linkage must come from actual admission in both receipts"
+    );
+    for (evidence, receipt) in [
+        (&parent_evidence, &parent_receipt),
+        (&child_evidence, &child_receipt),
+    ] {
+        ensure!(
+            evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Captured
+                && evidence.installation_id == receipt.installation_id
+                && evidence.tenant_id == receipt.tenant_id
+                && evidence.execution_id == receipt.execution_id
+                && evidence.attempts.len() == receipt.attempts.len()
+                && !evidence.frames.is_empty()
+        );
+        ensure!(
+            evidence.frames.iter().all(|frame| receipt
+                .attempts
+                .iter()
+                .any(|attempt| attempt.attempt_id == frame.attempt_id)),
+            "child observations must remain in their own execution, without copying or summing into the parent"
+        );
+    }
     for (value, model, input, output) in [
         (&child_receipt, "judge-r1", 7, 3),
         (&parent_receipt, "model-a", 4, 2),

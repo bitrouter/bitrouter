@@ -135,6 +135,7 @@ mod tests {
             ..route.clone()
         };
         let candidate = super::super::Candidate {
+            routing: Default::default(),
             target,
             projection: Vec::new(),
             credential,

@@ -215,10 +215,19 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
         // real SQLite I/O; do not let paused time auto-advance its cleanup deadline
         // while the database worker is still returning the durable result.
         tokio::time::resume();
-        // Recorder completion, rather than elapsed time, proves the failed wait.
+        // Closing the registry cancels delivery immediately. The caller's error
+        // is not the recorder's ACK: keep the ordinary lane full until the
+        // original observation has expired and its retained producer is joined.
+        ensure!(
+            tokio::time::timeout(TIMEOUT, fixture.service.pipelines.close_and_drain())
+                .await
+                .context("expired observation producer did not finish")?
+                .is_err()
+        );
+        ensure!(!fixture.service.eval.healthy());
         let outcome = tokio::time::timeout(Duration::from_secs(1), task)
             .await
-            .context("expired observation did not finish its independent receipt")?;
+            .context("cancelled observation caller did not finish")?;
         ensure!(outcome?.is_err());
         drop(reservations);
         ensure!(fixture.service.current().is_err());

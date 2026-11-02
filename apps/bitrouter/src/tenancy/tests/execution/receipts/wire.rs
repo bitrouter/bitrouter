@@ -149,6 +149,80 @@ pub(super) fn chat_stream(usage: Value, terminal: bool) -> Result<String> {
         if terminal { "data: [DONE]\n\n" } else { "" }
     ))
 }
+
+#[tokio::test]
+async fn ignored_messages_sse_labels_cannot_inject_usage_into_either_receipt_contract() -> Result<()>
+{
+    use bitrouter_ai::tenancy::usage_evidence::{Dimension, ExecutionUsageEvidenceV1, Source};
+    let events = [
+        (
+            "message_start",
+            json!({"type":"message_start","message":{"id":"msg_evidence","type":"message","role":"assistant","model":"model-a","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}),
+        ),
+        (
+            "ping",
+            json!({"type":"message_delta","usage":{"output_tokens":999}}),
+        ),
+        (
+            "unknown",
+            json!({"type":"message_delta","usage":{"output_tokens":999}}),
+        ),
+        (
+            "message_delta",
+            json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":7}}),
+        ),
+        (
+            "ping",
+            json!({"type":"message_delta","usage":{"output_tokens":999}}),
+        ),
+        ("message_stop", json!({"type":"message_stop"})),
+    ];
+    let mut stream = String::new();
+    for (label, value) in events {
+        stream.push_str(&format!("event: {label}\ndata: {value}\n\n"));
+    }
+    let harness = Harness::with_reply("messages", StatusCode::OK, stream, true, None).await?;
+    let client = Harness::client(false)?;
+    let response = harness.send(&client).send().await?;
+    ensure!(response.status() == StatusCode::OK);
+    let id = execution_id(&response)?;
+    response.bytes().await?;
+    let receipt = harness.receipt(&client, &id).await?;
+    ensure!(receipt.outcome == Outcome::Completed && receipt.usage.output_tokens == Some(7));
+    let bytes = harness
+        .fixture
+        .service
+        .read_receipt(
+            harness.fixture.operator.clone(),
+            harness.fixture.tenant.clone(),
+            read::Request::UsageEvidence(id),
+        )
+        .await
+        .map_err(failure)?;
+    let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&bytes)?;
+    evidence.validate()?;
+    ensure!(
+        evidence.frames.len() == 2
+            && evidence.frames[0].source == Source::MessageStart
+            && evidence.frames[1].source == Source::MessageDelta
+    );
+    ensure!(
+        evidence.frames[1]
+            .quantities
+            .iter()
+            .any(|q| q.dimension == Dimension::OutputTokens && q.value == Some(7))
+    );
+    ensure!(
+        evidence
+            .frames
+            .iter()
+            .flat_map(|f| &f.quantities)
+            .all(|q| q.value != Some(999))
+    );
+    ensure!(harness.calls.load(Ordering::SeqCst) == 1);
+    harness.fixture.service.shutdown().await?;
+    Ok(())
+}
 #[tokio::test]
 async fn json_and_sse_evidence_share_original_numbers_and_unresolved_stream_is_unknown()
 -> Result<()> {

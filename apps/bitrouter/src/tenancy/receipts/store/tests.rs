@@ -268,3 +268,6 @@ async fn startup_inventory_rejects_understated_bytes_and_hidden_unknown_before_a
 mod server;
 
 mod counts;
+
+#[cfg(all(feature = "core", feature = "harness"))]
+mod usage_evidence;

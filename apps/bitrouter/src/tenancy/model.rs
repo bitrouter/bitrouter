@@ -100,6 +100,8 @@ pub(super) struct Snapshot {
     pub credential_hashes: BTreeMap<String, CredentialId>,
     /// Only the bounded activation pointers are cached, not every retained draft.
     pub active_configurations: BTreeMap<TenantId, RevisionId>,
+    /// Managed heads and exact revocations; checked even for cached executions.
+    pub resource_lifecycle: super::resources::lifecycle::State,
 }
 
 /// Authentication produces this internal identity; requests cannot deserialize it.

@@ -7,6 +7,7 @@ use bitrouter_ai::tenancy::{
     configuration::{Activation, ConfigurationPut},
     identity::{BindingId, CredentialId, InstallationId, OperationId, PrincipalId, TenantId},
     operation::Mutation,
+    resources::{ResourcePut, ResourceRevoke},
     validation::{Validate, ValidationError},
 };
 use serde_json::{Value, json};
@@ -22,6 +23,8 @@ pub(super) enum Command {
     Revoke(TenantId, CredentialId, Mutation),
     Configuration(TenantId, ConfigurationPut),
     Activate(TenantId, Activation),
+    Resource(TenantId, ResourcePut),
+    RevokeResource(TenantId, ResourceRevoke),
 }
 
 impl Command {
@@ -35,6 +38,8 @@ impl Command {
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => body.validate(),
             Self::Configuration(_, body) => body.validate(),
             Self::Activate(_, body) => body.validate(),
+            Self::Resource(_, body) => body.validate(),
+            Self::RevokeResource(_, body) => body.validate(),
         }
     }
 
@@ -48,6 +53,8 @@ impl Command {
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => &body.operation_id,
             Self::Configuration(_, body) => &body.operation_id,
             Self::Activate(_, body) => &body.operation_id,
+            Self::Resource(_, body) => &body.operation_id,
+            Self::RevokeResource(_, body) => &body.operation_id,
         }
     }
 
@@ -61,16 +68,30 @@ impl Command {
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => &body.installation_id,
             Self::Configuration(_, body) => &body.installation_id,
             Self::Activate(_, body) => &body.installation_id,
+            Self::Resource(_, body) => &body.installation_id,
+            Self::RevokeResource(_, body) => &body.installation_id,
         }
     }
 
     pub fn safety(&self) -> bool {
-        matches!(self, Self::Revoke(..))
+        matches!(self, Self::Revoke(..) | Self::RevokeResource(..))
             || matches!(self, Self::Tenant(_, body) if body.state != TenantState::Active && body.expected_revision.is_some())
     }
 
     pub fn digest(&self, principal: &PrincipalId) -> anyhow::Result<String> {
         let (method, kind, targets, body) = match self {
+            Self::Resource(tenant, body) => (
+                "POST",
+                "resource.put",
+                json!({"tenant_id": tenant}),
+                serde_json::to_value(body)?,
+            ),
+            Self::RevokeResource(tenant, body) => (
+                "POST",
+                "resource.revoke",
+                json!({"tenant_id": tenant}),
+                serde_json::to_value(body)?,
+            ),
             Self::Tenant(tenant, body) => (
                 "PUT",
                 "tenant.put",

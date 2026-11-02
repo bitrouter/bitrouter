@@ -97,3 +97,10 @@ This case applies to all readers under the public-document profile in section 2.
 | ID | Scenario | Required observable result |
 | --- | --- | --- |
 | C59 | Numeric exponent/precision bomb, exact u64 boundaries, equivalent integer spellings, nested implementation-private keys and opaque null metadata | Reject excess before schema/arithmetic; process remains alive and accepts the next valid refresh; exact integers have consistent interpretation; valid unknown object identity and numeric precision survive all rewrites |
+
+## Current publisher and OpenRouter adapter scope
+
+| ID | Scenario | Required observable result |
+| --- | --- | --- |
+| C60 | Full listing includes chat/embedding `:batch` variants alongside supported models; manual batch references | Keep the full identity audit intact; exclude batch variants from imported inventory, new ledger bindings, and curation without rewriting IDs; reject batch canonical references or OpenRouter native batch entries at publication |
+| C61 | Text model advertises chat, another endpoint, empty endpoints, missing/null endpoints, or malformed endpoint metadata; one evidence field is absent while the other explicitly denies support | Only explicit chat support creates its interface; either unsupported endpoints or unsupported modalities retract owned interfaces independently; merely missing evidence preserves existing interfaces without authorizing new ones; malformed metadata fails the complete feed |

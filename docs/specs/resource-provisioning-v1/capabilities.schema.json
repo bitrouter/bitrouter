@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceCapabilities",
+  "description": "Independently versioned descriptor; does not alter strict v1 discovery.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource provisioning contract, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "installation_id": {
+      "description": "Persistent store identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "provisioning_enabled": {
+      "description": "Encrypted provisioning is available with the current wrapping key.",
+      "type": "boolean"
+    },
+    "max_command_bytes": {
+      "description": "Maximum serialized command bytes.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1048576
+    },
+    "tenant_routes_require_approved_origins": {
+      "description": "Endpoint selection by tenant credentials requires host-approved origins.",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "installation_id",
+    "provisioning_enabled",
+    "max_command_bytes",
+    "tenant_routes_require_approved_origins"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  }
+}

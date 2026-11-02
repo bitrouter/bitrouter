@@ -137,7 +137,16 @@ impl Sources {
         data.insert("models".into(), json!(models));
         data.insert("providers".into(), json!(providers));
         let document = Document::from_value(value, &ReaderPolicy::default())?;
+        for provider in document.providers() {
+            for model in provider["models"].as_array().context("provider models")? {
+                reject_batch_id(model["canonical_id"].as_str())?;
+                if provider["name"] == "openrouter" {
+                    reject_batch_id(model["provider_model_id"].as_str())?;
+                }
+            }
+        }
         for model in document.models() {
+            reject_batch_id(model["id"].as_str())?;
             if !available(&document, model["id"].as_str().unwrap_or_default()) {
                 bail!("curated model has no eligible offer: {}", model["id"]);
             }
@@ -234,6 +243,15 @@ impl Sources {
         fs::remove_dir_all(transaction)?;
         Ok(())
     }
+}
+
+fn reject_batch_id(id: Option<&str>) -> Result<()> {
+    if let Some(id) = id.filter(|id| bitrouter_registry::openrouter::is_batch_variant(id)) {
+        bail!(
+            "batch catalog ID {id} is outside the supported registry scope; remove it before publication"
+        );
+    }
+    Ok(())
 }
 
 fn available(document: &Document, id: &str) -> bool {

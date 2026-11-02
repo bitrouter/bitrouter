@@ -49,6 +49,8 @@ mod m20240101_000035_execution_receipts;
 mod m20240101_000036_native_harness_scope;
 mod m20240101_000037_owned_oauth;
 mod m20240101_000038_eval_import_provenance;
+mod m20240101_000039_resource_lifecycle;
+pub(crate) mod m20240101_000040_usage_evidence;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -104,6 +106,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000036_native_harness_scope::Migration),
             Box::new(m20240101_000037_owned_oauth::Migration),
             Box::new(m20240101_000038_eval_import_provenance::Migration),
+            Box::new(m20240101_000039_resource_lifecycle::Migration),
+            Box::new(m20240101_000040_usage_evidence::Migration),
         ]
     }
 }

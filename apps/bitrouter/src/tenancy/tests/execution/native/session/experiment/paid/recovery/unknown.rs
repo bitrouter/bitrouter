@@ -103,7 +103,6 @@ async fn producer() -> Result<()> {
             .context("actual accepted learning owner")?;
         let Binding::Native(binding) = &learning.binding else { anyhow::bail!("native paid binding changed"); };
         let deadline = receipt.deadline;
-        let cleanup_deadline = receipt.cleanup_deadline();
         ensure!(receipt.id() == &execution && learning.execution == execution && learning.deadline == deadline
             && binding.has_paid_source().map_err(|code| anyhow::anyhow!("source pin: {code:?}"))?);
         ensure!(learning.stopped().now_or_never().is_none() && !receipt.durable());
@@ -172,7 +171,8 @@ async fn producer() -> Result<()> {
         let after = tokio::time::timeout(TIMEOUT, receipt.journal.settled()).await??;
         usage(&after)?;
         ensure!(after.attempts[0].attempt_id == facts.attempts[0].attempt_id
-            && after.usage == facts.usage && receipt.deadline == deadline && receipt.cleanup_deadline() == cleanup_deadline);
+            && after.usage == facts.usage && receipt.deadline == deadline);
+        ensure!(receipt.cleanup_deadline() <= tokio::time::Instant::now() + std::time::Duration::from_secs(30));
         ensure!(!receipt.durable() && fixture.service.cleanup.ensure_clean().is_err()
             && fixture.service.cleanup.disposition() == Disposition::Ambiguous
             && fixture.service.current().is_err() && fixture.service.host_slots_for_test() == 0

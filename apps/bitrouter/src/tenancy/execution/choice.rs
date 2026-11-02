@@ -53,16 +53,25 @@ impl AdmittedChoice {
             .try_acquire(
                 &parent.submission.tenant,
                 &config.limits,
-                parent.submission.deadline,
+                parent.submission.deadline.min(
+                    tokio::time::Instant::now()
+                        + std::time::Duration::from_secs(
+                            parent.service.execution_settings.submission_timeout_secs,
+                        ),
+                ),
             )
             .map_err(Failure::from)?;
+        let mut submission = parent.submission.clone();
+        submission.cancelled = parent.submission.cancelled.child_token();
         let execution = parent.service.finish_admission(
-            parent.submission.clone(),
+            submission,
             route,
             lease,
             config.learning.clone(),
             true,
         )?;
+        crate::tenancy::receipts::journal::link_owned_child(parent, &execution)
+            .map_err(Failure::from)?;
         let owner = execution
             .receipt_owner()
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
@@ -115,7 +124,15 @@ impl AdmittedChoice {
         &self.profile
     }
     pub(crate) fn deadline(&self) -> tokio::time::Instant {
-        self.execution.submission.deadline
+        self.execution.submission.deadline.min(
+            tokio::time::Instant::now()
+                + std::time::Duration::from_secs(
+                    self.execution
+                        .service
+                        .execution_settings
+                        .submission_timeout_secs,
+                ),
+        )
     }
 
     pub(crate) async fn execute(

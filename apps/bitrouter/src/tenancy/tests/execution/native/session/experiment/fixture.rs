@@ -262,8 +262,11 @@ pub(super) fn task() -> TaskInput {
     let mut value = input();
     value.text = "Fix the parser error in src/parser.rs: expected a closing delimiter.".into();
     value.routing.model = ModelMode::Policy;
-    // Small explicit run limits leave genuine terminal room in the shared ACK
-    // budget. Host limits and the ordinary NativeSession contract stay unchanged.
+    // The complete routing profile retains custody and ordering callbacks. Its
+    // all-pending cleanup projection exceeds the former 128 KiB at HTTP dispatch
+    // admission, even though the current checkpoint itself is much smaller.
+    // Keep a finite 160 KiB profile and the original 256 KiB wire ceiling; the
+    // paired capacity regressions retain the old ceiling as a real refusal case.
     value.limits = Some(bitrouter_ai::core::protocol::Limits {
         active_models: 1,
         agents: 1,
@@ -274,7 +277,7 @@ pub(super) fn task() -> TaskInput {
         queued_runs: 1,
         mailbox_messages: 1,
         active_seconds: 30,
-        checkpoint_bytes: 128 * 1024,
+        checkpoint_bytes: 160 * 1024,
         unacknowledged_bytes: 256 * 1024,
         ephemeral_bytes: 64 * 1024,
         input_bytes: 4096,

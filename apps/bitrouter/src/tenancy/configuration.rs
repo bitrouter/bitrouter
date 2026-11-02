@@ -44,6 +44,13 @@ pub(super) async fn prepare(
     let compiled = resources
         .compile(db, tenant, &revision_id, document)
         .await?;
+    if compiled
+        .dependencies
+        .iter()
+        .any(|reference| state.resource_lifecycle.revoked(reference))
+    {
+        return Err(ErrorCode::Forbidden);
+    }
     authorize(
         state,
         caller,
@@ -151,6 +158,13 @@ pub(super) fn apply(
             vec![Change::Configuration(retained.clone())]
         }
         Command::Activate(_, input) => {
+            if retained
+                .dependencies
+                .iter()
+                .any(|reference| state.resource_lifecycle.revoked(reference))
+            {
+                return Err(ErrorCode::Forbidden);
+            }
             authorize(
                 state,
                 caller,

@@ -299,14 +299,17 @@ fn registered_adapter_discovers_verified_usable_and_curated_new_model() -> Resul
     let mut sources = Sources::load(root.path())?;
     let feed = json!({"id":"catalog","kind":"openrouter_models","writes":["models","metadata"],"request":{"url":bitrouter_registry::openrouter::URL,"auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"merge","scope":"public","complete":true,"allow_empty":false}});
     let provider = json!({"name":"openrouter","status":"active","billing":"usage","api_base":"https://openrouter.ai/api/v1","auth":{"kind":"none"},"models":[],"auto_sync":{"feeds":[feed]}});
-    let snapshot = json!({"data":[{"id":"org/model11","name":"Model 11","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"context_length":128000,"supported_parameters":["tools"]},{"id":"org/picture","architecture":{"input_modalities":["text"],"output_modalities":["image"]}}]});
+    let snapshot = json!({"data":[{"id":"org/model11","name":"Model 11","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"endpoints":["/api/v1/chat/completions"],"context_length":128000,"supported_parameters":["tools"]},{"id":"org/picture","architecture":{"input_modalities":["text"],"output_modalities":["image"]},"endpoints":["/api/v1/images"]},{"id":"org/model11:batch","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"endpoints":[]}]});
     let ids = identity_ids(&snapshot)?;
     let observed = bitrouter_registry::openrouter::observation(&feed, &snapshot)?;
+    assert_eq!(ids.len(), 3);
+    assert_eq!(observed.models.len(), 2);
     let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "test".into(), Utc::now())?;
     let (mut next, _) =
         bitrouter_registry::reconcile::apply(&provider, "catalog", &observed, &stamp)?;
     let mut ledger = json!([]);
     record_openrouter_bindings(&mut ledger, &provider, &observed, &stamp, &ids)?;
+    assert!(!serde_json::to_string(&ledger)?.contains(":batch"));
     materialize_bindings(&mut next, &ledger, &ids)?;
     assert_eq!(
         next["models"][0]["interfaces"][0]["protocol"],
@@ -328,6 +331,7 @@ fn registered_adapter_discovers_verified_usable_and_curated_new_model() -> Resul
     discovery::apply(&mut sources, &snapshot, &ids, Utc::now())?;
     let doc = sources.document()?;
     assert_eq!(doc.models()[0]["id"], "org/model11");
+    assert!(!serde_json::to_string(doc.value())?.contains(":batch"));
     validate_bindings(&doc, &sources.files[&sources.identities], Some(&ids))?;
     let mut generic = observed;
     let pending = hold_unverified_bindings(
@@ -365,7 +369,7 @@ fn explicit_unsupported_output_retracts_owned_text_interface() -> Result<()> {
     let feed = json!({"id":"catalog","kind":"openrouter_models","writes":["models","metadata"],"request":{"url":bitrouter_registry::openrouter::URL,"auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"merge","scope":"public","complete":true,"allow_empty":false}});
     let provider =
         json!({"name":"openrouter","status":"active","models":[],"auto_sync":{"feeds":[feed]}});
-    let initial = json!({"data":[{"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]}}]});
+    let initial = json!({"data":[{"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"endpoints":["/api/v1/chat/completions"]}]});
     let observation = bitrouter_registry::openrouter::observation(&feed, &initial)?;
     let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "first".into(), Utc::now())?;
     let (one, _) =
@@ -384,6 +388,102 @@ fn explicit_unsupported_output_retracts_owned_text_interface() -> Result<()> {
     let (two, _) = bitrouter_registry::reconcile::apply(&one, "catalog", &observation, &stamp)?;
     assert_eq!(two["models"][0]["interfaces"], json!([]));
     assert_eq!(two["models"][0]["model_types"], json!([]));
+    Ok(())
+}
+
+#[test]
+fn batch_references_cannot_be_published_through_manual_sources() -> Result<()> {
+    for target in ["curated", "canonical", "native"] {
+        let root = fixture()?;
+        let mut sources = Sources::load(root.path())?;
+        match target {
+            "curated" => {
+                sources
+                    .files
+                    .get_mut(&root.path().join("registry/models/org.yaml"))
+                    .context("curated fixture")?[0]["id"] = json!("org/model:batch");
+            }
+            "canonical" => {
+                sources
+                    .files
+                    .get_mut(&root.path().join("registry/providers/test.yaml"))
+                    .context("provider fixture")?["models"][0]["canonical_id"] =
+                    json!("org/model:batch");
+            }
+            "native" => {
+                sources
+                    .files
+                    .insert(root.path().join("registry/models/org.yaml"), json!([]));
+                sources
+                    .files
+                    .remove(&root.path().join("registry/providers/test.yaml"));
+                sources.files.insert(root.path().join("registry/providers/openrouter.yaml"), json!({"name":"openrouter","status":"active","billing":"usage","api_base":"https://openrouter.ai/api/v1","auth":{"kind":"none"},"models":[{"provider_model_id":"org/model:batch","status":"active","interfaces":[]}]}));
+            }
+            _ => bail!("unexpected fixture target"),
+        }
+        let error = sources
+            .document()
+            .err()
+            .context("batch reference was admitted")?;
+        assert!(
+            error.to_string().contains("batch catalog ID"),
+            "{target}: {error:#}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn endpoint_removal_retracts_owned_chat_but_missing_evidence_preserves_it() -> Result<()> {
+    let feed = json!({"id":"catalog","kind":"openrouter_models","writes":["models","metadata"],"request":{"url":bitrouter_registry::openrouter::URL,"auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"merge","scope":"public","complete":true,"allow_empty":false}});
+    let provider =
+        json!({"name":"openrouter","status":"active","models":[],"auto_sync":{"feeds":[feed]}});
+    let row = json!({"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"endpoints":["/api/v1/chat/completions"]});
+    let observation = bitrouter_registry::openrouter::observation(&feed, &json!({"data":[row]}))?;
+    let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "first".into(), Utc::now())?;
+    let (one, _) =
+        bitrouter_registry::reconcile::apply(&provider, "catalog", &observation, &stamp)?;
+    let mut cases = Vec::new();
+    for endpoints in [None, Some(json!([])), Some(json!(["/api/v1/responses"]))] {
+        let mut next = row.clone();
+        next.as_object_mut().context("model")?.remove("endpoints");
+        if let Some(value) = &endpoints {
+            next["endpoints"] = value.clone();
+        }
+        cases.push((next, endpoints.is_none()));
+    }
+    let mut no_architecture = row.clone();
+    no_architecture
+        .as_object_mut()
+        .context("model")?
+        .remove("architecture");
+    no_architecture["endpoints"] = json!([]);
+    cases.push((no_architecture, false));
+    let mut no_endpoints = row.clone();
+    no_endpoints
+        .as_object_mut()
+        .context("model")?
+        .remove("endpoints");
+    no_endpoints["architecture"]["output_modalities"] = json!(["image"]);
+    cases.push((no_endpoints, false));
+    for (next, preserve) in cases {
+        let observation =
+            bitrouter_registry::openrouter::observation(&feed, &json!({"data":[next]}))?;
+        let stamp = bitrouter_registry::reconcile::next_stamp(
+            &one["auto_sync"]["feeds"][0],
+            "second".into(),
+            Utc::now(),
+        )?;
+        let (two, _) = bitrouter_registry::reconcile::apply(&one, "catalog", &observation, &stamp)?;
+        if preserve {
+            assert_eq!(
+                two["models"][0]["interfaces"],
+                one["models"][0]["interfaces"]
+            );
+        } else {
+            assert_eq!(two["models"][0]["interfaces"], json!([]));
+        }
+    }
     Ok(())
 }
 

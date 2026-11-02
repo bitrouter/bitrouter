@@ -27,7 +27,11 @@ pub(in crate::tenancy) async fn enroll(
 ) -> Result<(), Failure> {
     let service = origin.binding().authority().service().clone();
     execution.revalidate().map_err(Failure::from)?;
-    let deadline = Instant::now() + execution.remaining().min(std::time::Duration::from_secs(5));
+    let budget = std::time::Duration::from_secs(5);
+    let deadline = Instant::now()
+        + execution
+            .remaining()
+            .map_or(budget, |remaining| remaining.min(budget));
     let read = service
         .reads
         .clone()

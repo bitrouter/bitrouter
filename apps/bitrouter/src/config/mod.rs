@@ -897,7 +897,7 @@ pub enum McpUpstreamProtocol {
     /// responses, and modern rejection codes fail the connection. Opting in
     /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
     /// Tasks `task` handle; neither is a shape this gateway can carry, so both
-    /// surface as explicit errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
+    /// surface as explicit errors (see `docs/development/gateway.md`).
     #[serde(rename = "2026-07-28")]
     V2026_07_28,
 }
@@ -1517,6 +1517,10 @@ pub struct ProviderModel {
     /// Per-model rate-limit override.
     #[serde(default)]
     pub rate_limits: Option<RateLimit>,
+    /// Optional technical relative weight for tenant `sort: cost` routing.
+    /// Lower values rank first; this is not currency, a tariff or a discount.
+    #[serde(default)]
+    pub routing_weight: Option<u64>,
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
@@ -2163,6 +2167,7 @@ pub async fn discover_models(config: &mut Config) {
                         provider_model_id: None,
                         api_protocol: None,
                         rate_limits: None,
+                        routing_weight: None,
                         pricing: None,
                         pricing_by_protocol: HashMap::new(),
                         capabilities: Vec::new(),

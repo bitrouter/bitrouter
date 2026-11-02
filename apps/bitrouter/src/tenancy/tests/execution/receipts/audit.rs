@@ -1,6 +1,7 @@
 //! Actual provider receipt -> retired snapshot -> protected archive SDK consumer.
 use super::*;
 mod schema;
+mod usage_evidence;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use std::{collections::BTreeMap, path::Path};
 use tokio_util::sync::CancellationToken;
@@ -56,6 +57,22 @@ pub(in crate::tenancy::tests::execution) async fn roundtrip(
 ) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     crate::tenancy::audit::tests::assert_file_database(db, live_source).await?;
+    let evidence_bytes = read::body(
+        db,
+        &expected.installation_id,
+        &expected.tenant_id,
+        &read::Request::UsageEvidence(expected.execution_id.clone()),
+        || {
+            crate::tenancy::error::Failure::from(
+                bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable,
+            )
+        },
+    )
+    .await
+    .map_err(failure)?;
+    let expected_evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+        serde_json::from_slice(&evidence_bytes)?;
+    ensure!(expected_evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Captured);
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("retired.sqlite");
     std::fs::File::create(&source)?;
@@ -132,6 +149,17 @@ pub(in crate::tenancy::tests::execution) async fn roundtrip(
                 )
                 .await?;
             ensure!(serde_json::to_value(actual)? == serde_json::to_value(expected)?);
+            let actual_evidence = sdk
+                .usage_evidence(
+                    &expected.installation_id,
+                    &expected.tenant_id,
+                    &expected.execution_id,
+                )
+                .await?;
+            ensure!(
+                serde_json::to_value(actual_evidence)? == serde_json::to_value(&expected_evidence)?,
+                "archive changed original usage observations"
+            );
             let page = sdk
                 .executions(
                     &expected.installation_id,
@@ -173,7 +201,38 @@ pub(in crate::tenancy::tests::execution) async fn roundtrip(
             );
             let body = response.bytes().await?;
             ensure!(!String::from_utf8_lossy(&body).contains("owned-upstream-secret"));
+            let evidence_uri = format!("{uri}/usage-evidence");
+            let evidence_response = client
+                .get(&evidence_uri)
+                .bearer_auth(AUDITOR)
+                .header(
+                    "bitrouter-installation-id",
+                    expected.installation_id.as_str(),
+                )
+                .send()
+                .await?;
+            ensure!(
+                evidence_response.status() == StatusCode::OK
+                    && evidence_response
+                        .headers()
+                        .get("cache-control")
+                        .is_some_and(|value| value == "no-store")
+            );
+            ensure!(
+                serde_json::from_slice::<Value>(&evidence_response.bytes().await?)?
+                    == serde_json::to_value(&expected_evidence)?
+            );
             for token in ["wrong-token", old_token] {
+                let denied = client
+                    .get(&evidence_uri)
+                    .bearer_auth(token)
+                    .header(
+                        "bitrouter-installation-id",
+                        expected.installation_id.as_str(),
+                    )
+                    .send()
+                    .await?;
+                ensure!(denied.status() == StatusCode::UNAUTHORIZED);
                 let response = client
                     .get(&uri)
                     .bearer_auth(token)
@@ -382,9 +441,30 @@ async fn digest_read_case(
                 .await
                 .is_err()
         );
+        ensure!(
+            store::inventory(db, &expected.installation_id)
+                .await
+                .is_err(),
+            "bound evidence inventory must reject the corrupt receipt before archive startup"
+        );
+        // Restore the sole changed cell before creating a valid immutable
+        // archive. The held-read fixture injects the same digest-only fault at
+        // its actual SQL/decoder boundary after startup has completed.
+        let restored = db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE tenancy_execution_receipts SET content_digest=? WHERE installation_id=? AND tenant_id=? AND execution_id=?",
+            [original.into(), expected.installation_id.as_str().into(), expected.tenant_id.as_str().into(), id.as_str().into()],
+        )).await?;
+        ensure!(restored.rows_affected() == 1);
+        let restored = digest_row(db, &expected).await?;
+        for column in ["content_digest", "receipt_json", "disposition_json"] {
+            ensure!(
+                before.try_get::<String>("", column)? == restored.try_get::<String>("", column)?
+            );
+        }
     }
-    // This is the precise bounded counterexample: all startup byte/state
-    // inventory passes, while a wrong digest fails the exact point decoder.
+    // Retain valid bound sidecars through startup; the point-read fixture must
+    // still reach its actual fatal rollback and close after its waiter exits.
     store::inventory(db, &expected.installation_id).await?;
     crate::tenancy::audit::tests::assert_file_database(db, &live_source).await?;
     let source = directory.path().join("retired.sqlite");

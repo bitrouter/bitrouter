@@ -384,14 +384,27 @@ impl DeliveryPermit {
             Ok(channel) => channel,
             Err(error) => return futures::future::ready(Err(error)).boxed(),
         };
+        let delivery_execution = execution.as_ref().map(Arc::downgrade);
         registration.spawn_delivery(async move {
             let _ = reply.send(work.await).await;
         });
         async move {
-            wait.recv()
+            let ready = wait
+                .recv()
                 .await
-                .ok_or(BitrouterError::UpstreamUnavailable)??
-                .commit()
+                .ok_or(BitrouterError::UpstreamUnavailable)??;
+            // The handoff can wait after receipt commit. Recheck lifetime and
+            // resource revocation, without demanding a fresh caller grant for
+            // already admitted work, in this final delivery poll.
+            if let Some(execution) = delivery_execution {
+                let execution = execution
+                    .upgrade()
+                    .ok_or(BitrouterError::UpstreamUnavailable)?;
+                execution
+                    .check_delivery()
+                    .map_err(|code| execution.reject(code))?;
+            }
+            ready.commit()
         }
         .boxed()
     }
@@ -838,11 +851,12 @@ impl Pipeline {
             let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
             tasks.spawn_execution(async move {
                 let result={let preparing=self.execute_prepared(req,#[cfg(feature="server-tools")]run_server_tools,control);
+                    tokio::pin!(preparing);
                     tokio::select!{biased;()=receipt.cancelled.cancelled()=>{
                         #[cfg(test)]
-                        eprintln!("headroom execution boundary: stage=PreparedExecution, reason=ReceiptCancelled, original_deadline_elapsed={}", execution.remaining().is_zero());
-                        Err(BitrouterError::UpstreamUnavailable)
-                    },result=preparing=>result}};
+                        eprintln!("headroom execution boundary: stage=PreparedExecution, reason=ReceiptCancelled, original_deadline_elapsed={}", execution.remaining().is_some_and(|remaining| remaining.is_zero()));
+                        preparing.await
+                    },()=sender.closed()=>{receipt.cancel();preparing.await},result=&mut preparing=>result}};
                 let result=match result {Ok(prepared)=>Ok(prepared),Err(error)=>{
                     match execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {Ok(())=>Err(error),Err(error)=>Err(error)}
                 }};
@@ -1531,8 +1545,11 @@ impl Pipeline {
             let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
             let driver_tasks = tasks.clone();
             tasks.spawn_execution(async move {
+                // Cancel transport I/O, not the owning preparation future. Its
+                // error path still owes settlement and external callback ACKs.
                 let result={let preparing=self.prepare_stream(req,#[cfg(feature="server-tools")]run_server_tools);
-                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>Err(BitrouterError::UpstreamUnavailable),result=preparing=>result}};
+                    tokio::pin!(preparing);
+                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>preparing.await,()=sender.closed()=>{receipt.cancel();preparing.await},result=&mut preparing=>result}};
                 let result=match result {
                     Ok(prepared)=>Self::own_tenant_stream(prepared,execution.clone(),driver_tasks),
                     Err(error)=>match execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {Ok(())=>Err(error),Err(error)=>Err(error)},
