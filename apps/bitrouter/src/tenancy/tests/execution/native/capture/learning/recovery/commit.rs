@@ -183,16 +183,27 @@ async fn opener() -> Result<()> {
     let (proof, epoch) = tokio::time::timeout(TIMEOUT, receive).await??;
     let result = async {
         tokio::time::timeout(TIMEOUT, epoch.entered.notified()).await?;
-        // Existing 031 read-only pin validation precedes paid prepare/apply. Its
-        // held rollback lets us install the exact-key observer before either.
+        // Hold the startup read rollback to install the exact-key observer
+        // before paid repair. Earlier bootstrap commits may precede its COMMIT.
         proof.observe_receipt_for_test(identity.clone())?;
         let commit = proof.hold(Phase::Committing);
         epoch.release.notify_one();
-        tokio::time::timeout(TIMEOUT, commit.entered.notified()).await?;
-        ensure!(proof.disposition() == Disposition::Pending);
-        let counts = proof.sql_counts_for_test();
-        let trace = proof.receipt_trace_for_test()?;
-        ensure!(trace.key == identity && !trace.overflow);
+        let (counts, trace) = tokio::time::timeout(TIMEOUT, async {
+            let mut held = commit;
+            loop {
+                held.entered.notified().await;
+                ensure!(proof.disposition() == Disposition::Pending);
+                let trace = proof.receipt_trace_for_test()?;
+                ensure!(trace.key == identity && !trace.overflow);
+                if trace.facts[0].is_some() {
+                    break Ok::<_, anyhow::Error>((proof.sql_counts_for_test(), trace));
+                }
+                // Install before release so the next COMMIT cannot pass its gate.
+                let next = proof.hold(Phase::Committing);
+                held.release.notify_one();
+                held = next;
+            }
+        }).await??;
         let candidate = trace.facts[0].as_ref().context("paid repair candidate never reached COMMIT")?;
         ensure!(candidate.commit.is_none() && candidate.fingerprint.attempt_count == 0);
         let fingerprint = candidate.fingerprint.clone();
