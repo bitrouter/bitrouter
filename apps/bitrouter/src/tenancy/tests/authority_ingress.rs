@@ -311,10 +311,16 @@ mod assessment {
     fn arm(
         exchange: Arc<Exchange>,
         request: reqwest::Request,
-    ) -> Result<std::result::Result<(), ErrorCode>> {
+    ) -> Result<(
+        std::result::Result<(), ErrorCode>,
+        std::result::Result<(), ErrorCode>,
+    )> {
         let (send, receive) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
-            send.send(exchange.execution.arm_oauth(&exchange, &request))
+            let revalidated = exchange.execution.revalidate();
+            // Always exercise the real arm, even when the owner check failed.
+            let armed = exchange.execution.arm_oauth(&exchange, &request);
+            send.send((revalidated, armed))
                 .map_err(|_| anyhow::anyhow!("arm observer disconnected"))
         });
         // A recursive lock on the aliased owner/child lease must fail with a
@@ -375,16 +381,26 @@ mod assessment {
                 .close_new_work()
                 .map_err(|error| anyhow::anyhow!("close: {error:?}"))?;
         }
-        let observed = arm(exchange.clone(), request)?;
+        let (revalidated, observed) = arm(exchange.clone(), request)?;
         ensure!(
-            observed
+            revalidated
                 == if closed {
                     Err(ErrorCode::AuthorityUnavailable)
                 } else {
                     Ok(())
                 }
         );
-        ensure!(exchange.armed.load(Ordering::Acquire) != closed);
+        // Native assessment authority can be valid while its retained route
+        // remains outside the supported Wire(Messages) OAuth consumer profile.
+        ensure!(
+            observed
+                == if closed {
+                    Err(ErrorCode::AuthorityUnavailable)
+                } else {
+                    Err(ErrorCode::CapabilityMismatch)
+                }
+        );
+        ensure!(!exchange.armed.load(Ordering::Acquire));
         tokio::time::timeout(TIMEOUT, exchange.submit(Operation::Release))
             .await?
             .map_err(code)?;
@@ -398,9 +414,9 @@ mod assessment {
         Ok(())
     }
 
-    /// UT: sequential owner/child checks permit a healthy aliased OAuth refresh.
+    /// UT: healthy aliased authority revalidates; native OAuth remains unsupported.
     #[tokio::test]
-    async fn healthy_assessment_oauth_arm_accepts_aliased_lease() -> Result<()> {
+    async fn healthy_assessment_revalidates_aliased_lease_but_refuses_native_oauth() -> Result<()> {
         check(false).await
     }
 
