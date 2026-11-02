@@ -400,7 +400,7 @@ impl OtelExporter {
         });
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn test_expire_spans(&self) -> anyhow::Result<usize> {
         let before_timeout = Instant::now()
             .checked_sub(self.span_timeout + Duration::from_secs(1))
@@ -1628,7 +1628,7 @@ pub(crate) mod hop_tests {
         make_test_exporter_with(OtelConfig::default())
     }
 
-    #[cfg(feature = "otel-http")]
+    #[cfg(all(unix, feature = "otel-http"))]
     pub(crate) fn make_http_test_exporter(config: OtelConfig) -> anyhow::Result<OtelExporter> {
         // Explicit loopback configuration, without ambient endpoint overrides.
         OtelExporter::build(config, None, super::ProcessorRuntime::new)
