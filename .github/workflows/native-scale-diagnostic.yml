@@ -6,6 +6,7 @@ name: Native scale diagnostic
     - codex/native-scale-diagnostic
     paths:
     - ".github/workflows/native-scale-diagnostic.yml"
+    - "apps/bitrouter/src/harness/service/tests/startup/scale.rs"
 permissions:
   contents: read
 concurrency:
