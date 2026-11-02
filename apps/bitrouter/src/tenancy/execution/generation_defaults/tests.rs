@@ -87,3 +87,27 @@ fn direct_body_decode_rejects_duplicate_reserved_and_inner_members_before_value_
     );
     Ok(())
 }
+
+#[test]
+fn envelope_member_is_reserved_on_nonordered_protocol_parsing_only() -> Result<()> {
+    for protocol in [
+        ApiProtocol::ChatCompletions,
+        ApiProtocol::Messages,
+        ApiProtocol::Responses,
+    ] {
+        let body = match protocol {
+            ApiProtocol::Responses => json!({"model":"r","input":"hello"}),
+            _ => json!({"model":"r","messages":[],"max_tokens":25}),
+        };
+        crate::gateway::http::parse_input(&protocol, body.clone())?;
+        let mut old = body.clone();
+        old[BODY_MEMBER] = json!({"schema_version":1});
+        crate::gateway::http::parse_input(&protocol, old)?;
+        for value in [Value::Null, json!({"schema_version":1,"supplemental":{}})] {
+            let mut new = body.clone();
+            new[ENVELOPE_BODY_MEMBER] = value;
+            assert!(crate::gateway::http::parse_input(&protocol, new).is_err());
+        }
+    }
+    Ok(())
+}
