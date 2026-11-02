@@ -373,7 +373,7 @@ jobs:
         | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_bootstrap_two_real_distinct_revisions_fit_the_shared_operation_budget)
         | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_missing_terminal_after_confirmed_local_stop_repairs_unknown_once_without_resend)
         | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_consuming_commit_error_keeps_owner_until_death_then_repairs_once)
-        | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_late_known_commit_retires_without_publishing_authority_or_resending)
+        | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_known_commit_publishes_readiness_only_after_ack_without_resending)
         | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_disconnected_opener_keeps_custody_until_late_known_commit)'
     - name: verify actual offline Eval CLI import and readers
       timeout-minutes: 10
@@ -408,7 +408,7 @@ jobs:
           tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_caught_unwind_retains_claim_then_fresh_repairs_twice \
           tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_begin_waiter_keeps_claim_until_process_exit \
           tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_commit_error_retains_candidate_then_fresh_repairs_twice \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_late_known_commit_retires_without_publishing_authority \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_known_commit_publishes_readiness_only_after_ack \
           tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_commit_waiter_keeps_custody_until_known_ack; do
           bash .github/scripts/ci-test.sh block --test-threads 1 --run-ignored only -E "test(=$case)"
         done
