@@ -77,6 +77,39 @@ fn sqlite(db: &impl ConnectionTrait) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+async fn empty_server_sources(db: &impl ConnectionTrait, charge: &Charge<'_>) -> Result<()> {
+    // Isolated server transaction fixtures have no receipt/OAuth workload. Prove
+    // that restriction in the caller's transaction; never invent an empty view
+    // of retained server history or enable the SQLite projection on that backend.
+    ensure!(
+        matches!(
+            db.get_database_backend(),
+            DatabaseBackend::Postgres | DatabaseBackend::MySql
+        ),
+        "empty-source compatibility requires a server test database"
+    );
+    for table in [
+        "tenancy_execution_receipts",
+        "tenancy_receipt_auxiliary",
+        "tenancy_oauth_slots",
+    ] {
+        charge(1, 128)?;
+        let query = Query::select()
+            .expr(Expr::val(1_i32))
+            .from(Alias::new(table))
+            .limit(1)
+            .to_owned();
+        let row = db
+            .query_one(db.get_database_backend().build(&query))
+            .await?;
+        charge(0, 0)?;
+        ensure!(row.is_none(), "server test source must be empty: {table}");
+    }
+    Ok(())
+}
+
 fn due(first: DateTime<Utc>) -> Result<DateTime<Utc>> {
     first
         .checked_add_signed(chrono::Duration::minutes(15))
@@ -175,6 +208,11 @@ pub(in crate::tenancy) async fn tenant_count(
     tenant: &TenantId,
     charge: &Charge<'_>,
 ) -> Result<u64> {
+    #[cfg(test)]
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        empty_server_sources(db, charge).await?;
+        return Ok(0);
+    }
     sqlite(db)?;
     charge(1, 128)?;
     let row = db.query_one(sql("SELECT COUNT(*) AS count FROM tenancy_unknown_obligations WHERE installation_id=? AND tenant_id=?", [installation.as_str().into(), tenant.as_str().into()])).await?.context("unknown tenant count")?;
@@ -201,6 +239,11 @@ pub(in crate::tenancy) async fn next_due(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Option<DateTime<Utc>>> {
+    #[cfg(test)]
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        empty_server_sources(db, charge).await?;
+        return Ok(None);
+    }
     sqlite(db)?;
     io::next_due(db, installation, charge).await
 }
@@ -239,6 +282,11 @@ pub(in crate::tenancy) async fn validate(
     installation: &InstallationId,
     charge: &Charge<'_>,
 ) -> Result<Inventory> {
+    #[cfg(test)]
+    if tx.get_database_backend() != DatabaseBackend::Sqlite {
+        empty_server_sources(tx, charge).await?;
+        return Ok(Fold::new().finish());
+    }
     sqlite(tx)?;
     validation::run(tx, installation, charge).await
 }

@@ -11,6 +11,7 @@ use std::panic::AssertUnwindSafe;
 
 mod cases;
 mod database;
+mod empty_sources;
 mod fault;
 mod harness;
 mod rows;
@@ -45,6 +46,12 @@ async fn server_owned_trajectory_five_terminal_faults_roll_back_the_compound_clo
 async fn server_owned_trajectory_exact_replay_is_read_only_inside_tx_and_durable_on_reopen()
 -> Result<()> {
     run(|database| Box::pin(cases::replay(database))).await
+}
+
+#[tokio::test]
+#[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
+async fn server_owned_trajectory_empty_source_compatibility_refuses_retained_rows() -> Result<()> {
+    run(|database| Box::pin(empty_sources::check(database))).await
 }
 
 #[tokio::test]
