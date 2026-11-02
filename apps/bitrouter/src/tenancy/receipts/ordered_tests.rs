@@ -11,6 +11,9 @@ use bitrouter_ai::tenancy::{
 use sea_orm::{Statement, TransactionTrait};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[path = "ordered_tests/shared_migration.rs"]
+mod shared_migration;
+
 fn acquisition(
     path: &std::path::Path,
 ) -> Result<(ownership::Lease, Arc<Proof>, Arc<StartupOwner>)> {

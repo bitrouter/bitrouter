@@ -56,7 +56,8 @@ pub(super) fn compiled_with_operation(
     );
     ensure!(
         revision.compiler_version == COMPILER_VERSION
-            || revision.compiler_version == super::PROFILED_COMPILER_VERSION,
+            || revision.compiler_version == super::PROFILED_COMPILER_VERSION
+            || revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION,
         "unsupported configuration compiler"
     );
     ensure!(
@@ -130,7 +131,8 @@ pub(super) fn compiled_with_operation(
             ensure!(
                 envelope.artifacts.len() <= MAX_CLOSURE
                     && envelope.routes.len() <= document.routes.len()
-                    && (envelope.format == 4 || envelope.routes.len() == document.routes.len()),
+                    && (matches!(envelope.format, 4 | 5)
+                        || envelope.routes.len() == document.routes.len()),
                 "compiled envelope count mismatch"
             );
             let mut artifacts = HashMap::new();
@@ -174,7 +176,8 @@ pub(super) fn compiled_with_operation(
                     (
                         Definition::Policy { .. }
                         | Definition::Checkpoint { .. }
-                        | Definition::AdmissionProfile { .. },
+                        | Definition::AdmissionProfile { .. }
+                        | Definition::AdmissionProfileV2 { .. },
                         None,
                     ) => {}
                     _ => anyhow::bail!("invalid compiled artifact kind or shape"),
@@ -242,7 +245,7 @@ pub(super) fn compiled_with_operation(
                     crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
                 }
             }
-            let expected = if envelope.format == 4 {
+            let expected = if matches!(envelope.format, 4 | 5) {
                 compiler::configuration_routes_with_operation(
                     document,
                     &envelope.artifacts,
@@ -252,7 +255,7 @@ pub(super) fn compiled_with_operation(
                 compiler::configuration_routes(document, &envelope.artifacts)
             }
             .map_err(|_| anyhow::anyhow!("invalid retained route composition"))?;
-            if envelope.format == 4 {
+            if matches!(envelope.format, 4 | 5) {
                 // Compare against independently retained projections, never a
                 // clone of wire input. Full identities preserve ordinary root
                 // ordering and reject missing or extra profiled projections.
@@ -278,6 +281,11 @@ pub(super) fn compiled_with_operation(
     ensure!(
         (envelope.format == 4) == (revision.compiler_version == super::PROFILED_COMPILER_VERSION),
         "admission configuration compiler mismatch"
+    );
+    ensure!(
+        (envelope.format == 5)
+            == (revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION),
+        "shared health configuration compiler mismatch"
     );
     super::execution::validate_with_operation(envelope, operation)
 }

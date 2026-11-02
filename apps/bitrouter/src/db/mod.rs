@@ -17,6 +17,7 @@ mod exclusive_migrations;
 pub mod migration;
 #[cfg(test)]
 mod migration_atomicity;
+mod migration_fence;
 mod sqlite;
 
 use sea_orm::{
@@ -272,10 +273,10 @@ async fn enable_wal(db: &DatabaseConnection) {
 /// Apply every pending migration in [`migration::Migrator`]. Idempotent —
 /// already-applied migrations are skipped, tracked in `seaql_migrations`.
 pub async fn run_migrations(db: &DatabaseConnection) -> Result<()> {
-    let result = if db.get_database_backend() == DatabaseBackend::Sqlite {
-        migrate_sqlite(db).await
-    } else {
-        migration::Migrator::up(db, None).await
+    let result = match db.get_database_backend() {
+        DatabaseBackend::Sqlite => migrate_sqlite(db).await,
+        DatabaseBackend::MySql => migration_fence::mysql(db).await,
+        DatabaseBackend::Postgres => migration::Migrator::up(db, None).await,
     };
     result.map_err(|e| BitrouterError::internal(format!("running database migrations: {e}")))?;
     Ok(())

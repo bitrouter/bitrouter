@@ -53,6 +53,11 @@ impl<'de> Deserialize<'de> for Definition {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
         let tag: Tag = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+        if tag.kind == "admission_profile_v2" {
+            let bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 { profile } =
+                serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+            return Ok(Self::AdmissionProfileV2 { profile });
+        }
         if matches!(tag.kind.as_str(), "admission_profile" | "profiled_route") {
             let public: bitrouter_ai::tenancy::resources::Definition =
                 serde_json::from_str(raw.get()).map_err(D::Error::custom)?;

@@ -211,7 +211,7 @@ async fn target_authority_format_must_match_current_writer_before_import() -> Re
     use sea_orm::sqlx::Connection;
 
     tokio::time::timeout(TIMEOUT, async {
-        for version in [1_i64, 2, 4] {
+        for version in [1_i64, 2, 3, 5] {
             let mut fixture = Fixture::new().await?;
             let owner = crate::tenancy::ownership::acquire_path(&fixture.target, false)?;
             let mut db = sea_orm::sqlx::SqliteConnection::connect(&format!(
