@@ -143,6 +143,77 @@ fn increment(count: &mut u64) -> Result<()> {
     Ok(())
 }
 
+fn batch_allowance(body_bytes: usize, rows: usize) -> Option<(usize, usize)> {
+    if rows == 0 || rows > query::OPERATION_BATCH_ROWS {
+        return None;
+    }
+    // Additional row/vector and query scratch, never borrowed from the retained
+    // key page. The extra slots include the n+1 duplicate witness.
+    let fixed = rows
+        .checked_add(4)?
+        .checked_mul(4096)?
+        .checked_add(4 * 64 * 1024)?;
+    let usable = body_bytes.checked_sub(fixed)?;
+    let encoded = usable.checked_div(rows.checked_mul(12)?)?;
+    (encoded > 0).then_some((encoded, usable / 2))
+}
+
+async fn read_batch(
+    db: &impl ConnectionTrait,
+    keys: &[Vec<String>],
+    body_bytes: usize,
+) -> Result<Option<Vec<QueryResult>>> {
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        return Ok(None);
+    }
+    let Some((encoded, decoded)) = batch_allowance(body_bytes, keys.len()) else {
+        return Ok(None);
+    };
+    let Some(statement) = query::sqlite_operation_batch(keys, encoded)? else {
+        return Ok(None);
+    };
+    let rows = db.query_all(statement).await?;
+    // The n+1 query-only witness fits usable, but may exceed its encoded half.
+    // Reject it before any JSON preflight or canonical allocation.
+    ensure!(
+        rows.len() == keys.len(),
+        "operation batch identity count mismatch"
+    );
+    let mut fits = true;
+    for row in &rows {
+        ensure!(
+            row.try_get::<i32>("", "directory_valid")? == 1,
+            "invalid directory row storage types"
+        );
+        let bytes = usize::try_from(row.try_get::<i64>("", "directory_bytes")?)?;
+        match row.try_get::<i32>("", "directory_fits")? {
+            0 => fits = false,
+            1 => ensure!(bytes <= encoded, "operation batch byte guard mismatch"),
+            _ => anyhow::bail!("invalid operation batch size marker"),
+        }
+    }
+    if !fits {
+        return Ok(None);
+    }
+    for (row, keys) in rows.iter().zip(keys) {
+        for (column, expected) in KEYS.iter().zip(keys) {
+            ensure!(
+                row.try_get::<String>("", column)? == *expected,
+                "operation batch key mismatch"
+            );
+        }
+    }
+    for row in &rows {
+        if retained::memory::operation(row)? > decoded {
+            return Ok(None);
+        }
+    }
+    // Every row has passed preflight before counters/cursor advance. On any
+    // None above, rows and ephemeral SQL allocations drop inside this helper,
+    // before the caller starts its unchanged full-body point fallback.
+    Ok(Some(rows))
+}
+
 pub(super) async fn validate_in(
     db: &impl ConnectionTrait,
     header: &AuthorityHeader,
@@ -179,55 +250,63 @@ pub(super) async fn validate_in(
         if page.is_empty() {
             break;
         }
-        for keys in page {
-            let row = query::one_statement(db, point.statement(db, &keys)?, |row| {
-                // The SQL guards already bound this row. Count its JSON nodes
-                // before allocating canonical DTOs, using that same SQL row.
-                if retained::memory::operation(row)? > body_bytes {
-                    return Err(CapacityExceeded.into());
-                }
-                decode(row)
-            })
-            .await?
-            .context("operation disappeared")?;
-            ensure!(
-                row.installation == header.installation,
-                "operation history installation mismatch"
-            );
-            let operation = &row.operation;
-            result(operation, header)?;
-            match &operation.context {
-                ReadContext::Installation => ensure!(
-                    row.class == AuthorityClass::Installation && row.tenant.is_none(),
-                    "operation read context differs from indexed owner"
-                ),
-                ReadContext::Tenant { tenant, scopes, .. } => {
-                    ensure!(
-                        row.class == AuthorityClass::Tenant && row.tenant.as_ref() == Some(tenant),
+        for keys in page.chunks(query::OPERATION_BATCH_ROWS) {
+            let batch = read_batch(db, keys, body_bytes).await?;
+            for (index, keys) in keys.iter().enumerate() {
+                let row = if let Some(rows) = &batch {
+                    decode(rows.get(index).context("operation batch row missing")?)?
+                } else {
+                    query::one_statement(db, point.statement(db, keys)?, |row| {
+                        // The SQL guards already bound this row. Count its JSON nodes
+                        // before allocating canonical DTOs, using that same SQL row.
+                        if retained::memory::operation(row)? > body_bytes {
+                            return Err(CapacityExceeded.into());
+                        }
+                        decode(row)
+                    })
+                    .await?
+                    .context("operation disappeared")?
+                };
+                ensure!(
+                    row.installation == header.installation,
+                    "operation history installation mismatch"
+                );
+                let operation = &row.operation;
+                result(operation, header)?;
+                match &operation.context {
+                    ReadContext::Installation => ensure!(
+                        row.class == AuthorityClass::Installation && row.tenant.is_none(),
                         "operation read context differs from indexed owner"
-                    );
-                    for scope in scopes {
-                        scope.validate()?;
+                    ),
+                    ReadContext::Tenant { tenant, scopes, .. } => {
+                        ensure!(
+                            row.class == AuthorityClass::Tenant
+                                && row.tenant.as_ref() == Some(tenant),
+                            "operation read context differs from indexed owner"
+                        );
+                        for scope in scopes {
+                            scope.validate()?;
+                        }
+                        ensure!(
+                            directory::tenant_in(db, tenant, bytes).await?.is_some()
+                                && directory::principal_in(db, &operation.principal, bytes)
+                                    .await?
+                                    .is_some(),
+                            "orphan operation read context"
+                        );
                     }
-                    ensure!(
-                        directory::tenant_in(db, tenant, bytes).await?.is_some()
-                            && directory::principal_in(db, &operation.principal, bytes)
-                                .await?
-                                .is_some(),
-                        "orphan operation read context"
-                    );
                 }
+                increment(if operation.safety {
+                    &mut safety
+                } else {
+                    &mut ordinary
+                })?;
+                after = Some(vec![
+                    row.installation.to_string(),
+                    operation.principal.to_string(),
+                    operation.id.to_string(),
+                ]);
             }
-            increment(if operation.safety {
-                &mut safety
-            } else {
-                &mut ordinary
-            })?;
-            after = Some(vec![
-                row.installation.to_string(),
-                operation.principal.to_string(),
-                operation.id.to_string(),
-            ]);
         }
     }
     ensure!(
@@ -289,6 +368,84 @@ mod tests {
         count = i64::MAX as u64;
         assert!(increment(&mut count).is_err());
         assert_eq!(count, i64::MAX as u64);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operation_batch_rejects_extra_rows_before_storage_and_json_preflight() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        db.execute_unprepared("CREATE TABLE tenancy_operations(installation_id,principal_id,operation_id,tenant_id,authority_class,read_context_json,command_digest,result_json,response_json,created_at,hash_version,safety)").await?;
+        let keys = vec![vec![
+            "installation".into(),
+            "principal".into(),
+            "operation".into(),
+        ]];
+        let insert = "INSERT INTO tenancy_operations VALUES('installation','principal','operation',NULL,'installation','{}','digest','{}','not-json','created',1,0)";
+        db.execute_unprepared(insert).await?;
+        db.execute_unprepared(insert).await?;
+        for mixed_storage in [false, true] {
+            if mixed_storage {
+                db.execute_unprepared("UPDATE tenancy_operations SET response_json=NULL WHERE rowid=(SELECT max(rowid) FROM tenancy_operations)").await?;
+            }
+            let error = read_batch(&db, &keys, 1024 * 1024)
+                .await
+                .err()
+                .context("duplicate accepted")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("operation batch identity count mismatch"),
+                "{error:#}"
+            );
+        }
+        db.execute_unprepared("DELETE FROM tenancy_operations WHERE rowid=(SELECT min(rowid) FROM tenancy_operations)").await?;
+        let error = read_batch(&db, &keys, 1024 * 1024)
+            .await
+            .err()
+            .context("invalid storage accepted")?;
+        assert!(
+            error
+                .to_string()
+                .contains("invalid directory row storage types"),
+            "{error:#}"
+        );
+        db.execute_unprepared("DELETE FROM tenancy_operations")
+            .await?;
+        let error = read_batch(&db, &keys, 1024 * 1024)
+            .await
+            .err()
+            .context("missing operation accepted")?;
+        assert!(
+            error
+                .to_string()
+                .contains("operation batch identity count mismatch"),
+            "{error:#}"
+        );
+        // The extra witness can occupy more than the encoded half, but remains
+        // within usable because the count guard runs before canonical preflight.
+        let (encoded, decoded) = batch_allowance(1024 * 1024, 1).context("batch allowance")?;
+        assert!(encoded * 6 * 2 > decoded && encoded * 6 * 2 <= decoded * 2);
+        db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operation_batch_budget_miss_does_not_query_or_mask_real_read_errors() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let keys = vec![vec![
+            "installation".into(),
+            "principal".into(),
+            "operation".into(),
+        ]];
+        // There is deliberately no table. Optional scratch pressure must select
+        // fallback before SQL; with enough room the actual SELECT error is kept.
+        assert!(read_batch(&db, &keys, 128 * 1024).await?.is_none());
+        let error = read_batch(&db, &keys, 1024 * 1024)
+            .await
+            .err()
+            .context("SQL failure converted to a fast-path miss")?;
+        assert!(!error.is::<CapacityExceeded>());
+        db.close().await?;
         Ok(())
     }
 }

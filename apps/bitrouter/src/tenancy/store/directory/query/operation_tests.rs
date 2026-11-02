@@ -30,13 +30,17 @@ async fn database() -> Result<DatabaseConnection> {
 }
 
 async fn insert(db: &DatabaseConnection) -> Result<()> {
+    insert_key(db, IDENTITY).await
+}
+
+async fn insert_key(db: &DatabaseConnection, identity: [&str; 3]) -> Result<()> {
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO tenancy_operations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         [
-            IDENTITY[0].into(),
-            IDENTITY[1].into(),
-            IDENTITY[2].into(),
+            identity[0].into(),
+            identity[1].into(),
+            identity[2].into(),
             Option::<String>::None.into(),
             "installation".into(),
             "{}".into(),
@@ -276,5 +280,76 @@ async fn compact_operation_probes_both_indexed_branches_and_rejects_mixed_duplic
         );
     }
     db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn operation_batch_guards_every_key_and_keeps_the_extra_duplicate_marker() -> Result<()> {
+    let db = database().await?;
+    let second = [IDENTITY[0], IDENTITY[1], "z-operation"];
+    insert_key(&db, second).await?;
+    let keys = [IDENTITY, second].map(|key| key.map(str::to_owned).to_vec());
+    let statement = sqlite_operation_batch(&keys, 4096)?.context("batch declined")?;
+    let rows = db.query_all(statement.clone()).await?;
+    assert_eq!(rows.len(), 2);
+    for (row, key) in rows.iter().zip(&keys) {
+        assert_eq!(row.try_get::<String>("", "operation_id")?, key[2]);
+        assert_eq!(payload(row)?.as_bytes(), "雪\0tail".as_bytes());
+    }
+    // First OR member must still pass the aggregate/type predicates. The
+    // malformed branch transfers scalar markers, never the BLOB or large text.
+    for (body, valid) in [
+        (Value::Bytes(Some(Box::new(vec![0; 8192]))), 0),
+        ("x".repeat(8192).into(), 1),
+    ] {
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE tenancy_operations SET response_json=? WHERE operation_id=?",
+            [body, IDENTITY[2].into()],
+        ))
+        .await?;
+        let rows = db.query_all(statement.clone()).await?;
+        assert_eq!(rows.len(), 2);
+        let rejected = rows.first().context("missing marker")?;
+        assert_eq!(rejected.try_get::<i32>("", "directory_valid")?, valid);
+        assert_eq!(rejected.try_get::<i32>("", "directory_fits")?, 0);
+        assert_eq!(
+            rejected.try_get::<Option<String>>("", "response_json")?,
+            None
+        );
+        assert_eq!(
+            payload(rows.get(1).context("valid peer missing")?)?.as_bytes(),
+            "雪\0tail".as_bytes()
+        );
+    }
+    insert(&db).await?;
+    let rows = db.query_all(statement).await?;
+    assert_eq!(rows.len(), 3, "compound LIMIT must retain the n+1 witness");
+    let mut fits = rows
+        .iter()
+        .map(|row| row.try_get::<i32>("", "directory_fits"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    fits.sort_unstable();
+    assert_eq!(fits, [0, 1, 1]);
+    db.close().await?;
+    Ok(())
+}
+
+#[test]
+fn operation_batch_input_checks_owned_capacity_and_strict_key_order() -> Result<()> {
+    let key = IDENTITY.map(str::to_owned).to_vec();
+    assert!(sqlite_operation_batch(&[key.clone(), key.clone()], 4096).is_err());
+    let mut reversed = vec![
+        key.clone(),
+        vec!["a".into(), "principal".into(), "operation".into()],
+    ];
+    assert!(sqlite_operation_batch(&reversed, 4096).is_err());
+    reversed.reverse();
+    let mut statement = sqlite_operation_batch(&reversed, 4096)?.context("valid keys declined")?;
+    assert!(operation_batch_input_fits(&statement));
+    // Length alone is insufficient: retaining a large SQL allocation must
+    // decline the optional path before the actual adapter is called.
+    statement.sql.reserve(64 * 1024);
+    assert!(!operation_batch_input_fits(&statement));
     Ok(())
 }

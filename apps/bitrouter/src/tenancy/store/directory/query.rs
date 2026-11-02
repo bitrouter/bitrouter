@@ -242,6 +242,14 @@ pub(in crate::tenancy::store) fn select(
 /// Fixed SQLite operation point query. Only the successful branch may return
 /// payloads; the other preserves malformed/oversized rows as scalar failures.
 pub(in crate::tenancy::store) fn sqlite_operation() -> String {
+    sqlite_operation_sql(
+        "\"tenancy_operations\".\"installation_id\"=?1 AND \"tenancy_operations\".\"principal_id\"=?2 AND \"tenancy_operations\".\"operation_id\"=?3",
+        4,
+        "LIMIT 2",
+    )
+}
+
+fn sqlite_operation_sql(keys: &str, byte_parameter: usize, tail: &str) -> String {
     let table = Table::Operation;
     let mut columns = Vec::new();
     let mut absent = Vec::new();
@@ -272,19 +280,108 @@ pub(in crate::tenancy::store) fn sqlite_operation() -> String {
     }
     let valid = format!("({})", valid.join(" AND "));
     let bytes = format!("({})", bytes.join("+"));
-    let predicate = format!("{valid} AND {bytes}<=?4");
-    let keys = "\"tenancy_operations\".\"installation_id\"=?1 AND \"tenancy_operations\".\"principal_id\"=?2 AND \"tenancy_operations\".\"operation_id\"=?3";
+    let predicate = format!("{valid} AND {bytes}<=?{byte_parameter}");
     // CASE covers both false and NULL. UNION ALL retains duplicate identities;
     // LIMIT applies to the entire compound, before any canonical DTO is built.
     // https://sqlite.org/lang_select.html#compound_select_statements
     // https://sqlite.org/lang_expr.html#the_case_expression
     format!(
-        "SELECT {},1 AS directory_valid,{bytes} AS directory_bytes,1 AS directory_fits FROM \"{}\" WHERE {keys} AND ({predicate}) UNION ALL SELECT {},CASE WHEN {valid} THEN 1 ELSE 0 END AS directory_valid,{bytes} AS directory_bytes,CASE WHEN {bytes}<=?4 THEN 1 ELSE 0 END AS directory_fits FROM \"{}\" WHERE {keys} AND CASE WHEN {predicate} THEN 0 ELSE 1 END=1 LIMIT 2",
+        "SELECT {},1 AS directory_valid,{bytes} AS directory_bytes,1 AS directory_fits FROM \"{}\" WHERE ({keys}) AND ({predicate}) UNION ALL SELECT {},CASE WHEN {valid} THEN 1 ELSE 0 END AS directory_valid,{bytes} AS directory_bytes,CASE WHEN {bytes}<=?{byte_parameter} THEN 1 ELSE 0 END AS directory_fits FROM \"{}\" WHERE ({keys}) AND CASE WHEN {predicate} THEN 0 ELSE 1 END=1 {tail}",
         columns.join(","),
         table.name(),
         absent.join(","),
         table.name(),
     )
+}
+
+pub(in crate::tenancy::store) const OPERATION_BATCH_ROWS: usize = 32;
+
+/// Optional transport batch, bounded independently of retained history. Both
+/// branches reuse the same typed keys; an extra row exposes duplicate storage.
+pub(in crate::tenancy::store) fn sqlite_operation_batch(
+    keys: &[Vec<String>],
+    bytes: usize,
+) -> Result<Option<Statement>> {
+    if keys.is_empty() || keys.len() > OPERATION_BATCH_ROWS || bytes == 0 {
+        return Ok(None);
+    }
+    ensure!(
+        keys.iter().all(|key| key.len() == 3
+            && key
+                .iter()
+                .all(|value| !value.is_empty() && value.len() <= 128)),
+        "invalid operation batch key"
+    );
+    ensure!(
+        keys.windows(2).all(|pair| pair[0] < pair[1]),
+        "unordered operation batch keys"
+    );
+    let Ok(bytes) = i64::try_from(bytes) else {
+        return Ok(None);
+    };
+    let mut predicates = Vec::with_capacity(keys.len());
+    let mut values = Vec::with_capacity(keys.len() * 3 + 1);
+    for key in keys {
+        let first = values.len() + 1;
+        predicates.push(format!(
+            "(\"tenancy_operations\".\"installation_id\"=?{first} AND \"tenancy_operations\".\"principal_id\"=?{} AND \"tenancy_operations\".\"operation_id\"=?{})",
+            first + 1, first + 2,
+        ));
+        values.extend(key.iter().map(|value| sea_orm::Value::from(value.as_str())));
+    }
+    values.push(bytes.into());
+    let sql = sqlite_operation_sql(
+        &predicates.join(" OR "),
+        values.len(),
+        &format!(
+            "ORDER BY installation_id,principal_id,operation_id LIMIT {}",
+            keys.len() + 1
+        ),
+    );
+    drop(predicates);
+    let statement = Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values);
+    if !operation_batch_input_fits(&statement) {
+        return Ok(None);
+    }
+    Ok(Some(statement))
+}
+
+fn operation_batch_input_fits(statement: &Statement) -> bool {
+    use sea_orm::{Value, sqlx::sqlite::SqliteArgumentValue};
+    let Some(values) = &statement.values else {
+        return false;
+    };
+    let fits = || -> Option<bool> {
+        let values_bytes = values.0.capacity().checked_mul(size_of::<Value>())?;
+        let arguments = values
+            .0
+            .len()
+            .max(4)
+            .checked_mul(size_of::<SqliteArgumentValue<'static>>())?;
+        let mut input = statement.sql.capacity().checked_add(values_bytes)?;
+        // Match the borrowed adapter's conversion/worker profile. Move the SQL
+        // into the statement; no batch template/cache survives this phase.
+        let mut working = statement
+            .sql
+            .capacity()
+            .checked_add(statement.sql.len().checked_add(1)?.checked_mul(3)?)?
+            .checked_add(arguments)?
+            .checked_add(values_bytes.max(arguments))?;
+        for value in &values.0 {
+            let (owned, sqlite) = match value {
+                Value::String(Some(text)) => (
+                    text.capacity().checked_add(size_of::<String>())?,
+                    text.len().checked_add(1)?,
+                ),
+                Value::BigInt(Some(_)) => (0, 0),
+                _ => return None,
+            };
+            input = input.checked_add(owned)?;
+            working = working.checked_add(owned)?.checked_add(sqlite)?;
+        }
+        Some(input < 64 * 1024 && working <= 4 * 64 * 1024)
+    };
+    fits() == Some(true)
 }
 
 pub(in crate::tenancy::store) async fn read<T>(
