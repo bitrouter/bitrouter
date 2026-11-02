@@ -34,7 +34,7 @@ env:
 jobs:
   capacity:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.qualification && 300 || 90 }}
+    timeout-minutes: ${{ inputs.qualification && 330 || 90 }}
     defaults:
       run:
         shell: bash
@@ -118,12 +118,14 @@ jobs:
       with:
         tool: nextest@0.9.114
     - name: Build capacity harness once without release LTO
-      timeout-minutes: 90
+      # The binary/examples and libtest are separate serial compiler passes.
+      # Compilation time is separate from the unchanged workload deadlines.
+      timeout-minutes: ${{ inputs.qualification && 120 || 90 }}
       run: |
         set -euo pipefail
         mkdir -p ci-evidence
         command -v vmstat
-        vmstat -w -t 30 180 &
+        vmstat -w -t 30 240 &
         sampler_pid=$!
         finish_build() {
           result=$?
