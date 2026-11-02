@@ -1,0 +1,233 @@
+---
+name: Native scale diagnostic
+'on':
+  push:
+    branches:
+    - codex/native-scale-diagnostic
+    paths:
+    - ".github/workflows/native-scale-diagnostic.yml"
+permissions:
+  contents: read
+concurrency:
+  group: native-scale-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '1'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTFLAGS: "--cfg bitrouter_capacity_tests -Dwarnings"
+jobs:
+  capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    defaults:
+      run:
+        shell: bash
+    env:
+      QUALIFICATION: 'true'
+      EXPECTED_CANDIDATE_SHA: "${{ github.sha }}"
+      QUALIFICATION_GROUP: native-diagnostic
+    steps:
+    - uses: actions/checkout@v6
+    - name: Prepare memory for the capacity build
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: "${{ runner.environment }}"
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_ACTIONS" == true && "$RUNNER_KIND" == github-hosted ]]
+        [[ ! -e /swapfile-bitrouter-capacity && ! -L /swapfile-bitrouter-capacity ]]
+        mkdir -p ci-evidence
+        { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-before-swap.txt
+        # Allocate before the scratch gates so their 40 GiB is net of swap.
+        sudo fallocate --length 8G /swapfile-bitrouter-capacity
+        sudo chmod 600 /swapfile-bitrouter-capacity
+        sudo mkswap /swapfile-bitrouter-capacity
+        sudo swapon /swapfile-bitrouter-capacity
+        { free -h; swapon --show --bytes; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-after-swap.txt
+    - name: Pin qualification candidate and inspect ephemeral runner space
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: "${{ runner.environment }}"
+      run: |
+        set -euo pipefail
+        # Dispatch the candidate ref and independently check its full SHA via env.
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch
+        if [[ "$GITHUB_ACTIONS" != true || "$RUNNER_KIND" != github-hosted ]]; then
+          echo '::error::Qualification requires a fresh GitHub-hosted runner.'
+          exit 1
+        fi
+        [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$EXPECTED_CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+        [[ "$(git rev-parse HEAD)" == "$EXPECTED_CANDIDATE_SHA" ]]
+        case "$QUALIFICATION_GROUP" in native-diagnostic) ;; *) exit 1 ;; esac
+        mkdir -p ci-evidence
+        umask 077
+        scratch="$(mktemp -d "$RUNNER_TEMP/bitrouter-capacity.XXXXXX")"
+        printf 'BITROUTER_C4_SCRATCH=%s\n' "$scratch" >> "$GITHUB_ENV"
+        printf 'candidate=%s\nref=%s\nprofile=ci-capacity\nfeatures=all\nRUSTFLAGS=%s\nrunner_image=%s/%s\n' \
+          "$GITHUB_SHA" "$GITHUB_REF" "$RUSTFLAGS" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
+          > ci-evidence/qualification.txt
+        printf 'qualification_group=%s\n' "$QUALIFICATION_GROUP" >> ci-evidence/qualification.txt
+        sha256sum Cargo.toml Cargo.lock .config/nextest.toml .github/workflows/capacity.yml .github/workflows/native-scale-diagnostic.yml apps/bitrouter/src/harness/service/tests/startup/scale.rs \
+          > ci-evidence/qualification-source.sha256
+        df -Pk "$PWD" "$RUNNER_TEMP" "$scratch" | tee ci-evidence/disk-before-cache.txt
+        free_kib="$(df -Pk "$scratch" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          # This Rust-only job uses none of these preinstalled SDKs. Never remove
+          # Rust, checkout data, caches or built test artifacts to make a test fit.
+          # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+          for unused in /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL; do
+            if [[ -d "$unused" && ! -L "$unused" ]]; then
+              sudo du -sh -- "$unused" | tee -a ci-evidence/preinstalled-cleanup.txt
+              sudo rm -rf -- "$unused"
+            fi
+          done
+        fi
+        df -Pk "$scratch" | tee ci-evidence/disk-before-build.txt
+        free_kib="$(df -Pk "$scratch" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          echo '::error::Qualification requires at least 40 GiB free scratch space; no test was qualified.'
+          exit 1
+        fi
+        printf '%s\n' 'diagnostic_only=true' 'qualification_accepted=false' 'base_source=c12d480d694fa01d21d6676ea19370f5f0c680a8' >> ci-evidence/qualification.txt
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache: false
+        cache-on-failure: false
+        cache-key: complete-v1
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Build the native libtest once
+      timeout-minutes: 120
+      run: |
+        set -euo pipefail
+        mkdir -p ci-evidence
+        command -v vmstat
+        vmstat -w -t 30 240 &
+        sampler_pid=$!
+        finish_build() {
+          result=$?
+          trap - EXIT
+          kill "$sampler_pid" 2>/dev/null || true
+          wait "$sampler_pid" 2>/dev/null || true
+          printf '%s\n' "$result" > ci-evidence/build-exit-status.txt || true
+          { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } > ci-evidence/build-resources-final.txt 2>&1 || true
+          cat ci-evidence/build-resources-final.txt || true
+          exit "$result"
+        }
+        trap finish_build EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+        # Listing binaries builds the harness once and preserves reusable metadata.
+        # https://nexte.st/docs/ci-features/archiving/#manually-creating-your-own-archives
+        /usr/bin/time -v -o ci-evidence/build-tests.txt \
+          cargo nextest list --locked -p bitrouter --all-features --lib \
+          --cargo-profile ci-capacity --build-jobs 1 --list-type binaries-only --message-format json \
+          > ci-evidence/binaries-metadata.json
+        cargo metadata --locked --all-features --format-version 1 > ci-evidence/cargo-metadata.json
+        if [[ "$QUALIFICATION" == true ]]; then
+          { rustc -Vv; cargo -Vv; cargo-nextest nextest --version; uname -a; } > ci-evidence/toolchain.txt
+          jq -er '."rust-binaries"[]."binary-path"' ci-evidence/binaries-metadata.json \
+            > ci-evidence/test-binary-paths.txt
+          while IFS= read -r binary; do
+            test -x "$binary"
+            sha256sum -- "$binary"
+          done < ci-evidence/test-binary-paths.txt > ci-evidence/qualification-binaries.sha256
+        fi
+        mkdir -p "$RUNNER_TEMP/native-no-build"
+        printf '#!/bin/sh\necho "native diagnostic must use prebuilt libtest" >&2\nexit 97\n' > "$RUNNER_TEMP/native-no-build/cargo"
+        chmod +x "$RUNNER_TEMP/native-no-build/cargo"
+        printf '%s\n' "$RUNNER_TEMP/native-no-build" >> "$GITHUB_PATH"
+    - name: Require real scratch capacity after cache restoration and build
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: "${{ runner.environment }}"
+      run: |
+        set -euo pipefail
+        if [[ "$GITHUB_ACTIONS" != true || "$RUNNER_KIND" != github-hosted ]]; then
+          echo '::error::Qualification requires a fresh GitHub-hosted runner.'
+          exit 1
+        fi
+        df -Pk "$PWD/target" "$RUNNER_TEMP" "$BITROUTER_C4_SCRATCH" | tee ci-evidence/disk-after-build.txt
+        free_kib="$(df -Pk "$BITROUTER_C4_SCRATCH" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          # Only the same unused preinstalled SDKs may be reclaimed on this fresh runner.
+          for unused in /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL; do
+            if [[ -d "$unused" && ! -L "$unused" ]]; then
+              sudo du -sh -- "$unused" | tee -a ci-evidence/preinstalled-cleanup.txt
+              sudo rm -rf -- "$unused"
+            fi
+          done
+        fi
+        df -Pk "$BITROUTER_C4_SCRATCH" | tee ci-evidence/disk-before-qualification.txt
+        free_kib="$(df -Pk "$BITROUTER_C4_SCRATCH" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          echo '::error::Build/cache storage leaves less than 40 GiB free; qualification must not be skipped or reduced.'
+          exit 1
+        fi
+        # The fixture additionally requires 2 * actual source size + 4 GiB before copying.
+        # Keep that runtime check; this runner preflight cannot replace it.
+    - name: Run the full native case once for diagnosis
+      timeout-minutes: 65
+      env:
+        BITROUTER_TEST_PREBUILT_ONLY: '1'
+      run: |
+        set -euo pipefail
+        export TMPDIR="$BITROUTER_C4_SCRATCH"
+        metadata=(--cargo-metadata "$PWD/ci-evidence/cargo-metadata.json"
+        --binaries-metadata "$PWD/ci-evidence/binaries-metadata.json"
+        --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
+        suite=native
+        selector=harness::service::tests::startup::scale::real_sqlite_native_history_crosses_old_startup_limits_without_replay
+        filter="kind(lib) & test(=$selector)"
+        cargo-nextest nextest list "${metadata[@]}" --profile ci --run-ignored only \
+          -E "$filter" --message-format json > "ci-evidence/$suite-selection.json"
+        jq -e '
+          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+          | length == 1 and all(.ignored == true)
+        ' "ci-evidence/$suite-selection.json"
+        sha256sum -c ci-evidence/qualification-source.sha256
+        sha256sum -c ci-evidence/qualification-binaries.sha256
+        rm -f target/nextest/ci/junit.xml
+        status=0
+        # Retain successful phase output too, without uploading any fixture database.
+        # https://nexte.st/docs/reporting/
+        /usr/bin/time -v -o "ci-evidence/$suite-resources.txt" \
+          cargo-nextest nextest run "${metadata[@]}" --profile ci --test-threads 1 \
+          --run-ignored only --retries 0 --no-tests fail --success-output immediate \
+          --failure-output immediate-final -E "$filter" 2>&1 | tee "ci-evidence/$suite.log" || status=$?
+        if [[ -f target/nextest/ci/junit.xml ]]; then
+          cp target/nextest/ci/junit.xml "ci-evidence/$suite-junit.xml"
+        fi
+        sha256sum -c ci-evidence/qualification-binaries.sha256 || status=$?
+        printf '%s\n' "$status" > "ci-evidence/$suite-exit-status.txt"
+        df -Pk "$BITROUTER_C4_SCRATCH" > "ci-evidence/$suite-disk-after.txt"
+        if (( status != 0 )); then exit "$status"; fi
+    - name: Record final qualification storage
+      if: always()
+      timeout-minutes: 5
+      run: |
+        mkdir -p ci-evidence
+        df -Pk "$PWD" "$RUNNER_TEMP" "${BITROUTER_C4_SCRATCH:-$RUNNER_TEMP}" \
+          | tee ci-evidence/disk-final.txt
+        for directory in target ci-evidence; do
+          if [[ -d "$directory" ]]; then du -sh "$directory"; fi
+        done > ci-evidence/storage-final.txt
+    - name: Upload small qualification evidence
+      if: always()
+      timeout-minutes: 5
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-scale-diagnostic-${{ github.sha }}-attempt-${{ github.run_attempt
+          }}
+        path: ci-evidence/
+        retention-days: 7
