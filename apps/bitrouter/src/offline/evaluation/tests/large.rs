@@ -23,7 +23,9 @@ async fn plan(fixture: &mut Fixture, malformed_last: bool) -> Result<()> {
     let owner = crate::tenancy::ownership::acquire_path(&fixture.target, false)?;
     let path = owner.path.clone();
     let mut connections = Connections::new(CancellationToken::new(), Some(owner));
-    connections.open_immutable_source(&path).await?;
+    // The v1 snapshot reopened this owned WAL target read-only. A real writer
+    // close settles SQLite's WAL before the immutable-source check below.
+    connections.open_destination(&path).await?;
     let mut tx = connections
         .source
         .as_mut()
@@ -46,6 +48,7 @@ async fn plan(fixture: &mut Fixture, malformed_last: bool) -> Result<()> {
     operations.sort_by_key(|(_, result)| result.authority_revision.map(|revision| revision.get()));
     tx.rollback().await?;
     connections.close().await?;
+    crate::offline::large::Source::inspect(&path)?;
     drop(connections);
     let header = ProvisioningHeader {
         format: PROVISIONING.into(),
