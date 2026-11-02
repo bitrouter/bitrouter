@@ -173,7 +173,7 @@ impl Service {
         .map_err(Failure::from)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) async fn warm_retained_execution_for_test(
         &self,
         submission: &Submission,
