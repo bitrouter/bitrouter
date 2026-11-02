@@ -112,7 +112,7 @@ impl Ready {
             json!({"kind":"credential","credential":{"type":"oauth","data":{
                 "access_token":"seed-access","refresh_token":"seed-refresh","expires_at":1}},
                 "oauth":{"format":1,"mechanism":"claude_code_refresh_v1","provider":"claude-code",
-                "account":"default","registration":"anthropic","token_endpoint":"https://example.invalid/oauth/token",
+                "account":"default","registration":"anthropic","token_endpoint":registration.auth.token_endpoint,
                 "client_id":registration.auth.client_id}})
         } else {
             json!({"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-secret"}}})
