@@ -14,6 +14,7 @@ mod database;
 mod empty_sources;
 mod fault;
 mod harness;
+mod known_receipts;
 mod projection;
 mod rows;
 
@@ -60,6 +61,13 @@ async fn server_owned_trajectory_empty_source_compatibility_refuses_retained_row
 async fn server_owned_trajectory_directory_projection_preserves_integer_decoders_and_bounds()
 -> Result<()> {
     run(|database| Box::pin(projection::check(database))).await
+}
+
+#[tokio::test]
+#[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
+async fn server_owned_trajectory_known_receipts_drain_restart_and_scan_with_one_reservation()
+-> Result<()> {
+    run(|database| Box::pin(known_receipts::check(database))).await
 }
 
 #[tokio::test]

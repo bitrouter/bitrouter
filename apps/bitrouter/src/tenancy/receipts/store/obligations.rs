@@ -6,6 +6,8 @@ use chrono::{DateTime, Utc};
 use sea_orm::{Statement, Value};
 mod bootstrap;
 mod io;
+#[cfg(test)]
+mod server_known;
 pub(in crate::tenancy) mod sources;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -78,38 +80,6 @@ fn sqlite(db: &impl ConnectionTrait) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-async fn empty_server_sources(db: &impl ConnectionTrait, charge: &Charge<'_>) -> Result<()> {
-    // Isolated server transaction fixtures have no receipt/OAuth workload. Prove
-    // that restriction in the caller's transaction; never invent an empty view
-    // of retained server history or enable the SQLite projection on that backend.
-    ensure!(
-        matches!(
-            db.get_database_backend(),
-            DatabaseBackend::Postgres | DatabaseBackend::MySql
-        ),
-        "empty-source compatibility requires a server test database"
-    );
-    for table in [
-        "tenancy_execution_receipts",
-        "tenancy_receipt_auxiliary",
-        "tenancy_oauth_slots",
-    ] {
-        charge(1, 128)?;
-        let query = Query::select()
-            .expr(Expr::val(1_i32))
-            .from(Alias::new(table))
-            .limit(1)
-            .to_owned();
-        let row = db
-            .query_one(db.get_database_backend().build(&query))
-            .await?;
-        charge(0, 0)?;
-        ensure!(row.is_none(), "server test source must be empty: {table}");
-    }
-    Ok(())
-}
-
 fn due(first: DateTime<Utc>) -> Result<DateTime<Utc>> {
     first
         .checked_add_signed(chrono::Duration::minutes(15))
@@ -129,6 +99,15 @@ pub(in crate::tenancy) async fn reconcile(
     key: &Key,
     charge: &Charge<'_>,
 ) -> Result<Change> {
+    #[cfg(test)]
+    if tx.get_database_backend() != DatabaseBackend::Sqlite {
+        server_known::validate(tx, installation, Some(key), charge).await?;
+        return Ok(Change {
+            key: key.clone(),
+            before: None,
+            after: None,
+        });
+    }
     sqlite(tx)?;
     let before = lookup(tx, installation, key, charge).await?;
     let source = sources::read(tx, installation, key, charge).await?;
@@ -210,7 +189,7 @@ pub(in crate::tenancy) async fn tenant_count(
 ) -> Result<u64> {
     #[cfg(test)]
     if db.get_database_backend() != DatabaseBackend::Sqlite {
-        empty_server_sources(db, charge).await?;
+        server_known::validate(db, installation, None, charge).await?;
         return Ok(0);
     }
     sqlite(db)?;
@@ -241,7 +220,7 @@ pub(in crate::tenancy) async fn next_due(
 ) -> Result<Option<DateTime<Utc>>> {
     #[cfg(test)]
     if db.get_database_backend() != DatabaseBackend::Sqlite {
-        empty_server_sources(db, charge).await?;
+        server_known::validate(db, installation, None, charge).await?;
         return Ok(None);
     }
     sqlite(db)?;
@@ -284,7 +263,7 @@ pub(in crate::tenancy) async fn validate(
 ) -> Result<Inventory> {
     #[cfg(test)]
     if tx.get_database_backend() != DatabaseBackend::Sqlite {
-        empty_server_sources(tx, charge).await?;
+        server_known::validate(tx, installation, None, charge).await?;
         return Ok(Fold::new().finish());
     }
     sqlite(tx)?;
