@@ -164,7 +164,17 @@ pub(super) fn check(
     host: &Limits,
     grant: &OwnershipGrant,
 ) -> Result<(), CoreError> {
-    projected_bytes(state, proposed, host, grant).map(|_| ())
+    #[cfg(test)]
+    {
+        let mut timing = headroom_trace::Region::new(headroom_trace::RegionKind::Capacity);
+        let result = projected_bytes(state, proposed, host, grant).map(|_| ());
+        timing.returned(result.is_ok());
+        result
+    }
+    #[cfg(not(test))]
+    {
+        projected_bytes(state, proposed, host, grant).map(|_| ())
+    }
 }
 
 pub(super) fn projected_bytes(

@@ -181,6 +181,7 @@ jobs:
       timeout-minutes: 65
       env:
         BITROUTER_TEST_PREBUILT_ONLY: '1'
+        BITROUTER_TEST_CHECKPOINT_TIMING: '1'
       run: |
         set -euo pipefail
         export TMPDIR="$BITROUTER_C4_SCRATCH"

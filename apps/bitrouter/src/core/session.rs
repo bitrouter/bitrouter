@@ -74,7 +74,7 @@ mod capacity;
 pub(crate) mod choice;
 mod context_decisions;
 #[cfg(test)]
-mod headroom_trace;
+pub(crate) mod headroom_trace;
 mod model_output;
 #[cfg(feature = "harness")]
 pub(crate) mod native_capacity;
@@ -3614,8 +3614,6 @@ impl CoreSession {
             let mut live = self.shared.live.lock().await;
             let mut next = live.state.clone();
             let head = live.gate.head().clone();
-            #[cfg(test)]
-            timing.snapshot(head.state_revision, next.context_store.decisions.len());
             // During restoration, delayed stop reports can still correct
             // the open interval. Seal only the authenticated entry baseline
             // until output replay and the lifecycle drain have finished.

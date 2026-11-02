@@ -8,6 +8,8 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::session::HarnessPort;
+#[cfg(test)]
+use crate::core::session::headroom_trace::{Region, RegionKind};
 use crate::harness::agent::{RunEvent, commit_execution};
 use crate::harness::storage::{CommitRequest, ExecutionRecord};
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
@@ -218,6 +220,14 @@ impl HarnessPort for Port {
             self.stopped.cancel();
             return Err(unavailable(error));
         }
+        #[cfg(test)]
+        {
+            let mut timing = Region::new(RegionKind::JournalApply);
+            let result = journal.apply(batch, &ack);
+            timing.returned(result.is_ok());
+            result?;
+        }
+        #[cfg(not(test))]
         journal.apply(batch, &ack)?;
         self.budget.lock().await.observe(&snapshot);
         journal.presented.extend(projection.keys);

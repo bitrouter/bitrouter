@@ -2,6 +2,8 @@
 
 use super::{Saved, artifact, budget, journal, port, scheduling, skills, tools};
 use crate::core::session::CoreSession;
+#[cfg(test)]
+use crate::core::session::headroom_trace::{Region, RegionKind};
 use crate::harness::agent::Agent;
 use crate::harness::agent::RunChannels;
 use crate::harness::agent::RunReport;
@@ -238,14 +240,31 @@ impl Agent {
         });
         report.native = None;
         let core = if let Some(restore) = restore {
-            CoreSession::restore(
-                restore,
-                &capabilities,
-                self.app.clone(),
-                self.caller.clone(),
-                port.clone(),
-            )
-            .await
+            #[cfg(test)]
+            {
+                let mut timing = Region::new(RegionKind::CoreRestore);
+                let result = CoreSession::restore(
+                    restore,
+                    &capabilities,
+                    self.app.clone(),
+                    self.caller.clone(),
+                    port.clone(),
+                )
+                .await;
+                timing.returned(result.is_ok());
+                result
+            }
+            #[cfg(not(test))]
+            {
+                CoreSession::restore(
+                    restore,
+                    &capabilities,
+                    self.app.clone(),
+                    self.caller.clone(),
+                    port.clone(),
+                )
+                .await
+            }
         } else {
             CoreSession::bind(
                 Bind {
