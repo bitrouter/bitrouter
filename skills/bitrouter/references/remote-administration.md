@@ -89,7 +89,9 @@ keep explicit room for maintenance. See the canonical configuration specificatio
 for all fields and the distinction between runtime and retained directory size.
 
 Authority-view memory is allocated lazily: one third of its byte budget holds
-live facts and two thirds cover publication staging. Raising directory counts
+leased and optionally retained facts and two thirds cover publication staging.
+Directory entries are not preallocated. Pressure releases optional retention
+before refusing allocation; active leases keep their ownership. Raising directory counts
 does not enlarge caches, queues or connection pools. Retained unknown obligations
 remain valid when admission budgets are lowered; new work must fit the new
 budgets. There is no fixed tenant/key-count ceiling. The

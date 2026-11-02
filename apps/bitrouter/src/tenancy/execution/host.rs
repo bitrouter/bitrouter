@@ -36,7 +36,12 @@ impl Service {
         if headers.contains_key(super::BLOCK_LINK_HEADER) {
             return Err(ErrorCode::InvalidRequest.into());
         }
-        let identity = self.submission(headers).await?;
+        let identity = self
+            .submission_with_intent(
+                headers,
+                crate::tenancy::authority::live::DependencyIntent::Owner,
+            )
+            .await?;
         let (credential_scope, binding_scope) = self
             .with_dispatch_authority(&identity, |state| {
                 let effective = state.effective(&identity.caller, &identity.tenant, Utc::now())?;
@@ -133,6 +138,7 @@ impl Authority {
         Submission {
             caller: self.identity.caller.clone(),
             authority: self.identity.authority.clone(),
+            preparation: crate::tenancy::authority::live::DependencyIntent::Owner,
             tenant: self.identity.tenant.clone(),
             principal: self.identity.principal.clone(),
             credential: self.identity.credential.clone(),

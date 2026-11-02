@@ -55,9 +55,13 @@ because the public revision advanced. Every final lease check observes the same
 service liveness fence. Shutdown closes dispatch before draining HTTP while
 retaining the writer for admitted completion and cleanup.
 
-Authority-view bytes reserve one third for live facts and two thirds for staged
-replacements and construction overlap. Expansion is checked before cloning;
-revocation can publish when the live budget is full. Allocation is lazy.
+Authority-view bytes reserve one third for leased and optionally retained facts
+and two thirds for staged replacements and construction overlap. Fresh submission
+ingress may reuse a bounded retained lease after checking its current authority
+and exact dependencies; reuse still consumes an admitted read job. Pressure drops
+optional retention, without evicting active leases, before retrying allocation.
+Expansion is checked before cloning; revocation can publish when the resident
+budget is full. Allocation is lazy and does not preload directory entries.
 Immutable cache entries and pinned values have separate entry/byte budgets.
 These are payload-accounting bounds, not a measurement of total allocator RSS.
 

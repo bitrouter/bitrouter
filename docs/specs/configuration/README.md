@@ -178,9 +178,11 @@ CPU, allocator overhead and transient codec storage are not interchangeable with
 cache payload bytes; the implementation guide describes allocation ownership.
 
 `authority_views.bytes` includes publication headroom: one third is available
-for live facts and two thirds for staged replacements and construction overlap.
-The storage is allocated lazily. `authority_views.entries` bounds simultaneously
-retained views, not stored identities. Routing send ownership derives from
+for leased and optionally retained facts and two thirds for staged replacements
+and construction overlap. The storage is allocated lazily; directory entries are
+not preallocated. `authority_views.entries` bounds simultaneously retained views,
+not stored identities. Pressure releases optional retention before refusing new
+allocation; active leases keep their ownership. Routing send ownership derives from
 `execution.instance_active`; there is no separate routing-in-flight setting.
 
 With tenancy enabled, the local inference listener uses

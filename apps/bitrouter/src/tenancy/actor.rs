@@ -124,7 +124,10 @@ pub(super) struct CredentialRead {
 }
 
 pub(super) enum AuthoritySubject {
-    Token(String),
+    Token {
+        hash: String,
+        reuse: bool,
+    },
     Caller(Caller),
     Tenant {
         caller: Caller,
@@ -136,6 +139,7 @@ pub(super) enum AuthoritySubject {
         caller: Caller,
         lease: super::authority::live::Lease,
         dependencies: Vec<bitrouter_ai::tenancy::configuration::ResourceRef>,
+        intent: super::authority::live::DependencyIntent,
     },
 }
 

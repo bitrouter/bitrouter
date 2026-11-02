@@ -64,6 +64,7 @@ mod tests;
 pub(crate) struct Submission {
     caller: Caller,
     authority: super::authority::live::Lease,
+    preparation: super::authority::live::DependencyIntent,
     tenant: TenantId,
     principal: PrincipalId,
     credential: CredentialId,
@@ -224,13 +225,32 @@ impl Service {
         self.with_dispatch_view(submission, |view| check(view.facts()))
     }
 
+    #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) async fn extend_submission(
         &self,
         submission: &Submission,
         dependencies: &[ResourceRef],
     ) -> Result<(), Failure> {
-        self.with_dispatch_authority(submission, |_| Ok(()))
-            .map_err(Failure::from)?;
+        self.prepare_submission(
+            submission,
+            dependencies,
+            super::authority::live::DependencyIntent::Owner,
+        )
+        .await
+    }
+
+    async fn prepare_submission(
+        &self,
+        submission: &Submission,
+        dependencies: &[ResourceRef],
+        intent: super::authority::live::DependencyIntent,
+    ) -> Result<(), Failure> {
+        if self
+            .with_dispatch_view(submission, |view| view.covers(dependencies, intent))
+            .map_err(Failure::from)?
+        {
+            return Ok(());
+        }
         self.admitted_authority_read(|| {
             // All queued copies together fit one third of the working share.
             // The read permit is acquired before reserving or cloning payloads.
@@ -253,6 +273,7 @@ impl Service {
                 caller: submission.caller.clone(),
                 lease: submission.authority.clone(),
                 dependencies: copied,
+                intent,
             })
         })
         .await?;
@@ -261,6 +282,15 @@ impl Service {
     }
 
     pub(crate) async fn submission(&self, headers: &HeaderMap) -> Result<Submission, Failure> {
+        self.submission_with_intent(headers, super::authority::live::DependencyIntent::Fresh)
+            .await
+    }
+
+    async fn submission_with_intent(
+        &self,
+        headers: &HeaderMap,
+        preparation: super::authority::live::DependencyIntent,
+    ) -> Result<Submission, Failure> {
         let binding = dispatch_binding(headers)?;
         if headers.contains_key("x-api-key")
             || headers.contains_key("bitrouter-tenant-id")
@@ -279,7 +309,12 @@ impl Service {
         {
             return Err(ErrorCode::Unauthorized.into());
         }
-        let authenticated = self.authenticate_live(token).await?;
+        let authenticated = self
+            .authenticate_with_reuse(
+                token,
+                preparation == super::authority::live::DependencyIntent::Fresh,
+            )
+            .await?;
         let (tenant, principal, credential) = self
             .authority
             .read()
@@ -300,6 +335,7 @@ impl Service {
         let submission = Submission {
             caller: authenticated.caller,
             authority: authenticated.lease,
+            preparation,
             tenant,
             principal,
             credential,
@@ -351,7 +387,7 @@ impl Service {
 
     async fn admit_selected_execution(
         &self,
-        submission: Submission,
+        mut submission: Submission,
         fail_fast: bool,
         select: impl FnOnce(
             &super::cache::Pin<RetainedExecutionRevision>,
@@ -361,8 +397,9 @@ impl Service {
             .map_err(Failure::from)?;
         let revision = self.retained_execution(&submission).await?;
         let route = select(&revision).map_err(Failure::from)?;
-        self.extend_submission(&submission, route.dependencies())
+        self.prepare_submission(&submission, route.dependencies(), submission.preparation)
             .await?;
+        submission.preparation = super::authority::live::DependencyIntent::Owner;
         self.with_dispatch_authority(&submission, |state| {
             authorize_route(state, &submission, route.dependencies())
         })

@@ -129,11 +129,11 @@
     },
     "AuthorityViews": {
       "additionalProperties": false,
-      "description": "Live authorization facts only; dormant directory entries consume no view.",
+      "description": "Authorization views loaded on demand; directory entries are not preallocated.",
       "properties": {
         "bytes": {
           "default": 67108864,
-          "description": "One third holds live facts; two thirds cover staged replacements and\nconstruction overlap during publication. Allocation is lazy.",
+          "description": "One third holds leased and optionally retained facts; two thirds cover\nstaged replacements and construction overlap. Allocation is lazy.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"

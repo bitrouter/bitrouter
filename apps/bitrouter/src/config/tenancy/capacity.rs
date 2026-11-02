@@ -103,13 +103,13 @@ impl Default for Caches {
     }
 }
 
-/// Live authorization facts only; dormant directory entries consume no view.
+/// Authorization views loaded on demand; directory entries are not preallocated.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthorityViews {
     pub entries: usize,
-    /// One third holds live facts; two thirds cover staged replacements and
-    /// construction overlap during publication. Allocation is lazy.
+    /// One third holds leased and optionally retained facts; two thirds cover
+    /// staged replacements and construction overlap. Allocation is lazy.
     pub bytes: usize,
 }
 

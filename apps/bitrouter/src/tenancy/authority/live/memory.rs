@@ -154,6 +154,10 @@ pub(super) fn registry(capacity: usize) -> Result<usize> {
     Ok(bytes)
 }
 
+pub(super) fn reuse(capacity: usize) -> Result<usize> {
+    product(capacity, size_of::<super::reuse::Entry>())
+}
+
 fn tree<K, V>(len: usize) -> Result<usize> {
     let node = 11usize
         .checked_mul(

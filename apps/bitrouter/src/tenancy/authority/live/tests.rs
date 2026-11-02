@@ -1,6 +1,7 @@
 use super::*;
 mod capacity;
 mod oauth;
+mod reuse;
 use crate::config::tenancy::capacity::AuthorityViews;
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind, TenantState},

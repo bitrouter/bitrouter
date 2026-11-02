@@ -7,6 +7,7 @@
 
 mod forecast;
 mod memory;
+mod reuse;
 #[cfg(test)]
 mod tests;
 
@@ -182,10 +183,18 @@ pub(in crate::tenancy) struct Authenticated {
     pub observed_revision: bitrouter_ai::tenancy::identity::AuthorityRevision,
 }
 
+/// Only a new ingress lease may discard inherited request dependencies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::tenancy) enum DependencyIntent {
+    Fresh,
+    Owner,
+}
+
 struct State {
     header: AuthorityHeader,
     publication: u64,
     views: Vec<Weak<Inner>>,
+    reuse: Vec<reuse::Entry>,
     preparing: bool,
 }
 
@@ -196,6 +205,8 @@ pub(in crate::tenancy) struct Authority {
     state: RwLock<State>,
     #[cfg(test)]
     staged_clones: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(in crate::tenancy) read_jobs: std::sync::atomic::AtomicUsize,
 }
 
 pub(in crate::tenancy) struct ReadGuard<'a> {
@@ -283,10 +294,13 @@ impl Authority {
                 header,
                 publication: 0,
                 views: Vec::new(),
+                reuse: Vec::new(),
                 preparing: false,
             }),
             #[cfg(test)]
             staged_clones: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            read_jobs: std::sync::atomic::AtomicUsize::new(0),
         }))
     }
 
@@ -333,7 +347,7 @@ impl Authority {
     }
 
     /// Called by the actor after read-transaction cleanup, before it starts the next job.
-    pub fn register(self: &Arc<Self>, mut view: View, expected: u64) -> Result<Lease> {
+    pub fn register(self: &Arc<Self>, view: View, expected: u64) -> Result<Lease> {
         let mut state = self
             .state
             .write()
@@ -345,11 +359,24 @@ impl Authority {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
+        let views = match self.reserve_registration(&mut state, view.bytes) {
+            Err(ErrorCode::CapacityExceeded) => {
+                state.clear_reuse()?;
+                self.reserve_registration(&mut state, view.bytes)?
+            }
+            result => result?,
+        };
+        Ok(self.install(&mut state, view, views))
+    }
+
+    /// Preflight registry storage and all resident payload before making a copy.
+    fn reserve_registration(&self, state: &mut State, extra: usize) -> Result<Vec<Weak<Inner>>> {
         state.views.retain(|view| view.strong_count() > 0);
         if state.views.len() >= self.max_entries {
             return Err(ErrorCode::CapacityExceeded);
         }
-        let mut bytes = view.bytes;
+        let mut bytes = extra;
+        memory::add(&mut bytes, memory::reuse(state.reuse.capacity())?)?;
         for live in state.views.iter().filter_map(Weak::upgrade) {
             bytes = bytes
                 .checked_add(
@@ -372,31 +399,39 @@ impl Authority {
             .try_reserve_exact(required)
             .map_err(|_| ErrorCode::CapacityExceeded)?;
         let accounted_bytes = bytes
-            .checked_add(memory::registry(views.capacity())?)
+            .checked_add(memory::registry(
+                state.views.capacity().max(views.capacity()),
+            )?)
             .ok_or(ErrorCode::CapacityExceeded)?;
         if accounted_bytes > self.working_bytes {
             return Err(ErrorCode::CapacityExceeded);
         }
         views.extend(state.views.iter().cloned());
-        view.publish_header(&state.header, state.publication);
-        let inner = Arc::new(Inner {
-            view: Mutex::new(view),
-        });
-        views.push(Arc::downgrade(&inner));
-        state.views = views;
-        drop(state);
-        // This is the checked charge observed by this operation, not a live
-        // registry count or RSS promise. No observer walks or retains views.
         tracing::debug!(
             phase = "register",
             as_of = "checked_owner_operation",
             accounted_bytes,
             "authority capacity observation"
         );
-        Ok(Lease {
+        Ok(views)
+    }
+
+    fn install(
+        self: &Arc<Self>,
+        state: &mut State,
+        mut view: View,
+        mut views: Vec<Weak<Inner>>,
+    ) -> Lease {
+        view.publish_header(&state.header, state.publication);
+        let inner = Arc::new(Inner {
+            view: Mutex::new(view),
+        });
+        views.push(Arc::downgrade(&inner));
+        state.views = views;
+        Lease {
             owner: Arc::downgrade(self),
             inner,
-        })
+        }
     }
 
     /// Extend one existing owner after its actor-owned dependency read settles.
@@ -414,13 +449,50 @@ impl Authority {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
+        // A source may later become a real owner's growing dependency union.
+        // Remove its soft alias before every replacement, even if it fits.
+        state
+            .reuse
+            .retain(|entry| !Arc::ptr_eq(&entry.lease.inner, &lease.inner));
+        if state.reuse.is_empty() {
+            state.clear_reuse()?;
+        }
+        let bytes = match self.replacement_bytes(&mut state, lease, replacement.bytes) {
+            Err(ErrorCode::CapacityExceeded) => {
+                state.clear_reuse()?;
+                self.replacement_bytes(&mut state, lease, replacement.bytes)?
+            }
+            result => result?,
+        };
+        replacement.publish_header(&state.header, state.publication);
+        *lease
+            .inner
+            .view
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)? = replacement;
+        drop(state);
+        tracing::debug!(
+            phase = "replace",
+            as_of = "checked_owner_operation",
+            accounted_bytes = bytes,
+            "authority capacity observation"
+        );
+        Ok(())
+    }
+
+    fn replacement_bytes(
+        &self,
+        state: &mut State,
+        lease: &Lease,
+        replacement: usize,
+    ) -> Result<usize> {
         state.views.retain(|view| view.strong_count() > 0);
-        let mut bytes = memory::registry(state.views.capacity())?;
+        let mut bytes = state.registry_bytes()?;
         let mut found = false;
         for live in state.views.iter().filter_map(Weak::upgrade) {
             let charge = if Arc::ptr_eq(&live, &lease.inner) {
                 found = true;
-                replacement.bytes
+                replacement
             } else {
                 live.view
                     .lock()
@@ -437,20 +509,7 @@ impl Authority {
         if bytes > self.working_bytes {
             return Err(ErrorCode::CapacityExceeded);
         }
-        replacement.publish_header(&state.header, state.publication);
-        *lease
-            .inner
-            .view
-            .lock()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)? = replacement;
-        drop(state);
-        tracing::debug!(
-            phase = "replace",
-            as_of = "checked_owner_operation",
-            accounted_bytes = bytes,
-            "authority capacity observation"
-        );
-        Ok(())
+        Ok(bytes)
     }
 
     /// Stage every live view before writing durable authority. No directory scan.
@@ -473,36 +532,14 @@ impl Authority {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         forecast::unique(changes)?;
-        state.views.retain(|view| view.strong_count() > 0);
-        let registry = memory::registry(state.views.capacity())?;
-        let mut predicted = registry;
-        // Complete the aggregate preflight before cloning any payload, including
-        // when a later view is the one that would exceed the working budget.
-        for inner in state.views.iter().filter_map(Weak::upgrade) {
-            let view = inner
-                .view
-                .lock()
-                .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            memory::add(
-                &mut predicted,
-                forecast::bytes(&view, changes, oauth)?.unwrap_or(view.bytes),
-            )?;
-        }
-        if predicted > self.working_bytes {
-            return Err(ErrorCode::CapacityExceeded);
-        }
-        let mut views = Vec::new();
-        views
-            .try_reserve_exact(state.views.len())
-            .map_err(|_| ErrorCode::CapacityExceeded)?;
-        let actual_registry = memory::registry(state.views.capacity().max(views.capacity()))?;
-        predicted = predicted
-            .checked_sub(registry)
-            .and_then(|bytes| bytes.checked_add(actual_registry))
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        if predicted > self.working_bytes {
-            return Err(ErrorCode::CapacityExceeded);
-        }
+        let (predicted, actual_registry, mut views) =
+            match self.reserve_publication(&mut state, changes, oauth) {
+                Err(ErrorCode::CapacityExceeded) => {
+                    state.clear_reuse()?;
+                    self.reserve_publication(&mut state, changes, oauth)?
+                }
+                result => result?,
+            };
         let mut bytes = actual_registry;
         for inner in state.views.iter().filter_map(Weak::upgrade) {
             let view = inner
@@ -543,6 +580,39 @@ impl Authority {
             views,
             finished: false,
         })
+    }
+
+    fn reserve_publication(
+        &self,
+        state: &mut State,
+        changes: &[Change],
+        oauth: Option<(&Metadata, &Metadata)>,
+    ) -> Result<(usize, usize, Vec<Staged>)> {
+        state.views.retain(|view| view.strong_count() > 0);
+        let mut views = Vec::new();
+        views
+            .try_reserve_exact(state.views.len())
+            .map_err(|_| ErrorCode::CapacityExceeded)?;
+        let registry = memory::registry(state.views.capacity().max(views.capacity()))?
+            .checked_add(memory::reuse(state.reuse.capacity())?)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        let mut predicted = registry;
+        // Complete the aggregate preflight before cloning any payload, including
+        // when a later view is the one that would exceed the working budget.
+        for inner in state.views.iter().filter_map(Weak::upgrade) {
+            let view = inner
+                .view
+                .lock()
+                .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+            memory::add(
+                &mut predicted,
+                forecast::bytes(&view, changes, oauth)?.unwrap_or(view.bytes),
+            )?;
+        }
+        if predicted > self.working_bytes {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        Ok((predicted, registry, views))
     }
 }
 

@@ -4,7 +4,7 @@ use bitrouter_ai::tenancy::{authority::ResourceKind, configuration::ResourceRef}
 
 use super::{AuthorityRead, AuthoritySubject, Control, ErrorCode, Failure, Worker};
 use crate::tenancy::{
-    authority::live::{Authenticated, OAuthFact, View},
+    authority::live::{Authenticated, DependencyIntent, OAuthFact, View},
     model::Caller,
     oauth,
     store::directory,
@@ -19,12 +19,39 @@ impl Worker {
         if !self.live.0.load(std::sync::atomic::Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
+        control
+            .check_read()
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        #[cfg(test)]
+        self.authority
+            .read_jobs
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let AuthoritySubject::Token { hash, reuse: true } = &read.subject
+            && let Some(authenticated) = self
+                .authority
+                .try_reuse_token(hash)
+                .map_err(Failure::from)?
+        {
+            control
+                .check_read()
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+            self.authority
+                .read()
+                .map_err(Failure::from)?
+                .check(&authenticated.lease, |view| {
+                    view.facts()
+                        .principal(&authenticated.caller, chrono::Utc::now())
+                        .map(|_| ())
+                })
+                .map_err(Failure::from)?;
+            return Ok(authenticated);
+        }
         let (header, publication) = {
             let guard = self.authority.read().map_err(Failure::from)?;
             (guard.header().clone(), guard.publication())
         };
         let bytes = self.authority.load_budget();
-        let references = self.read_dependencies(&read.subject, bytes / 3)?;
+        let references = read_dependencies(&self.authority, &read.subject, bytes / 3)?;
         let transaction = control
             .begin(&self.db)
             .await
@@ -34,7 +61,7 @@ impl Worker {
                 .check_read()
                 .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
             let caller = match &read.subject {
-                AuthoritySubject::Token(hash) => {
+                AuthoritySubject::Token { hash, .. } => {
                     let credential =
                         directory::credential_by_hash_in(&transaction, hash, bytes / 96)
                             .await
@@ -171,71 +198,24 @@ impl Worker {
                     .map(|_| ())
             })
             .map_err(Failure::from)?;
+        control
+            .check_read()
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        if let AuthoritySubject::Extend {
+            dependencies,
+            intent: DependencyIntent::Fresh,
+            ..
+        } = &read.subject
+        {
+            self.authority
+                .retain_prepared(&caller, &lease, dependencies)
+                .map_err(Failure::from)?;
+        }
         Ok(Authenticated {
             caller,
             lease,
             observed_revision: header.revision,
         })
-    }
-
-    fn read_dependencies(
-        &self,
-        subject: &AuthoritySubject,
-        bytes: usize,
-    ) -> Result<Vec<ResourceRef>, Failure> {
-        let AuthoritySubject::Extend {
-            lease,
-            dependencies,
-            ..
-        } = subject
-        else {
-            return Ok(Vec::new());
-        };
-        self.authority
-            .read()
-            .map_err(Failure::from)?
-            .check(lease, |view| {
-                let lifecycle = &view.facts().resource_lifecycle;
-                let count = lifecycle
-                    .records()
-                    .count()
-                    .checked_add(lifecycle.absences().count())
-                    .and_then(|n| n.checked_add(dependencies.len()))
-                    .ok_or(ErrorCode::CapacityExceeded)?;
-                // Three bounded opaque IDs, the vector entry and sort workspace.
-                if count
-                    .checked_mul(512 + std::mem::size_of::<ResourceRef>())
-                    .is_none_or(|n| n > bytes)
-                {
-                    return Err(ErrorCode::CapacityExceeded);
-                }
-                let mut references = Vec::new();
-                references
-                    .try_reserve_exact(count)
-                    .map_err(|_| ErrorCode::CapacityExceeded)?;
-                references.extend(lifecycle.records().map(|row| row.reference.clone()));
-                references.extend(lifecycle.absences().cloned());
-                references.extend_from_slice(dependencies);
-                references.sort_unstable_by(|left, right| {
-                    (
-                        left.owner_kind as u8,
-                        left.owner_id.as_str(),
-                        left.resource_kind as u8,
-                        left.resource_id.as_str(),
-                        left.revision_id.as_str(),
-                    )
-                        .cmp(&(
-                            right.owner_kind as u8,
-                            right.owner_id.as_str(),
-                            right.resource_kind as u8,
-                            right.resource_id.as_str(),
-                            right.revision_id.as_str(),
-                        ))
-                });
-                references.dedup();
-                Ok(references)
-            })
-            .map_err(Failure::from)
     }
 
     pub(super) fn directory_failure(&self, error: anyhow::Error) -> Failure {
@@ -246,3 +226,75 @@ impl Worker {
         }
     }
 }
+
+fn read_dependencies(
+    authority: &crate::tenancy::authority::live::Authority,
+    subject: &AuthoritySubject,
+    bytes: usize,
+) -> Result<Vec<ResourceRef>, Failure> {
+    let AuthoritySubject::Extend {
+        lease,
+        dependencies,
+        intent,
+        ..
+    } = subject
+    else {
+        return Ok(Vec::new());
+    };
+    authority
+        .read()
+        .map_err(Failure::from)?
+        .check(lease, |view| {
+            let lifecycle = &view.facts().resource_lifecycle;
+            let inherited = if *intent == DependencyIntent::Owner {
+                lifecycle
+                    .records()
+                    .count()
+                    .checked_add(lifecycle.absences().count())
+                    .ok_or(ErrorCode::CapacityExceeded)?
+            } else {
+                0
+            };
+            let count = inherited
+                .checked_add(dependencies.len())
+                .ok_or(ErrorCode::CapacityExceeded)?;
+            // Three bounded opaque IDs, the vector entry and sort workspace.
+            if count
+                .checked_mul(512 + std::mem::size_of::<ResourceRef>())
+                .is_none_or(|n| n > bytes)
+            {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            let mut references = Vec::new();
+            references
+                .try_reserve_exact(count)
+                .map_err(|_| ErrorCode::CapacityExceeded)?;
+            if *intent == DependencyIntent::Owner {
+                references.extend(lifecycle.records().map(|row| row.reference.clone()));
+                references.extend(lifecycle.absences().cloned());
+            }
+            references.extend_from_slice(dependencies);
+            references.sort_unstable_by(|left, right| {
+                (
+                    left.owner_kind as u8,
+                    left.owner_id.as_str(),
+                    left.resource_kind as u8,
+                    left.resource_id.as_str(),
+                    left.revision_id.as_str(),
+                )
+                    .cmp(&(
+                        right.owner_kind as u8,
+                        right.owner_id.as_str(),
+                        right.resource_kind as u8,
+                        right.resource_id.as_str(),
+                        right.revision_id.as_str(),
+                    ))
+            });
+            references.dedup();
+            Ok(references)
+        })
+        .map_err(Failure::from)
+}
+
+#[cfg(test)]
+mod tests;

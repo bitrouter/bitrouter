@@ -752,12 +752,21 @@ impl Service {
         &self,
         token: &str,
     ) -> Result<authority::live::Authenticated, Failure> {
+        self.authenticate_with_reuse(token, false).await
+    }
+
+    async fn authenticate_with_reuse(
+        &self,
+        token: &str,
+        reuse: bool,
+    ) -> Result<authority::live::Authenticated, Failure> {
         if !token.starts_with("brtk_") || token.len() > 512 {
             return Err(ErrorCode::Unauthorized.into());
         }
-        self.authority_read(actor::AuthoritySubject::Token(crate::auth::keys::hash_key(
-            token,
-        )))
+        self.authority_read(actor::AuthoritySubject::Token {
+            hash: crate::auth::keys::hash_key(token),
+            reuse,
+        })
         .await
     }
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::tenancy::oauth::{profile::Profile, storage};
 use std::sync::atomic::Ordering;
 
-fn metadata(initial: &AuthorityHeader) -> anyhow::Result<Metadata> {
+pub(super) fn metadata(initial: &AuthorityHeader) -> anyhow::Result<Metadata> {
     let reference = ResourceRef {
         resource_kind: ResourceKind::Credential,
         resource_id: "slot".try_into()?,

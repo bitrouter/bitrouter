@@ -33,6 +33,8 @@ use std::{
 const MODEL: &str = "authority-ingress";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+mod reuse;
+
 fn code(error: ErrorCode) -> anyhow::Error {
     anyhow::anyhow!("authority ingress failure: {error:?}")
 }
@@ -92,8 +94,22 @@ struct Ready {
 
 impl Ready {
     async fn new(oauth: bool) -> Result<Self> {
+        Self::with_queries(oauth, None).await
+    }
+
+    async fn with_queries(
+        oauth: bool,
+        queries: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    ) -> Result<Self> {
         let mut fixture = Fixture::new().await?;
         fixture.service.shutdown().await?;
+        if let Some(queries) = queries {
+            fixture.db.set_metric_callback(move |info| {
+                if info.statement.sql.trim_start().starts_with("SELECT") {
+                    queries.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
         let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
         let reference = |resource_kind, id: &str| -> Result<ResourceRef> {
             Ok(ResourceRef {
