@@ -146,6 +146,13 @@ async fn committed_generation_and_receipt(db: &DatabaseConnection, case: &Case) 
             && receipt.usage == case.receipt.receipt.usage
     );
     ensure!(serde_json::to_vec(&receipt)? == serde_json::to_vec(&case.receipt.receipt)?);
+    // This raw server-storage fixture does not start the SQLite Service profile.
+    if matches!(
+        db.get_database_backend(),
+        DatabaseBackend::Postgres | DatabaseBackend::MySql
+    ) {
+        return server_receipt_storage(db, case, &row).await;
+    }
     let bytes = receipt_store::inventory(db, installation).await?;
     let canonical = case.receipt.bytes() + case.receipt.auxiliary_bytes();
     ensure!(bytes.rows == 1 && bytes.bytes == canonical);
@@ -159,6 +166,55 @@ async fn committed_generation_and_receipt(db: &DatabaseConnection, case: &Case) 
     let slot_reserved = inventory(db, installation).await?;
     ensure!(slot_reserved == INVENTORY_BYTES && bytes.oauth_bytes == slot_reserved);
     for slot in [&case.initial, &row] {
+        ensure!(u64::try_from(slot.json.len() + slot.payload.len())? <= slot_reserved);
+    }
+    Ok(())
+}
+// Canonical rows and accounted bytes, not Service projection or archive accounting.
+async fn server_receipt_storage(db: &DatabaseConnection, case: &Case, row: &Row) -> Result<()> {
+    let receipt = &case.receipt.receipt;
+    let saved = receipt_store::lookup_candidate(
+        db,
+        &receipt.installation_id,
+        &receipt.tenant_id,
+        &receipt.execution_id,
+    )
+    .await?
+    .context("persisted server receipt and private evidence")?;
+    ensure!(saved.digest == case.receipt.digest);
+    ensure!(
+        saved.bytes() == case.receipt.bytes()
+            && saved.auxiliary_bytes() == case.receipt.auxiliary_bytes()
+    );
+    // Together with the canonical point read, whole-table counts exclude any
+    // additional foreign/orphan data in this fixed one-receipt storage fixture.
+    let backend = db.get_database_backend();
+    let count = if backend == DatabaseBackend::MySql {
+        "CAST(COUNT(*) AS SIGNED)"
+    } else {
+        "CAST(COUNT(*) AS BIGINT)"
+    };
+    for (table, expected) in [
+        ("tenancy_execution_receipts", 1_i64),
+        ("tenancy_receipt_auxiliary", 1),
+        ("tenancy_usage_evidence", 0),
+    ] {
+        let query = Query::select()
+            .from(Alias::new(table))
+            .expr_as(Expr::cust(count), Alias::new("rows"))
+            .to_owned();
+        let actual = db
+            .query_one(backend.build(&query))
+            .await?
+            .context("server storage row count")?;
+        ensure!(
+            actual.try_get::<i64>("", "rows")? == expected,
+            "unexpected server storage count: {table}"
+        );
+    }
+    let slot_reserved = inventory(db, &receipt.installation_id).await?;
+    ensure!(slot_reserved == INVENTORY_BYTES);
+    for slot in [&case.initial, row] {
         ensure!(u64::try_from(slot.json.len() + slot.payload.len())? <= slot_reserved);
     }
     Ok(())
