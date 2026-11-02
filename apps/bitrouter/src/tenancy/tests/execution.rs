@@ -117,8 +117,21 @@ async fn draft(
     operation: &str,
     tokens: u32,
 ) -> Result<ConfigurationRevision> {
+    draft_with_policy(fixture, route, operation, tokens, None).await
+}
+
+async fn draft_with_policy(
+    fixture: &Fixture,
+    route: &ResourceRef,
+    operation: &str,
+    tokens: u32,
+    policy: Option<ResourceRef>,
+) -> Result<ConfigurationRevision> {
     let mut input = fixture.configuration_input(operation)?;
     input.document.routes.push(route.clone());
+    if let Some(policy) = policy {
+        input.document.policy = Some(policy);
+    }
     input.document.generation_defaults.max_output_tokens = tokens;
     input.document.limits.active_executions = 4;
     input.document.limits.queued_work = 4;

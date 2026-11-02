@@ -1,6 +1,8 @@
 //! Real leased storage, SDK transports, provider sends and v2 durable readback.
 use super::*;
-use crate::config::tenancy::capacity::CapacityConfig;
+use crate::{
+    config::tenancy::capacity::CapacityConfig, tenancy::tests::execution::draft_with_policy,
+};
 use bitrouter_ai::{
     control::ControlScope,
     protocol::{
@@ -327,6 +329,15 @@ impl OrderedHarness {
             route_definition["definition"]["attachments"] = json!(attachments);
         }
         edit(&mut definitions)?;
+        // A retained route PolicyLock must match the configuration policy before
+        // an ordered request can reach its capability refusal boundary.
+        let policy = serde_json::from_value(
+            definitions
+                .iter()
+                .find(|row| row["reference"]["resource_kind"] == "route")
+                .context("route definition")?["definition"]["policy"]
+                .clone(),
+        )?;
         // Import prerequisites before the route without exceeding one import's
         // 256-resource limit. The tested route itself still retains all ordinals.
         definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
@@ -363,7 +374,7 @@ impl OrderedHarness {
         let revision = if profiles.is_some() {
             profiled::draft_profiles(&fixture, &route).await?
         } else {
-            draft(&fixture, &route, "ordered-draft", 25).await?
+            draft_with_policy(&fixture, &route, "ordered-draft", 25, policy).await?
         };
         let credential = if profiles.is_some() {
             let references = definitions

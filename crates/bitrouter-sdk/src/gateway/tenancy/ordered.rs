@@ -9,7 +9,7 @@ use bitrouter_ai::{
     tenancy::{
         generation_defaults::{
             BODY_MEMBER, CanonicalGenerationDefaultsV1, GenerationDefaultsEnvelopeV1,
-            MAX_DEFAULTS_BYTES,
+            GenerationDefaultsEnvelopeV2, MAX_DEFAULTS_BYTES,
         },
         identity::Digest,
         ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
@@ -157,6 +157,44 @@ impl OrderedTenantGateway<'_> {
         Ok(self)
     }
 
+    /// Attach version-two defaults, including their bound configuration-layer choice.
+    /// Supplemental values merge after caller parsing, retaining their independent
+    /// outbound provenance. This never changes routing or continuation authority.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults, a competing attachment or a different bound digest.
+    pub fn with_generation_defaults_envelope_v2(
+        mut self,
+        defaults: GenerationDefaultsEnvelopeV2,
+    ) -> Result<Self, Error> {
+        let digest = match defaults.digest() {
+            Ok(digest) => digest,
+            Err(_) => {
+                // Invalid programmatic Values may exceed the JSON depth budget.
+                // Dispose of their children iteratively rather than recursively
+                // dropping the rejected tree on this consuming API's error path.
+                let mut pending: Vec<_> = defaults.supplemental.into_values().collect();
+                while let Some(value) = pending.pop() {
+                    match value {
+                        serde_json::Value::Array(values) => pending.extend(values),
+                        serde_json::Value::Object(values) => pending.extend(values.into_values()),
+                        _ => {}
+                    }
+                }
+                return Err(Error::Request("invalid generation defaults envelope"));
+            }
+        };
+        if self.inner.generation_defaults.is_some()
+            || self.generation_defaults_digest.as_ref() != Some(&digest)
+        {
+            return Err(Error::Request(
+                "generation defaults envelope differs from binding or competes with attachment",
+            ));
+        }
+        self.inner.generation_defaults = Some(Defaults::EnvelopeV2(defaults));
+        Ok(self)
+    }
+
     /// Replace this call's `anthropic-beta` values without changing its selection.
     ///
     /// Preserves opaque field-value bytes, duplicates and order. An empty slice
@@ -226,11 +264,25 @@ pub(super) fn envelope_body(
     request: &impl serde::Serialize,
     defaults: &GenerationDefaultsEnvelopeV1,
 ) -> Result<Vec<u8>, Error> {
+    bounded_envelope_body(request, defaults)
+}
+
+pub(super) fn envelope_v2_body(
+    request: &impl serde::Serialize,
+    defaults: &GenerationDefaultsEnvelopeV2,
+) -> Result<Vec<u8>, Error> {
+    bounded_envelope_body(request, defaults)
+}
+
+fn bounded_envelope_body(
+    request: &impl serde::Serialize,
+    defaults: &impl serde::Serialize,
+) -> Result<Vec<u8>, Error> {
     #[derive(serde::Serialize)]
-    struct Request<'a, T> {
+    struct Request<'a, T, D> {
         #[serde(flatten)]
         request: &'a T,
-        bitrouter_generation_defaults_envelope: &'a GenerationDefaultsEnvelopeV1,
+        bitrouter_generation_defaults_envelope: &'a D,
     }
     struct Bounded {
         bytes: Vec<u8>,

@@ -3,8 +3,8 @@
 use bitrouter_ai::{
     tenancy::{
         generation_defaults::{
-            BODY_MEMBER, CanonicalGenerationDefaultsV1, ENVELOPE_BODY_MEMBER,
-            GenerationDefaultsEnvelopeV1,
+            BODY_MEMBER, CanonicalGenerationDefaultsV1, ConfigurationDefaults,
+            ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelopeV1, GenerationDefaultsEnvelopeV2,
         },
         operation::ErrorCode,
     },
@@ -21,10 +21,13 @@ use crate::{gateway::pipeline::types::PipelineInput, tenancy::error::Failure};
 
 impl Submission {
     pub(in crate::tenancy) fn parse_http_input(
-        &self,
+        &mut self,
         protocol: &ApiProtocol,
         body: &[u8],
     ) -> Result<PipelineInput, Failure> {
+        // Only this successful, digest-verified parse may select another layer.
+        // Old, native and failed parse paths retain the configuration fill.
+        self.configuration_defaults = ConfigurationDefaults::Apply;
         let invalid = || Failure::from(ErrorCode::InvalidRequest);
         let (value, defaults, envelope) = if let Some(selection) = &self.binding.selection {
             let body: OrderedBody = serde_json::from_slice(body).map_err(|_| invalid())?;
@@ -55,23 +58,71 @@ impl Submission {
             apply(&defaults, &mut prompt.params);
         }
         if let Some(envelope) = envelope {
+            let (canonical, supplemental, configuration_defaults) = match &envelope {
+                Envelope::V1(value) => (
+                    &value.canonical,
+                    &value.supplemental,
+                    ConfigurationDefaults::Apply,
+                ),
+                Envelope::V2(value) => (
+                    &value.canonical,
+                    &value.supplemental,
+                    value.configuration_defaults,
+                ),
+            };
             let prompt = input.generation_prompt_mut().ok_or_else(invalid)?;
-            if let Some(canonical) = &envelope.canonical {
+            if let Some(canonical) = canonical {
                 apply(canonical, &mut prompt.params);
             }
             crate::gateway::pipeline::context::apply_parameter_defaults(
                 &mut prompt.params,
-                envelope.supplemental.iter(),
+                supplemental.iter(),
             );
+            self.configuration_defaults = configuration_defaults;
         }
         Ok(input)
+    }
+}
+
+// Keep the original JSON tokens through version selection. Serde's untagged
+// buffering would erase exact decimal/exponent spellings required by the integer
+// contract. Both concrete decoders reject unknown fields and duplicate keys;
+// digest() validates the exact version before any layer choice can take effect.
+enum Envelope {
+    V1(GenerationDefaultsEnvelopeV1),
+    V2(GenerationDefaultsEnvelopeV2),
+}
+
+impl Envelope {
+    fn digest(
+        &self,
+    ) -> Result<
+        bitrouter_ai::tenancy::identity::Digest,
+        bitrouter_ai::tenancy::validation::ValidationError,
+    > {
+        match self {
+            Self::V1(value) => value.digest(),
+            Self::V2(value) => value.digest(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Envelope {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        if let Ok(value) = serde_json::from_str::<GenerationDefaultsEnvelopeV1>(raw.get()) {
+            return Ok(Self::V1(value));
+        }
+        serde_json::from_str::<GenerationDefaultsEnvelopeV2>(raw.get())
+            .map(Self::V2)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 struct OrderedBody {
     request: Map<String, Value>,
     defaults: Option<CanonicalGenerationDefaultsV1>,
-    envelope: Option<GenerationDefaultsEnvelopeV1>,
+    envelope: Option<Envelope>,
 }
 
 impl<'de> Deserialize<'de> for OrderedBody {

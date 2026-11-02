@@ -51,6 +51,41 @@ async fn archive_case(envelope: bool) -> Result<()> {
         ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
         ensure!(!serde_json::to_string(&receipt)?.contains("request-only-secret"));
     }
+    verify_archive(harness, receipt).await
+}
+
+#[tokio::test]
+async fn envelope_v2_choice_digest_survives_archive_without_payload_or_dispatch() -> Result<()> {
+    let harness = OrderedHarness::new(9, 64, None).await?;
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2 =
+        serde_json::from_value(
+            json!({"schema_version":2,"supplemental":{"vendor_knob":"request-only-secret"},"configuration_defaults":"preserve_absence"}),
+        )?;
+    let binding = harness
+        .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
+        .await?
+        .with_generation_defaults_envelope_v2(&values)?;
+    let id = super::envelope::absence::invoke(
+        &harness,
+        &binding,
+        values.clone(),
+        GenerationProtocol::ChatCompletions,
+        false,
+        HttpVersion::Http1Only,
+        json!({}),
+    )
+    .await?;
+    let receipt = harness.receipt(&id).await?;
+    ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+    let encoded = serde_json::to_string(&receipt)?;
+    ensure!(
+        !encoded.contains("request-only-secret") && !encoded.contains("configuration_defaults")
+    );
+    verify_archive(harness, receipt).await
+}
+
+async fn verify_archive(harness: OrderedHarness, receipt: ExecutionReceiptV2) -> Result<()> {
+    let id = receipt.execution_id.clone();
     let evidence = harness
         .control(false, HttpVersion::Http1Only)?
         .usage_evidence_v2(&receipt)

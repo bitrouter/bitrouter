@@ -803,6 +803,9 @@ jobs:
               'pub struct bitrouter_ai::tenancy::admission::AdmissionProfileV1'
               'pub struct bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1'
               'pub struct bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1'
+              'pub struct bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2'
+              'pub enum bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults'
+              'bitrouter_ai::tenancy::ordered::OrderedDispatchBindingV2::with_generation_defaults_envelope_v2'
               'bitrouter_ai::tenancy::ordered::OrderedDispatchBindingV2::with_generation_defaults_envelope'
               'bitrouter_ai::tenancy::ordered::OrderedDispatchBindingV2::with_generation_defaults'
               'pub struct bitrouter_ai::tenancy::resources::ResourceStatus'
@@ -837,6 +840,7 @@ jobs:
               "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_anthropic_beta"
               "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_generation_defaults"
               "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_generation_defaults_envelope"
+              "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_generation_defaults_envelope_v2"
               'bitrouter_sdk::tenancy::TenancyClient::put_resource'
               'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
