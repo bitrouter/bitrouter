@@ -14,6 +14,7 @@ mod database;
 mod empty_sources;
 mod fault;
 mod harness;
+mod projection;
 mod rows;
 
 async fn run(
@@ -52,6 +53,13 @@ async fn server_owned_trajectory_exact_replay_is_read_only_inside_tx_and_durable
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
 async fn server_owned_trajectory_empty_source_compatibility_refuses_retained_rows() -> Result<()> {
     run(|database| Box::pin(empty_sources::check(database))).await
+}
+
+#[tokio::test]
+#[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
+async fn server_owned_trajectory_directory_projection_preserves_integer_decoders_and_bounds()
+-> Result<()> {
+    run(|database| Box::pin(projection::check(database))).await
 }
 
 #[tokio::test]

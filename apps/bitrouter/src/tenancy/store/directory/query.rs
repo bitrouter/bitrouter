@@ -212,6 +212,13 @@ pub(in crate::tenancy::store) fn select(
     for (name, boolean) in table.integers() {
         let null: SimpleExpr = if *boolean {
             Expr::val(Option::<bool>::None).into()
+        } else if backend == DatabaseBackend::Postgres
+            && matches!(*name, "singleton" | "schema_version" | "hash_version")
+        {
+            // PostgreSQL resolves CASE branches to one type. An INT8 NULL
+            // would widen these INT4 fields past their canonical i32 decoders.
+            // https://www.postgresql.org/docs/current/typeconv-union-case.html
+            Expr::val(Option::<i32>::None).into()
         } else {
             Expr::val(Option::<i64>::None).into()
         };
