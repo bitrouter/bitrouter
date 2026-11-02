@@ -126,7 +126,11 @@ async fn cancelled_human_predecessor_keeps_its_original_deadline_on_the_next_acp
 #[tokio::test]
 #[ignore = "requires separately built BITROUTER_OWNED_CAPTURE_FIXTURE; no nested Cargo"]
 async fn queued_manual_edit_rechecks_current_revoke_suspend_and_tenant_scope() -> Result<()> {
-    for change in ["revoke", "suspend", "scope"] {
+    for (change, code) in [
+        ("revoke", ErrorCode::Unauthorized),
+        ("suspend", ErrorCode::TenantInactive),
+        ("scope", ErrorCode::Forbidden),
+    ] {
         let mut host = Host::new(false, usize::MAX).await?;
         let result = async {
             let native = host.open().await?;
@@ -141,49 +145,43 @@ async fn queued_manual_edit_rechecks_current_revoke_suspend_and_tenant_scope() -
                 "queued-current",
             );
             let service = &host.ready.fixture.service;
-            let execution = service
-                .admit_execution(
-                    service
-                        .submission(&host.ready.headers()?)
-                        .await
-                        .map_err(failure)?,
-                    host.ready.subject.resource_id.as_str(),
-                    &ApiProtocol::ChatCompletions,
-                )
-                .await
-                .map_err(failure)?;
             let gate = service.cleanup.hold(Phase::Committing);
-            drop(execution);
-            tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
-            let commands = service.commands.capacity();
-            let safety = service.safety.capacity();
-            // Installation revokes and suspension use the reserved safety
-            // queue; a scope update remains in the ordinary FIFO. Both must
-            // be admitted before the Human operation while the actor is held.
-            let safety_mutation = usize::from(matches!(change, "revoke" | "suspend"));
-            let ordinary_mutation = 1 - safety_mutation;
             let mut mutation = Box::pin(change_authority(
                 &host.ready.fixture,
                 &host.ready.credential,
                 &host.ready.subject,
                 change,
             ));
-            ensure!(futures::poll!(&mut mutation).is_pending());
-            ensure!(
-                service.commands.capacity() + ordinary_mutation == commands
-                    && service.safety.capacity() + safety_mutation == safety,
-                "{change}: real mutation did not enqueue in its designated queue"
-            );
+            // Hold the actual mutation before COMMIT/publication. Queue
+            // rotation does not promise ordering across safety and ordinary.
+            tokio::select! {
+                result = &mut mutation => anyhow::bail!(
+                    "{change}: authority mutation returned before its COMMIT gate: {result:?}"
+                ),
+                entered = tokio::time::timeout(TIMEOUT, gate.entered.notified()) => {
+                    entered.context("authority mutation did not reach its COMMIT gate")?;
+                }
+            }
+            let commands = service.commands.capacity();
+            let safety = service.safety.capacity();
             let mut edit = Box::pin(current.submit_assessment(&native, input));
-            ensure!(futures::poll!(&mut edit).is_pending());
             ensure!(
-                service.commands.capacity() + ordinary_mutation + 1 == commands
-                    && service.safety.capacity() + safety_mutation == safety,
-                "{change}: manual operation did not enqueue after mutation"
+                futures::poll!(&mut edit).is_pending(),
+                "{change}: manual operation did not wait behind the unpublished mutation"
+            );
+            ensure!(
+                service.commands.capacity() + 1 == commands && service.safety.capacity() == safety,
+                "{change}: manual operation did not enter the ordinary queue before publication"
             );
             service.cleanup.release_gate();
             tokio::time::timeout(TIMEOUT, &mut mutation).await??;
-            ensure!(tokio::time::timeout(TIMEOUT, &mut edit).await?.is_err());
+            rejected(
+                &tokio::time::timeout(TIMEOUT, &mut edit)
+                    .await?
+                    .err()
+                    .context("queued manual edit unexpectedly committed")?,
+                code,
+            )?;
             drained(&host.ready).await?;
             ensure!(count(&host.ready.fixture, "acp_assessment_revisions").await? == 0);
             ensure!(
@@ -193,7 +191,9 @@ async fn queued_manual_edit_rechecks_current_revoke_suspend_and_tenant_scope() -
             Ok(())
         }
         .await;
-        host.finish(result).await?;
+        host.finish(result)
+            .await
+            .with_context(|| format!("{change}: queued Human authority recheck"))?;
     }
     Ok(())
 }
