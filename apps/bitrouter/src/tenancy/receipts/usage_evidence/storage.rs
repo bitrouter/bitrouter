@@ -115,16 +115,6 @@ async fn preflight(
                     && row.try_get::<i32>("", "schema_version")? == 1,
                 "usage evidence length or version"
             );
-            // Three copies cover transfer, decoding and canonical encoding.
-            // Both digest strings are exactly 64 bytes; fixed overhead covers
-            // scalar cells and allocation metadata. A duplicate is rejected
-            // before decoding, so its two transferred bodies fit this allowance.
-            let allocation = bytes
-                .checked_add(128)
-                .and_then(|bytes| bytes.checked_mul(3))
-                .and_then(|bytes| bytes.checked_add(4096))
-                .context("usage evidence allocation bound")?;
-            charge(2, allocation)?;
             Ok(Some(bytes))
         }
         _ => anyhow::bail!("usage evidence presence mismatch"),
@@ -145,6 +135,29 @@ async fn load_inline(
     } else {
         None
     };
+    load_inline_body(db, receipt, receipt_digest, expected, charge, measured).await
+}
+
+async fn load_inline_body(
+    db: &impl ConnectionTrait,
+    receipt: &ExecutionReceipt,
+    receipt_digest: &str,
+    expected: Option<&str>,
+    charge: Option<&Charge<'_>>,
+    measured: Option<usize>,
+) -> Result<Option<Evidence>> {
+    if let (Some(charge), Some(bytes)) = (charge, measured) {
+        // Three copies cover transfer, decoding and canonical encoding.
+        // Both digest strings are exactly 64 bytes; fixed overhead covers
+        // scalar cells and allocation metadata. A duplicate is rejected
+        // before decoding, so its two transferred bodies fit this allowance.
+        let allocation = bytes
+            .checked_add(128)
+            .and_then(|bytes| bytes.checked_mul(3))
+            .and_then(|bytes| bytes.checked_add(4096))
+            .context("usage evidence allocation bound")?;
+        charge(2, allocation)?;
+    }
     let backend = db.get_database_backend();
     let mut query = scope(receipt);
     for (name, bound) in [
@@ -208,8 +221,36 @@ pub(in crate::tenancy::receipts) async fn validate_inline(
     expected: Option<&str>,
     charge: Option<&Charge<'_>>,
 ) -> Result<()> {
-    candidate.usage_evidence =
-        load_inline(db, &candidate.receipt, &candidate.digest, expected, charge).await?;
+    let uncharged = |_, _| Ok(());
+    let measured =
+        store::archive::usage_metadata(db, candidate, false, charge.unwrap_or(&uncharged)).await?;
+    candidate.usage_evidence = if db.get_database_backend() == DatabaseBackend::Sqlite
+        && let Some(charge) = charge
+    {
+        // Reuse only the scalar validation just performed on this database.
+        // Retain the original preflight debits/checkpoints, including absence.
+        charge(2, 1024)?;
+        charge(0, 0)?;
+        ensure!(
+            measured.is_some() == expected.is_some(),
+            "usage evidence presence mismatch"
+        );
+        if measured.is_some() {
+            load_inline_body(
+                db,
+                &candidate.receipt,
+                &candidate.digest,
+                expected,
+                Some(charge),
+                measured,
+            )
+            .await?
+        } else {
+            None
+        }
+    } else {
+        load_inline(db, &candidate.receipt, &candidate.digest, expected, charge).await?
+    };
     Ok(())
 }
 

@@ -5,8 +5,11 @@ use crate::tenancy::{
     receipts::{auxiliary, auxiliary_store, usage_evidence},
 };
 use bitrouter_ai::tenancy::execution::{Attempt, Outcome};
-use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
-use std::sync::atomic::{AtomicBool, Ordering};
+use sea_orm::{DatabaseConnection, DbErr, ExecResult, Statement, TransactionTrait};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 const FREE: &archive::Charge<'_> = &|_, _| Ok(());
 
@@ -544,5 +547,532 @@ async fn final_proof_charge_refusal_keeps_projection_and_transaction_uncommitted
         empty(&db).await?;
         db.close().await?;
     }
+    Ok(())
+}
+
+// Only these two payload columns are observed. The delegate retains scalar
+// counts, and can change one real SQL row after its scalar read has completed.
+struct Transfer<'a> {
+    tx: &'a DatabaseTransaction,
+    bodies: Mutex<[(usize, usize); 2]>,
+    between: Option<(&'static str, &'static str)>,
+    changed: AtomicBool,
+}
+impl<'a> Transfer<'a> {
+    fn new(tx: &'a DatabaseTransaction, between: Option<(&'static str, &'static str)>) -> Self {
+        Self {
+            tx,
+            bodies: Mutex::new([(0, 0); 2]),
+            between,
+            changed: AtomicBool::new(false),
+        }
+    }
+    fn counts(&self) -> Result<[(usize, usize); 2]> {
+        self.bodies
+            .lock()
+            .map(|value| *value)
+            .map_err(|_| anyhow::anyhow!("transfer observation poisoned"))
+    }
+    async fn observed(&self, sql: &str, rows: &[QueryResult]) -> std::result::Result<(), DbErr> {
+        for (index, column) in ["receipt_json", "evidence_json"].into_iter().enumerate() {
+            if sql.contains(&format!(" AS \"{column}\"")) {
+                let mut counts = self
+                    .bodies
+                    .lock()
+                    .map_err(|_| DbErr::Custom("transfer observation poisoned".into()))?;
+                counts[index].0 += 1;
+                for row in rows {
+                    // A BLOB must not become a false zero-byte observation just
+                    // because the normal String decoder rejects its type.
+                    let bytes = match row.try_get::<Option<String>>("", column) {
+                        Ok(value) => value.map_or(0, |value| value.len()),
+                        Err(_) => row
+                            .try_get::<Option<Vec<u8>>>("", column)?
+                            .map_or(0, |value| value.len()),
+                    };
+                    counts[index].1 = counts[index]
+                        .1
+                        .checked_add(bytes)
+                        .ok_or_else(|| DbErr::Custom("transfer count overflow".into()))?;
+                }
+            }
+        }
+        if let Some((marker, mutation)) = self.between
+            && sql.contains(marker)
+            && !self.changed.load(Ordering::Acquire)
+        {
+            let result = self.tx.execute_unprepared(mutation).await?;
+            if result.rows_affected() != 1 {
+                return Err(DbErr::Custom("between-read mutation missed row".into()));
+            }
+            self.changed.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+#[async_trait::async_trait]
+impl ConnectionTrait for Transfer<'_> {
+    fn get_database_backend(&self) -> DatabaseBackend {
+        DatabaseBackend::Sqlite
+    }
+    async fn execute(&self, _: Statement) -> std::result::Result<ExecResult, DbErr> {
+        Err(DbErr::Custom("unexpected reader write".into()))
+    }
+    async fn execute_unprepared(&self, _: &str) -> std::result::Result<ExecResult, DbErr> {
+        Err(DbErr::Custom("unexpected reader write".into()))
+    }
+    async fn query_one(
+        &self,
+        statement: Statement,
+    ) -> std::result::Result<Option<QueryResult>, DbErr> {
+        let sql = statement.sql.clone();
+        let row = self.tx.query_one(statement).await?;
+        self.observed(&sql, row.as_slice()).await?;
+        Ok(row)
+    }
+    async fn query_all(
+        &self,
+        statement: Statement,
+    ) -> std::result::Result<Vec<QueryResult>, DbErr> {
+        let sql = statement.sql.clone();
+        let rows = self.tx.query_all(statement).await?;
+        self.observed(&sql, &rows).await?;
+        Ok(rows)
+    }
+}
+async fn charged(
+    db: &impl ConnectionTrait,
+    value: &Candidate,
+    charge: &archive::Charge<'_>,
+) -> Result<Option<Candidate>> {
+    let r = &value.receipt;
+    lookup_candidate_bounded(
+        db,
+        &r.installation_id,
+        &r.tenant_id,
+        &r.execution_id,
+        charge,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn charged_receipt_scalar_distinguishes_absence_invalid_storage_and_boundary() -> Result<()> {
+    use crate::storage::operation_budget::Error;
+    let db = open().await?;
+    let value = tests::candidate("installation", "tenant", "execution", &"p".repeat(128))?;
+    ensure!(tests::commit(&db, &value).await?);
+    for (mutation, missing, body_queries) in [
+        (None, false, 1),
+        (Some("DELETE FROM tenancy_execution_receipts"), true, 0),
+        (
+            Some("UPDATE tenancy_execution_receipts SET receipt_json=printf('%1048577s','x')"),
+            false,
+            0,
+        ),
+        (
+            Some("UPDATE tenancy_execution_receipts SET principal_id=principal_id||'p'"),
+            false,
+            0,
+        ),
+        (
+            Some("UPDATE tenancy_execution_receipts SET receipt_json=CAST(receipt_json AS BLOB)"),
+            false,
+            1,
+        ),
+    ] {
+        let tx = db.begin().await?;
+        let result: Result<()> = async {
+            if let Some(sql) = mutation {
+                ensure!(tx.execute_unprepared(sql).await?.rows_affected() == 1);
+            }
+            let reader = Transfer::new(&tx, None);
+            let loaded = charged(&reader, &value, FREE).await;
+            let seen = reader.counts()?;
+            ensure!(seen[0].0 == body_queries && seen[1] == (0, 0));
+            if mutation.is_none() {
+                same_completion(&loaded?.context("boundary candidate missing")?, &value)?;
+                ensure!(seen[0].1 == value.json.len());
+            } else if missing {
+                ensure!(loaded?.is_none() && seen[0].1 == 0);
+            } else {
+                ensure!(loaded.is_err() && seen[0].1 == 0);
+                // Accepted fail-closed ordering: even an already-invalid row
+                // may first encounter the caller's reservation refusal.
+                let reader = Transfer::new(&tx, None);
+                let error = charged(&reader, &value, &|_, _| Err(Error::Capacity.into()))
+                    .await
+                    .err()
+                    .context("callback refusal accepted")?;
+                ensure!(matches!(
+                    error.downcast_ref::<Error>(),
+                    Some(Error::Capacity)
+                ));
+                ensure!(reader.counts()? == [(0, 0); 2]);
+            }
+            Ok(())
+        }
+        .await;
+        tx.rollback().await?;
+        result?;
+    }
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn charged_usage_metadata_covers_presence_and_corruption_before_body() -> Result<()> {
+    let db = open().await?;
+    let mut cases = vec![
+        (false, false, None),
+        (false, true, None),
+        (true, false, None),
+        (true, true, None),
+    ];
+    cases.extend(
+        [
+            "UPDATE tenancy_usage_evidence SET evidence_json=CAST(evidence_json AS BLOB)",
+            "UPDATE tenancy_usage_evidence SET receipt_digest=printf('%064d',0)",
+            "UPDATE tenancy_usage_evidence SET evidence_digest=printf('%064d',0)",
+            "UPDATE tenancy_usage_evidence SET schema_version=1.5",
+            "UPDATE tenancy_usage_evidence SET byte_count=1.5",
+            "UPDATE tenancy_usage_evidence SET storage_kind=0.5",
+            "UPDATE tenancy_usage_evidence SET schema_version=X'31'",
+            "UPDATE tenancy_usage_evidence SET byte_count=CAST(byte_count AS BLOB)",
+            "duplicate",
+        ]
+        .map(|sql| (true, true, Some(sql))),
+    );
+    for (expected, actual, mutation) in cases {
+        let value = if expected {
+            value()?
+        } else {
+            tests::candidate("installation", "tenant", "execution", "creator")?
+        };
+        let tx = db.begin().await?;
+        let result: Result<()> = async {
+            ensure!(insert(&tx, &value).await?);
+            if expected && !actual { tx.execute_unprepared("DELETE FROM tenancy_usage_evidence").await?; }
+            if !expected && actual { usage_evidence::storage::insert_fresh(&tx, &self::value()?).await?; }
+            if matches!(mutation, Some("duplicate" | "UPDATE tenancy_usage_evidence SET storage_kind=0.5")) {
+                // One real row without the marker CHECK, so the type case reaches
+                // the reader. Only duplication adds a second row; rollback removes the relation.
+                tx.execute_unprepared("CREATE TEMP TABLE tenancy_usage_evidence AS SELECT * FROM main.tenancy_usage_evidence").await?;
+            }
+            match mutation {
+                Some("duplicate") => {
+                    tx.execute_unprepared("INSERT INTO temp.tenancy_usage_evidence SELECT * FROM main.tenancy_usage_evidence").await?;
+                }
+                Some(sql) => { ensure!(tx.execute_unprepared(sql).await?.rows_affected() == 1); }
+                None => {}
+            }
+            let reader = Transfer::new(&tx, None);
+            let loaded = charged(&reader, &value, FREE).await;
+            let seen = reader.counts()?;
+            ensure!(seen[0] == (1, value.json.len()));
+            if expected == actual && mutation.is_none() {
+                same_completion(&loaded?.context("valid usage candidate missing")?, &value)?;
+                let bytes = value.usage_evidence.as_ref().map_or(0, |e| e.json.len());
+                ensure!(seen[1] == (usize::from(actual), bytes));
+            } else {
+                let error = loaded.err().context("invalid usage metadata accepted")?;
+                ensure!(seen[1] == (0, 0), "metadata refusal transferred a usage body");
+                if mutation == Some("duplicate") { ensure!(error.to_string().contains("multiplicity")); }
+            }
+            Ok(())
+        }.await;
+        tx.rollback().await?;
+        result?;
+        empty(&db).await?;
+    }
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn charged_body_rechecks_between_scalar_and_payload_reads() -> Result<()> {
+    let db = open().await?;
+    let value = value()?;
+    ensure!(tests::commit(&db, &value).await?);
+    for (marker, mutation, usage, body_survives) in [
+        (
+            " AS \"receipt_bytes\"",
+            "UPDATE tenancy_execution_receipts SET receipt_json=receipt_json||' '",
+            false,
+            false,
+        ),
+        (
+            " AS \"receipt_bytes\"",
+            "UPDATE tenancy_execution_receipts SET receipt_json=CAST(receipt_json AS BLOB)",
+            false,
+            false,
+        ),
+        (
+            " AS inline_bytes",
+            "UPDATE tenancy_usage_evidence SET evidence_json=evidence_json||' '",
+            true,
+            false,
+        ),
+        (
+            " AS inline_bytes",
+            "UPDATE tenancy_usage_evidence SET receipt_digest=printf('%064d',0)",
+            true,
+            true,
+        ),
+        (
+            " AS inline_bytes",
+            "UPDATE tenancy_usage_evidence SET byte_count=1.5",
+            true,
+            true,
+        ),
+    ] {
+        let tx = db.begin().await?;
+        let result: Result<()> = async {
+            let reader = Transfer::new(&tx, Some((marker, mutation)));
+            let loaded = charged(&reader, &value, FREE).await;
+            ensure!(
+                reader.changed.load(Ordering::Acquire),
+                "mutation boundary was not reached"
+            );
+            ensure!(loaded.is_err());
+            let seen = reader.counts()?;
+            let index = usize::from(usage);
+            ensure!(seen[index].0 == 1, "body guard was not exercised");
+            if body_survives {
+                ensure!(
+                    seen[index].1
+                        == value
+                            .usage_evidence
+                            .as_ref()
+                            .context("captured usage")?
+                            .json
+                            .len()
+                );
+            } else {
+                ensure!(
+                    seen[index].1 == 0,
+                    "changed body crossed the driver boundary"
+                );
+            }
+            if !usage {
+                ensure!(seen[1] == (0, 0));
+            }
+            Ok(())
+        }
+        .await;
+        tx.rollback().await?;
+        result?;
+    }
+    same_completion(&saved(&db, &value).await?, &value)?;
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> {
+    use crate::storage::operation_budget::Error;
+    use bitrouter_ai::tenancy::operation::ErrorCode;
+    let db = open().await?;
+    for captured in [false, true] {
+        let value = if captured {
+            value()?
+        } else {
+            tests::candidate("installation", "tenant", "execution", "creator")?
+        };
+        let r = &value.receipt;
+        let bytes = value.json.len()
+            + value.private_json.len()
+            + 256
+            + [
+                r.installation_id.as_str(),
+                r.tenant_id.as_str(),
+                r.execution_id.as_str(),
+                r.principal_id.as_str(),
+                r.correlation_id.as_str(),
+                value.digest.as_str(),
+                r.recorded_at.as_str(),
+            ]
+            .iter()
+            .map(|s| s.len())
+            .sum::<usize>();
+        let mut expected = vec![
+            (0, 0),
+            (1, 256),
+            (1, bytes * 3),
+            (0, 0),
+            (1, 1024),
+            (2, 2048),
+            (0, 0),
+            (2, 1024),
+            (0, 0),
+        ];
+        if let Some(e) = &value.usage_evidence {
+            expected.extend([(2, (e.json.len() + 128) * 3 + 4096), (0, 0)]);
+        }
+        expected.push((0, 0));
+        for refuse in std::iter::once(None).chain((0..expected.len()).map(Some)) {
+            let tx = db.begin().await?;
+            let result: Result<()> = async {
+                ensure!(insert(&tx, &value).await?);
+                let calls = Mutex::new(Vec::new());
+                let reader = Transfer::new(&tx, None);
+                let loaded = charged(&reader, &value, &|rows, bytes| {
+                    let mut seen = calls
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
+                    let index = seen.len();
+                    seen.push((rows, bytes));
+                    if refuse == Some(index) {
+                        return Err(if rows == 0 {
+                            Error::Rejected(ErrorCode::AuthorityUnavailable)
+                        } else {
+                            Error::Capacity
+                        }
+                        .into());
+                    }
+                    Ok(())
+                })
+                .await;
+                let seen = calls
+                    .into_inner()
+                    .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
+                ensure!(seen == expected[..refuse.map_or(expected.len(), |index| index + 1)]);
+                match refuse {
+                    None => {
+                        same_completion(&loaded?.context("valid charged lookup missing")?, &value)?
+                    }
+                    Some(index) => {
+                        let error = loaded.err().context("failed logical callback accepted")?;
+                        match (expected[index].0, error.downcast_ref::<Error>()) {
+                            (0, Some(Error::Rejected(ErrorCode::AuthorityUnavailable))) => {}
+                            (rows, Some(Error::Capacity)) if rows > 0 => {}
+                            _ => anyhow::bail!("callback failure changed cause"),
+                        }
+                    }
+                }
+                let body = reader.counts()?;
+                // Debit indices 2 and 9 precede the respective body SELECTs;
+                // later callback failures must not pretend those reads vanished.
+                let receipt_read = refuse.is_none_or(|index| index > 2);
+                let usage_read = captured && refuse.is_none_or(|index| index > 9);
+                ensure!(
+                    body[0]
+                        == (
+                            usize::from(receipt_read),
+                            if receipt_read { value.json.len() } else { 0 }
+                        )
+                );
+                ensure!(
+                    body[1]
+                        == (
+                            usize::from(usage_read),
+                            if usage_read {
+                                value
+                                    .usage_evidence
+                                    .as_ref()
+                                    .context("usage trace")?
+                                    .json
+                                    .len()
+                            } else {
+                                0
+                            }
+                        )
+                );
+                Ok(())
+            }
+            .await;
+            tx.rollback().await?;
+            result?;
+            empty(&db).await?;
+        }
+    }
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_stage_checks_full_archive_scope_and_existing_canonical_rows() -> Result<()> {
+    let db = open().await?;
+    let expected = value()?;
+    for (installation, tenant) in [
+        ("installation", "tenant"),
+        ("installation", "other"),
+        ("other", "tenant"),
+    ] {
+        let tx = db.begin().await?;
+        let result: Result<()> = async {
+            let archived = tests::candidate(installation, tenant, "execution", "creator")?
+                .with_usage_evidence(usage_evidence::Snapshot::default())?;
+            ensure!(insert(&tx, &archived).await?);
+            let prepared = archive::Prepared::new(&archived, FREE)?;
+            ensure!(archive::archive_one(&tx, &prepared, FREE).await?);
+            ensure!(
+                tx.execute_unprepared("DELETE FROM tenancy_execution_receipts")
+                    .await?
+                    .rows_affected()
+                    == 1
+            );
+            ensure!(
+                tx.execute_unprepared("DELETE FROM tenancy_usage_evidence")
+                    .await?
+                    .rows_affected()
+                    == 1
+            );
+            ensure!(count(&tx, "tenancy_receipt_archive").await? == 1);
+            let stage = stage_terminal(&tx, &expected).await;
+            if installation == "installation" && tenant == "tenant" {
+                let error = stage.err().context("same-key orphan archive accepted")?;
+                ensure!(
+                    error
+                        .to_string()
+                        .contains("orphan or duplicate receipt archive")
+                );
+                ensure!(
+                    count(&tx, "tenancy_execution_receipts").await? == 0
+                        && count(&tx, "tenancy_usage_evidence").await? == 0,
+                    "orphan refusal followed a write"
+                );
+            } else {
+                let staged = stage?;
+                ensure!(staged.inserted());
+                ensure!(staged.reconcile(FREE).await?.delta() == 0);
+                same_completion(&saved(&tx, &expected).await?, &expected)?;
+            }
+            ensure!(count(&tx, "tenancy_receipt_archive").await? == 1);
+            Ok(())
+        }
+        .await;
+        tx.rollback().await?;
+        result?;
+        empty(&db).await?;
+    }
+    let tx = db.begin().await?;
+    let result: Result<()> = async {
+        ensure!(insert(&tx, &expected).await?);
+        ensure!(
+            tx.execute_unprepared("UPDATE tenancy_execution_receipts SET receipt_json='{'")
+                .await?
+                .rows_affected()
+                == 1
+        );
+        let error = stage_terminal(&tx, &expected)
+            .await
+            .err()
+            .context("existing corrupt receipt bypassed canonical replay")?;
+        ensure!(
+            error.downcast_ref::<serde_json::Error>().is_some(),
+            "existing receipt did not reach canonical JSON decoding"
+        );
+        ensure!(
+            count(&tx, "tenancy_execution_receipts").await? == 1
+                && count(&tx, "tenancy_usage_evidence").await? == 1
+        );
+        Ok(())
+    }
+    .await;
+    tx.rollback().await?;
+    result?;
+    empty(&db).await?;
+    db.close().await?;
     Ok(())
 }

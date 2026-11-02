@@ -267,18 +267,21 @@ async fn bounded_row(
     budget: Option<&archive::Charge<'_>>,
 ) -> Result<Option<QueryResult>> {
     let backend = db.get_database_backend();
-    // Bound stored TEXT before transferring it; a corrupt cell is never materialized.
-    let length = oversized(backend);
-    let oversized = query
-        .clone()
-        .expr(Expr::val(1))
-        .and_where(Expr::cust(length))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&oversized)).await?.is_none(),
-        "stored receipt byte bound"
-    );
+    // Callers supply an exact receipt key. Charged SQLite reads combine both
+    // scalar probes; other readers retain the original oversized-row probe.
+    let combined = backend == DatabaseBackend::Sqlite && budget.is_some();
+    if !combined {
+        let oversized = query
+            .clone()
+            .expr(Expr::val(1))
+            .and_where(Expr::cust(oversized(backend)))
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(backend.build(&oversized)).await?.is_none(),
+            "stored receipt byte bound"
+        );
+    }
     let mut transfer_guard = String::new();
     if let Some(budget) = budget {
         budget(0, 0)?;
@@ -302,12 +305,20 @@ async fn bounded_row(
         } else {
             "BIGINT"
         };
+        let measured = format!("CAST(({lengths} + 256) AS {cast})");
+        let measured = if combined {
+            // NULL marks an invalid present row; never filter it into absence.
+            // Reserve before transfer even when cancellation masks that error.
+            format!(
+                "CASE WHEN ({}) THEN NULL ELSE {measured} END",
+                oversized(backend)
+            )
+        } else {
+            measured
+        };
         let mut size = query.clone();
-        size.expr_as(
-            Expr::cust(format!("CAST(({lengths} + 256) AS {cast})")),
-            Alias::new("receipt_bytes"),
-        )
-        .limit(1);
+        size.expr_as(Expr::cust(measured), Alias::new("receipt_bytes"))
+            .limit(1);
         budget(1, 256)?;
         let Some(metadata) = db.query_one(backend.build(&size)).await? else {
             return Ok(None);
@@ -488,6 +499,11 @@ async fn insert_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Result<b
         same_completion(&saved, candidate)?;
         return Ok(false);
     }
+    insert_new_row(tx, candidate).await
+}
+
+async fn insert_new_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Result<bool> {
+    let receipt = &candidate.receipt;
     let fields: Vec<(&str, sea_orm::Value)> = vec![
         ("installation_id", receipt.installation_id.as_str().into()),
         ("tenant_id", receipt.tenant_id.as_str().into()),
@@ -614,7 +630,19 @@ pub(in crate::tenancy) async fn stage_terminal<'a>(
     candidate: &'a Candidate,
 ) -> Result<TerminalWrite<'a>> {
     let inserted = if tx.get_database_backend() == DatabaseBackend::Sqlite {
-        let inserted = insert_row(tx, candidate).await?;
+        let receipt = &candidate.receipt;
+        let missing = archive::missing_receipt(
+            tx,
+            &receipt.installation_id,
+            &receipt.tenant_id,
+            &receipt.execution_id,
+        )
+        .await?;
+        let inserted = if missing {
+            insert_new_row(tx, candidate).await?
+        } else {
+            insert_row(tx, candidate).await?
+        };
         if inserted {
             super::usage_evidence::storage::insert_fresh(tx, candidate).await?;
         }

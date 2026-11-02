@@ -55,6 +55,38 @@ fn integer(name: &str) -> String {
     format!("CASE WHEN typeof({name})='integer' THEN {name} ELSE NULL END AS {name}")
 }
 
+/// SQLite terminal staging only: true proves both exact-key rows are absent in
+/// this transaction. False requires the full canonical replay check; an archive
+/// alongside an existing receipt may be legitimate. No validity filter may
+/// turn a corrupt existing row into absence, and errors never mean missing.
+pub(super) async fn missing_receipt(
+    tx: &DatabaseTransaction,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+) -> Result<bool> {
+    ensure!(
+        tx.get_database_backend() == DatabaseBackend::Sqlite,
+        "receipt presence probe requires SQLite"
+    );
+    let row = tx
+        .query_one(sqlite(
+            format!(
+                "SELECT EXISTS(SELECT 1 FROM {} WHERE {KEY}) AS receipt_present, EXISTS(SELECT 1 FROM {TABLE} WHERE {KEY}) AS archive_present",
+                super::TABLE
+            ),
+            values(installation, tenant, id)
+                .into_iter()
+                .chain(values(installation, tenant, id)),
+        ))
+        .await?
+        .context("receipt presence result missing")?;
+    let receipt: bool = row.try_get("", "receipt_present")?;
+    let archive: bool = row.try_get("", "archive_present")?;
+    ensure!(receipt || !archive, "orphan or duplicate receipt archive");
+    Ok(!receipt)
+}
+
 pub(super) async fn ensure_inline(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
@@ -136,15 +168,17 @@ pub(super) async fn load(
 
 /// Check sidecar location without loading an inline body. Archived metadata
 /// remains authoritative for presence, schema, both digests and logical size.
-pub(super) async fn usage_metadata(
+/// SQLite returns validated body length or absence. Other backends retain the
+/// no-op path; callers must not interpret its None as verified absence.
+pub(in crate::tenancy::receipts) async fn usage_metadata(
     db: &impl ConnectionTrait,
     candidate: &Candidate,
     archived: bool,
     charge: &Charge<'_>,
-) -> Result<()> {
+) -> Result<Option<usize>> {
     if db.get_database_backend() != DatabaseBackend::Sqlite {
         ensure!(!archived, "receipt archive requires SQLite");
-        return Ok(());
+        return Ok(None);
     }
     charge(2, 2048)?;
     let r = &candidate.receipt;
@@ -158,10 +192,13 @@ pub(super) async fn usage_metadata(
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
     let disposition: super::StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     match (disposition.usage_evidence_digest.as_deref(), rows.first()) {
-        (None, None) => ensure!(
-            candidate.usage_evidence.is_none(),
-            "unexpected archived usage"
-        ),
+        (None, None) => {
+            ensure!(
+                candidate.usage_evidence.is_none(),
+                "unexpected archived usage"
+            );
+            Ok(None)
+        }
         (Some(expected), Some(row)) => {
             ensure!(
                 row.try_get::<i64>("", "schema_version")? == 1
@@ -188,10 +225,10 @@ pub(super) async fn usage_metadata(
             } else {
                 ensure!(inline == bytes, "inline usage evidence length");
             }
+            Ok(Some(bytes))
         }
         _ => anyhow::bail!("usage evidence presence mismatch"),
     }
-    Ok(())
 }
 
 pub(super) fn known(candidate: &Candidate) -> Result<()> {

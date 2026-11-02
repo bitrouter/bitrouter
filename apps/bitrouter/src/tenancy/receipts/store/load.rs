@@ -68,12 +68,11 @@ pub(super) async fn candidate(
             ensure!(evidence.json == json, "archived usage canonical bytes");
             candidate.usage_evidence = Some(evidence);
         }
-        archive::usage_metadata(db, &candidate, true, account).await?;
+        let _ = archive::usage_metadata(db, &candidate, true, account).await?;
         // Unknown history is never a valid archived representation, even if
         // all projected digests were rewritten consistently.
         archive::known(&candidate)?;
     } else {
-        archive::usage_metadata(db, &candidate, false, account).await?;
         super::super::usage_evidence::storage::validate_inline(
             db,
             &mut candidate,
