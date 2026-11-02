@@ -336,8 +336,8 @@ jobs:
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
         FILTER: >-
           kind(lib) & (test(=tenancy::tests::execution::native::session::choice::recovery::companion::authority::native_recovery_committed_repair_survives_revocation_expiry_and_lost_waiter)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_reserves_aggregate_unknown_room_before_any_repair_write)
-          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_counts_released_peer_rows_in_one_cumulative_budget)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_repairs_above_unknown_policy_without_reopening_admission)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_validates_released_peers_without_cumulative_history_limit)
           | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capture::native_recovery_refuses_actual_capture_history_without_retained_reaper_proof)
           | test(=tenancy::tests::execution::native::session::choice::recovery::companion::custody::native_recovery_unwind_and_overdue_commit_keep_the_exact_owner)
           | test(=tenancy::tests::execution::native::session::choice::recovery::companion::profiles::native_recovery_refuses_uncovered_generation_and_auxiliary_but_reopens_released_v1)

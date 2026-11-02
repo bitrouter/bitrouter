@@ -17,6 +17,24 @@ struct UnknownWire {
     gateway: AbortOnDropHandle<std::io::Result<()>>,
 }
 impl UnknownWire {
+    fn client() -> Result<reqwest::Client> {
+        Ok(reqwest::Client::builder()
+            .no_proxy()
+            .http1_only()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(TIMEOUT)
+            .build()?)
+    }
+    async fn request(&self, client: &reqwest::Client) -> Result<reqwest::Response> {
+        Ok(client
+            .post(format!("{}/v1/chat/completions", self.base))
+            .headers(self.headers.clone())
+            .json(&json!({"model":UNKNOWN_MODEL,
+                "messages":[{"role":"user","content":"observe incomplete provider stream"}],
+                "stream":true,"max_tokens":25}))
+            .send()
+            .await?)
+    }
     async fn start(bound: &Bound) -> Result<Self> {
         async fn reply(
             State(calls): State<Arc<AtomicUsize>>,
@@ -121,22 +139,10 @@ impl UnknownWire {
         })
     }
     async fn populate(&self, bound: &Bound, count: usize) -> Result<BTreeSet<String>> {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .http1_only()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(TIMEOUT)
-            .build()?;
+        let client = Self::client()?;
         let mut ids = BTreeSet::new();
         for _ in 0..count {
-            let response = client
-                .post(format!("{}/v1/chat/completions", self.base))
-                .headers(self.headers.clone())
-                .json(&json!({"model":UNKNOWN_MODEL,
-                    "messages":[{"role":"user","content":"observe incomplete provider stream"}],
-                    "stream":true,"max_tokens":25}))
-                .send()
-                .await?;
+            let response = self.request(&client).await?;
             ensure!(response.status() == StatusCode::OK);
             let id = response
                 .headers()
@@ -174,9 +180,9 @@ impl UnknownWire {
 }
 
 #[tokio::test]
-#[ignore = "actual admitted Unknown receipt limit and native repair; select this parent"]
-async fn native_recovery_reserves_aggregate_unknown_room_before_any_repair_write() -> Result<()> {
-    campaign(&["capacity-unknown-fit", "capacity-unknown-reject"]).await
+#[ignore = "actual protected repair and ordinary Unknown refusal; select this parent"]
+async fn native_recovery_repairs_above_unknown_policy_without_reopening_admission() -> Result<()> {
+    campaign(&["capacity-unknown-fit", "capacity-unknown-over-policy"]).await
 }
 
 pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
@@ -194,19 +200,40 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
             before.len() == count
                 && before.iter().map(|r| r.0.clone()).collect::<BTreeSet<_>>() == ids
         );
-        let native_before = payload(&stopped.bound.fixture.db).await?;
-        let opened = fixture::open(
+        let journal = fixture::journal(&stopped.bound).await?;
+        let mut native_ids = BTreeSet::new();
+        for link in journal["owned_choices"]
+            .as_object()
+            .context("real native choices")?
+            .values()
+        {
+            for field in ["parent_execution", "child_execution"] {
+                native_ids.insert(
+                    link[field]
+                        .as_str()
+                        .context("native receipt identity")?
+                        .to_owned(),
+                );
+            }
+        }
+        ensure!(native_ids.len() == 2 && native_ids.is_disjoint(&ids));
+        let session = fixture::open(
             &stopped.bound,
             &stopped.generation,
             &root.join("workspace"),
             Arc::new(HostSpies::default()),
         )
-        .await;
-        if mode == "capacity-unknown-fit" {
-            let session = opened?;
+        .await?;
+        let checked = async {
             let all = terminals(&stopped.bound.fixture.db).await?;
-            ensure!(all.len() == 100 && before.iter().all(|row| all.contains(row)));
-            for (id, body, _) in all.iter().filter(|row| !ids.contains(&row.0)) {
+            ensure!(all.len() == count + 2 && before.iter().all(|row| all.contains(row)));
+            let added: BTreeSet<_> = all
+                .iter()
+                .filter(|row| !ids.contains(&row.0))
+                .map(|row| row.0.clone())
+                .collect();
+            ensure!(added == native_ids);
+            for (id, body, _) in all.iter().filter(|row| native_ids.contains(&row.0)) {
                 let value: ExecutionReceipt = serde_json::from_str(body)?;
                 ensure!(
                     value.execution_id.as_str() == id
@@ -215,36 +242,65 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
                         && value.execution_revision == stopped.bound.revision
                 );
             }
-            session.close().await?;
-            ensure!(terminals(&stopped.bound.fixture.db).await? == all);
-        } else {
-            if let Ok(session) = opened {
-                session.close().await?;
-                anyhow::bail!("repair exceeded tenant Unknown limit");
-            }
-            ensure!(payload(&stopped.bound.fixture.db).await? == native_before);
-            ensure!(terminals(&stopped.bound.fixture.db).await? == before);
-            ensure!(
-                stopped.bound.fixture.service.current().is_ok(),
-                "ordinary capacity refusal fenced authority"
-            );
+            Ok::<_, anyhow::Error>(all)
         }
+        .await;
+        let closed = session.close().await;
+        let all = checked?;
+        closed?;
+        ensure!(terminals(&stopped.bound.fixture.db).await? == all);
         tokio::time::timeout(TIMEOUT, async {
             while stopped.bound.fixture.service.host_slots_for_test() != 1 {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
+        let accounting = stopped
+            .bound
+            .fixture
+            .service
+            .admission
+            .receipt_capacity_for_test()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        ensure!(accounting.0 == 0 && !accounting.2);
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+        {
+            let observed = tokio::time::timeout(TIMEOUT, async {
+                loop {
+                    match stopped.bound.fixture.service.admission.observed_capacity() {
+                        Ok(value) => break Ok::<_, anyhow::Error>(value),
+                        Err(
+                            crate::telemetry::receipt_latency::capacity::ReadError::Unavailable,
+                        ) => {
+                            tokio::task::yield_now().await;
+                        }
+                        Err(error) => anyhow::bail!("invalid settled repair accounting: {error:?}"),
+                    }
+                }
+            })
+            .await??;
+            ensure!(observed.accounted > 0 && observed.live_unknown == u64::try_from(count + 2)?);
+        }
+        stopped.bound.fixture.service.cleanup.ensure_clean()?;
+        ensure!(stopped.bound.fixture.service.current().is_ok());
+        let response = wire.request(&UnknownWire::client()?).await?;
+        ensure!(response.status() == StatusCode::TOO_MANY_REQUESTS);
+        let rejected: bitrouter_ai::tenancy::operation::Error = response.json().await?;
         ensure!(
-            stopped
-                .bound
-                .fixture
-                .service
-                .admission
-                .receipt_capacity_for_test()
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?
-                .0
-                == 0
+            rejected.code == bitrouter_ai::tenancy::operation::ErrorCode::CapacityExceeded
+                && rejected.dispatch_state
+                    == bitrouter_ai::tenancy::operation::DispatchState::NotStarted
+                && rejected.execution_id.is_none()
+        );
+        tokio::time::timeout(
+            TIMEOUT,
+            stopped.bound.fixture.service.admission.wait_drained(),
+        )
+        .await?;
+        ensure!(terminals(&stopped.bound.fixture.db).await? == all);
+        ensure!(
+            stopped.bound.fixture.service.current().is_ok(),
+            "ordinary refusal fenced authority"
         );
         ensure!(
             stopped.generation.calls() == 0
@@ -261,14 +317,21 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "actual released native journals exercise cumulative recovery bytes; select this parent"]
-async fn native_recovery_counts_released_peer_rows_in_one_cumulative_budget() -> Result<()> {
-    campaign(&["capacity-bytes-control", "capacity-bytes-reject"]).await
+#[ignore = "actual released history and malformed late peer; select this parent"]
+async fn native_recovery_validates_released_peers_without_cumulative_history_limit() -> Result<()> {
+    campaign(&[
+        "capacity-bytes-control",
+        "capacity-bytes-history",
+        "capacity-bytes-malformed-peer",
+    ])
+    .await
 }
 
 pub(super) async fn bytes(root: &Path, mode: &str) -> Result<()> {
     let mut stopped = Stopped::produce(root, mode).await?;
     let result = async {
+        let history = mode == "capacity-bytes-history";
+        let malformed = mode == "capacity-bytes-malformed-peer";
         let app = Arc::new(host_app(&stopped.bound.fixture, &stopped.generation.url,
             Arc::new(HostSpies::default()))?.with_tenancy(stopped.bound.fixture.service.clone()));
         let mut peers = 0usize;
@@ -277,7 +340,7 @@ pub(super) async fn bytes(root: &Path, mode: &str) -> Result<()> {
             let workspace = root.join(&name); std::fs::create_dir(&workspace)?;
             let mut session = NativeSession::open_authenticated(app.clone(), stopped.bound.headers.clone(),
                 &name, &workspace, ToolMode::ReadOnly, &HarnessConfig::default()).await?;
-            if mode == "capacity-bytes-reject" {
+            if history {
                 let mut task = input();
                 task.text = "bounded retained input ".repeat(24_000);
                 task.context_limit_bytes = Some(2 * 1024 * 1024);
@@ -287,36 +350,116 @@ pub(super) async fn bytes(root: &Path, mode: &str) -> Result<()> {
             }
             session.close().await?; peers += 1;
             let row = stopped.bound.fixture.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-                "SELECT COUNT(*) AS rows, COALESCE(SUM(payload_bytes),0) AS bytes FROM bro_managed_sessions"))
-                .await?.context("real native inventory")?;
+                "SELECT COUNT(*) AS rows, COALESCE(SUM(payload_bytes),0) AS bytes, COALESCE(MAX(payload_bytes),0) AS largest FROM bro_managed_sessions WHERE logical_name<>'choice-session'"))
+                .await?.context("real released peer inventory")?;
             let bytes = u64::try_from(row.try_get::<i64>("", "bytes")?)?;
-            ensure!(row.try_get::<i64>("", "rows")? == i64::try_from(peers+1)?);
-            if mode == "capacity-bytes-control" || bytes.checked_mul(3)
-                .is_some_and(|n| n > crate::tenancy::session::recovery::MAX_BYTES as u64) { break; }
+            let largest = u64::try_from(row.try_get::<i64>("", "largest")?)?;
+            ensure!(row.try_get::<i64>("", "rows")? == i64::try_from(peers)?);
+            let page_bytes = u64::try_from(peers.min(32))?.checked_mul(1024).context("peer page bytes")?;
+            ensure!(largest.checked_mul(3).and_then(|n| n.checked_add(page_bytes))
+                .is_some_and(|n| n <= crate::tenancy::session::recovery::MAX_BYTES as u64),
+                "each actual peer must fit its own bounded validation");
+            if mode == "capacity-bytes-control" || (malformed && peers == 2) || (history && bytes.checked_mul(3)
+                .is_some_and(|n| n > crate::tenancy::session::recovery::MAX_BYTES as u64)) { break; }
             ensure!(peers < 32, "actual journals did not reach the explicit cumulative byte boundary");
         }
+        if malformed {
+            corrupt_last_peer(&stopped.bound).await?;
+        }
+        let peer_before = peer_digests(&stopped.bound).await?;
+        ensure!(peer_before.len() == peers);
         let before = terminals(&stopped.bound.fixture.db).await?;
         let source = payload_for_name(&stopped.bound, "choice-session").await?;
         let sends = stopped.generation.calls();
         let opened = fixture::open(&stopped.bound, &stopped.generation, &root.join("workspace"),
             Arc::new(HostSpies::default())).await;
-        if mode == "capacity-bytes-control" {
+        if !malformed {
             let session = opened?;
-            ensure!(terminals(&stopped.bound.fixture.db).await?.len() == before.len()+2);
-            session.close().await?;
+            let checked = async {
+                let all = terminals(&stopped.bound.fixture.db).await?;
+                ensure!(all.len() == before.len()+2 && before.iter().all(|row| all.contains(row)));
+                ensure!(peer_digests(&stopped.bound).await? == peer_before);
+                Ok::<_, anyhow::Error>(all)
+            }.await;
+            let closed = session.close().await;
+            let all = checked?;
+            closed?;
+            ensure!(terminals(&stopped.bound.fixture.db).await? == all);
+            if history { ensure!(peers > 1 && sends == peers); }
         } else {
-            if let Ok(session) = opened { session.close().await?; anyhow::bail!("recovery ignored peer-row byte budget"); }
+            if let Ok(session) = opened { session.close().await?; anyhow::bail!("recovery ignored malformed late peer checkpoint"); }
             ensure!(payload_for_name(&stopped.bound, "choice-session").await? == source);
             ensure!(terminals(&stopped.bound.fixture.db).await? == before);
-            ensure!(peers > 1 && sends == peers);
+            ensure!(peers == 2 && sends == 0);
         }
+        ensure!(peer_digests(&stopped.bound).await? == peer_before);
         ensure!(stopped.generation.calls() == sends && stopped.choice.calls() == 1);
         tokio::time::timeout(TIMEOUT, async {
             while stopped.bound.fixture.service.host_slots_for_test() != 1 { tokio::task::yield_now().await; }
         }).await?;
+        stopped.bound.fixture.service.cleanup.ensure_clean()?;
+        ensure!(stopped.bound.fixture.service.admission.receipt_capacity_for_test()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?.0 == 0);
         Ok(())
     }.await;
     stopped.close(result).await
+}
+async fn peer_digests(bound: &Bound) -> Result<Vec<(String, i64, String)>> {
+    let rows = bound.fixture.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT id,payload,payload_bytes FROM bro_managed_sessions WHERE logical_name<>'choice-session' ORDER BY id"))
+        .await?;
+    rows.into_iter()
+        .map(|row| {
+            let body: String = row.try_get("", "payload")?;
+            let bytes: i64 = row.try_get("", "payload_bytes")?;
+            ensure!(bytes == i64::try_from(body.len())?);
+            Ok((
+                row.try_get("", "id")?,
+                bytes,
+                crate::storage::checkpoint::sha256(body.as_bytes()),
+            ))
+        })
+        .collect()
+}
+async fn corrupt_last_peer(bound: &Bound) -> Result<()> {
+    // This is the last peer in the actual indexed scan order, after a valid
+    // released peer. Keep descriptor, release flags and indexed byte length valid.
+    let row = bound.fixture.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT id,payload FROM bro_managed_sessions WHERE logical_name<>'choice-session' ORDER BY id DESC LIMIT 1"))
+        .await?.context("actual late released peer")?;
+    let id: String = row.try_get("", "id")?;
+    let body: String = row.try_get("", "payload")?;
+    let mut value: Value = serde_json::from_str(&body)?;
+    ensure!(value["journal"]["released"] == true && !value["journal"]["ack"].is_null());
+    let descriptor = serde_json::from_value(value["descriptor"].clone())?;
+    crate::harness::resources::managed::store::recovery::validate_released_owner(
+        &serde_json::to_vec(&value["journal"])?,
+        &descriptor,
+    )?;
+    value["journal"]["ack"] = Value::Null;
+    ensure!(
+        crate::harness::resources::managed::store::recovery::validate_released_owner(
+            &serde_json::to_vec(&value["journal"])?,
+            &descriptor,
+        )
+        .is_err()
+    );
+    let body = serde_json::to_string(&value)?;
+    let updated = bound
+        .fixture
+        .db
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE bro_managed_sessions SET payload=?,payload_bytes=? WHERE id=?",
+            [
+                body.clone().into(),
+                i64::try_from(body.len())?.into(),
+                id.into(),
+            ],
+        ))
+        .await?;
+    ensure!(updated.rows_affected() == 1);
+    Ok(())
 }
 async fn payload_for_name(bound: &Bound, name: &str) -> Result<String> {
     let row = bound.fixture.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
