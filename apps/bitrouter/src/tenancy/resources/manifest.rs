@@ -3,13 +3,17 @@
 use crate::{gateway::providers::auth::credentials::Credential, policy_lock::PolicyLock};
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::{
+    admission::{AdmissionAttachmentV1, AdmissionProfileV1},
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
     identity::InstallationId,
+    validation::Validate,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, io::Write};
+
+mod decoding;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,9 +30,19 @@ pub(super) struct Import {
     pub definition: Definition,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Definition {
+    AdmissionProfile {
+        profile: AdmissionProfileV1,
+    },
+    ProfiledRoute {
+        routing: Value,
+        selector: String,
+        policy: Option<ResourceRef>,
+        credentials: Vec<CredentialBinding>,
+        attachments: Vec<AdmissionAttachmentV1>,
+    },
     Route {
         /// Complete explicit routing source, retained rather than reread.
         routing: Value,
@@ -101,6 +115,40 @@ impl Import {
     pub fn validate(&self) -> Result<()> {
         bounded_bytes(self, super::MAX_ARTIFACT_BYTES)?;
         let kind = match &self.definition {
+            Definition::AdmissionProfile { profile } => {
+                profile.validate()?;
+                ensure!(
+                    self.reference.owner_kind == OwnerKind::OperatorPool,
+                    "admission profile requires an operator-pool owner"
+                );
+                ResourceKind::Policy
+            }
+            Definition::ProfiledRoute {
+                routing,
+                selector,
+                policy,
+                credentials,
+                attachments,
+            } => {
+                bitrouter_ai::tenancy::resources::Definition::ProfiledRoute {
+                    routing: routing.clone(),
+                    selector: selector.clone(),
+                    policy: policy.clone(),
+                    credentials: credentials
+                        .iter()
+                        .map(
+                            |binding| bitrouter_ai::tenancy::resources::CredentialBinding {
+                                provider: binding.provider.clone(),
+                                account: binding.account.clone(),
+                                credential: binding.credential.clone(),
+                            },
+                        )
+                        .collect(),
+                    attachments: attachments.clone(),
+                }
+                .validate()?;
+                ResourceKind::Route
+            }
             Definition::Route {
                 selector,
                 credentials,
@@ -236,6 +284,17 @@ impl Import {
 }
 
 impl Definition {
+    pub(super) fn is_profiled(&self) -> bool {
+        matches!(
+            self,
+            Self::AdmissionProfile { .. } | Self::ProfiledRoute { .. }
+        )
+    }
+
+    pub(super) fn is_route(&self) -> bool {
+        matches!(self, Self::Route { .. } | Self::ProfiledRoute { .. })
+    }
+
     pub(super) fn requires_envelope_v2(&self) -> bool {
         match self {
             Self::Route {
@@ -250,13 +309,29 @@ impl Definition {
 
     pub fn policy_reference(&self) -> Option<&ResourceRef> {
         match self {
-            Self::Route { policy, .. } => policy.as_ref(),
+            Self::Route { policy, .. } | Self::ProfiledRoute { policy, .. } => policy.as_ref(),
             _ => None,
         }
     }
 
     pub fn dependencies(&self) -> Vec<ResourceRef> {
         let candidates: Vec<_> = match self {
+            Self::AdmissionProfile { .. } => Vec::new(),
+            Self::ProfiledRoute {
+                policy,
+                credentials,
+                attachments,
+                ..
+            } => policy
+                .iter()
+                .cloned()
+                .chain(credentials.iter().map(|binding| binding.credential.clone()))
+                .chain(
+                    attachments
+                        .iter()
+                        .map(|attachment| attachment.profile.clone()),
+                )
+                .collect(),
             Self::Route {
                 policy,
                 credentials,

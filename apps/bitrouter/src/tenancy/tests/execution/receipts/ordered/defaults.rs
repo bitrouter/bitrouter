@@ -23,6 +23,8 @@ async fn ordered_retained_continuation_defaults_reject_before_any_provider_send(
             harness.revision.revision_id.clone(),
             "no-continuation-defaults".try_into()?,
             OrderedCandidateSelectionV1 {
+                generation_defaults_digest: None,
+                admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
                 schema_version: 1,
                 route: harness.route.clone(),
                 candidate_indices: vec![0],

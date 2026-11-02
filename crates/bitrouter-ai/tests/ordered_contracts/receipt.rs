@@ -210,6 +210,10 @@ fn maximum_receipt_fits_and_byte_limit_is_exact() -> TestResult {
     receipt.validate()?;
     let length = serde_json::to_vec(&receipt)?.len();
     assert!(length > 128 * 1024 && length < 1024 * 1024, "{length}");
+    let mut bound = receipt.clone();
+    bound.accepted_selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
+    bound.validate()?;
+    assert_eq!(serde_json::to_vec(&bound)?.len(), length + 96);
     // Timestamp fractions are valid arbitrary precision in the frozen primitive.
     // They provide a semantic value to exercise the exact document byte fence.
     receipt.recorded_at = "2026-11-02T00:00:00.0Z".try_into()?;

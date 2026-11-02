@@ -212,9 +212,9 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
         "main fixture already has ordered format"
     );
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 2);
+    ensure!(version(&db).await? == 3);
     management_mutation(&db).await?;
-    ensure!(version(&db).await? == 2);
+    ensure!(version(&db).await? == 3);
     let saved = lookup_candidate(
         &db,
         &original.receipt.installation_id,
@@ -247,7 +247,7 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
     db.close().await?;
     let db = owned_connection(&path).await?;
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 2);
+    ensure!(version(&db).await? == 3);
     ensure!(
         lookup_candidate(
             &db,
@@ -282,7 +282,7 @@ async fn ordered_migration_failure_rolls_back_schema_and_authority_format_togeth
     db.execute_unprepared("DROP INDEX idx_tenancy_credentials_directory")
         .await?;
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 2);
+    ensure!(version(&db).await? == 3);
     ensure!(
         crate::db::migration::m20240101_000045_ordered_receipts::Migration
             .down(&manager)
@@ -314,12 +314,13 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
         if migrated {
             management_mutation(&db).await?;
         }
-        ensure!(version(&db).await? == 2);
+        ensure!(version(&db).await? == 3);
         db.close().await?;
         let db = owned_connection(&source).await?;
         crate::db::run_migrations(&db).await?;
         authority::load(&db, chrono::Utc::now()).await?;
         db.close().await?;
+        let mut observed_authority_refusal = false;
         for retain_migration_marker in [true, false] {
             let copy = root.join("rollback.sqlite");
             std::fs::copy(&source, &copy)?;
@@ -363,20 +364,30 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
-            ensure!(!output.status.success(), "predecessor accepted format2");
-            if !retain_migration_marker {
-                ensure!(
-                    diagnostics.contains("unsupported authority store identity"),
-                    "predecessor authority guard not reached: {diagnostics}"
-                );
-            }
+            ensure!(!output.status.success(), "predecessor accepted format3");
+            let authority_refusal = diagnostics.contains("unsupported authority store format")
+                || diagnostics.contains("unsupported authority store identity");
+            observed_authority_refusal |= authority_refusal;
+            // A predecessor with migration 41 already registered reaches the
+            // format fence with its marker present. Without the marker, its
+            // non-reentrant migration refuses the existing ordered tables.
+            let migration_refusal = if retain_migration_marker {
+                diagnostics.contains(
+                    "Migration file of version 'm20240101_000045_ordered_receipts' is missing",
+                )
+            } else {
+                diagnostics.contains("unsupported authority store format")
+            };
             ensure!(
-                diagnostics.contains("unsupported authority store identity")
-                    || diagnostics.contains(
-                        "Migration file of version 'm20240101_000045_ordered_receipts' is missing"
-                    ),
+                authority_refusal || migration_refusal,
                 "unexpected predecessor failure: {diagnostics}"
             );
+            let unchanged = owned_connection(&copy).await?;
+            ensure!(
+                version(&unchanged).await? == 3,
+                "predecessor rewrote the authority format"
+            );
+            unchanged.close().await?;
             ensure!(
                 !diagnostics.contains("Address already in use"),
                 "predecessor reached listener"
@@ -388,6 +399,10 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
                 "unexpected inference I/O"
             );
         }
+        ensure!(
+            observed_authority_refusal,
+            "predecessor authority guard was never reached"
+        );
     }
     Ok(())
 }

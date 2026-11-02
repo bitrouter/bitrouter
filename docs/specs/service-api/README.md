@@ -584,6 +584,34 @@ Resource identity includes owner kind, owner ID, resource kind and resource ID;
 an exact reference additionally includes revision ID. Authority revision and
 content revision are distinct and MUST NOT be substituted for each other.
 
+The same format-one command has two additional closed definition variants:
+`admission_profile` contains an `AdmissionProfileV1`, and `profiled_route`
+contains the existing concrete routing fields plus a total attachment map.
+An admission profile is an operator-pool Policy resource, distinct from a
+PolicyLock definition. Both variants require installation authority, including
+a profiled route with a tenant owner. A profile key cannot change between the
+two Policy definition types. Only its member RPM ceiling may rotate; rate-group
+membership, health rules and fallback remain immutable for that key. Zero RPM
+is valid and means local refusal, while explicit null disables a gate.
+
+Attachments identify exact ingress protocol, original candidate ordinal,
+credential revision and profile revision. Compilation verifies total, unique
+coverage of the three retained generation roots. Policy, continuation, counting,
+dynamic credential and other unsupported roots cannot acquire a profiled
+definition. All existing command, import, artifact and configuration byte bounds
+apply to the final serialized objects; cardinality ceilings do not promise that
+every combination of maximum-width values fits.
+
+Accepting a profiled route permanently protects its resource key across retained
+revisions. Legacy activation or execution cannot bypass that protection by using
+an old configuration, default route, native entrypoint or auxiliary operation.
+Revocation and rotation retain the old immutable definitions and protection.
+Read authority and existing terminal obligations remain independent of current
+operational eligibility. The private format-one import accepts the same new
+variants. It initializes one unambiguous head for a new profile key atomically;
+identical reimport never rewinds the head. Later rotations use authenticated CAS.
+Missing retained profile heads are errors, not disabled admission rules.
+
 Credential writes require `credential.manage`; route and policy writes require
 `resource.draft` on the addressed key. Every dependency in the compiled closure
 requires current `resource.read`; credential dependencies also require
@@ -680,9 +708,40 @@ Manifest queries require exactly `route_owner_kind`, `route_owner_id`, `route_id
 persisted protocol root, not positions in a private deduplicated target array.
 The manifest contains at most 256 entries and 1 MiB of JSON, with each ordinal,
 nonsecret configured target IDs and exact credential resource reference.
+Its required `admission_mode` is `legacy` or `profiled_v1`; each descriptor has
+an explicit nullable `admission_profile`. Profiled descriptors must carry the
+exact pinned profile reference, including for explicitly disabled gates. The
+required-nullable `runtime_observation` is advisory process-local information,
+with one entry per descriptor in the same ordinal order. Missing profile
+authority is unavailable/denied, never an invented zero count. Producers use
+whole-second UTC timestamps and validate the complete manifest after appending
+observations. No observation grants admission or proves provider work.
+All candidates in one manifest share one bounded read snapshot of the local
+rate and health state; concurrent admission cannot split a shared group's count
+inside that response. A later actual hop still performs its own admission.
+
+An operator profile may include `observe_rate_group_id` for a read-only group
+in the profile's own operator-pool namespace. This association is immutable
+across revisions. If `rate` is non-null, its group must match the observed group.
+The runtime observation then includes `observed_shared_count`, without inventing
+a ceiling for a `rate:null` profile. Reading or executing such a rate-disabled
+member does not charge that group or consult another member's health. Its own
+explicit health/fallback rules remain independent. An authorized, valid group
+with no live timestamps has measured count 0 for this process instance; absent
+association, missing profile authority or unavailable state has no count.
+Counters include the same group across retained roots, not only candidates in
+the queried manifest. Optional observation fields are omitted when unused.
 It contains no credential bytes, URL, arbitrary metadata or provider body.
 An authority change during read fails rather than mixing revisions. Tenant
 inference credentials cannot enumerate this operator view.
+
+The admission mode is mandatory in selections and accepted selections; it has
+no deserialization default. Previously retained ordered bindings or receipts
+without the field require an explicit historical decoder in archive consumers.
+Preserve their original bytes and digests instead of reserializing them through
+the current DTO or injecting a field. A historical read projection grants no
+new dispatch authority. Previously retained manifests also lack the new
+required-nullable fields. Legacy v1 receipt and evidence formats are unchanged.
 
 A v2 request sends the existing seven strict binding headers with
 `Bitrouter-Tenancy-Version: 2`, plus exactly one `Bitrouter-Candidate-Selection`.
@@ -692,6 +751,7 @@ at most 4096 encoded bytes. Its decoded shape is:
 ```json
 {
   "schema_version": 1,
+  "admission_mode": "legacy",
   "route": {
     "owner_kind": "tenant",
     "owner_id": "example-tenant",
@@ -704,10 +764,19 @@ at most 4096 encoded bytes. Its decoded shape is:
 ```
 
 The route MUST match the exact retained revision and body model. The ordered
+mode is required and must match the authenticated retained root; omission is
+not a legacy default. Predecessor closed readers reject the added field, while
+current readers reject the old missing-field shape. This completes the
+unreleased ordered contract without changing strict v1 bytes or endpoints. The
+accepted mode remains part of selection identity in the existing v2 receipt,
+usage evidence and bounded dispatch intent. The ordered
 list has 1–64 unique integer ordinals below 256, each present in that root.
-Different ordinals that resolve to the same private candidate cannot both be
-selected. Empty, duplicate, unknown, oversized or unauthorized selections fail
-before sending. V1 requests carrying the selection header are rejected; a
+In legacy mode, different ordinals that resolve to the same private candidate
+cannot both be selected. Profiled mode permits equal private candidates at
+distinct original ordinals, preserving each ordinal's own profile attachment
+and reached-hop admission. Duplicate ordinals are rejected in both modes.
+Empty, unknown, oversized or unauthorized selections also fail before sending.
+V1 requests carrying the selection header are rejected; a
 client MUST NOT retry an unsupported v2 request as v1 or truncate its list.
 The header is removed before provider dispatch.
 
@@ -759,7 +828,11 @@ V1 and v2 reads are explicit: requesting the wrong format returns
 correlation pagination can list both formats and retains multiplicity. Neither
 an execution ID nor a correlation ID expands receipt-read authority.
 
-Fresh stores and explicitly migrated stores use authority format 2. Every
+Fresh stores and explicitly migrated stores use authority format 3. Only
+released format-one stores migrate; unreleased format-two stores are refused
+without implicit conversion. Profiled configuration envelopes use format 4
+and an authenticated admission compiler subtype; retained formats 1–3 remain
+readable under their original compiler bindings. Every
 management write preserves that marker. An older binary MUST refuse the store,
 including after fresh initialization or a later management mutation. Existing
 v1 receipt bytes and integrity digests remain unchanged. Rollback requires the
@@ -767,6 +840,42 @@ stopped-writer, compatible-backup procedure below; deleting v2 records or
 resetting a version marker is not a supported downgrade.
 
 #### Scoped Beta header preservation
+
+Ordered generation can opt into one closed per-call default object described by
+[`generation-defaults.schema.json`](generation-defaults.schema.json). Its only
+fields besides `schema_version: 1` are `temperature`, `top_p`, `max_tokens`,
+`reasoning_effort`, `top_k`, `seed`, `stop`, `presence_penalty`, and
+`frequency_penalty`. Absent fields supply no default. The object rejects null,
+unknown or duplicate fields, non-finite numbers and invalid typed values. A
+single stop string normalizes to an array. No provider-specific extras, model,
+credential, header or routing control can be carried by this object.
+
+Call `OrderedDispatchBindingV2::with_generation_defaults` before retaining the
+submission binding, then supply the same object through the consuming
+`OrderedTenantGateway::with_generation_defaults` method. The optional
+`generation_defaults_digest` is SHA-256 of the ASCII domain
+`bitrouter.canonical-generation-defaults.v1` followed by a zero byte and the
+compact typed JSON in declared field order. Absent fields are omitted. It binds
+the normalized requested defaults, not the raw request, effective provider
+settings or usage. Selection, accepted selection, intent, receipt and evidence
+retain that digest. The SDK rejects a missing, changed or competing object
+before I/O; the service repeats validation before execution admission.
+
+The SDK carries the object in `bitrouter_generation_defaults` in the existing
+request body. Core rejects duplicate reserved members, removes the object before
+protocol parsing, and never forwards it. The whole request remains limited to
+16 MiB; the fixed digest retains the existing 4,096-byte encoded selection
+limit. Unused extensions omit both members and preserve previous bytes. An old
+closed selection reader rejects the used extension. This optional field does
+not relax the separately mandatory `admission_mode` contract.
+
+Defaults fill the canonical prompt before retained configuration defaults and
+normal policy checks. Typed caller values, including zero, win. Typed null
+becomes `None` and permits filling; an empty stop list also permits filling.
+An opaque source extra with the competing canonical name blocks filling without
+being promoted across protocols. Existing outbound adapters control supported
+spellings and omissions on each fallback hop. Strict v1, native Decisions and
+host execution do not gain this per-call API.
 
 The scoped v1 and ordered v2 SDK helpers provide the consuming
 `with_anthropic_beta(&[reqwest::header::HeaderValue])` method. It replaces only

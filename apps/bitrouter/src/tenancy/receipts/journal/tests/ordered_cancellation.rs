@@ -77,6 +77,8 @@ async fn owner_with_deadline(
             revision: "revision".try_into()?,
             ordered: Some((
                 AcceptedSelectionV2 {
+                    generation_defaults_digest: None,
+                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
                     route: reference(ResourceKind::Route)?,
                     inbound_protocol: GenerationProtocol::Messages,
                     candidate_indices: vec![0],

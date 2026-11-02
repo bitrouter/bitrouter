@@ -36,4 +36,6 @@ pub(crate) mod receipt_latency;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod subscriber;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+mod tenant;
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 mod transport;

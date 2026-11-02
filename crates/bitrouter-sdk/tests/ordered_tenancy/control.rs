@@ -4,9 +4,9 @@ use bitrouter_sdk::error::Error;
 
 fn manifest() -> TestResult<Value> {
     Ok(
-        json!({"schema_version":1,"installation_id":"installation","tenant_id":"tenant",
+        json!({"schema_version":1,"admission_mode":"legacy","runtime_observation":null,"installation_id":"installation","tenant_id":"tenant",
         "execution_revision":"revision","authority_revision":7,"route":route()?,"inbound_protocol":"chat_completions",
-        "candidates":[{"candidate_index":255,"target":{"provider_id":"provider","model_id":"model",
+        "candidates":[{"candidate_index":255,"admission_profile":null,"target":{"provider_id":"provider","model_id":"model",
             "account_id":"opaque-account","credential_id":"opaque-credential","credential_version":"slot-revision"},
             "credential":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"credential",
             "resource_id":"slot","revision_id":"slot-revision"}}]}),

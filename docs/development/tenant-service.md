@@ -83,6 +83,52 @@ revision explicitly. The [operator guide](../../skills/bitrouter/references/remo
 describes setup and management operations; permission, CAS and replay behavior
 are defined in the canonical service API.
 
+Operational profile publication uses the same authority writer and immutable
+resource store. The protection index is derived from every authenticated
+profiled-route revision, including revoked and non-head history; there is no
+second mutable protection table. The snapshot publishes protection with the
+resource transaction, and startup reconstructs it before readiness. Existing
+catalog limits bound this index. Retention must never evict those definitions to
+recover capacity. The authority-format-three fence rejects predecessor writers;
+profiled configuration plaintext has envelope format four and its own
+authenticated compiler subtype. Legacy compiler bytes retain their old binding.
+The format-four compiled document keeps each profiled projection in its original
+immutable artifact. Its visible execution route is reconstructed once from that
+artifact and the bound configuration defaults. The stored ordinary route sequence
+must match the corresponding original artifacts exactly. Reconstruction uses the
+existing cumulative byte bounds and charges the shared operation budget before
+copying. Immutable resource artifacts and hidden ordinary child projections keep
+their representation; the complete persisted plaintext still has a 1 MiB limit.
+
+Effect eligibility is checked separately from grant-only reads. Historical
+activation, queued admission, cached execution, provider arm, continuation,
+counting and OAuth effects consult current route-key protection. The authority
+guard spans the final check and arm, so publication acknowledgement prevents new
+eligible arms. Already-armed work keeps its terminal obligation. Operational
+state is process-local, intended for one owning instance, and cannot provide a
+distributed RPM or circuit guarantee across processes or restarts.
+
+Reached-hop admission follows the exact selected ordinal, after request guards
+and before constructing or authenticating the provider request. A successful
+entry charges its shared window once and supplies a private single-use arm
+token. Cancellation, construction failure or a later authority refusal does not
+refund that timestamp; arming rechecks authority without charging again. Exact
+60-second timestamps remain counted. Windows have a 16 MiB timestamp-allocation
+budget, independent of the profile's RPM ceiling; pressure refuses locally and
+never evicts live history. Retained-resource limits also bound group/health keys.
+
+Manifest observation takes one synchronous read snapshot for all candidates.
+Its optional read-only group association shares the same counter namespace but
+does not enable rate admission or acquire another member's circuit probe. Reads
+do not allocate windows or reconstruct them from receipts. No lock crosses I/O.
+
+Tenant pipelines reuse the configured process OpenTelemetry exporter. Trusted
+execution scope, original ordinal, armed AttemptId, actual provider status and
+typed terminal outcome are emitted through the existing bounded exporter.
+Weak execution liveness protects an active stream from age-based span cleanup;
+it does not keep execution or probe ownership alive. Exporter absence, sampling,
+queue loss or export failure cannot change admission, receipts or recovery.
+
 ## Client dispatch
 
 A `GatewayClient` owns the shared connection pool. Its
@@ -347,3 +393,12 @@ provider/model RPM, metric ordering, circuit ownership and bounded fallback.
 These controls remain process-local. Resource, receipt and evidence reads
 recheck current scope after waits; telemetry is diagnostic and never substitutes
 for the durable receipt or grants execution authority.
+
+Ordered per-call canonical defaults use a closed body object and a digest in
+selection identity. Ingress validates and removes the object before protocol
+parsing; immutable route-cache entries never hold per-call defaults. Merge the
+nine fields into canonical parameters before retained fallback defaults and
+policy validation. Typed null and empty stop preserve default filling, while
+opaque source extras block canonical promotion. Exact historical records must
+continue through their original read codec; adding optional defaults does not
+make an older binding with a missing enforcement mode valid send authority.

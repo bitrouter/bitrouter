@@ -3,11 +3,13 @@
 //! Validate typed values before sending them or accepting them at a trust boundary.
 //! Validation checks wire bounds and internal consistency; it never grants access.
 
+pub mod admission;
 pub mod authority;
 pub mod configuration;
 pub mod directory;
 pub mod execution;
 pub mod execution_v2;
+pub mod generation_defaults;
 pub mod identity;
 pub mod operation;
 pub mod ordered;

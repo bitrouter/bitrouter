@@ -8,6 +8,7 @@ use bitrouter_ai::tenancy::{
 
 mod admission;
 mod namespaces;
+mod protection;
 mod queued;
 
 fn revoke(fixture: &Fixture, credential: &CredentialIssued) -> Result<Command> {

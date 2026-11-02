@@ -21,6 +21,7 @@ use bitrouter_sdk::{
 };
 use futures::StreamExt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU16};
 
 const OPERATOR: &str = "ordered-test-operator-secret-at-least-32-bytes";
 
@@ -29,20 +30,52 @@ mod authorization;
 mod archive;
 mod barrier;
 mod caller_timeout;
+mod canonical;
 mod defaults;
 mod predecessor;
+mod profiled;
 
 #[derive(Clone)]
 struct Provider {
     observed: Arc<Mutex<Vec<(String, HeaderMap)>>>,
     held_provider: Arc<Mutex<Option<Arc<barrier::Gate>>>>,
     malformed: Option<usize>,
+    controls: Arc<ProviderControls>,
+}
+
+struct ProviderControls {
+    rejection_status: AtomicU16,
+    missing_usage: AtomicBool,
+    held_stream: Mutex<Option<Arc<barrier::Gate>>>,
+    bodies: Mutex<Vec<Value>>,
+}
+
+impl Default for ProviderControls {
+    fn default() -> Self {
+        Self {
+            rejection_status: AtomicU16::new(503),
+            missing_usage: AtomicBool::new(false),
+            held_stream: Mutex::new(None),
+            bodies: Mutex::new(Vec::new()),
+        }
+    }
 }
 async fn ordered_provider(
     State(state): State<Provider>,
+    uri: axum::http::Uri,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    let protocol = match uri.path() {
+        "/v1/messages" => "messages",
+        "/v1/responses" => "responses",
+        _ => "chat_completions",
+    };
+    if let Ok(mut bodies) = state.controls.bodies.lock() {
+        bodies.push(body.clone());
+    } else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let model = body["model"].as_str().unwrap_or_default().to_owned();
     {
         let Ok(mut observed) = state.observed.lock() else {
@@ -50,10 +83,18 @@ async fn ordered_provider(
         };
         observed.push((model.clone(), headers.clone()));
     }
-    if headers
-        .get("authorization")
-        .is_none_or(|value| value != "Bearer owned-upstream-secret")
-    {
+    let authenticated = if protocol == "messages" {
+        headers
+            .get("x-api-key")
+            .is_some_and(|value| value == "owned-upstream-secret")
+            && !headers.contains_key("authorization")
+    } else {
+        headers
+            .get("authorization")
+            .is_some_and(|value| value == "Bearer owned-upstream-secret")
+            && !headers.contains_key("x-api-key")
+    };
+    if !authenticated {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let gate = {
@@ -77,20 +118,57 @@ async fn ordered_provider(
     }
     if model != "model-0" {
         return (
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::from_u16(state.controls.rejection_status.load(Ordering::SeqCst))
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Json(json!({
-                "error":{"message":"temporary"}, "usage":full_usage("chat_completions")
+                "error":{"message":"temporary"}, "usage":full_usage(protocol)
             })),
         )
             .into_response();
     }
+    let usage = if state.controls.missing_usage.load(Ordering::SeqCst) {
+        json!({"prompt_tokens":11,"completion_tokens":7})
+    } else {
+        full_usage(protocol)
+    };
     if body["stream"] == true {
-        return match super::wire::chat_stream(full_usage("chat_completions"), true) {
-            Ok(body) => ([("content-type", "text/event-stream")], body).into_response(),
+        let gate = match state.controls.held_stream.lock() {
+            Ok(mut gate) => gate.take(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        return match canonical::provider_stream(protocol, usage) {
+            Ok(body) => {
+                if let Some(gate) = gate {
+                    let Some((first, rest)) = body.split_once("\n\n") else {
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    };
+                    let first = format!("{first}\n\n");
+                    let rest = rest.to_owned();
+                    let stream = futures::stream::once(
+                        async move { Ok::<_, std::io::Error>(first) },
+                    )
+                    .chain(futures::stream::once(async move {
+                        gate.entered.notify_one();
+                        gate.release
+                            .acquire()
+                            .await
+                            .map_err(std::io::Error::other)?
+                            .forget();
+                        Ok(rest)
+                    }));
+                    (
+                        [("content-type", "text/event-stream")],
+                        axum::body::Body::from_stream(stream),
+                    )
+                        .into_response()
+                } else {
+                    ([("content-type", "text/event-stream")], body).into_response()
+                }
+            }
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
-    match json_response("chat_completions", full_usage("chat_completions")) {
+    match json_response(protocol, usage) {
         Ok(body) => Json(body).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -104,6 +182,7 @@ struct OrderedHarness {
     endpoint: String,
     observed: Arc<Mutex<Vec<(String, HeaderMap)>>>,
     held_provider: Arc<Mutex<Option<Arc<barrier::Gate>>>>,
+    controls: Arc<ProviderControls>,
     _provider: AbortOnDropHandle<std::io::Result<()>>,
     _gateway: AbortOnDropHandle<std::io::Result<()>>,
     _directory: tempfile::TempDir,
@@ -119,6 +198,27 @@ impl OrderedHarness {
         malformed: Option<usize>,
         defaults: Value,
     ) -> Result<Self> {
+        Self::with_profiles(count, limit, malformed, defaults, None).await
+    }
+
+    async fn with_profiles(
+        count: usize,
+        limit: u8,
+        malformed: Option<usize>,
+        defaults: Value,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+    ) -> Result<Self> {
+        Self::with_resource_edits(count, limit, malformed, defaults, profiles, |_| Ok(())).await
+    }
+
+    async fn with_resource_edits(
+        count: usize,
+        limit: u8,
+        malformed: Option<usize>,
+        defaults: Value,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
+    ) -> Result<Self> {
         let directory = tempfile::tempdir()?;
         let (db, owner, claim) = crate::db::connect_owned_tenancy(&format!(
             "sqlite://{}",
@@ -132,12 +232,16 @@ impl OrderedHarness {
         let base = format!("http://{}/v1", listener.local_addr()?);
         let observed = Arc::new(Mutex::new(Vec::new()));
         let held_provider = Arc::new(Mutex::new(None));
+        let controls = Arc::new(ProviderControls::default());
         let provider = Router::new()
             .route("/v1/chat/completions", post(ordered_provider))
+            .route("/v1/messages", post(ordered_provider))
+            .route("/v1/responses", post(ordered_provider))
             .with_state(Provider {
                 observed: observed.clone(),
                 held_provider: held_provider.clone(),
                 malformed,
+                controls: controls.clone(),
             });
         let provider = AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, provider).await
@@ -181,14 +285,38 @@ impl OrderedHarness {
             json!({"reference":route,"definition":{"kind":"route","selector":selector,"policy":null,
             "routing":routing,"credentials":credentials}}),
         );
-        resources
-            .provision_bytes(
-                &fixture.db,
-                &serde_json::to_vec(&json!({
-                    "format":1, "installation_id":fixture.installation, "resources":definitions
-                }))?,
-            )
-            .await?;
+        if let Some(profiles) = profiles {
+            ensure!(profiles.len() == count);
+            let mut attachments = Vec::new();
+            for (index, profile) in profiles.iter().enumerate() {
+                let profile_ref = profiled::reference(index)?;
+                for protocol in ["chat_completions", "messages", "responses"] {
+                    attachments.push(json!({"inbound_protocol":protocol,"candidate_index":index,
+                        "credential":credentials[index]["credential"],"profile":profile_ref}));
+                }
+                definitions.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":profile}}));
+            }
+            let route_definition = definitions
+                .iter_mut()
+                .find(|entry| entry["reference"] == json!(route))
+                .context("route definition")?;
+            route_definition["definition"]["kind"] = json!("profiled_route");
+            route_definition["definition"]["attachments"] = json!(attachments);
+        }
+        edit(&mut definitions)?;
+        // Import prerequisites before the route without exceeding one import's
+        // 256-resource limit. The tested route itself still retains all ordinals.
+        definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
+        for batch in definitions.chunks(128) {
+            resources
+                .provision_bytes(
+                    &fixture.db,
+                    &serde_json::to_vec(&json!({
+                        "format":1, "installation_id":fixture.installation, "resources":batch
+                    }))?,
+                )
+                .await?;
+        }
         fixture.service = crate::tenancy::Service::start_resources_with_continuations(
             fixture.db.clone(),
             Some(owner),
@@ -205,8 +333,16 @@ impl OrderedHarness {
         )
         .await?;
         fixture.service.execution_settings.ordered_attempt_limit = limit;
-        let revision = draft(&fixture, &route, "ordered-draft", 25).await?;
-        let credential = fixture.issue("ordered-client").await?;
+        let revision = if profiles.is_some() {
+            profiled::draft_profiles(&fixture, &route).await?
+        } else {
+            draft(&fixture, &route, "ordered-draft", 25).await?
+        };
+        let credential = if profiles.is_some() {
+            profiled::grant_pool(&fixture, count).await?
+        } else {
+            fixture.issue("ordered-client").await?
+        };
         fixture
             .service
             .dispatch_test_ready
@@ -243,6 +379,7 @@ impl OrderedHarness {
             endpoint,
             observed,
             held_provider,
+            controls,
             _provider: provider,
             _gateway: gateway,
             _directory: directory,
@@ -296,6 +433,8 @@ impl OrderedHarness {
             self.revision.revision_id.clone(),
             "ordered-correlation".try_into()?,
             OrderedCandidateSelectionV1 {
+                generation_defaults_digest: None,
+                admission_mode: manifest.admission_mode,
                 schema_version: 1,
                 route: self.route.clone(),
                 candidate_indices: indices,

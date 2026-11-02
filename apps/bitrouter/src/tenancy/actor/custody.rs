@@ -2,6 +2,7 @@
 
 use std::future::{Future, pending, poll_fn};
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::task::Poll;
 
 use futures::FutureExt;
