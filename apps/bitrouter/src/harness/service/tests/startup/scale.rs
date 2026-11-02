@@ -187,14 +187,14 @@ impl Disk {
         let micros = u64::try_from(elapsed.as_micros()).map_err(|error| error.to_string())?;
         for (counter, value) in [(&self.records, records), (&self.commit_micros, micros)] {
             counter
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
                     old.checked_add(value)
                 })
                 .map_err(|_| "scale diagnostic counter overflow".to_owned())?;
         }
         let previous = self
             .commits
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
                 old.checked_add(1)
             })
             .map_err(|_| "scale diagnostic commit counter overflow".to_owned())?;
