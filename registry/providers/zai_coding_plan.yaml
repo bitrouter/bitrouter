@@ -1,8 +1,42 @@
 {
   "api_base": "https://api.z.ai/api/coding/paas/v4",
-  "weight": 1,
-  "status": "active",
-  "submitted_at": "2026-06-05T00:00:00Z",
+  "auth": {
+    "env": "ZAI_CODING_PLAN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "zai-coding-plan",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:31.448013Z"
+        }
+      }
+    ]
+  },
   "billing": "subscription",
   "metadata": {
     "headquarters": "CN",
@@ -13,80 +47,116 @@
   },
   "models": [
     {
-      "provider_model_id": "glm-5.2",
-      "status": "active",
+      "canonical_id": "z-ai/glm-5.2",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
+          "protocol": "messages",
           "rate_limits": {
             "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
+      "provider_model_id": "glm-5.2",
+      "status": "active"
     },
     {
+      "canonical_id": "z-ai/glm-5.3",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "glm-5.3",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "z-ai/glm-5.3"
+      },
+      "name": "GLM-5.3"
     },
     {
-      "provider_model_id": "glm-5.3-flash",
-      "status": "active",
+      "canonical_id": "z-ai/glm-5.3-flash",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
           "operation": "generation",
+          "protocol": "messages",
           "rate_limits": {
             "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "z-ai/glm-5.3-flash"
+      "provider_model_id": "glm-5.3-flash",
+      "status": "active",
+      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GLM-5.3-Flash"
+    },
+    {
+      "provider_model_id": "glm-5.3-highspeed",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:31.448013Z"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "name": "GLM-5.3 Highspeed",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:31.448013Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "zai_coding_plan",
-  "auth": {
-    "kind": "bearer",
-    "env": "ZAI_CODING_PLAN_API_KEY"
-  }
+  "status": "active",
+  "submitted_at": "2026-06-05T00:00:00Z",
+  "weight": 1
 }

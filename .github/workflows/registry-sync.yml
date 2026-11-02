@@ -46,13 +46,10 @@ jobs:
           GEMINI_REGISTRY_API_KEY: ${{ secrets.GEMINI_REGISTRY_API_KEY }}
           MINIMAX_REGISTRY_API_KEY: ${{ secrets.MINIMAX_REGISTRY_API_KEY }}
           MOONSHOTAI_REGISTRY_API_KEY: ${{ secrets.MOONSHOTAI_REGISTRY_API_KEY }}
-          SILICONFLOW_REGISTRY_API_KEY: ${{ secrets.SILICONFLOW_REGISTRY_API_KEY }}
           TENCENT_REGISTRY_API_KEY: ${{ secrets.TENCENT_REGISTRY_API_KEY }}
           XAI_REGISTRY_API_KEY: ${{ secrets.XAI_REGISTRY_API_KEY }}
           XIAOMI_REGISTRY_API_KEY: ${{ secrets.XIAOMI_REGISTRY_API_KEY }}
           ZAI_REGISTRY_API_KEY: ${{ secrets.ZAI_REGISTRY_API_KEY }}
-          OPENAI_REGISTRY_API_KEY: ${{ secrets.OPENAI_REGISTRY_API_KEY }}
-          ANTHROPIC_REGISTRY_API_KEY: ${{ secrets.ANTHROPIC_REGISTRY_API_KEY }}
         run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.json
 
       - name: Preserve public evidence and sanitized diagnostics

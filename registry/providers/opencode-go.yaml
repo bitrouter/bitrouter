@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-01T17:14:20.950Z",
-          "observed_at": "2026-11-01T17:14:54.593945Z",
-          "sequence": 5
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:05.869955Z",
+          "sequence": 6
         },
         "id": "catalog",
         "inventory": {
@@ -62,7 +62,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -77,7 +77,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
@@ -102,7 +102,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -117,7 +117,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
@@ -297,7 +297,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -312,13 +312,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -333,13 +333,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -354,7 +354,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
@@ -417,7 +417,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -432,7 +432,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
@@ -567,7 +567,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -582,13 +582,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -603,7 +603,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     },
@@ -687,7 +687,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:54.593945Z",
+        "checked_at": "2026-11-02T11:27:05.869955Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -702,7 +702,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:54.593945Z",
+        "last_seen_at": "2026-11-02T11:27:05.869955Z",
         "owner": "catalog"
       }
     }

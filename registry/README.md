@@ -19,14 +19,16 @@ coverage has been established. New heterogeneous offers have empty interfaces
 until endpoint support is verified; unknown prices stay absent.
 
 The `models_dev` adapter is a merge-only directory fallback where a native
-listing cannot be configured globally or requires interactive subscription
-authentication unsupported by CI. It selects an explicit reviewed provider
+listing is unavailable to CI, including missing usable listing credentials,
+resource-specific discovery, or unsupported interactive authentication.
+Selecting it is an explicit reviewed source change, never an automatic fallback
+after a native feed fails. It selects an explicit reviewed provider
 key, excludes deprecated rows, and imports new offers as staging with empty
 interfaces. It cannot establish provider lifecycle, execution, canonical
-bindings or tariff authority. It preserves existing manual data. A missing or
-rejected key for a usable native list is a credential problem, not grounds for
-silently switching sources. Private native candidates can remain manual; a
-declared feed must not receive a CI listing credential until its complete
+bindings or tariff authority. It preserves existing manual data. When replacing
+a native feed, release its ownership of existing verified statuses so directory
+staging defaults cannot downgrade them. Private native candidates can remain
+manual; a declared feed must not receive a CI listing credential until its complete
 observation and publication admission pass validation.
 
 Feed authentication is independent of the provider's inference authentication.
@@ -34,8 +36,8 @@ Configure each listing according to its own endpoint contract. Examples:
 
 | Feed | Listing authentication | CI secret |
 | --- | --- | --- |
-| [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list) | Bearer credential | `OPENAI_REGISTRY_API_KEY` |
-| [Anthropic](https://platform.claude.com/docs/en/api/models/list) | `x-api-key`, with `anthropic-version: 2023-06-01` | `ANTHROPIC_REGISTRY_API_KEY` |
+| [Google](https://ai.google.dev/api/models) | `x-goog-api-key` | `GEMINI_REGISTRY_API_KEY` |
+| [models.dev](https://github.com/anomalyco/models.dev#api) | Explicit `auth: {kind: none}` | None |
 | [BitRouter](https://api.bitrouter.ai/v1/models) | Explicit `auth: {kind: none}` | None |
 | [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | Explicit `auth: {kind: none}` | None |
 

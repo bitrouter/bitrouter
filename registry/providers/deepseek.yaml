@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-01T17:14:20.950Z",
-          "observed_at": "2026-11-01T17:14:40.532566Z",
-          "sequence": 5
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:50.327775Z",
+          "sequence": 6
         },
         "id": "catalog",
         "inventory": {
@@ -62,7 +62,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:40.532566Z",
+        "checked_at": "2026-11-02T11:26:50.327775Z",
         "scope": "account",
         "source_url": "https://api.deepseek.com/models"
       },
@@ -75,13 +75,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:40.532566Z",
+        "last_seen_at": "2026-11-02T11:26:50.327775Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:40.532566Z",
+        "checked_at": "2026-11-02T11:26:50.327775Z",
         "scope": "account",
         "source_url": "https://api.deepseek.com/models"
       },
@@ -94,7 +94,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:40.532566Z",
+        "last_seen_at": "2026-11-02T11:26:50.327775Z",
         "owner": "catalog"
       }
     }

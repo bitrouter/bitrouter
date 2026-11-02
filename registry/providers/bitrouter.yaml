@@ -9,9 +9,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-01T17:14:20.950Z",
-          "observed_at": "2026-11-01T17:14:38.656526Z",
-          "sequence": 6
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:47.979790Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -64,7 +64,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -108,13 +108,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -145,13 +145,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -185,13 +185,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -222,7 +222,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
@@ -270,7 +270,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -314,13 +314,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -351,13 +351,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -400,13 +400,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -450,13 +450,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -487,13 +487,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -523,13 +523,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -559,13 +559,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -595,13 +595,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -631,13 +631,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -668,13 +668,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -704,7 +704,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
@@ -738,7 +738,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -768,13 +768,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -804,7 +804,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
@@ -839,7 +839,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -884,13 +884,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -935,13 +935,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -986,13 +986,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1023,13 +1023,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1060,13 +1060,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1097,13 +1097,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1134,13 +1134,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1153,13 +1153,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1190,13 +1190,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1227,13 +1227,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1262,13 +1262,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1299,13 +1299,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1336,13 +1336,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1373,13 +1373,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1412,13 +1412,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1448,7 +1448,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
@@ -1510,7 +1510,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1540,13 +1540,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1576,13 +1576,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1612,13 +1612,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1648,13 +1648,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1684,13 +1684,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1720,13 +1720,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1756,13 +1756,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1792,13 +1792,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1828,13 +1828,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1864,13 +1864,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1900,13 +1900,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1936,13 +1936,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -1972,13 +1972,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "checked_at": "2026-11-02T11:26:47.979790Z",
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
@@ -2009,7 +2009,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "last_seen_at": "2026-11-02T11:26:47.979790Z",
         "owner": "catalog"
       }
     }

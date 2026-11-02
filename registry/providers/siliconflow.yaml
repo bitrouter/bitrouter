@@ -1,7 +1,43 @@
 {
   "api_base": "https://api.siliconflow.com/v1",
+  "auth": {
+    "env": "SILICONFLOW_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "siliconflow",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:14.400936Z"
+        }
+      }
+    ]
+  },
   "billing": "usage",
-  "weight": 1,
   "display_name": "SiliconFlow",
   "kind": "aggregator",
   "metadata": {
@@ -11,157 +47,1185 @@
   },
   "models": [
     {
-      "provider_model_id": "zai-org/GLM-5.2",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "z-ai/glm-5.2"
+      "provider_model_id": "ByteDance-Seed/Seed-OSS-36B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Tool-capable chat model for instruction following and agentic application workflows",
+      "name": "ByteDance-Seed/Seed-OSS-36B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
     },
     {
-      "provider_model_id": "openai/gpt-oss-120b",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.05
-            },
-            "output_tokens": {
-              "text": 0.45
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-oss-120b"
+      "provider_model_id": "MiniMaxAI/MiniMax-M3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "MiniMax multimodal model for long-context coding, perception, and agent planning",
+      "name": "MiniMax-M3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
     },
     {
-      "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B",
-      "status": "active",
+      "provider_model_id": "Qwen/Qwen2.5-72B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen2.5-72B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen2.5-7B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen2.5-7B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-14B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen3-14B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-32B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen3-32B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-8B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen3-8B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen coding model for software agents, repository edits, and code reasoning",
+      "name": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen coding model for software agents, repository edits, and code reasoning",
+      "name": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-VL-30B-A3B-Thinking",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen/Qwen3-VL-30B-A3B-Thinking",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-VL-32B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen/Qwen3-VL-32B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-VL-32B-Thinking",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen/Qwen3-VL-32B-Thinking",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3-VL-8B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen/Qwen3-VL-8B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.5-122B-A10B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 122B-A10B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.5-27B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 27B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.5-35B-A3B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 35B-A3B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.5-9B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen/Qwen3.5-9B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.6-27B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.6 27B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.6-35B-A3B",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Open multimodal Qwen MoE for local agents that need vision, audio, and code",
+      "name": "Qwen3.6 35B-A3B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "qwen/qwen3.8-2.4t-a95b",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.25,
               "no_cache": 2
             },
+            "kind": "token",
             "output_tokens": {
               "text": 6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "qwen/qwen3.8-2.4t-a95b"
+      "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B",
+      "status": "active",
+      "description": "Open-weight sparse MoE (2.4T total, 95B active), the open-weight twin of Qwen3.8 Max for coding, research, complex reasoning, and agentic workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.8 2.4T A95B"
     },
     {
-      "provider_model_id": "moonshotai/Kimi-K2.7-Code",
-      "status": "active",
+      "provider_model_id": "deepseek-ai/DeepSeek-R1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
+      "name": "deepseek-ai/DeepSeek-R1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "deepseek-ai/DeepSeek-V3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "deepseek-ai/DeepSeek-V3.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.1-Terminus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "deepseek-ai/DeepSeek-V3.1-Terminus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "deepseek-ai/DeepSeek-V3.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.2-Exp",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "deepseek-ai/DeepSeek-V3.2-Exp",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
+      "name": "DeepSeek V4 Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+      "name": "DeepSeek V4 Flash 0731",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Experimental multimodal DeepSeek V4 Flash model for image understanding, coding, and agentic work",
+      "name": "DeepSeek V4 Flash Vision Exp",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Open MoE flagship with million-token context for coding and long agent runs",
+      "name": "DeepSeek V4 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+      "name": "DeepSeek V4 Pro 0813",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google/gemma-4-12B-it",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Compact Gemma 4 instruction model for open, self-hosted chat and reasoning",
+      "name": "Gemma 4 12B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google/gemma-4-26B-A4B-it",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Open Gemma instruction model for efficient chat and self-hosted deployments",
+      "name": "Gemma 4 26B A4B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google/gemma-4-31B-it",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Largest Gemma 4 instruction model for open, self-hosted chat and reasoning",
+      "name": "Gemma 4 31B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "inclusionAI/Ling-flash-2.0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "inclusionAI/Ling-flash-2.0",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "meituan-longcat/LongCat-2.0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Meituan LongCat-2.0, a reasoning model with tool calling and a 1M-token context window",
+      "name": "LongCat-2.0",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "moonshotai/Kimi-K2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+      "name": "moonshotai/Kimi-K2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "moonshotai/Kimi-K2.6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+      "name": "moonshotai/Kimi-K2.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k2.7-code",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.17993,
               "no_cache": 0.85916
             },
+            "kind": "token",
             "output_tokens": {
               "text": 3.8
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "moonshotai/kimi-k2.7-code"
+      "provider_model_id": "moonshotai/Kimi-K2.7-Code",
+      "status": "active",
+      "description": "Coding-focused Kimi model, stronger on long-horizon repo work with less overthinking",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Kimi K2.7 Code"
     },
     {
-      "provider_model_id": "moonshotai/Kimi-K3",
-      "status": "active",
+      "canonical_id": "moonshotai/kimi-k3",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.27,
               "no_cache": 2.7
             },
+            "kind": "token",
             "output_tokens": {
               "text": 13.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3"
+      "provider_model_id": "moonshotai/Kimi-K3",
+      "status": "active",
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Kimi K3"
+    },
+    {
+      "canonical_id": "openai/gpt-oss-120b",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "no_cache": 0.05
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.45
+            }
+          },
+          "protocol": "chat_completions"
+        }
+      ],
+      "provider_model_id": "openai/gpt-oss-120b",
+      "status": "active",
+      "description": "Open-weight GPT model for self-hosted reasoning and instruction-following workloads",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "openai/gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "openai/gpt-oss-20b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Open-weight GPT model for self-hosted reasoning and instruction-following workloads",
+      "name": "openai/gpt-oss-20b",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "stepfun-ai/Step-3.5-Flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "StepFun flash model for efficient multimodal reasoning, coding, and tool use",
+      "name": "stepfun-ai/Step-3.5-Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "tencent/Hunyuan-A13B-Instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "name": "tencent/Hunyuan-A13B-Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "tencent/Hy3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "name": "Hy3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "zai-org/GLM-4.5-Air",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Efficient GLM model for fast reasoning, coding, and agent workflows",
+      "name": "zai-org/GLM-4.5-Air",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "zai-org/GLM-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
+      "name": "zai-org/GLM-5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "zai-org/GLM-5.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
+      "name": "zai-org/GLM-5.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "protocol": "chat_completions"
+        }
+      ],
+      "provider_model_id": "zai-org/GLM-5.2",
+      "status": "active",
+      "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GLM-5.2"
+    },
+    {
+      "provider_model_id": "zai-org/GLM-5.3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "name": "GLM-5.3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "zai-org/GLM-5.3-Flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+      "name": "GLM-5.3-Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "zai-org/GLM-5V-Turbo",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:14.400936Z"
+      },
+      "description": "GLM vision model for visual reasoning, documents, and multimodal agents",
+      "name": "zai-org/GLM-5V-Turbo",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:14.400936Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "siliconflow",
   "status": "active",
   "submitted_at": "2026-07-07T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "SILICONFLOW_API_KEY"
-  },
-  "auto_sync": {
-    "feeds": [
-      {
-        "id": "catalog",
-        "kind": "v1_models",
-        "writes": [
-          "models",
-          "metadata"
-        ],
-        "request": {
-          "url": "https://api.siliconflow.com/v1/models",
-          "auth": {
-            "kind": "bearer",
-            "env": "SILICONFLOW_REGISTRY_API_KEY"
-          }
-        },
-        "pagination": {
-          "kind": "none"
-        },
-        "inventory": {
-          "mode": "merge",
-          "scope": "account",
-          "complete": false,
-          "allow_empty": false
-        },
-        "response": {
-          "items_path": "/data",
-          "mapping": {
-            "/id": "/provider_model_id"
-          },
-          "defaults": {
-            "status": "active",
-            "interfaces": []
-          }
-        }
-      }
-    ]
-  }
+  "weight": 1
 }

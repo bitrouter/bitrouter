@@ -7,9 +7,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-01T17:14:20.950Z",
-          "observed_at": "2026-11-01T17:14:37.385790Z",
-          "sequence": 5
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:46.267445Z",
+          "sequence": 6
         },
         "id": "directory",
         "inventory": {
@@ -264,7 +264,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -279,13 +279,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -300,13 +300,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -321,13 +321,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -342,7 +342,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
@@ -719,7 +719,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -734,13 +734,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -755,13 +755,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -776,13 +776,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -797,13 +797,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -818,13 +818,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -839,13 +839,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -860,13 +860,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -881,13 +881,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -902,7 +902,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
@@ -953,7 +953,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -968,13 +968,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -989,13 +989,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1010,13 +1010,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1031,13 +1031,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1052,13 +1052,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1073,13 +1073,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1094,13 +1094,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1115,13 +1115,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1136,13 +1136,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1157,13 +1157,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1178,13 +1178,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1199,13 +1199,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1220,13 +1220,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1241,13 +1241,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1262,13 +1262,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1283,13 +1283,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1304,7 +1304,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
@@ -1698,7 +1698,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1713,13 +1713,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1734,13 +1734,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1755,13 +1755,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1776,13 +1776,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1797,13 +1797,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1818,13 +1818,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1839,13 +1839,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1860,13 +1860,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1881,13 +1881,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1902,7 +1902,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
@@ -1959,7 +1959,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1974,13 +1974,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -1995,13 +1995,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2016,7 +2016,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
@@ -2073,7 +2073,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2088,13 +2088,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2109,13 +2109,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2130,13 +2130,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2151,13 +2151,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2172,13 +2172,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2193,13 +2193,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2214,13 +2214,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2235,13 +2235,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2256,13 +2256,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2277,13 +2277,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2298,13 +2298,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2319,13 +2319,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2340,13 +2340,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2361,13 +2361,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2382,13 +2382,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2403,13 +2403,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:37.385790Z",
+        "checked_at": "2026-11-02T11:26:46.267445Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -2424,7 +2424,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-01T17:14:37.385790Z",
+        "last_seen_at": "2026-11-02T11:26:46.267445Z",
         "owner": "directory"
       }
     }

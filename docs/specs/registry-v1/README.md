@@ -848,16 +848,16 @@ semantics makes the final sync run unsuccessful. Valid independent feed changes
 may still be proposed when the global identity audit passes. Optional feeds are
 not defined in this revision; an unknown `optional` field cannot relax this rule.
 
-`models_dev` is a reviewed fallback for providers without a usable native
-machine listing, including subscription-only or resource-specific discovery
-that cannot supply a global noninteractive feed. It requires an explicit
-`provider_id` matching the selected provider map key and its `id`, the exact
+`models_dev` is a reviewed fallback when a provider's native machine listing is
+unavailable to the synchronizer, including missing usable listing credentials,
+subscription-only or resource-specific discovery. Selecting it requires an
+explicit reviewed source change; a failed native feed never silently falls back.
+It requires an explicit `provider_id` matching the selected provider map key and
+its `id`, the exact
 public URL `https://models.dev/api.json?type=all`, `auth: {kind: none}`, no
 constant request headers or query overrides, `pagination: {kind: none}`,
 `writes: [models, metadata]`, and `inventory: {mode: merge, scope: public,
 complete: false}`. Response mappings are not configurable for this adapter.
-An absent credential for an otherwise usable native listing is not grounds
-for switching sources. A failed native feed never silently falls back.
 
 The [models.dev API](https://github.com/anomalyco/models.dev#api) is a
 third-party directory, not provider-authoritative lifecycle evidence. Each
@@ -869,6 +869,10 @@ support. New offers have `status: staging`, empty interfaces, and no inferred
 canonical binding or prices. Descriptive names/descriptions may be imported.
 Normal ownership preserves existing manual execution data and verified active
 statuses. Merge-only updates never withdraw old offers from third-party absence.
+When replacing a native feed, the reviewed source migration MUST release that
+feed's ownership of existing verified statuses to manual control before applying
+directory staging defaults. It MUST preserve existing canonical bindings,
+interfaces, tariffs and statuses; the directory cannot inherit native authority.
 
 A provider's own documented feed is preferred for membership. A provider with
 no usable machine feed may remain manual or use a documented, reviewed proxy

@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-01T17:14:20.950Z",
-          "observed_at": "2026-11-01T17:14:24.165087Z",
-          "sequence": 4
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:38.524830Z",
+          "sequence": 5
         },
         "id": "catalog",
         "inventory": {
@@ -61,7 +61,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -76,13 +76,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -97,7 +97,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
@@ -167,7 +167,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -182,13 +182,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -203,13 +203,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -224,7 +224,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
@@ -264,7 +264,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-01T17:14:24.165087Z",
+        "checked_at": "2026-11-02T11:26:38.524830Z",
         "scope": "public",
         "source_url": "https://api.ambient.xyz/v1/models"
       },
@@ -279,7 +279,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T17:14:24.165087Z",
+        "last_seen_at": "2026-11-02T11:26:38.524830Z",
         "owner": "catalog"
       }
     },
