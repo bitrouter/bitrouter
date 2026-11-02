@@ -20,7 +20,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
-  CARGO_BUILD_JOBS: '2'
+  CARGO_BUILD_JOBS: '1'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
   RUSTFLAGS: --cfg bitrouter_capacity_tests -Dwarnings
@@ -36,6 +36,22 @@ jobs:
       EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
     steps:
     - uses: actions/checkout@v6
+    - name: Prepare memory for the capacity build
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: ${{ runner.environment }}
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_ACTIONS" == true && "$RUNNER_KIND" == github-hosted ]]
+        [[ ! -e /swapfile-bitrouter-capacity && ! -L /swapfile-bitrouter-capacity ]]
+        mkdir -p ci-evidence
+        { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-before-swap.txt
+        # Allocate before the scratch gates so their 40 GiB is net of swap.
+        sudo fallocate --length 8G /swapfile-bitrouter-capacity
+        sudo chmod 600 /swapfile-bitrouter-capacity
+        sudo mkswap /swapfile-bitrouter-capacity
+        sudo swapon /swapfile-bitrouter-capacity
+        { free -h; swapon --show --bytes; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-after-swap.txt
     - name: Pin qualification candidate and inspect ephemeral runner space
       if: inputs.qualification
       timeout-minutes: 5
@@ -96,13 +112,29 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p ci-evidence
+        command -v vmstat
+        vmstat -w -t 30 180 &
+        sampler_pid=$!
+        finish_build() {
+          result=$?
+          trap - EXIT
+          kill "$sampler_pid" 2>/dev/null || true
+          wait "$sampler_pid" 2>/dev/null || true
+          printf '%s\n' "$result" > ci-evidence/build-exit-status.txt || true
+          { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } > ci-evidence/build-resources-final.txt 2>&1 || true
+          cat ci-evidence/build-resources-final.txt || true
+          exit "$result"
+        }
+        trap finish_build EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
         /usr/bin/time -v -o ci-evidence/build-fixtures.txt \
-          cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 2
+          cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 1
         # Listing binaries builds the harness once and preserves reusable metadata.
         # https://nexte.st/docs/ci-features/archiving/#manually-creating-your-own-archives
         /usr/bin/time -v -o ci-evidence/build-tests.txt \
           cargo nextest list --locked -p bitrouter --all-features --lib --test core_execution \
-          --cargo-profile ci-capacity --build-jobs 2 --list-type binaries-only --message-format json \
+          --cargo-profile ci-capacity --build-jobs 1 --list-type binaries-only --message-format json \
           > ci-evidence/binaries-metadata.json
         cargo metadata --locked --all-features --format-version 1 > ci-evidence/cargo-metadata.json
         if [[ "$QUALIFICATION" == true ]]; then
