@@ -408,7 +408,7 @@ pub(super) async fn bytes(root: &Path, mode: &str) -> Result<()> {
         tokio::time::timeout(TIMEOUT, async {
             while stopped.bound.fixture.service.host_slots_for_test() != 1 { tokio::task::yield_now().await; }
         }).await?;
-        stopped.bound.fixture.service.cleanup.ensure_clean()?;
+        // Stopped::close checks cleanup after H has also drained maintenance.
         ensure!(stopped.bound.fixture.service.admission.receipt_capacity_for_test()
             .map_err(|e| anyhow::anyhow!("{e:?}"))?.0 == 0);
         Ok(())

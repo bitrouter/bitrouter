@@ -134,7 +134,6 @@ async fn consumer() -> Result<()> {
                         && !snapshot.fenced
                 );
             }
-            service.cleanup.ensure_clean()?;
             ensure!(
                 service.current().is_ok()
                     && service
@@ -148,7 +147,8 @@ async fn consumer() -> Result<()> {
         }
         .await;
         let stopped = service.shutdown().await;
-        result.and(stopped)
+        result.and(stopped)?;
+        service.cleanup.ensure_clean()
     }
     .await;
     let closed = db.close().await;

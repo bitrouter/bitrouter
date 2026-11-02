@@ -492,10 +492,8 @@ async fn repair_held(
                 .is_some_and(|r| !r.ok && r.sqlite_code == Some(1811))
         );
         ensure!(fact.rollback.is_some_and(|r| r.ok) && fact.commit.is_none());
-        bound.fixture.service.cleanup.ensure_clean()?;
     } else {
         ensure!(fact.commit.is_some_and(|r| r.ok) && fact.rollback.is_none());
-        bound.fixture.service.cleanup.ensure_clean()?;
     }
     let reader = crate::db::connect(&format!(
         "sqlite://{}?mode=ro",

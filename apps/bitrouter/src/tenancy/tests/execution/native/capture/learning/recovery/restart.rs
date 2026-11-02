@@ -165,7 +165,6 @@ async fn consumer() -> Result<()> {
         let service = open?;
         let result = async {
             ensure!(service.current().is_ok());
-            service.cleanup.ensure_clean()?;
             let after = exact(&db).await?;
             missing::accounting(&service, &db).await?;
             if mode == "again" {
@@ -307,7 +306,8 @@ async fn consumer() -> Result<()> {
         }
         .await;
         let stopped = service.shutdown().await;
-        result.and(stopped)
+        result.and(stopped)?;
+        service.cleanup.ensure_clean()
     }
     .await;
     let closed = db.close().await;
