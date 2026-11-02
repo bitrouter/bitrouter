@@ -6,6 +6,11 @@ use crate::storage::checkpoint::{VerifiedBatch, sha256};
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
 use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant};
 
+#[cfg(feature = "core")]
+use crate::storage::checkpoint::snapshot::SessionSnapshot;
+#[cfg(feature = "core")]
+use bitrouter_ai::core::checkpoint::DurableEvent;
+
 fn artifact_error() -> CoreError {
     CoreError::rejected(
         ErrorCode::ArtifactUnavailable,
@@ -66,6 +71,60 @@ pub(super) struct Journal {
     context_history: crate::storage::checkpoint::snapshot::context::validation::History,
     artifacts: BTreeMap<String, (ArtifactRef, std::sync::Arc<Vec<u8>>)>,
     quota: u64,
+}
+
+#[cfg(feature = "core")]
+pub(super) enum Prepared<'a> {
+    AlreadyAcknowledged(CheckpointAck),
+    Append(Box<PendingCommit<'a>>),
+}
+
+/// One admitted batch, tied to the journal that admitted it until persistence
+/// finishes. No caller can substitute a different snapshot, ACK or journal.
+#[cfg(feature = "core")]
+pub(super) struct PendingCommit<'a> {
+    journal: &'a mut Journal,
+    batch: CheckpointBatch,
+    ack: CheckpointAck,
+    snapshot: SessionSnapshot,
+    events: Vec<DurableEvent>,
+    fences: Vec<ToolStartFence>,
+}
+
+#[cfg(feature = "core")]
+impl PendingCommit<'_> {
+    pub(super) fn batch(&self) -> &CheckpointBatch {
+        &self.batch
+    }
+
+    pub(super) fn snapshot(&self) -> &SessionSnapshot {
+        &self.snapshot
+    }
+
+    pub(super) fn events(&self) -> &[DurableEvent] {
+        &self.events
+    }
+
+    pub(super) fn limits(&self) -> &Limits {
+        &self.journal.limits
+    }
+
+    pub(super) fn presented(&self) -> &BTreeSet<String> {
+        &self.journal.presented
+    }
+
+    /// Called only after the durable commit is acknowledged. Dropping this
+    /// value on failure or cancellation leaves the journal unchanged.
+    pub(super) fn apply(self) -> Result<(CheckpointAck, SessionSnapshot), CoreError> {
+        crate::storage::checkpoint::snapshot::context::validation::validate_store_history(
+            &self.snapshot.context_store,
+            &mut self.journal.context_history,
+        )?;
+        self.journal.fences.extend(self.fences);
+        self.journal.head = self.ack.head();
+        self.journal.checkpoint = Some(self.batch);
+        Ok((self.ack, self.snapshot))
+    }
 }
 
 impl Journal {
@@ -247,11 +306,30 @@ impl Journal {
     }
 
     #[cfg(feature = "core")]
-    pub(super) fn prepare(&self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
-        self.prepare_verified(&crate::storage::checkpoint::verified_batch(
+    pub(super) fn prepare_owned(
+        &mut self,
+        batch: CheckpointBatch,
+    ) -> Result<Prepared<'_>, CoreError> {
+        let verified = crate::storage::checkpoint::verified_batch(&batch, &self.limits)?;
+        let ack = self.prepare_verified(&verified)?;
+        if self.head == ack.head() {
+            return Ok(Prepared::AlreadyAcknowledged(ack));
+        }
+        let payload = verified.into_payload();
+        let snapshot = serde_json::from_value(payload.checkpoint.state).map_err(|_| {
+            CoreError::rejected(
+                ErrorCode::CheckpointUnavailable,
+                "native Core snapshot could not be decoded",
+            )
+        })?;
+        Ok(Prepared::Append(Box::new(PendingCommit {
+            journal: self,
             batch,
-            &self.limits,
-        )?)
+            ack,
+            snapshot,
+            events: payload.events,
+            fences: payload.tool_start_fences,
+        })))
     }
 
     pub(super) fn prepare_verified(
@@ -303,23 +381,6 @@ impl Journal {
             .extend(decoded.verified.payload().tool_start_fences.iter().cloned());
         self.head = ack.head();
         self.checkpoint = Some(decoded.verified.batch().clone());
-        Ok(())
-    }
-
-    #[cfg(feature = "core")]
-    pub(super) fn apply(
-        &mut self,
-        batch: CheckpointBatch,
-        ack: &CheckpointAck,
-    ) -> Result<(), CoreError> {
-        let payload = batch.decode(&self.limits)?;
-        crate::storage::checkpoint::snapshot::context::validation::validate_history(
-            &payload,
-            &mut self.context_history,
-        )?;
-        self.fences.extend(payload.tool_start_fences);
-        self.head = ack.head();
-        self.checkpoint = Some(batch);
         Ok(())
     }
 

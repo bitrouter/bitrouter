@@ -55,6 +55,12 @@ impl VerifiedBatch<'_> {
         &self.payload
     }
 
+    /// Consume the verified view so a local commit can move its decoded state.
+    #[cfg(feature = "core")]
+    pub(crate) fn into_payload(self) -> CheckpointPayload {
+        self.payload
+    }
+
     pub(crate) fn validate_append(
         &self,
         grant: &OwnershipGrant,
