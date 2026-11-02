@@ -300,8 +300,13 @@ impl Child {
                 let mut line = String::new();
                 let read = self.output.read_line(&mut line).await?;
                 ensure!(
-                    read > 0 && line.len() <= 8192,
-                    "child exited or output bound reached before witness"
+                    read > 0 || self.output.get_ref().limit() != 0,
+                    "child stdout total bound reached before witness"
+                );
+                ensure!(read > 0, "child stdout closed before witness");
+                ensure!(
+                    line.len() <= 8192,
+                    "child stdout line bound reached before witness"
                 );
                 if line.trim_end() == expected {
                     return Ok::<_, anyhow::Error>(());
@@ -312,11 +317,45 @@ impl Child {
         .context("stopped owner witness deadline")?
     }
     async fn reap(mut self, killed: bool) -> Result<()> {
+        let before_cleanup = match self.child.try_wait() {
+            Ok(Some(status)) => format!("exited: {status}"),
+            Ok(None) => "running".to_owned(),
+            Err(_) => "unavailable".to_owned(),
+        };
         if killed {
             self.child.start_kill()?;
         }
         let status = tokio::time::timeout(TIMEOUT, self.child.wait()).await??;
         let bytes = tokio::time::timeout(TIMEOUT, self.diagnostics).await???;
+        if killed || !status.success() {
+            eprintln!(
+                "native recovery {}/{}: cleanup_requested={killed}, before_cleanup={before_cleanup}, reaped={status}, stderr_bytes={}",
+                self.selector,
+                self.mode,
+                bytes.len()
+            );
+            // Propagate only fixed fixture phase markers through nested children.
+            // Raw stderr still requires the explicit private diagnostics directory.
+            for phase in [
+                "producer",
+                "wire_setup",
+                "populate",
+                "repair_open",
+                "settled_receipts",
+                "session_close",
+                "settled_accounting",
+                "ordinary_refusal",
+                "shutdown",
+            ] {
+                let marker = format!("native-capacity-phase={phase}");
+                if bytes
+                    .split(|byte| *byte == b'\n')
+                    .any(|line| line == marker.as_bytes())
+                {
+                    eprintln!("{marker}");
+                }
+            }
+        }
         retain_child_diagnostics(&self.selector, &self.mode, &bytes)?;
         ensure!(bytes.len() <= 8192, "child stderr bound");
         ensure!(

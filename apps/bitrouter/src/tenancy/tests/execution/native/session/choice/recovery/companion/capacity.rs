@@ -186,7 +186,9 @@ async fn native_recovery_repairs_above_unknown_policy_without_reopening_admissio
 }
 
 pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
+    eprintln!("native-capacity-phase=producer");
     let stopped = Stopped::produce(root, mode).await?;
+    eprintln!("native-capacity-phase=wire_setup");
     let wire = UnknownWire::start(&stopped.bound).await?;
     let result = async {
         let count = if mode == "capacity-unknown-fit" {
@@ -194,6 +196,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
         } else {
             99
         };
+        eprintln!("native-capacity-phase=populate");
         let ids = wire.populate(&stopped.bound, count).await?;
         let before = terminals(&stopped.bound.fixture.db).await?;
         ensure!(
@@ -217,6 +220,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
             }
         }
         ensure!(native_ids.len() == 2 && native_ids.is_disjoint(&ids));
+        eprintln!("native-capacity-phase=repair_open");
         let session = fixture::open(
             &stopped.bound,
             &stopped.generation,
@@ -225,6 +229,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
         )
         .await?;
         let checked = async {
+            eprintln!("native-capacity-phase=settled_receipts");
             let all = terminals(&stopped.bound.fixture.db).await?;
             ensure!(all.len() == count + 2 && before.iter().all(|row| all.contains(row)));
             let added: BTreeSet<_> = all
@@ -245,6 +250,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
             Ok::<_, anyhow::Error>(all)
         }
         .await;
+        eprintln!("native-capacity-phase=session_close");
         let closed = session.close().await;
         let all = checked?;
         closed?;
@@ -255,6 +261,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
             }
         })
         .await?;
+        eprintln!("native-capacity-phase=settled_accounting");
         let accounting = stopped
             .bound
             .fixture
@@ -283,6 +290,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
         }
         stopped.bound.fixture.service.cleanup.ensure_clean()?;
         ensure!(stopped.bound.fixture.service.current().is_ok());
+        eprintln!("native-capacity-phase=ordinary_refusal");
         let response = wire.request(&UnknownWire::client()?).await?;
         ensure!(response.status() == StatusCode::TOO_MANY_REQUESTS);
         let rejected: bitrouter_ai::tenancy::operation::Error = response.json().await?;
@@ -310,6 +318,7 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
         Ok(())
     }
     .await;
+    eprintln!("native-capacity-phase=shutdown");
     let wire_closed = wire.close().await;
     let closed = stopped.close(result).await;
     closed?;
