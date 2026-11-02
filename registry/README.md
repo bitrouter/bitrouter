@@ -11,6 +11,14 @@ checks; they do not claim a fresh OpenRouter audit. `registry sync` always fetch
 the complete OpenRouter identity list and gates the complete candidate before
 writing any source. `--report` writes JSON, including required-feed failures.
 
+Curated model ID selection is configured in `model-discovery.yaml`. Family
+`pattern` and `exclude_variants` regular expressions are evaluated against the
+canonical ID when selecting new recommendations. To exclude an ID immediately, add an
+evidence-backed `retired_models` entry and remove its existing recommendation
+from `models/` before rebuilding. This exact-ID exclusion bypasses the rolling
+retention grace period and prevents rediscovery until explicitly removed.
+Provider offers and canonical bindings remain independent of this selection.
+
 Prefer the provider's own model-list GET feed. Public lists use explicit
 anonymous authentication; credentialed lists use their own named listing key
 and account scope. A missing account-visible model cannot prove global
