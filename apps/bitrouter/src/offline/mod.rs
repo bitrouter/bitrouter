@@ -673,6 +673,7 @@ pub async fn recover_with_budget(
     validation: ValidationBudget,
 ) -> Result<impl CliReport> {
     recovery::run_with_budget(plan, report, validation).await
+        .map_err(|_| failure("offline recovery verification failed or cleanup is unconfirmed: retain incomplete evidence and the stopped target; do not release ingress"))
 }
 
 /// Verify a fresh target using complete streamed provisioning and retirement evidence.
