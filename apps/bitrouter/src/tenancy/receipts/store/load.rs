@@ -7,6 +7,7 @@ pub(super) async fn candidate(
     tenant: &TenantId,
     id: &ExecutionId,
     charge: Option<&archive::Charge<'_>>,
+    fresh_inline: bool,
 ) -> Result<Option<Candidate>> {
     let Some(row) = bounded_row(db, point(installation, tenant, id), charge).await? else {
         archive::ensure_inline(db, installation, tenant, id).await?;
@@ -20,6 +21,10 @@ pub(super) async fn candidate(
         1 => true,
         _ => anyhow::bail!("receipt storage kind"),
     };
+    ensure!(
+        !fresh_inline || !archived,
+        "fresh terminal receipt must remain inline"
+    );
     let (json, usage) = if archived {
         ensure!(inline.is_empty(), "duplicate inline receipt payload");
         archive::load(db, installation, tenant, id, account).await?

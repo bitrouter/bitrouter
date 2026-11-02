@@ -43,6 +43,7 @@ mod lifecycle;
 mod lifetime;
 mod reads;
 mod soft_stop;
+mod terminal;
 mod wire;
 
 const TIMEOUT: Duration = Duration::from_secs(10);

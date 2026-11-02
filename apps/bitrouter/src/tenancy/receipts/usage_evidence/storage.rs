@@ -301,15 +301,12 @@ pub(in crate::tenancy::receipts) async fn validate_bounded(
     .await?;
     Ok(())
 }
-pub(in crate::tenancy::receipts) async fn insert(
+/// The terminal caller must still verify the complete database candidate.
+pub(in crate::tenancy::receipts) async fn insert_fresh(
     db: &impl ConnectionTrait,
     candidate: &Candidate,
-    new_receipt: bool,
 ) -> Result<()> {
-    let expected = candidate.usage_evidence.as_ref().map(|e| e.digest.as_str());
-    if let Some(evidence) = &candidate.usage_evidence
-        && new_receipt
-    {
+    if let Some(evidence) = &candidate.usage_evidence {
         let receipt = &candidate.receipt;
         let fields: Vec<(&str, sea_orm::Value)> = vec![
             ("installation_id", receipt.installation_id.as_str().into()),
@@ -333,6 +330,17 @@ pub(in crate::tenancy::receipts) async fn insert(
                 == 1,
             "usage evidence insert count"
         );
+    }
+    Ok(())
+}
+pub(in crate::tenancy::receipts) async fn insert(
+    db: &impl ConnectionTrait,
+    candidate: &Candidate,
+    new_receipt: bool,
+) -> Result<()> {
+    let expected = candidate.usage_evidence.as_ref().map(|e| e.digest.as_str());
+    if new_receipt {
+        insert_fresh(db, candidate).await?;
     }
     let saved = load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
     ensure!(

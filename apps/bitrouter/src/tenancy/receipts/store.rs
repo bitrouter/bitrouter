@@ -19,6 +19,8 @@ pub(super) mod inventory;
 mod load;
 pub(crate) mod obligations;
 #[cfg(test)]
+mod terminal_tests;
+#[cfg(test)]
 mod tests;
 
 const TABLE: &str = "tenancy_execution_receipts";
@@ -441,7 +443,7 @@ pub(in crate::tenancy) async fn lookup_candidate(
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<Option<Candidate>> {
-    load::candidate(db, installation, tenant, id, None).await
+    load::candidate(db, installation, tenant, id, None, false).await
 }
 
 /// Shared bounded read for maintenance and recovery, including archived bodies.
@@ -453,7 +455,7 @@ pub(in crate::tenancy) async fn lookup_candidate_bounded(
     id: &ExecutionId,
     charge: &archive::Charge<'_>,
 ) -> Result<Option<Candidate>> {
-    load::candidate(db, installation, tenant, id, Some(charge)).await
+    load::candidate(db, installation, tenant, id, Some(charge), false).await
 }
 
 fn same_completion(saved: &Candidate, candidate: &Candidate) -> Result<()> {
@@ -473,12 +475,7 @@ fn same_completion(saved: &Candidate, candidate: &Candidate) -> Result<()> {
     Ok(())
 }
 
-/// The actor owns this transaction through confirmed commit/rollback. Reconciliation
-/// compares exact immutable bytes; it never replays inference or widens authority.
-pub(in crate::tenancy) async fn insert(
-    tx: &DatabaseTransaction,
-    candidate: &Candidate,
-) -> Result<bool> {
+async fn insert_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Result<bool> {
     let receipt = &candidate.receipt;
     if let Some(saved) = lookup_candidate(
         tx,
@@ -538,6 +535,20 @@ pub(in crate::tenancy) async fn insert(
         same_completion(&saved, candidate)?;
         return Ok(false);
     }
+    Ok(true)
+}
+
+/// The actor owns this transaction through confirmed commit/rollback. Reconciliation
+/// compares exact immutable bytes; it never replays inference or widens authority.
+pub(in crate::tenancy) async fn insert(
+    tx: &DatabaseTransaction,
+    candidate: &Candidate,
+) -> Result<bool> {
+    let changed = insert_row(tx, candidate).await?;
+    if !changed {
+        return Ok(false);
+    }
+    let receipt = &candidate.receipt;
     let row = row(
         tx,
         point(
@@ -563,6 +574,59 @@ pub(in crate::tenancy) async fn insert(
     );
     super::usage_evidence::storage::insert(tx, candidate, changed).await?;
     Ok(changed)
+}
+
+/// Pending writes, not validated evidence or custody. Finalize after all side-writes.
+#[must_use = "terminal writes require final reconciliation before commit"]
+pub(in crate::tenancy) struct TerminalWrite<'a> {
+    tx: &'a DatabaseTransaction,
+    expected: &'a Candidate,
+    inserted: bool,
+}
+impl TerminalWrite<'_> {
+    pub(in crate::tenancy) fn inserted(&self) -> bool {
+        self.inserted
+    }
+    pub(in crate::tenancy) async fn reconcile(
+        self,
+        charge: &archive::Charge<'_>,
+    ) -> Result<obligations::Change> {
+        if self.inserted && self.tx.get_database_backend() == DatabaseBackend::Sqlite {
+            return obligations::reconcile_completion(self.tx, self.expected, charge).await;
+        }
+        let receipt = &self.expected.receipt;
+        obligations::reconcile(
+            self.tx,
+            &receipt.installation_id,
+            &obligations::Key {
+                tenant: receipt.tenant_id.clone(),
+                execution: receipt.execution_id.clone(),
+            },
+            charge,
+        )
+        .await
+    }
+}
+
+/// Only a fresh SQLite terminal defers readback to its final source proof.
+pub(in crate::tenancy) async fn stage_terminal<'a>(
+    tx: &'a DatabaseTransaction,
+    candidate: &'a Candidate,
+) -> Result<TerminalWrite<'a>> {
+    let inserted = if tx.get_database_backend() == DatabaseBackend::Sqlite {
+        let inserted = insert_row(tx, candidate).await?;
+        if inserted {
+            super::usage_evidence::storage::insert_fresh(tx, candidate).await?;
+        }
+        inserted
+    } else {
+        insert(tx, candidate).await?
+    };
+    Ok(TerminalWrite {
+        tx,
+        expected: candidate,
+        inserted,
+    })
 }
 
 /// Caller supplies one stable read transaction and rechecks current permission

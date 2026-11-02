@@ -92,16 +92,18 @@ impl Worker {
             self.proof
                 .receipt_result_for_test(observation, Step::Check, &checked);
             checked?;
-            let insertion = store::insert(&transaction, &candidate).await;
+            let insertion = store::stage_terminal(&transaction, &candidate).await;
             #[cfg(test)]
             {
                 self.proof
                     .receipt_result_for_test(observation, Step::Store, &insertion);
-                if let Ok(inserted) = &insertion {
-                    self.proof.receipt_inserted_for_test(observation, *inserted);
+                if let Ok(staged) = &insertion {
+                    self.proof
+                        .receipt_inserted_for_test(observation, staged.inserted());
                 }
             }
-            let inserted = insertion?;
+            let staged = insertion?;
+            let inserted = staged.inserted();
             crate::tenancy::receipts::auxiliary_store::insert(&transaction, &candidate).await?;
             #[cfg(all(feature = "core", feature = "harness"))]
             crate::tenancy::experiment::store::terminal::receipt(
@@ -111,10 +113,8 @@ impl Worker {
                 &budget,
             )
             .await?;
-            let change =
-                store::obligations::reconcile(&transaction, &installation, &key, &|rows, bytes| {
-                    budget.charge(rows, bytes).map_err(Into::into)
-                })
+            let change = staged
+                .reconcile(&|rows, bytes| budget.charge(rows, bytes).map_err(Into::into))
                 .await?;
             let checked = control.check_read();
             #[cfg(test)]

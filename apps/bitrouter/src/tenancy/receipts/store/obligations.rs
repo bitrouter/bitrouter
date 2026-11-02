@@ -108,9 +108,32 @@ pub(in crate::tenancy) async fn reconcile(
             after: None,
         });
     }
+    reconcile_inner(tx, installation, key, None, charge).await
+}
+
+pub(super) async fn reconcile_completion(
+    tx: &DatabaseTransaction,
+    expected: &Candidate,
+    charge: &Charge<'_>,
+) -> Result<Change> {
+    let receipt = &expected.receipt;
+    let key = Key {
+        tenant: receipt.tenant_id.clone(),
+        execution: receipt.execution_id.clone(),
+    };
+    reconcile_inner(tx, &receipt.installation_id, &key, Some(expected), charge).await
+}
+
+async fn reconcile_inner(
+    tx: &DatabaseTransaction,
+    installation: &InstallationId,
+    key: &Key,
+    expected: Option<&Candidate>,
+    charge: &Charge<'_>,
+) -> Result<Change> {
     sqlite(tx)?;
     let before = lookup(tx, installation, key, charge).await?;
-    let source = sources::read(tx, installation, key, charge).await?;
+    let source = sources::read_expected(tx, installation, key, expected, charge).await?;
     if let Some(old) = &before {
         ensure!(
             old.source_mask & (RECEIPT | AUXILIARY) & !source.mask == 0,

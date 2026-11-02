@@ -54,14 +54,31 @@ pub(super) async fn read(
     key: &Key,
     charge: &Charge<'_>,
 ) -> Result<Sources> {
-    let candidate = super::super::lookup_candidate_bounded(
+    read_expected(db, installation, key, None, charge).await
+}
+
+pub(super) async fn read_expected(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    key: &Key,
+    expected: Option<&Candidate>,
+    charge: &Charge<'_>,
+) -> Result<Sources> {
+    let candidate = super::super::load::candidate(
         db,
         installation,
         &key.tenant,
         &key.execution,
-        charge,
+        Some(charge),
+        expected.is_some(),
     )
     .await?;
+    if let Some(expected) = expected {
+        super::super::same_completion(
+            candidate.as_ref().context("terminal receipt disappeared")?,
+            expected,
+        )?;
+    }
     let mut sources = Sources {
         mask: 0,
         first: None,
