@@ -76,9 +76,11 @@ impl Fixture {
         if success {
             Ok(serde_json::from_slice(&output.stdout)?)
         } else {
-            Ok(Value::String(
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            ))
+            Ok(Value::String(format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )))
         }
     }
     async fn connect(&self, server: &MockServer) -> Result<Value> {
@@ -433,7 +435,12 @@ async fn explicit_config_env_without_state_override_cannot_hide_native_state() -
         .await?;
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("config and state directories differ")
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .contains("config and state directories differ")
     );
     assert_eq!(std::fs::read_to_string(external)?, "{}\n");
     Ok(())
