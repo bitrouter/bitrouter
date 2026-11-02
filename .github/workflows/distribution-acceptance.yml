@@ -339,7 +339,7 @@ jobs:
       run: |
         cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
         cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
-        cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1
+        cargo test --release --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1 --nocapture
         cargo clippy --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets --jobs 2 -- -D warnings
   core-sdk:
     name: independent core SDK (${{ matrix.os }})

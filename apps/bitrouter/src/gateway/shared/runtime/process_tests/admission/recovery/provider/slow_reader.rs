@@ -123,24 +123,37 @@ async fn exercise(
             && matches!(running.attempts[0].state, AttemptState::Dispatched)
     );
 
+    let pressure_deadline = Instant::now() + Duration::from_secs(6);
     probe.start.cancel();
     // Neither an unread tiny response nor elapsed silence is the barrier:
     // this is Poll::Pending on the actual first provider TCP connection.
-    let first = probe.stalled(1024 * 1024, 1).await?;
+    let first = probe
+        .stalled_until(1024 * 1024, 1, pressure_deadline)
+        .await?;
     reject_locally(w, "while-stalled").await?;
     recovery::progress(w, provider, clients, 3, "other:mock", "other", "survivor").await?;
-    let held = probe.snapshot();
-    ensure!(
-        held.pending && held.written == first.written && !held.body_dropped,
-        "provider did not stay backpressured across survivor completion: first={first:?}, held={held:?}"
-    );
+    // An upstream Pending epoch does not freeze every intermediate buffer.
+    // Reconfirm pressure without granting this phase another six seconds.
+    let held = probe
+        .stalled_until(first.written, first.blocks, pressure_deadline)
+        .await?;
     ensure!(provider.calls() == 2);
 
-    // A bounded reader resume must restore writes on that SAME upstream TCP
-    // connection. This distinguishes propagated pressure from an idle source.
+    // Require an actual read before taking the progress baseline on the SAME
+    // upstream TCP connection. This orders observations, not exclusive TCP causes.
     let before = wire.bytes;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while probe.snapshot().written == held.written {
+    let post_first_read = tokio::time::timeout(Duration::from_secs(5), async {
+        ensure!(
+            wire.bytes - before < MAX_RESUME,
+            "reader resume exhausted byte budget"
+        );
+        ensure!(
+            wire.read(&mut reader).await?,
+            "reader resume found a closed stream after pressure: {held:?}"
+        );
+        ensure!(wire.bytes > before, "reader resume read no bytes");
+        let baseline = probe.snapshot();
+        while probe.snapshot().written <= baseline.written {
             ensure!(
                 wire.bytes - before < MAX_RESUME,
                 "reader resume exhausted byte budget"
@@ -150,12 +163,13 @@ async fn exercise(
                 "reader resume found a closed stream"
             );
         }
-        Ok::<(), anyhow::Error>(())
+        Ok::<Observed, anyhow::Error>(baseline)
     })
     .await
-    .context("reading did not restore provider TCP write progress")??;
-    ensure!(wire.bytes > before, "progress preceded the reader resume");
-    let second = probe.stalled(held.written + 1, held.blocks + 1).await?;
+    .context("no further provider TCP write progress after the first reader resume")??;
+    let second = probe
+        .stalled(post_first_read.written + 1, post_first_read.blocks + 1)
+        .await?;
     reject_locally(w, "stalled-again").await?;
     ensure!(probe.snapshot().pending && !probe.snapshot().body_dropped);
 
@@ -457,12 +471,26 @@ impl Probe {
         *self.state.borrow()
     }
     async fn stalled(&self, written: usize, blocks: usize) -> Result<Observed> {
+        self.stalled_until(written, blocks, Instant::now() + Duration::from_secs(6))
+            .await
+    }
+    async fn stalled_until(
+        &self,
+        written: usize,
+        blocks: usize,
+        expires_at: Instant,
+    ) -> Result<Observed> {
         // Filter transient kernel Pending during initial fill. This measures
         // an actually observed blocked write, not absence of a provider call.
-        tokio::time::timeout(Duration::from_secs(6), async {
+        tokio::time::timeout_at(expires_at, async {
             let mut receiver = self.state.subscribe();
             loop {
                 let state = *receiver.borrow_and_update();
+                let now = Instant::now();
+                ensure!(
+                    now < expires_at,
+                    "provider socket pressure deadline expired"
+                );
                 ensure!(
                     !state.cap_hit && !state.closed && !state.body_dropped,
                     "provider ended/exhausted bytes before sustained socket pressure: {state:?}"
@@ -472,7 +500,7 @@ impl Probe {
                         .pending_since
                         .context("Pending write had no timestamp")?
                         + Duration::from_millis(200);
-                    if Instant::now() >= deadline {
+                    if now >= deadline {
                         return Ok(state);
                     }
                     tokio::select! {
@@ -655,6 +683,83 @@ async fn probe_measures_socket_pressure_with_exhausted_task_budget() -> Result<(
     })
     .await
     .context("cooperative-budget probe regression timed out")?
+}
+
+#[tokio::test(start_paused = true)]
+async fn probe_reconfirms_changed_epoch_with_original_deadline() -> Result<()> {
+    let probe = Probe::new();
+    let expires_at = Instant::now() + Duration::from_secs(6);
+    probe.write(&Poll::Ready(Ok(1024)));
+    probe.write(&Poll::Pending);
+    tokio::time::advance(Duration::from_millis(200)).await;
+    let first = probe.stalled_until(1024, 1, expires_at).await?;
+
+    // Buffered progress is allowed between phases; the new Pending epoch must
+    // earn its own full dwell instead of inheriting the first epoch's age.
+    probe.write(&Poll::Ready(Ok(16)));
+    probe.write(&Poll::Pending);
+    let changed = probe.snapshot();
+    let reconfirm = probe.stalled_until(first.written, first.blocks, expires_at);
+    tokio::pin!(reconfirm);
+    ensure!(
+        std::future::poll_fn(|cx| Poll::Ready(reconfirm.as_mut().poll(cx).is_pending())).await,
+        "new Pending epoch inherited the first epoch's age"
+    );
+    tokio::time::advance(Duration::from_millis(199)).await;
+    ensure!(
+        std::future::poll_fn(|cx| Poll::Ready(reconfirm.as_mut().poll(cx).is_pending())).await,
+        "new Pending epoch did not earn the full dwell"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let held = reconfirm.await?;
+    ensure!(
+        held.written == first.written + 16
+            && held.blocks == first.blocks + 1
+            && held.pending_since == changed.pending_since,
+        "reconfirmation returned a stale pressure baseline: {held:?}"
+    );
+
+    tokio::time::sleep_until(expires_at).await;
+    ensure!(
+        probe
+            .stalled_until(held.written, held.blocks, expires_at)
+            .await
+            .is_err(),
+        "eligible snapshot bypassed the expired shared deadline"
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn probe_reconfirmation_refuses_ended_or_exhausted_source() -> Result<()> {
+    for terminal in [
+        Observed {
+            closed: true,
+            ..Observed::default()
+        },
+        Observed {
+            body_dropped: true,
+            ..Observed::default()
+        },
+        Observed {
+            cap_hit: true,
+            ..Observed::default()
+        },
+    ] {
+        let probe = Probe::new();
+        probe.state.send_replace(Observed {
+            written: 1024,
+            blocks: 1,
+            pending: true,
+            pending_since: Some(Instant::now() - Duration::from_millis(200)),
+            ..terminal
+        });
+        ensure!(
+            probe.stalled(1024, 1).await.is_err(),
+            "ended/exhausted source qualified as pressure: {terminal:?}"
+        );
+    }
+    Ok(())
 }
 
 async fn read_head(socket: &mut TcpStream) -> Result<Wire> {
