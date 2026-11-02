@@ -128,11 +128,13 @@ jobs:
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test http2_ingress --jobs 2 -- --test-threads=2
-    - name: verify shared transport bounds and connection ownership
+    - uses: taiki-e/install-action@nextest
+      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness' || matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
+    - name: verify transport bounds and connection ownership
       if: matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: 'cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --jobs 2 gateway::shared::transport:: -- --test-threads=2'
+      run: cargo nextest run --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --build-jobs 2 --test-threads 2 --no-tests fail -E 'test(gateway::transport::)'
     - name: verify gateway behavior without learning services
       if: matrix.features == '' || matrix.features == 'harness'
       env:
@@ -154,8 +156,6 @@ jobs:
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test host_lifecycle --jobs 2 -- --test-threads=2
-    - uses: taiki-e/install-action@nextest
-      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
     - name: verify base contracts without harness
       if: matrix.features == ''
       run: cargo nextest run -p bitrouter --no-default-features --lib --bin bro --build-jobs 2 --test-threads 2 -E 'test(client::agent_local::) | test(providers::cli_install::)
