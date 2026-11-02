@@ -342,3 +342,12 @@ the nine canonical fields in the service API specification. Keep the object in
 the existing bounded body, never in provider extras or a custom header. Typed
 null and empty stop permit default filling; explicit typed values win. An
 unused extension leaves existing request and selection bytes unchanged.
+
+For opaque provider defaults, use `GenerationDefaultsEnvelopeV1`, bind it with
+`with_generation_defaults_envelope`, and attach the same object on the ordered
+gateway. Put the nine canonical fields in `canonical` and other parameter
+defaults in `supplemental`. The two defaults body families are mutually
+exclusive. Supplemental JSON cannot change selected routing, authentication,
+HTTP headers or continuation permissions. See the service API contract for
+caller precedence, null/invalid fallthrough, hash domains and exact reserved
+names; never copy supplemental fields into ingress DTO extras.

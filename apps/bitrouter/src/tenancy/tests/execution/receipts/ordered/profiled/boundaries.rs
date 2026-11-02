@@ -165,6 +165,15 @@ fn count(
 #[tokio::test]
 async fn profiled_arbitrary_64_of_256_preserves_255_and_ignores_revoked_unselected_profiles()
 -> Result<()> {
+    capacity_case(false).await
+}
+
+#[tokio::test]
+async fn envelope_profiled_64_of_256_keeps_digest_without_changing_bounds() -> Result<()> {
+    capacity_case(true).await
+}
+
+async fn capacity_case(envelope: bool) -> Result<()> {
     let order: Vec<u16> = (0..63).map(|i| 255 - i * 4).chain([0]).collect();
     let selected: std::collections::HashSet<_> = order.iter().copied().collect();
     let profiles = (0..256)
@@ -254,16 +263,43 @@ async fn profiled_arbitrary_64_of_256_preserves_255_and_ignores_revoked_unselect
         .binding(order.clone(), GenerationProtocol::ChatCompletions)
         .await?;
     revoke(&harness, reference(1)?).await?;
-    let id = harness
-        .invoke(
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+        serde_json::from_value(
+            json!({"schema_version":1,"supplemental":{"vendor_knob":"bounded"}}),
+        )?;
+    let id = if envelope {
+        let binding = binding.with_generation_defaults_envelope(&values)?;
+        super::super::envelope::invoke(
+            &harness,
             &binding,
+            values.clone(),
             GenerationProtocol::ChatCompletions,
             false,
             HttpVersion::Http1Only,
+            json!({}),
         )
-        .await?;
+        .await?
+    } else {
+        harness
+            .invoke(
+                &binding,
+                GenerationProtocol::ChatCompletions,
+                false,
+                HttpVersion::Http1Only,
+            )
+            .await?
+    };
     let receipt = harness.receipt(&id).await?;
     ensure!(receipt.outcome == Outcome::Completed);
+    if envelope {
+        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+        let bodies = harness
+            .controls
+            .bodies
+            .lock()
+            .map_err(|_| anyhow::anyhow!("provider bodies"))?;
+        ensure!(bodies.len() == 64 && bodies.iter().all(|body| body["vendor_knob"] == "bounded"));
+    }
     ensure!(receipt.accepted_selection.candidate_indices == order);
     ensure!(
         receipt

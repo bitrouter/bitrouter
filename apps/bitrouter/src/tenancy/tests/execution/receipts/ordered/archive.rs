@@ -6,19 +6,51 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn ordered_v2_receipt_and_evidence_survive_archive_http_without_new_dispatch() -> Result<()> {
+    archive_case(false).await
+}
+
+#[tokio::test]
+async fn envelope_receipt_digest_survives_stopped_writer_archive_without_payload_or_dispatch()
+-> Result<()> {
+    archive_case(true).await
+}
+
+async fn archive_case(envelope: bool) -> Result<()> {
     let harness = OrderedHarness::new(9, 64, None).await?;
     let binding = harness
         .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
         .await?;
-    let id = harness
-        .invoke(
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+        serde_json::from_value(
+            json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+        )?;
+    let id = if envelope {
+        let binding = binding.with_generation_defaults_envelope(&values)?;
+        super::envelope::invoke(
+            &harness,
             &binding,
+            values.clone(),
             GenerationProtocol::ChatCompletions,
             false,
             HttpVersion::Http1Only,
+            json!({}),
         )
-        .await?;
+        .await?
+    } else {
+        harness
+            .invoke(
+                &binding,
+                GenerationProtocol::ChatCompletions,
+                false,
+                HttpVersion::Http1Only,
+            )
+            .await?
+    };
     let receipt = harness.receipt(&id).await?;
+    if envelope {
+        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+        ensure!(!serde_json::to_string(&receipt)?.contains("request-only-secret"));
+    }
     let evidence = harness
         .control(false, HttpVersion::Http1Only)?
         .usage_evidence_v2(&receipt)

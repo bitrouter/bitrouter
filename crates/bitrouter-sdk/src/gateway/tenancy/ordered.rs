@@ -7,7 +7,10 @@ use bitrouter_ai::{
         responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse},
     },
     tenancy::{
-        generation_defaults::{BODY_MEMBER, CanonicalGenerationDefaultsV1},
+        generation_defaults::{
+            BODY_MEMBER, CanonicalGenerationDefaultsV1, GenerationDefaultsEnvelopeV1,
+            MAX_DEFAULTS_BYTES,
+        },
         identity::Digest,
         ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
         validation::Validate,
@@ -16,7 +19,8 @@ use bitrouter_ai::{
 use reqwest::header::HeaderValue;
 
 use super::{
-    Body, Error, GatewayClient, Reply, TenantGateway, bearer_headers, reject_stream_shadow,
+    Body, Defaults, Error, GatewayClient, Reply, TenantGateway, bearer_headers,
+    reject_stream_shadow,
 };
 
 /// One ordered v2 submission. Only the three generation protocols are exposed.
@@ -111,7 +115,45 @@ impl OrderedTenantGateway<'_> {
         if self.generation_defaults_digest.as_ref() != Some(&digest) {
             return Err(Error::Request("canonical defaults differ from binding"));
         }
-        self.inner.generation_defaults = Some(defaults);
+        self.inner.generation_defaults = Some(Defaults::Canonical(defaults));
+        Ok(self)
+    }
+
+    /// Attach the complete request-local defaults already bound to this call.
+    /// Supplemental values merge after caller parsing, retaining their independent
+    /// outbound provenance. This never changes routing or continuation authority.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults, a competing attachment or a different bound digest.
+    pub fn with_generation_defaults_envelope(
+        mut self,
+        defaults: GenerationDefaultsEnvelopeV1,
+    ) -> Result<Self, Error> {
+        let digest = match defaults.digest() {
+            Ok(digest) => digest,
+            Err(_) => {
+                // Invalid programmatic Values may exceed the JSON depth budget.
+                // Dispose of their children iteratively rather than recursively
+                // dropping the rejected tree on this consuming API's error path.
+                let mut pending: Vec<_> = defaults.supplemental.into_values().collect();
+                while let Some(value) = pending.pop() {
+                    match value {
+                        serde_json::Value::Array(values) => pending.extend(values),
+                        serde_json::Value::Object(values) => pending.extend(values.into_values()),
+                        _ => {}
+                    }
+                }
+                return Err(Error::Request("invalid generation defaults envelope"));
+            }
+        };
+        if self.inner.generation_defaults.is_some()
+            || self.generation_defaults_digest.as_ref() != Some(&digest)
+        {
+            return Err(Error::Request(
+                "generation defaults envelope differs from binding or competes with attachment",
+            ));
+        }
+        self.inner.generation_defaults = Some(Defaults::Envelope(defaults));
         Ok(self)
     }
 
@@ -180,6 +222,80 @@ impl OrderedTenantGateway<'_> {
     }
 }
 
+pub(super) fn envelope_body(
+    request: &impl serde::Serialize,
+    defaults: &GenerationDefaultsEnvelopeV1,
+) -> Result<Vec<u8>, Error> {
+    #[derive(serde::Serialize)]
+    struct Request<'a, T> {
+        #[serde(flatten)]
+        request: &'a T,
+        bitrouter_generation_defaults_envelope: &'a GenerationDefaultsEnvelopeV1,
+    }
+    struct Bounded {
+        bytes: Vec<u8>,
+        depth: usize,
+        string: bool,
+        escape: bool,
+    }
+    impl std::io::Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_DEFAULTS_BYTES.saturating_sub(self.bytes.len()) {
+                return Err(std::io::Error::other("generation request body limit"));
+            }
+            // Count emitted JSON containers before serialization recurses into
+            // their children, including programmatically constructed caller data.
+            // Ignore structural characters inside escaped JSON strings; state
+            // spans writer chunks. https://www.rfc-editor.org/rfc/rfc8259#section-7
+            for byte in bytes {
+                if self.string {
+                    if self.escape {
+                        self.escape = false;
+                    } else if *byte == b'\\' {
+                        self.escape = true;
+                    } else if *byte == b'"' {
+                        self.string = false;
+                    }
+                } else {
+                    match byte {
+                        b'"' => self.string = true,
+                        b'{' | b'[' => {
+                            self.depth += 1;
+                            if self.depth >= 128 {
+                                return Err(std::io::Error::other(
+                                    "generation request nesting limit",
+                                ));
+                            }
+                        }
+                        b'}' | b']' => self.depth -= 1,
+                        _ => {}
+                    }
+                }
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut body = Bounded {
+        bytes: Vec::new(),
+        depth: 0,
+        string: false,
+        escape: false,
+    };
+    serde_json::to_writer(
+        &mut body,
+        &Request {
+            request,
+            bitrouter_generation_defaults_envelope: defaults,
+        },
+    )
+    .map_err(|_| Error::Request("invalid or oversized generation request"))?;
+    Ok(body.bytes)
+}
+
 fn encode_selection(bytes: &[u8]) -> Result<String, Error> {
     // RFC 4648 URL-safe alphabet, canonical zero pad bits and no '=' padding.
     // https://www.rfc-editor.org/rfc/rfc4648.html#section-5
@@ -208,6 +324,34 @@ fn encode_selection(bytes: &[u8]) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::encode_selection;
+
+    #[test]
+    fn envelope_body_bounds_whole_request_depth_bytes_and_escaped_strings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use serde_json::{Value, json};
+        let defaults = serde_json::from_value(json!({"schema_version":1,"supplemental":{}}))?;
+        let mut nested = Value::Null;
+        for _ in 0..126 {
+            nested = json!([nested]);
+        }
+        let request = json!({"input":nested,"quoted":"\\\"[{]}\\\""});
+        let bytes = super::envelope_body(&request, &defaults)?;
+        let decoded: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(decoded["quoted"], request["quoted"]);
+        let too_deep = json!({"input":[request["input"].clone()]});
+        assert!(super::envelope_body(&too_deep, &defaults).is_err());
+        let empty = json!({"input":""});
+        let overhead = super::envelope_body(&empty, &defaults)?.len();
+        let request = json!({"input":"x".repeat(super::MAX_DEFAULTS_BYTES - overhead)});
+        assert_eq!(
+            super::envelope_body(&request, &defaults)?.len(),
+            super::MAX_DEFAULTS_BYTES
+        );
+        let mut over = request;
+        over["extra"] = Value::Null;
+        assert!(super::envelope_body(&over, &defaults).is_err());
+        Ok(())
+    }
 
     #[test]
     fn rfc4648_unpadded_vectors_and_exact_header_bound() -> Result<(), super::Error> {

@@ -2,7 +2,10 @@
 
 use bitrouter_ai::{
     tenancy::{
-        generation_defaults::{BODY_MEMBER, CanonicalGenerationDefaultsV1},
+        generation_defaults::{
+            BODY_MEMBER, CanonicalGenerationDefaultsV1, ENVELOPE_BODY_MEMBER,
+            GenerationDefaultsEnvelopeV1,
+        },
         operation::ErrorCode,
     },
     types::{ApiProtocol, GenerationParams},
@@ -23,27 +26,43 @@ impl Submission {
         body: &[u8],
     ) -> Result<PipelineInput, Failure> {
         let invalid = || Failure::from(ErrorCode::InvalidRequest);
-        let (value, defaults) = if let Some(selection) = &self.binding.selection {
+        let (value, defaults, envelope) = if let Some(selection) = &self.binding.selection {
             let body: OrderedBody = serde_json::from_slice(body).map_err(|_| invalid())?;
-            let digest = body
-                .defaults
-                .as_ref()
-                .map(CanonicalGenerationDefaultsV1::digest)
-                .transpose()
-                .map_err(|_| invalid())?;
+            let digest = match (&body.defaults, &body.envelope) {
+                (Some(defaults), None) => Some(defaults.digest()),
+                (None, Some(envelope)) => Some(envelope.digest()),
+                (None, None) => None,
+                _ => return Err(invalid()),
+            }
+            .transpose()
+            .map_err(|_| invalid())?;
             if digest != selection.generation_defaults_digest {
                 return Err(invalid());
             }
-            (Value::Object(body.request), body.defaults)
+            (Value::Object(body.request), body.defaults, body.envelope)
         } else {
             // Strict v1 retains its existing protocol-body decoding contract.
-            (serde_json::from_slice(body).map_err(|_| invalid())?, None)
+            (
+                serde_json::from_slice(body).map_err(|_| invalid())?,
+                None,
+                None,
+            )
         };
         let mut input =
             crate::gateway::http::parse_input(protocol, value).map_err(|_| invalid())?;
         if let Some(defaults) = defaults {
             let prompt = input.generation_prompt_mut().ok_or_else(invalid)?;
             apply(&defaults, &mut prompt.params);
+        }
+        if let Some(envelope) = envelope {
+            let prompt = input.generation_prompt_mut().ok_or_else(invalid)?;
+            if let Some(canonical) = &envelope.canonical {
+                apply(canonical, &mut prompt.params);
+            }
+            crate::gateway::pipeline::context::apply_parameter_defaults(
+                &mut prompt.params,
+                envelope.supplemental.iter(),
+            );
         }
         Ok(input)
     }
@@ -52,6 +71,7 @@ impl Submission {
 struct OrderedBody {
     request: Map<String, Value>,
     defaults: Option<CanonicalGenerationDefaultsV1>,
+    envelope: Option<GenerationDefaultsEnvelopeV1>,
 }
 
 impl<'de> Deserialize<'de> for OrderedBody {
@@ -66,14 +86,22 @@ impl<'de> Deserialize<'de> for OrderedBody {
                 let mut body = OrderedBody {
                     request: Map::new(),
                     defaults: None,
+                    envelope: None,
                 };
                 while let Some(key) = map.next_key::<String>()? {
                     if key == BODY_MEMBER {
-                        if body.defaults.is_some() {
+                        if body.defaults.is_some() || body.envelope.is_some() {
                             return Err(serde::de::Error::duplicate_field(BODY_MEMBER));
                         }
                         // Decode directly, before Value could erase duplicate keys.
                         body.defaults = Some(map.next_value()?);
+                    } else if key == ENVELOPE_BODY_MEMBER {
+                        if body.defaults.is_some() || body.envelope.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "competing generation defaults members",
+                            ));
+                        }
+                        body.envelope = Some(map.next_value()?);
                     } else {
                         body.request.insert(key, map.next_value()?);
                     }

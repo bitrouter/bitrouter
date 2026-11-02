@@ -33,6 +33,7 @@ mod barrier;
 mod caller_timeout;
 mod canonical;
 mod defaults;
+mod envelope;
 mod predecessor;
 mod profiled;
 
