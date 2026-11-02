@@ -839,7 +839,7 @@ v1 receipt bytes and integrity digests remain unchanged. Rollback requires the
 stopped-writer, compatible-backup procedure below; deleting v2 records or
 resetting a version marker is not a supported downgrade.
 
-#### Scoped Beta header preservation
+#### Request-local generation defaults
 
 Ordered generation can opt into one closed per-call default object described by
 [`generation-defaults.schema.json`](generation-defaults.schema.json). Its only
@@ -876,6 +876,99 @@ An opaque source extra with the competing canonical name blocks filling without
 being promoted across protocols. Existing outbound adapters control supported
 spellings and omissions on each fallback hop. Strict v1, native Decisions and
 host execution do not gain this per-call API.
+
+For protocol-independent supplemental defaults, use the additive
+[`generation-defaults-envelope.schema.json`](generation-defaults-envelope.schema.json)
+contract `GenerationDefaultsEnvelopeV1`. Its closed outer object requires
+`schema_version: 1` and a `supplemental` object; optional `canonical` is the
+unchanged nine-field contract above and cannot be null. Supplemental values can
+be any JSON value, including null. Duplicate keys at every depth of the envelope
+are rejected before JSON object construction can erase them.
+
+```json
+{
+  "schema_version": 1,
+  "canonical": {"schema_version": 1, "max_tokens": 25},
+  "supplemental": {
+    "vendor_knob": {"mode": "fast"},
+    "store": false,
+    "parallel_tool_calls": false
+  }
+}
+```
+
+Bind the complete object with
+`OrderedDispatchBindingV2::with_generation_defaults_envelope`, then attach that
+same object with `OrderedTenantGateway::with_generation_defaults_envelope`.
+The SDK sends `bitrouter_generation_defaults_envelope` in the request body.
+Exactly one of the canonical-only member and envelope member may be present;
+missing, mismatched, duplicate, null or competing attachments fail before
+admission. The envelope is removed before caller protocol parsing. Ordinary
+v1/anonymous ingress rejects this reserved member. A preceding canonical-only
+ordered server rejects a correctly bound envelope because its computed defaults
+digest does not match; clients must not retry or downgrade. Unused extensions
+and existing canonical-only calls retain their original encoding and API.
+
+The existing `generation_defaults_digest` slot carries SHA-256 of
+`bitrouter.generation-defaults-envelope.v1` followed by a zero byte, then compact
+UTF-8 JSON with outer order `schema_version`, `canonical` (if present),
+`supplemental`. Canonical fields retain their existing declared-field encoding.
+Supplemental object keys are recursively sorted by decoded Rust string order;
+arrays retain order. Numbers use Serde JSON representation, not RFC 8785 or
+arbitrary-precision numeric normalization. All requested values bind the digest,
+including defaults suppressed by caller precedence. Receipts and evidence carry
+the same single digest, never the defaults payload. Its separate hash domain
+preserves canonical V1 digests without a durable schema revision. A verifier
+retains the requested defaults object and contract family.
+
+Only these exact top-level supplemental keys are reserved: `model`, `messages`,
+`stream`, the nine canonical names above, `bitrouter_generation_defaults` and
+`bitrouter_generation_defaults_envelope`. There is no prefix blacklist and no
+recursive name ban. Names such as `provider`, `headers`, `tenant_id`, `api_key`
+and `extra_protocol` remain opaque provider JSON; they do not modify routing,
+credentials, HTTP headers, provenance or receipt identity. The post-parse merge
+writes only generation parameters, never a Prompt or authority/configuration
+object. Provider-specific interpretation remains the provider's contract.
+
+Apply canonical values first, then supplemental parameters, before retained
+configuration defaults and ordinary ordered checks. A parsed caller extra of
+the same name suppresses a supplemental default globally, including explicit
+null; that caller extra still renders only on its source protocol. Existing typed
+caller values, including false, win. Valid boolean `store` and
+`parallel_tool_calls` fill their existing typed slots. Valid `stream_options`
+fills the existing Chat-only typed options. Invalid/null special values fall
+through to the supplemental map without coercion. Other fields, including raw
+`tool_choice`, remain opaque supplemental values available to every outbound
+adapter. Typed-owned wire fields win. Raw null/invalid special values do not
+mask a later retained valid typed default; ordinary supplemental entries
+inserted earlier win over later raw defaults.
+
+`max_tokens` belongs in `canonical`. Residual `max_completion_tokens` and
+`max_output_tokens` are not promoted, renamed or used as canonical admission
+limits. Chat omits extra `max_completion_tokens` and retains its selected typed
+token spelling; Messages can emit both residual aliases alongside required
+`max_tokens`; Responses' typed `max_output_tokens` wins when present. Existing
+retained canonical limits can therefore suppress a residual alias. These rules
+preserve existing adapter behavior, including provider-specific omissions.
+Streaming Chat forces `stream_options.include_usage=true`, replacing a raw
+nonobject options value with an object; JSON rendering does not perform that
+streaming transformation.
+
+Ordered continuation checks remain mandatory after merge and during attach.
+Effective non-null `previous_response_id`, `conversation`, `context_management`
+or `cachedContent` refuses before provider I/O, including false, zero, empty
+strings, objects and arrays. Null is not continuation authority. Store and all
+other conversion/capability checks retain their existing refusal/fallback
+classification; uncertain provider work never grants permission to resend.
+
+The 16 MiB whole-request budget includes the caller body and envelope. The SDK
+uses bounded serialization and the existing JSON recursion budget: the 128th
+nested container is rejected, counting the enclosing request/envelope/map.
+Programmatic supplemental values are checked before hashing. There is no new
+key-count limit, retained defaults cache, receipt payload, attempt limit or
+manifest limit; the existing 64-attempt/256-candidate bounds still apply.
+
+#### Scoped Beta header preservation
 
 The scoped v1 and ordered v2 SDK helpers provide the consuming
 `with_anthropic_beta(&[reqwest::header::HeaderValue])` method. It replaces only

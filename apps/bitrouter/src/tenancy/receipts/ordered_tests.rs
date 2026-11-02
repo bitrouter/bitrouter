@@ -342,6 +342,16 @@ async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() ->
 
 #[tokio::test]
 async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay() -> Result<()> {
+    restart_case(false).await
+}
+
+#[tokio::test]
+async fn envelope_digest_survives_outstanding_intent_recovery_without_payload_or_replay()
+-> Result<()> {
+    restart_case(true).await
+}
+
+async fn restart_case(envelope: bool) -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("receipts.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
@@ -349,7 +359,19 @@ async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay()
     let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
         .await?
         .installation;
-    let identity = identity(&installation, "execution", 64)?;
+    let mut identity = identity(&installation, "execution", 64)?;
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+        serde_json::from_value(
+            serde_json::json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+        )?;
+    if envelope {
+        identity
+            .ordered
+            .as_mut()
+            .context("ordered identity")?
+            .0
+            .generation_defaults_digest = Some(values.digest()?);
+    }
     let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
     persist_intent(&db, &intent).await?;
     let control = Control::new(proof.clone());
@@ -379,6 +401,7 @@ async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay()
         .await?
         .context("recovered receipt")?;
     ensure!(saved.unknown());
+    ensure!(!saved.json().contains("request-only-secret"));
     let bytes = saved.json().to_owned();
     let Terminal::V2(candidate) = saved else {
         anyhow::bail!("recovery format lost")
@@ -392,6 +415,23 @@ async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay()
         candidate.evidence.document.capture == Capture::Unavailable
             && candidate.evidence.document.frames.is_empty()
     );
+    if envelope {
+        ensure!(
+            candidate
+                .receipt
+                .accepted_selection
+                .generation_defaults_digest
+                == Some(values.digest()?)
+        );
+        ensure!(
+            candidate
+                .evidence
+                .document
+                .accepted_selection
+                .generation_defaults_digest
+                == Some(values.digest()?)
+        );
+    }
     let inventory = store::inventory(&db, &installation).await?;
     ensure!(inventory.rows == 1 && inventory.unknown_count == 1);
     db.close().await?;
