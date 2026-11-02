@@ -1,0 +1,119 @@
+---
+name: Remaining process validation from frozen CI artifacts
+'on':
+  push:
+    branches:
+    - codex/tenant-capacity-diagnostics
+    paths:
+    - ".github/workflows/remaining-capacity-diagnostic.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: fc7a40db6c2705d87e34ce04346b71ed98994f54
+        persist-credentials: false
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-tests-fc7a40db6c2705d87e34ce04346b71ed98994f54
+        path: ".ci-archive"
+        run-id: 41419321397
+        github-token: "${{ github.token }}"
+    - name: Restore the exact failed candidate without a build
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+        test "$(git rev-parse HEAD^{tree})" = 'db35b2bc4408ec1533d3f7ffaa65233fb02543d0'
+        test "$(cat .ci-archive/tests.sha)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+        test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
+        (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
+        mkdir -p ci-evidence
+        tar --zstd -xf .ci-archive/tests.tar.zst
+        test -x target/debug/bro
+        test -x target/debug/examples/owned_capture_fixture
+        printf '%s\n' \
+          'BITROUTER_TEST_PREBUILT_ONLY=1' \
+          "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
+          "BITROUTER_TEST_BRO=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
+        mkdir -p "$RUNNER_TEMP/ci-no-build"
+        printf '#!/bin/sh\necho "diagnostic must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
+        chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
+        printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"
+    - name: verify stopped paid recovery
+      timeout-minutes: 20
+      env:
+        BITROUTER_TEST_EXAMPLES_DIR: "${{ github.workspace }}/target/debug/examples"
+        BITROUTER_OWNED_CAPTURE_FIXTURE: "${{ github.workspace }}/target/debug/examples/owned_capture_fixture"
+      run: |-
+        set -euo pipefail
+        bash .github/scripts/ci-test.sh 5 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_actual_begin_error_keeps_owner_until_process_exit) | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_actual_consuming_rollback_error_keeps_owner_until_process_exit) | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_bootstrap_caught_unwind_keeps_owner_until_process_exit) | test(=tenancy::tests::execution::native::capture::learning::recovery::custody::paid_cancelled_bootstrap_waiter_does_not_cancel_the_claimed_writer) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_local_cleanup_without_exact_registry_ack_cannot_recover) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_counter_pending_and_origin_corruption_refuse_without_repair) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_failed_judge_is_interrupted_without_refund_or_resend) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_repair_preserves_the_actual_public_human_head) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_stopped_restart_preserves_known_usage_never_selects_or_resends_and_is_idempotent) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_bootstrap_two_real_distinct_revisions_fit_the_shared_operation_budget) | test(=tenancy::tests::execution::native::capture::learning::recovery::restart::paid_missing_terminal_after_confirmed_local_stop_repairs_unknown_once_without_resend) | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_consuming_commit_error_keeps_owner_until_death_then_repairs_once) | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_known_commit_publishes_readiness_only_after_ack_without_resending) | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_disconnected_opener_keeps_custody_until_late_known_commit)'
+      shell: bash
+    - name: verify actual offline Eval CLI import and readers
+      timeout-minutes: 10
+      env:
+        BITROUTER_TEST_BRO: "${{ github.workspace }}/target/debug/bro"
+      run: |-
+        set -euo pipefail
+        bash .github/scripts/ci-test.sh 6 --test-threads 1 --run-ignored only -E 'test(=offline::evaluation::tests::cli::built_cli_inventory_backfill_rejections_and_real_scoped_readers)'
+      shell: bash
+    - name: verify exact Block and native repair consumers serially
+      timeout-minutes: 30
+      shell: bash
+      env:
+        BITROUTER_OWNED_CAPTURE_FIXTURE: "${{ github.workspace }}/target/debug/examples/owned_capture_fixture"
+      run: |
+        set -euo pipefail
+        for case in \
+          tenancy::tests::execution::native::capture::block::actual_block_socket_selection_keeps_one_owner_and_rebuilds_effective_human_head \
+          tenancy::tests::execution::native::capture::block::copied_headers_and_same_name_reopened_controller_cannot_reanimate_an_old_block_link \
+          tenancy::tests::execution::native::capture::block::known_block_intent_cannot_send_after_original_capture_close_or_key_revocation \
+          tenancy::tests::execution::native::capture::block::copied_block_nonce_does_not_authorize_a_second_key_or_another_principal \
+          tenancy::tests::execution::native::capture::block::eligibility::actual_nonmatching_rule_sends_baseline_but_never_creates_a_conclusive_trial_score \
+          tenancy::tests::execution::native::capture::block::eligibility::real_prior_local_turn_cannot_be_enrolled_as_a_fresh_provider_trial \
+          tenancy::tests::execution::native::capture::block::restart::process_crash_reopen_refuses_stale_open_capture_link_before_any_new_provider_send \
+          tenancy::tests::execution::native::capture::block::tenants::same_database_equal_names_keep_live_links_and_block_cohorts_tenant_scoped \
+          tenancy::tests::execution::native::capture::block::faults::block_consuming_commit_error_retains_original_owner_and_denies_another_send \
+          tenancy::tests::execution::native::capture::block::faults::block_lost_deadline_reply_keeps_one_committed_draw_without_provider_send \
+          tenancy::tests::execution::native::capture::block::adoption::actual_adoption_is_withdrawn_after_original_public_human_retraction \
+          tenancy::tests::execution::native::capture::block::adoption::actual_adoption_is_rolled_back_after_original_public_human_severe_correction \
+          tenancy::tests::execution::native::capture::block::coexistence::actual_paid_block_head_validates_original_receipt_and_never_relabels_human_or_refunds \
+          tenancy::tests::execution::native::capture::block::coexistence::actual_block_human_wins_held_judge_and_retraction_preserves_both_paid_facts \
+          tenancy::tests::execution::native::capture::block::coexistence::integrity::actual_selected_paid_block_rejects_missing_job_changed_output_and_missing_judge_receipt \
+          tenancy::tests::execution::native::capture::block::pricing::real_cached_usage_requires_the_effective_retained_tariff \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_begin_error_retains_claim_then_fresh_repairs_twice \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_rollback_error_retains_claim_then_fresh_repairs_twice \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_caught_unwind_retains_claim_then_fresh_repairs_twice \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_begin_waiter_keeps_claim_until_process_exit \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_commit_error_retains_candidate_then_fresh_repairs_twice \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_known_commit_publishes_readiness_only_after_ack \
+          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_commit_waiter_keeps_custody_until_known_ack; do
+          bash .github/scripts/ci-test.sh block --test-threads 1 --run-ignored only -E "test(=$case)"
+        done
+    - name: verify actual archive, restart and refusal
+      timeout-minutes: 45
+      shell: bash
+      env:
+        BITROUTER_TEST_BRO: "${{ github.workspace }}/target/debug/bro"
+      run: |
+        set -euo pipefail
+        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+        for case in \
+          actual_cli_verifies_fresh_static_provisioning_and_rejects_changed_evidence \
+          actual_cli_refuses_unreadable_operation_context_and_timestamp \
+          actual_cli_refuses_definition_substitution_and_copied_old_credential \
+          abandoned_recovery_waiter_keeps_actual_file_owner_until_read_rollback_and_close \
+          selected_files::actual_cli_refuses_changed_linked_or_nonprivate_selected_files \
+          selected_files::selected_file_change_during_actual_read_prevents_publication_after_worker_close ; do
+          bash .github/scripts/ci-test.sh "offline-${case//::/-}" --test-threads 1 --run-ignored only -E "test(=offline::recovery::tests::$case)"
+        done
