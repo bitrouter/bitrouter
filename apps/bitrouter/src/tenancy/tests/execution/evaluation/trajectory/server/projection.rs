@@ -93,7 +93,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             .await?
             .context("header missing")?;
         ensure!(
-            loaded.format == startup::Format::V3
+            loaded.format == startup::Format::V4
                 && loaded.header.revision.get() == u64::try_from(wide)?
                 && loaded.header.operation_ids == 7
                 && loaded.header.safety_operation_ids == 3

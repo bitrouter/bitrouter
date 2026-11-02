@@ -174,6 +174,21 @@ async fn envelope_profiled_64_of_256_keeps_digest_without_changing_bounds() -> R
 }
 
 async fn capacity_case(envelope: bool) -> Result<()> {
+    capacity_profile_case(envelope, false).await
+}
+
+#[tokio::test]
+async fn shared_health_arbitrary_64_of_256_preserves_ordinals_and_ignores_unselected_revocation()
+-> Result<()> {
+    capacity_profile_case(false, true).await
+}
+
+#[tokio::test]
+async fn shared_health_envelope_64_of_256_preserves_bound_defaults_digest() -> Result<()> {
+    capacity_profile_case(true, true).await
+}
+
+async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()> {
     let order: Vec<u16> = (0..63).map(|i| 255 - i * 4).chain([0]).collect();
     let selected: std::collections::HashSet<_> = order.iter().copied().collect();
     let profiles = (0..256)
@@ -218,6 +233,19 @@ async fn capacity_case(envelope: bool) -> Result<()> {
                 ),
                 _ => true,
             });
+            if shared_health {
+                for row in resources
+                    .iter_mut()
+                    .filter(|row| row["reference"]["resource_kind"] == "policy")
+                {
+                    let local: AdmissionProfileV1 =
+                        serde_json::from_value(row["definition"]["profile"].clone())?;
+                    let mut profile =
+                        super::shared::grouped(local.rate.context("rate")?.member_rpm)?;
+                    profile.health.as_mut().context("health")?.failure_threshold = 1000;
+                    row["definition"] = json!({"kind":"admission_profile_v2","profile":profile});
+                }
+            }
             Ok(())
         },
     )
@@ -365,15 +393,61 @@ async fn profiled_success_prefix_never_charges_an_unreached_distinct_group() -> 
 #[tokio::test]
 async fn profiled_current_authority_revocation_after_charge_never_arms_or_falls_back() -> Result<()>
 {
-    for change in ["profile", "credential", "grant"] {
-        let harness = OrderedHarness::with_profiles(
-            2,
-            8,
-            None,
-            Value::Null,
-            Some(&[rules(500, false)?, rules(500, false)?]),
-        )
-        .await?;
+    revocation_after_charge(false).await
+}
+
+#[tokio::test]
+async fn shared_health_current_pinned_credential_and_grant_revocation_preserve_ticket_obligations()
+-> Result<()> {
+    revocation_after_charge(true).await
+}
+
+async fn revocation_after_charge(shared_health: bool) -> Result<()> {
+    let changes: &[&str] = if shared_health {
+        &["pinned", "current", "credential", "grant"]
+    } else {
+        &["profile", "credential", "grant"]
+    };
+    for &change in changes {
+        let harness = if shared_health {
+            super::shared::harness(
+                &[super::shared::grouped(500)?, super::shared::grouped(500)?],
+                false,
+                false,
+            )
+            .await?
+        } else {
+            OrderedHarness::with_profiles(
+                2,
+                8,
+                None,
+                Value::Null,
+                Some(&[rules(500, false)?, rules(500, false)?]),
+            )
+            .await?
+        };
+        let mut current = reference(0)?;
+        if matches!(change, "pinned" | "current") {
+            let result = harness
+                .control(true, HttpVersion::Http1Only)?
+                .put_resource_v2(
+                    &harness.fixture.tenant,
+                    &bitrouter_ai::tenancy::resources_v2::ResourcePutV2 {
+                        format: 2,
+                        operation_id: "rotate-before-revocation".try_into()?,
+                        installation_id: harness.fixture.installation.clone(),
+                        key: current.key(),
+                        expected_revision: Some(current.revision_id.clone()),
+                        definition:
+                            bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
+                                profile: super::shared::grouped(501)?,
+                            },
+                    },
+                )
+                .await?;
+            current.revision_id = result.resource_revision.context("rotated profile")?;
+            ensure!(current.revision_id != reference(0)?.revision_id);
+        }
         let binding = harness
             .binding(vec![0, 1], GenerationProtocol::ChatCompletions)
             .await?;
@@ -391,7 +465,8 @@ async fn profiled_current_authority_revocation_after_charge_never_arms_or_falls_
             .clone();
         ensure!(harness.observed()?.is_empty() && count(&manifest(&harness).await?, 1)? == 1);
         match change {
-            "profile" => revoke(&harness, reference(0)?).await?,
+            "profile" | "pinned" => revoke(&harness, reference(0)?).await?,
+            "current" => revoke(&harness, current).await?,
             "credential" => {
                 let credential = manifest(&harness).await?.candidates[0].credential.clone();
                 revoke(&harness, credential).await?;
@@ -435,6 +510,13 @@ async fn profiled_current_authority_revocation_after_charge_never_arms_or_falls_
         }
         ensure!(receipt.attempts.is_empty() && receipt.outcome == Outcome::Failed);
         ensure!(harness.observed()?.is_empty() && count(&manifest(&harness).await?, 1)? == 1);
+        if shared_health {
+            let snapshot = manifest(&harness)
+                .await?
+                .runtime_observation
+                .context("shared snapshot")?;
+            ensure!(snapshot.candidates[1].health == HealthObservation::Healthy);
+        }
         drop(release);
         harness.fixture.service.shutdown().await?;
     }

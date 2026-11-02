@@ -8,6 +8,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::sync::Arc;
 
 mod admission;
+mod shared_admission;
 
 async fn keyed_fixture() -> Result<Fixture> {
     let mut fixture = Fixture::new().await?;

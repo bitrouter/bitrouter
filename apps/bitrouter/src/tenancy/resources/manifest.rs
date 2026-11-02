@@ -4,6 +4,7 @@ use crate::{gateway::providers::auth::credentials::Credential, policy_lock::Poli
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::{
     admission::{AdmissionAttachmentV1, AdmissionProfileV1},
+    admission_v2::AdmissionProfileV2,
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
     identity::InstallationId,
@@ -35,6 +36,9 @@ pub(super) struct Import {
 pub(super) enum Definition {
     AdmissionProfile {
         profile: AdmissionProfileV1,
+    },
+    AdmissionProfileV2 {
+        profile: AdmissionProfileV2,
     },
     ProfiledRoute {
         routing: Value,
@@ -115,6 +119,14 @@ impl Import {
     pub fn validate(&self) -> Result<()> {
         bounded_bytes(self, super::MAX_ARTIFACT_BYTES)?;
         let kind = match &self.definition {
+            Definition::AdmissionProfileV2 { profile } => {
+                profile.validate()?;
+                ensure!(
+                    self.reference.owner_kind == OwnerKind::OperatorPool,
+                    "admission profile requires an operator-pool owner"
+                );
+                ResourceKind::Policy
+            }
             Definition::AdmissionProfile { profile } => {
                 profile.validate()?;
                 ensure!(
@@ -285,13 +297,22 @@ impl Import {
 
 impl Definition {
     pub(super) fn is_admission_profile(&self) -> bool {
-        matches!(self, Self::AdmissionProfile { .. })
+        matches!(
+            self,
+            Self::AdmissionProfile { .. } | Self::AdmissionProfileV2 { .. }
+        )
+    }
+
+    pub(super) fn is_shared_profile(&self) -> bool {
+        matches!(self, Self::AdmissionProfileV2 { .. })
     }
 
     pub(super) fn is_profiled(&self) -> bool {
         matches!(
             self,
-            Self::AdmissionProfile { .. } | Self::ProfiledRoute { .. }
+            Self::AdmissionProfile { .. }
+                | Self::AdmissionProfileV2 { .. }
+                | Self::ProfiledRoute { .. }
         )
     }
 
@@ -320,7 +341,7 @@ impl Definition {
 
     pub fn dependencies(&self) -> Vec<ResourceRef> {
         let candidates: Vec<_> = match self {
-            Self::AdmissionProfile { .. } => Vec::new(),
+            Self::AdmissionProfile { .. } | Self::AdmissionProfileV2 { .. } => Vec::new(),
             Self::ProfiledRoute {
                 policy,
                 credentials,

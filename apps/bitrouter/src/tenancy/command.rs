@@ -8,6 +8,7 @@ use bitrouter_ai::tenancy::{
     identity::{BindingId, CredentialId, InstallationId, OperationId, PrincipalId, TenantId},
     operation::Mutation,
     resources::{ResourcePut, ResourceRevoke},
+    resources_v2::ResourcePutV2,
     validation::{Validate, ValidationError},
 };
 use serde_json::{Value, json};
@@ -24,6 +25,7 @@ pub(super) enum Command {
     Configuration(TenantId, ConfigurationPut),
     Activate(TenantId, Activation),
     Resource(TenantId, ResourcePut),
+    ResourceV2(TenantId, ResourcePutV2),
     RevokeResource(TenantId, ResourceRevoke),
 }
 
@@ -39,6 +41,7 @@ impl Command {
             Self::Configuration(_, body) => body.validate(),
             Self::Activate(_, body) => body.validate(),
             Self::Resource(_, body) => body.validate(),
+            Self::ResourceV2(_, body) => body.validate(),
             Self::RevokeResource(_, body) => body.validate(),
         }
     }
@@ -54,6 +57,7 @@ impl Command {
             Self::Configuration(_, body) => &body.operation_id,
             Self::Activate(_, body) => &body.operation_id,
             Self::Resource(_, body) => &body.operation_id,
+            Self::ResourceV2(_, body) => &body.operation_id,
             Self::RevokeResource(_, body) => &body.operation_id,
         }
     }
@@ -69,6 +73,7 @@ impl Command {
             Self::Configuration(_, body) => &body.installation_id,
             Self::Activate(_, body) => &body.installation_id,
             Self::Resource(_, body) => &body.installation_id,
+            Self::ResourceV2(_, body) => &body.installation_id,
             Self::RevokeResource(_, body) => &body.installation_id,
         }
     }
@@ -80,6 +85,12 @@ impl Command {
 
     pub fn digest(&self, principal: &PrincipalId) -> anyhow::Result<String> {
         let (method, kind, targets, body) = match self {
+            Self::ResourceV2(tenant, body) => (
+                "POST",
+                "resource.put.v2",
+                json!({"tenant_id": tenant}),
+                serde_json::to_value(body)?,
+            ),
             Self::Resource(tenant, body) => (
                 "POST",
                 "resource.put",

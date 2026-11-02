@@ -341,12 +341,20 @@ impl OrderedHarness {
         // Import prerequisites before the route without exceeding one import's
         // 256-resource limit. The tested route itself still retains all ordinals.
         definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
+        let import_format = if definitions
+            .iter()
+            .any(|entry| entry["definition"]["kind"] == "admission_profile_v2")
+        {
+            2
+        } else {
+            1
+        };
         for batch in definitions.chunks(128) {
             resources
                 .provision_bytes(
                     &fixture.db,
                     &serde_json::to_vec(&json!({
-                        "format":1, "installation_id":fixture.installation, "resources":batch
+                        "format":import_format, "installation_id":fixture.installation, "resources":batch
                     }))?,
                 )
                 .await?;

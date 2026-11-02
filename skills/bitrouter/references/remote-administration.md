@@ -130,8 +130,13 @@ Installation authority alone can provision admission profiles or profiled
 routes through the existing resource API. Profiles use explicit rate/health
 rules; zero RPM is valid local refusal. A profiled route permanently protects
 its key, including old revisions and configurations. Do not downgrade a denied
-profiled request to legacy or v1. New authority stores use format three and
-refuse unreleased format-two stores; retain a compatible stopped-writer backup
+profiled request to legacy or v1. V1 profiles keep local health. For explicit
+shared health across distinct members, verify enabled V2 resource discovery and
+use format-two profile puts with `health_group_id`; never downgrade unsupported
+V2 writes. Group rules and membership remain immutable, including revoked history.
+New authority stores use format four and refuse unreleased format-two stores;
+the supported upgrade preserves the historical 1-to-3 step before 3-to-4.
+Retain a compatible stopped-writer backup
 before changing binaries. See the [service contract](../../../docs/specs/service-api/README.md#resource-provisioning)
 for exact profile, import-head and protection semantics.
 Use `observe_rate_group_id` only for an explicit same-owner read-only association.

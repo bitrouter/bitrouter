@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceCapabilitiesV2",
+  "description": "Explicit format-two discovery; does not alter format-one discovery or grant authority.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource capability contract, exactly two.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 2,
+      "maximum": 2
+    },
+    "installation_id": {
+      "description": "Persistent installation identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "provisioning_enabled": {
+      "description": "Encrypted provisioning has its explicit wrapping key.",
+      "type": "boolean"
+    },
+    "max_command_bytes": {
+      "description": "Maximum complete serialized command bytes.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1048576
+    },
+    "tenant_routes_require_approved_origins": {
+      "description": "Existing tenant route origin restrictions remain mandatory.",
+      "type": "boolean"
+    },
+    "admission_profile_versions": {
+      "description": "Supported profile versions, exactly [1, 2]; version two requires shared health binding.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "const": [
+        1,
+        2
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "installation_id",
+    "provisioning_enabled",
+    "max_command_bytes",
+    "tenant_routes_require_approved_origins",
+    "admission_profile_versions"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  }
+}
