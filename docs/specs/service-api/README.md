@@ -903,7 +903,7 @@ same object with `OrderedTenantGateway::with_generation_defaults_envelope`.
 The SDK sends `bitrouter_generation_defaults_envelope` in the request body.
 Exactly one of the canonical-only member and envelope member may be present;
 missing, mismatched, duplicate, null or competing attachments fail before
-admission. The envelope is removed before caller protocol parsing. Ordinary
+execution admission (bounded ingress reservation and parsing occur first). The envelope is removed before caller protocol parsing. Ordinary
 v1/anonymous ingress rejects this reserved member. A preceding canonical-only
 ordered server rejects a correctly bound envelope because its computed defaults
 digest does not match; clients must not retry or downgrade. Unused extensions
@@ -920,6 +920,51 @@ including defaults suppressed by caller precedence. Receipts and evidence carry
 the same single digest, never the defaults payload. Its separate hash domain
 preserves canonical V1 digests without a durable schema revision. A verifier
 retains the requested defaults object and contract family.
+
+The additive [`generation-defaults-envelope-v2.schema.json`](generation-defaults-envelope-v2.schema.json)
+contract `GenerationDefaultsEnvelopeV2` uses the same reserved body member. Its
+closed object requires `schema_version: 2`, `supplemental`, and
+`configuration_defaults`, exactly `apply` or `preserve_absence`. Optional
+`canonical` keeps the unchanged V1 contract. Bind and attach it with the additive
+`with_generation_defaults_envelope_v2` methods on `OrderedDispatchBindingV2`
+and `OrderedTenantGateway` respectively.
+
+```json
+{
+  "schema_version": 2,
+  "supplemental": {"vendor_knob": {"mode": "fast"}},
+  "configuration_defaults": "preserve_absence"
+}
+```
+
+Its digest domain is `bitrouter.generation-defaults-envelope.v2` followed by a
+zero byte, then compact JSON in exactly `schema_version`, optional `canonical`,
+`supplemental`, `configuration_defaults` order. The choice always binds identity,
+even when effective provider bodies match. Nested normalization, exact integer
+decoding, duplicate rejection, bounds and reserved names are unchanged. Missing,
+null, unknown or duplicate layer choices fail; unsupported versions do not
+fall back to another contract. Both canonical-only and envelope-V1 predecessors
+reject correctly bound V2 requests; clients must not downgrade or replay them.
+
+`apply` fills absent typed temperature and output tokens from retained
+configuration. `preserve_absence` skips only that configuration-specific fill:
+caller values (including zero) and canonical defaults still win, supplemental
+values keep their existing provenance, and other retained defaults still apply.
+The retained raw temperature and token aliases remain filtered, so they cannot
+reintroduce the skipped layer. Chat and Responses omit absent typed values;
+Messages supplies its existing required `max_tokens: 4096`, while omitting
+absent temperature. Explicit later protocol requirements still apply. A null
+input is not an assertion of key absence and keeps existing parser semantics.
+
+This is a request-only selection, not a nullable configuration format or an
+execution-token budget. All old, V1 and native entry points retain `apply`.
+Bounded ingress reservation precedes validation and retains its release paths;
+execution admission, intent, RPM/probe and provider work remain behind their
+existing checks. Ordered PolicyLock routes remain `CapabilityMismatch`; V2
+neither enables them nor bypasses constraints or continuation guards. Storage
+formats, retained compiled bytes and writer fences are unchanged. Intent,
+receipt and archive retain only the opaque digest; outstanding-intent recovery
+terminalizes Unknown without storing or replaying the envelope or layer choice.
 
 Only these exact top-level supplemental keys are reserved: `model`, `messages`,
 `stream`, the nine canonical names above, `bitrouter_generation_defaults` and

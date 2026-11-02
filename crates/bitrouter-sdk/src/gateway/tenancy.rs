@@ -164,6 +164,7 @@ impl Error {
 enum Defaults {
     Canonical(bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1),
     Envelope(bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1),
+    EnvelopeV2(bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2),
 }
 
 /// One trusted submission, borrowing the gateway pool without mutating defaults.
@@ -410,6 +411,10 @@ impl TenantGateway<'_> {
             builder
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(ordered::envelope_body(request, defaults)?)
+        } else if let Some(Defaults::EnvelopeV2(defaults)) = &self.generation_defaults {
+            builder
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(ordered::envelope_v2_body(request, defaults)?)
         } else {
             builder.json(request)
         };

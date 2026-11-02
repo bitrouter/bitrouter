@@ -342,16 +342,33 @@ async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() ->
 
 #[tokio::test]
 async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay() -> Result<()> {
-    restart_case(false).await
+    restart_case(None).await
 }
 
 #[tokio::test]
 async fn envelope_digest_survives_outstanding_intent_recovery_without_payload_or_replay()
 -> Result<()> {
-    restart_case(true).await
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+        serde_json::from_value(
+            serde_json::json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+        )?;
+    restart_case(Some(values.digest()?)).await
 }
 
-async fn restart_case(envelope: bool) -> Result<()> {
+#[tokio::test]
+async fn envelope_v2_choice_digest_recovers_unknown_without_executable_payload_or_replay()
+-> Result<()> {
+    for mode in ["apply", "preserve_absence"] {
+        let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2 =
+            serde_json::from_value(
+                serde_json::json!({"schema_version":2,"supplemental":{"vendor_knob":"request-only-secret"},"configuration_defaults":mode}),
+            )?;
+        restart_case(Some(values.digest()?)).await?;
+    }
+    Ok(())
+}
+
+async fn restart_case(digest: Option<bitrouter_ai::tenancy::identity::Digest>) -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("receipts.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
@@ -360,18 +377,12 @@ async fn restart_case(envelope: bool) -> Result<()> {
         .await?
         .installation;
     let mut identity = identity(&installation, "execution", 64)?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
-        serde_json::from_value(
-            serde_json::json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
-        )?;
-    if envelope {
-        identity
-            .ordered
-            .as_mut()
-            .context("ordered identity")?
-            .0
-            .generation_defaults_digest = Some(values.digest()?);
-    }
+    identity
+        .ordered
+        .as_mut()
+        .context("ordered identity")?
+        .0
+        .generation_defaults_digest = digest.clone();
     let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
     persist_intent(&db, &intent).await?;
     let control = Control::new(proof.clone());
@@ -402,6 +413,7 @@ async fn restart_case(envelope: bool) -> Result<()> {
         .context("recovered receipt")?;
     ensure!(saved.unknown());
     ensure!(!saved.json().contains("request-only-secret"));
+    ensure!(!saved.json().contains("configuration_defaults"));
     let bytes = saved.json().to_owned();
     let Terminal::V2(candidate) = saved else {
         anyhow::bail!("recovery format lost")
@@ -415,13 +427,13 @@ async fn restart_case(envelope: bool) -> Result<()> {
         candidate.evidence.document.capture == Capture::Unavailable
             && candidate.evidence.document.frames.is_empty()
     );
-    if envelope {
+    if let Some(digest) = digest {
         ensure!(
             candidate
                 .receipt
                 .accepted_selection
                 .generation_defaults_digest
-                == Some(values.digest()?)
+                == Some(digest.clone())
         );
         ensure!(
             candidate
@@ -429,7 +441,7 @@ async fn restart_case(envelope: bool) -> Result<()> {
                 .document
                 .accepted_selection
                 .generation_defaults_digest
-                == Some(values.digest()?)
+                == Some(digest.clone())
         );
     }
     let inventory = store::inventory(&db, &installation).await?;
