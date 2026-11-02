@@ -33,7 +33,7 @@ fn reference(kind: &str) -> Value {
 }
 fn selected(indices: Vec<u16>) -> Result<OrderedCandidateSelectionV1, serde_json::Error> {
     serde_json::from_value(
-        json!({"schema_version":1, "route":reference("route"), "candidate_indices":indices}),
+        json!({"schema_version":1, "admission_mode":"legacy", "route":reference("route"), "candidate_indices":indices}),
     )
 }
 fn unknown_usage() -> Usage {

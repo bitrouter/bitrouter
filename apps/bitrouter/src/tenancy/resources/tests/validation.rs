@@ -3,7 +3,7 @@ use crate::tenancy::configuration_store::StoredConfiguration;
 use bitrouter_ai::tenancy::configuration::ConfigurationRevision;
 use sha2::{Digest, Sha256};
 
-pub(super) fn stored(
+pub(in crate::tenancy::resources) fn stored(
     document: Configuration,
     compiled: CompiledConfiguration,
 ) -> Result<StoredConfiguration> {
@@ -27,7 +27,7 @@ pub(super) fn stored(
     })
 }
 
-pub(super) fn reseal(
+pub(in crate::tenancy::resources) fn reseal(
     resources: &Resources,
     row: &mut StoredConfiguration,
     envelope: &Value,
@@ -43,7 +43,7 @@ pub(super) fn reseal(
                 &resources.installation,
                 &revision.tenant_id,
                 &revision.revision_id,
-                COMPILER_VERSION,
+                revision.compiler_version.as_str(),
                 &revision.document,
                 &row.dependencies,
             ),

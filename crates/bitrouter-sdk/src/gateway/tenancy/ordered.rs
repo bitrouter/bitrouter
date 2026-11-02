@@ -7,6 +7,8 @@ use bitrouter_ai::{
         responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse},
     },
     tenancy::{
+        generation_defaults::{BODY_MEMBER, CanonicalGenerationDefaultsV1},
+        identity::Digest,
         ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
         validation::Validate,
     },
@@ -22,6 +24,7 @@ use super::{
 pub struct OrderedTenantGateway<'a> {
     inner: TenantGateway<'a>,
     route_id: String,
+    generation_defaults_digest: Option<Digest>,
 }
 
 impl std::fmt::Debug for OrderedTenantGateway<'_> {
@@ -80,7 +83,9 @@ impl GatewayClient {
             );
         }
         Ok(OrderedTenantGateway {
+            generation_defaults_digest: binding.selection.generation_defaults_digest.clone(),
             inner: TenantGateway {
+                generation_defaults: None,
                 client: self,
                 headers,
             },
@@ -90,6 +95,26 @@ impl GatewayClient {
 }
 
 impl OrderedTenantGateway<'_> {
+    /// Attach the canonical defaults already bound to this submission.
+    /// Typed caller values win; typed null and an empty stop list permit default
+    /// filling. Opaque source extras are never promoted across protocols.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults or a digest different from the frozen binding.
+    pub fn with_generation_defaults(
+        mut self,
+        defaults: CanonicalGenerationDefaultsV1,
+    ) -> Result<Self, Error> {
+        let digest = defaults
+            .digest()
+            .map_err(|_| Error::Request("invalid canonical defaults"))?;
+        if self.generation_defaults_digest.as_ref() != Some(&digest) {
+            return Err(Error::Request("canonical defaults differ from binding"));
+        }
+        self.inner.generation_defaults = Some(defaults);
+        Ok(self)
+    }
+
     /// Replace this call's `anthropic-beta` values without changing its selection.
     ///
     /// Preserves opaque field-value bytes, duplicates and order. An empty slice
@@ -107,6 +132,11 @@ impl OrderedTenantGateway<'_> {
         extra: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(), Error> {
         reject_stream_shadow(extra)?;
+        if extra.contains_key(BODY_MEMBER)
+            || self.generation_defaults_digest.is_some() != self.inner.generation_defaults.is_some()
+        {
+            return Err(Error::Request("missing or competing canonical defaults"));
+        }
         if model != self.route_id || extra.contains_key("model") {
             return Err(Error::Request("ordered route differs from request model"));
         }

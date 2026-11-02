@@ -114,6 +114,77 @@
       "description": "Write-only resource definition. Debug output deliberately omits all contents.",
       "oneOf": [
         {
+          "description": "Installation-managed operational profile, independent of PolicyLock.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "description": "Closed, bounded operational rules.",
+              "$ref": "#/$defs/AdmissionProfileV1"
+            },
+            "kind": {
+              "type": "string",
+              "const": "admission_profile"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "profile"
+          ]
+        },
+        {
+          "description": "Static ordered route with an explicit profile for every protocol-root entry.",
+          "type": "object",
+          "properties": {
+            "routing": {
+              "description": "Explicit service routing document.",
+              "type": "object",
+              "additionalProperties": true
+            },
+            "selector": {
+              "description": "Selector resolved exclusively inside this document.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "policy": {
+              "description": "Required-nullable policy reference; only qualified static roots execute.",
+              "$ref": "#/$defs/RequiredNullable_ResourceRef"
+            },
+            "credentials": {
+              "description": "Separately owned immutable credential slots.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CredentialBinding"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            },
+            "attachments": {
+              "description": "Total unique map over the three actual compiled protocol roots.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AdmissionAttachmentV1"
+              },
+              "minItems": 1,
+              "maxItems": 768
+            },
+            "kind": {
+              "type": "string",
+              "const": "profiled_route"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "routing",
+            "selector",
+            "policy",
+            "credentials",
+            "attachments"
+          ]
+        },
+        {
           "description": "Static upstream credential; ingress credentials use the separate issuance API.",
           "type": "object",
           "properties": {
@@ -214,6 +285,163 @@
         }
       ]
     },
+    "AdmissionProfileV1": {
+      "description": "Immutable rules with a live, independently rotatable member RPM ceiling.",
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "description": "Profile format, exactly one.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "rate": {
+          "description": "Null disables rate admission; a zero ceiling refuses locally.",
+          "$ref": "#/$defs/RequiredNullable_RateProfileV1"
+        },
+        "observe_rate_group_id": {
+          "description": "Optional read-only group in this profile's operator-pool namespace.\nDoes not enable rate admission, charge a timestamp or consult a circuit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "description": "Null disables the availability circuit.",
+          "$ref": "#/$defs/RequiredNullable_HealthProfileV1"
+        },
+        "fallback": {
+          "description": "Explicit permission to advance after a proven terminal HTTP rejection.",
+          "$ref": "#/$defs/FallbackRule"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "rate",
+        "health",
+        "fallback"
+      ]
+    },
+    "RequiredNullable_RateProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RateProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RateProfileV1": {
+      "description": "Shared sliding-window identity and this member's current ceiling.",
+      "type": "object",
+      "properties": {
+        "rate_group_id": {
+          "description": "Scoped by installation and operator-pool owner, independent of revisions.",
+          "$ref": "#/$defs/ResourceId"
+        },
+        "member_rpm": {
+          "description": "Maximum reached entries in the shared 60-second window; zero is valid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rate_group_id",
+        "member_rpm"
+      ]
+    },
+    "ResourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RequiredNullable_HealthProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HealthProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "HealthProfileV1": {
+      "description": "Circuit rules, immutable for a profile key, including across RPM rotations.",
+      "type": "object",
+      "properties": {
+        "rules": {
+          "description": "Closed classification of actual provider terminal outcomes.",
+          "$ref": "#/$defs/HealthRules"
+        },
+        "failure_threshold": {
+          "description": "Consecutive failures needed to open the circuit; at least one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "transient_cooldown_seconds": {
+          "description": "Transient cooldown in seconds; zero is valid.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "persistent_cooldown_seconds": {
+          "description": "Persistent cooldown in seconds, at least the transient cooldown.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "probe_lease_seconds": {
+          "description": "Exclusive probe lease in seconds; at least one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rules",
+        "failure_threshold",
+        "transient_cooldown_seconds",
+        "persistent_cooldown_seconds",
+        "probe_lease_seconds"
+      ]
+    },
+    "HealthRules": {
+      "description": "Versioned provider availability classification.",
+      "oneOf": [
+        {
+          "description": "Protocol terminal success, persistent authorization failures and transient failures.",
+          "type": "string",
+          "const": "availability_v1"
+        }
+      ]
+    },
+    "FallbackRule": {
+      "description": "Ordered fallback permission; uncertainty never authorizes another attempt.",
+      "oneOf": [
+        {
+          "description": "Stop after any reached provider attempt.",
+          "type": "string",
+          "const": "stop"
+        },
+        {
+          "description": "Advance only after an explicitly qualified terminal HTTP rejection.",
+          "type": "string",
+          "const": "ordered_terminal_rejections_v1"
+        }
+      ]
+    },
     "RequiredNullable_ResourceRef": {
       "anyOf": [
         {
@@ -297,6 +525,46 @@
         "provider",
         "account",
         "credential"
+      ]
+    },
+    "AdmissionAttachmentV1": {
+      "description": "Exact association with one retained protocol-root ordinal and credential.",
+      "type": "object",
+      "properties": {
+        "inbound_protocol": {
+          "description": "Actual ingress protocol, not the target's upstream protocol.",
+          "$ref": "#/$defs/GenerationProtocol"
+        },
+        "candidate_index": {
+          "description": "Original root ordinal, below 256.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "credential": {
+          "description": "Exact retained credential revision for this root entry.",
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "profile": {
+          "description": "Pinned operator-pool Policy revision containing an admission profile.",
+          "$ref": "#/$defs/ResourceRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "inbound_protocol",
+        "candidate_index",
+        "credential",
+        "profile"
+      ]
+    },
+    "GenerationProtocol": {
+      "type": "string",
+      "enum": [
+        "chat_completions",
+        "messages",
+        "responses"
       ]
     }
   }

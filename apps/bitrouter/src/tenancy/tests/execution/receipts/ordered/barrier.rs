@@ -48,7 +48,10 @@ impl OrderedHarness {
 
 type Submission = AbortOnDropHandle<std::result::Result<(), DispatchError>>;
 
-fn submit(harness: &OrderedHarness, binding: &OrderedDispatchBindingV2) -> Result<Submission> {
+pub(super) fn submit(
+    harness: &OrderedHarness,
+    binding: &OrderedDispatchBindingV2,
+) -> Result<Submission> {
     let client = GatewayClient::with_options(
         &harness.endpoint,
         None,

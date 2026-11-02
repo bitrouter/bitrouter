@@ -146,7 +146,9 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
         &artifact.definition,
         super::manifest::Definition::Credential { oauth: Some(_), .. }
     );
-    let version = if oauth {
+    let version = if artifact.definition.is_profiled() {
+        super::PROFILED_COMPILER_VERSION
+    } else if oauth {
         "tenancy-oauth-resource-v1"
     } else {
         COMPILER_VERSION
@@ -184,6 +186,7 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
 pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Result<Artifact> {
     ensure!(
         record.compiler_version == COMPILER_VERSION
+            || record.compiler_version == super::PROFILED_COMPILER_VERSION
             || record.compiler_version == "tenancy-oauth-resource-v1",
         "unsupported resource compiler"
     );
@@ -208,6 +211,11 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
     };
     let bytes = key.open_bound(purpose, &binding, &sealed)?;
     let artifact: Artifact = serde_json::from_slice(&bytes)?;
+    ensure!(
+        artifact.definition.is_profiled()
+            == (record.compiler_version == super::PROFILED_COMPILER_VERSION),
+        "admission resource compiler mismatch"
+    );
     ensure!(
         oauth
             == matches!(

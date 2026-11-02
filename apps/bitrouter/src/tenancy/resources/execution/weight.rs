@@ -404,6 +404,7 @@ impl Weight {
     fn route(&mut self, value: &RouteData) -> Result<()> {
         let RouteData {
             reference,
+            admission,
             assessment,
             block,
             block_pricing,
@@ -416,6 +417,13 @@ impl Weight {
             candidates,
             choice,
         } = value;
+        if let Some(attachments) = admission {
+            self.vector(attachments)?;
+            for attachment in attachments {
+                self.reference(&attachment.credential)?;
+                self.reference(&attachment.profile)?;
+            }
+        }
         if let Some(choice) = choice {
             self.string(&choice.digest)?;
             // DecisionPolicy has only inline scalar fields. Shared child data

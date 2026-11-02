@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 fn selection(count: u16) -> Value {
     json!({
         "schema_version": 1,
+        "admission_mode": "legacy",
         "route": {
             "owner_kind": "tenant", "owner_id": "tenant-a", "resource_kind": "route",
             "resource_id": "route-a", "revision_id": "route-rev-a"

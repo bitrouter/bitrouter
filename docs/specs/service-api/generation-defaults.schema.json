@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanonicalGenerationDefaultsV1",
+  "description": "Canonical preset defaults for one ordered request, without arbitrary fields.\n\nTyped caller values (including zero) win. Typed null becomes None and permits\na default; an empty stop vector also permits a default. A source-owned opaque\nextra with a competing canonical name blocks promotion without itself being\npromoted across protocols. Unsupported outbound fields keep their existing\nadapter behavior. Configuration defaults remain a separate retained object.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Format, exactly one.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "temperature": {
+      "description": "Finite temperature; absence supplies no default.",
+      "type": "number",
+      "format": "double"
+    },
+    "top_p": {
+      "description": "Finite nucleus-sampling value.",
+      "type": "number",
+      "format": "double"
+    },
+    "max_tokens": {
+      "description": "Output-token default, including zero.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "reasoning_effort": {
+      "description": "Existing canonical effort level; this is not a policy treatment.",
+      "$ref": "#/$defs/ReasoningEffort"
+    },
+    "top_k": {
+      "description": "Top-k default, rendered only by supporting protocol adapters.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "seed": {
+      "description": "Signed deterministic-sampling seed, including zero.",
+      "type": "integer",
+      "format": "int64",
+      "minimum": -9223372036854775808,
+      "maximum": 9223372036854775807
+    },
+    "stop": {
+      "description": "Stop sequences. A single input string normalizes to a one-element vector.",
+      "$ref": "#/$defs/StopInput"
+    },
+    "presence_penalty": {
+      "description": "Finite presence-penalty default.",
+      "type": "number",
+      "format": "double"
+    },
+    "frequency_penalty": {
+      "description": "Finite frequency-penalty default.",
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ],
+  "$defs": {
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "StopInput": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  }
+}

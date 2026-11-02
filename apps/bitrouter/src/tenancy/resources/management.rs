@@ -124,6 +124,29 @@ impl Resources {
             .try_into()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         let definition = match &input.definition {
+            PublicDefinition::AdmissionProfile { profile } => Definition::AdmissionProfile {
+                profile: profile.clone(),
+            },
+            PublicDefinition::ProfiledRoute {
+                routing,
+                selector,
+                policy,
+                credentials,
+                attachments,
+            } => Definition::ProfiledRoute {
+                routing: routing.clone(),
+                selector: selector.clone(),
+                policy: policy.clone(),
+                credentials: credentials
+                    .iter()
+                    .map(|binding| CredentialBinding {
+                        provider: binding.provider.clone(),
+                        account: binding.account.clone(),
+                        credential: binding.credential.clone(),
+                    })
+                    .collect(),
+                attachments: attachments.clone(),
+            },
             PublicDefinition::Credential { secret } => Definition::Credential {
                 credential: crate::gateway::providers::auth::credentials::Credential::ApiKey {
                     value: secret.clone(),
@@ -208,7 +231,7 @@ impl Resources {
                 )?;
             }
         }
-        let envelope = if matches!(import.definition, Definition::Route { .. }) {
+        let envelope = if import.definition.is_route() {
             let policy = import.definition.policy_reference().and_then(|reference| {
                 closure
                     .iter()
@@ -226,6 +249,11 @@ impl Resources {
             definition: import.definition,
             envelope,
         };
+        if artifact.definition.is_profiled() {
+            let mut complete = closure;
+            complete.push(artifact.clone());
+            super::admission::validate_graph(&complete).map_err(|_| ErrorCode::InvalidRequest)?;
+        }
         storage::seal(self, &artifact).map_err(|_| ErrorCode::InvalidRequest)
     }
 
@@ -296,6 +324,7 @@ pub(in crate::tenancy) async fn prepare(
 ) -> Result<(ReadContext, Option<StoredResource>)> {
     match command {
         Command::Resource(tenant, input) => {
+            authorize_profile_put(state, caller, input)?;
             authorize(
                 state,
                 caller,
@@ -348,6 +377,7 @@ pub(in crate::tenancy) fn apply(
     let mut changes = Vec::new();
     let record = match command {
         Command::Resource(tenant, input) => {
+            authorize_profile_put(state, caller, input)?;
             authorize(
                 state,
                 caller,
@@ -379,6 +409,9 @@ pub(in crate::tenancy) fn apply(
                 });
             }
             changes.push(Change::Resource(retained.clone()));
+            state
+                .resource_admission
+                .apply_put(&retained.reference, &input.definition);
             lifecycle::Record {
                 reference: retained.reference.clone(),
                 is_head: true,
@@ -425,6 +458,23 @@ pub(in crate::tenancy) fn apply(
         issued: None,
         configuration: None,
     })
+}
+
+fn authorize_profile_put(
+    state: &Snapshot,
+    caller: &Caller,
+    input: &bitrouter_ai::tenancy::resources::ResourcePut,
+) -> Result<()> {
+    if matches!(
+        input.definition,
+        PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
+    ) && !matches!(caller, Caller::Installation(_))
+    {
+        return Err(ErrorCode::Forbidden);
+    }
+    state
+        .resource_admission
+        .validate_put(&input.key, &input.definition)
 }
 
 impl Service {

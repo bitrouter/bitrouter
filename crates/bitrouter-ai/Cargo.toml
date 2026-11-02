@@ -29,6 +29,7 @@ serde.workspace = true
 # a fractional or out-of-range token into an authority revision.
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order", "raw_value"] }
 thiserror.workspace = true
+sha2.workspace = true
 schemars = { workspace = true, optional = true }
 axum = { version = "0.8", default-features = false, features = ["json"], optional = true }
 futures-core = { workspace = true, optional = true }
