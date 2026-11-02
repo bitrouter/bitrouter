@@ -25,6 +25,15 @@ pub(super) enum Restore {
         instance: PathBuf,
         profiles: Vec<PathBuf>,
     },
+    HermesConfig {
+        model: String,
+    },
+    OpenClawConfig {
+        instance: PathBuf,
+        catalogs: Vec<PathBuf>,
+    },
+    OpenClawModels,
+    OpenClawCredential,
     ClaudeProfile,
     ClaudeMeta {
         profile: String,
@@ -87,6 +96,17 @@ impl Change {
     }
 
     fn restored(&self, current: Option<&str>, preserve_mode: bool) -> Result<Option<String>> {
+        // OpenClaw can materialize new agent catalogs after setup. Check for
+        // credential copies even when the source config's bytes are unchanged.
+        if let Restore::OpenClawConfig { instance, catalogs } = &self.restore {
+            return super::openclaw::restore_config(
+                self.before.as_deref(),
+                &self.after,
+                current,
+                instance,
+                catalogs,
+            );
+        }
         if current == self.before.as_deref() {
             return Ok(self.before.clone());
         }
@@ -128,6 +148,12 @@ impl Change {
             Restore::DeepseekProfile => {
                 return super::deepseek::restore_profile(before, &self.after, current);
             }
+            Restore::HermesConfig { model } => {
+                return super::hermes::restore_config(before, &self.after, current, model);
+            }
+            Restore::OpenClawModels => {
+                return super::openclaw::restore_models(before, &self.after, current);
+            }
             Restore::DeepseekCredentials { instance, profiles } => {
                 return super::deepseek::restore_credentials(
                     before,
@@ -139,17 +165,24 @@ impl Change {
             }
             _ => {}
         }
-        ensure!(!matches!(self.restore, Restore::Exact), "file was edited");
+        ensure!(
+            !matches!(self.restore, Restore::Exact | Restore::OpenClawCredential),
+            "file was edited"
+        );
         let mut value = object(current)?;
         let after = object(Some(&self.after))?;
         let before = object(self.before.as_deref())?;
         match &self.restore {
             Restore::Exact
+            | Restore::OpenClawCredential
             | Restore::CodexConfig { .. }
             | Restore::OpenCodeProvider
             | Restore::PiModels
             | Restore::PiAuth
             | Restore::PiSettings { .. }
+            | Restore::HermesConfig { .. }
+            | Restore::OpenClawConfig { .. }
+            | Restore::OpenClawModels
             | Restore::DeepseekProfile
             | Restore::DeepseekCredentials { .. } => anyhow::bail!("file was edited"),
             Restore::ClaudeProfile => {
@@ -207,10 +240,14 @@ impl Change {
     }
 
     fn installed(&self, current: Option<&str>) -> Result<bool> {
+        if let Restore::OpenClawConfig { instance, catalogs } = &self.restore {
+            return super::openclaw::config_installed(&self.after, current, instance, catalogs);
+        }
         if current == Some(&self.after) {
             return Ok(true);
         }
-        if current.is_none() || matches!(self.restore, Restore::Exact) {
+        if current.is_none() || matches!(self.restore, Restore::Exact | Restore::OpenClawCredential)
+        {
             return Ok(false);
         }
         if self.restored(current, false).is_err() {
@@ -231,6 +268,12 @@ impl Change {
             Restore::DeepseekProfile => {
                 return super::deepseek::profile_installed(&self.after, current);
             }
+            Restore::HermesConfig { .. } => {
+                return super::hermes::config_installed(&self.after, current);
+            }
+            Restore::OpenClawModels => {
+                return super::openclaw::models_installed(&self.after, current);
+            }
             Restore::DeepseekCredentials { .. } => {
                 return super::deepseek::credentials_installed(&self.after, current);
             }
@@ -249,11 +292,15 @@ impl Change {
             Restore::ClaudeMode => value.get("deploymentMode") == after.get("deploymentMode"),
             Restore::ClaudeProfile => true,
             Restore::Exact
+            | Restore::OpenClawCredential
             | Restore::CodexConfig { .. }
             | Restore::OpenCodeProvider
             | Restore::PiModels
             | Restore::PiAuth
             | Restore::PiSettings { .. }
+            | Restore::HermesConfig { .. }
+            | Restore::OpenClawConfig { .. }
+            | Restore::OpenClawModels
             | Restore::DeepseekProfile
             | Restore::DeepseekCredentials { .. } => false,
         })
@@ -315,7 +362,7 @@ struct Replacement {
 impl Receipt {
     pub fn new(endpoint: String, model: String, files: Vec<Change>) -> Self {
         Self {
-            version: 5,
+            version: 6,
             endpoint,
             model,
             display_name: None,
@@ -339,7 +386,7 @@ impl Receipt {
                 let mut receipt: Self =
                     serde_json::from_str(&text).context("invalid connection receipt")?;
                 ensure!(
-                    matches!(receipt.version, 1..=5),
+                    matches!(receipt.version, 1..=6),
                     "unsupported connection receipt version"
                 );
                 if receipt.version == 1 && receipt.model.is_empty() {
@@ -368,6 +415,10 @@ impl Receipt {
                 Restore::PiAuth => return super::pi::stored_token(&file.after),
                 Restore::DeepseekCredentials { .. } => {
                     return super::deepseek::stored_token(&file.after);
+                }
+                Restore::HermesConfig { .. } => return super::hermes::stored_token(&file.after),
+                Restore::OpenClawCredential => {
+                    return super::openclaw::stored_token(&file.after);
                 }
                 _ => {}
             }

@@ -121,6 +121,7 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 toml.workspace = true
 toml_edit = "0.25"
+json5 = "1.3.7"
 erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true

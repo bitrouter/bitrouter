@@ -85,7 +85,7 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 ### 5. Start the desired agent interface
 
 For persistent gateway model options, use `bro connect --model ID [--display-name LABEL]` (default `bitrouter/automatos`, no harness required);
-choose Codex, Claude, OpenCode, Pi (CLI/TUI), or DeepSeek Harness. See
+choose Codex, Claude, OpenCode, Pi (CLI/TUI), DeepSeek Harness, Hermes Agent, or OpenClaw. See
 `references/connect.md` for instance selection, previews, checks, updates and scoped recovery.
 Use single-operation CLI controls or the harness's own native interface.
 Observing state never submits, approves, resumes or stops work:

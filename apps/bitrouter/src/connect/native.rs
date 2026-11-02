@@ -93,6 +93,8 @@ fn instance(target: Target, explicit: Option<&Path>) -> Result<PathBuf> {
         Target::OpenCode => super::opencode::instance(explicit)?,
         Target::Pi => super::pi::instance(explicit)?,
         Target::Deepseek => super::deepseek::instance(explicit)?,
+        Target::Hermes => super::hermes::instance(explicit)?,
+        Target::OpenClaw => super::openclaw::instance(explicit)?,
         _ => anyhow::bail!("unsupported native provider client"),
     })
 }
@@ -119,6 +121,12 @@ fn prepare(
         Target::Pi => super::pi::prepare(endpoint, token, model, label, instance, protocol)?,
         Target::Deepseek => {
             super::deepseek::prepare(endpoint, token, model, label, instance, profiles, protocol)?
+        }
+        Target::Hermes => {
+            super::hermes::prepare(endpoint, token, model, label, instance, profiles, protocol)?
+        }
+        Target::OpenClaw => {
+            super::openclaw::prepare(endpoint, token, model, label, instance, profiles, protocol)?
         }
         _ => anyhow::bail!("unsupported native provider client"),
     };
@@ -150,6 +158,11 @@ async fn credential(interactive: bool) -> Result<String> {
 }
 
 pub(super) async fn run(target: Target, mut options: Options, output: &Output) -> Result<()> {
+    if matches!(target, Target::Hermes) {
+        for profile in &mut options.profiles {
+            *profile = profile.trim().to_lowercase();
+        }
+    }
     options.profiles.sort();
     options.profiles.dedup();
     ensure!(
@@ -157,8 +170,8 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
         "--codex-catalog requires codex"
     );
     ensure!(
-        matches!(target, Target::Deepseek) || options.profiles.is_empty(),
-        "--profile requires deepseek-harness"
+        matches!(target, Target::Deepseek | Target::Hermes) || options.profiles.is_empty(),
+        "--profile requires deepseek-harness or hermes; select an OpenClaw configuration with --instance"
     );
     let instance = instance(target, options.instance.as_deref())?;
     let instance_text = instance
@@ -284,14 +297,20 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
         );
     }
     let model = options.model.as_deref().unwrap_or(super::DEFAULT_MODEL);
-    let label = options.display_name.as_deref().unwrap_or(model);
+    let label = options.display_name.as_deref().unwrap_or_else(|| {
+        if matches!(target, Target::Hermes | Target::OpenClaw) {
+            model.strip_prefix("bitrouter/").unwrap_or(model)
+        } else {
+            model
+        }
+    });
     super::validate_model(model)?;
     super::validate_display_name(label)?;
     let protocol = options.protocol.unwrap_or_default();
-    let profiles = if matches!(target, Target::Deepseek) {
-        super::deepseek::profiles(&instance, &options.profiles)?
-    } else {
-        vec![]
+    let profiles = match target {
+        Target::Deepseek => super::deepseek::profiles(&instance, &options.profiles)?,
+        Target::Hermes => super::hermes::profiles(&instance, &options.profiles)?,
+        _ => vec![],
     };
     if previous.is_none()
         && options.base_url.is_none()
@@ -354,7 +373,11 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
             &endpoint,
             &token,
             (model, label),
-            options.instance.as_ref().map(|_| instance.as_path()),
+            if options.instance.is_some() || matches!(target, Target::Hermes | Target::OpenClaw) {
+                Some(instance.as_path())
+            } else {
+                None
+            },
             &profiles,
             protocol,
         )
@@ -399,6 +422,18 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
                     .join(profile)
                     .join("cordis.patch.yml")
             }));
+            result.files.sort();
+            result.files.dedup();
+        }
+        if matches!(target, Target::Hermes) {
+            result.notes.push(if profiles.is_empty() {
+                "Hermes: update only the selected home/profile.".into()
+            } else {
+                format!("Selected Hermes profiles: {}", profiles.join(", "))
+            });
+            result
+                .files
+                .extend(super::hermes::config_paths(&instance, &profiles)?);
             result.files.sort();
             result.files.dedup();
         }

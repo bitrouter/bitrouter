@@ -79,5 +79,5 @@ remaining references, then remove only `refs.BITROUTER_CONNECT_API_KEY` from
 `.credentials.yaml` when it is no longer used, before reconnecting.
 
 `--check` validates the saved connection and gateway model catalog; it does not
-run inference or a tool. Native picker, stream, and tool acceptance evidence is
-tracked in `docs/DEEPSEEK_CONNECT_ACCEPTANCE.md`.
+run inference or a tool. Verify the native picker, streaming and a complete tool
+roundtrip against the intended gateway before treating inference as working.

@@ -89,5 +89,5 @@ connecting. `--status` verifies saved file state offline; `--check` additionally
 verifies the gateway catalog using the saved credential. Neither sends an
 inference request nor proves a running client has reloaded.
 
-See the internal [acceptance record](../../../docs/OPENCODE_CONNECT_ACCEPTANCE.md)
-for tested versions, actual tool-roundtrip evidence, and limits.
+Validate inference and tool use against the intended gateway and native client
+version separately; a successful catalog check does not establish those behaviors.

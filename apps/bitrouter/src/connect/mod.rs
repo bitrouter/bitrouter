@@ -3,7 +3,9 @@ mod claude;
 mod codex;
 mod deepseek;
 mod files;
+mod hermes;
 mod native;
+mod openclaw;
 mod opencode;
 mod pi;
 
@@ -73,6 +75,9 @@ pub enum Target {
     #[value(name = "deepseek-harness", alias = "dsh")]
     #[serde(rename = "deepseek-harness")]
     Deepseek,
+    Hermes,
+    #[value(name = "openclaw")]
+    OpenClaw,
 }
 
 impl Target {
@@ -83,6 +88,8 @@ impl Target {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::Deepseek => "deepseek-harness",
+            Self::Hermes => "hermes",
+            Self::OpenClaw => "openclaw",
         }
     }
 }
@@ -100,19 +107,19 @@ pub struct Options {
     /// Exact gateway model ID; new connections default to bitrouter/automatos.
     #[arg(long, conflicts_with = "remove")]
     pub model: Option<String>,
-    /// Native display/detail name; defaults to the exact gateway model ID.
+    /// Native label where supported; Hermes/OpenClaw defaults omit bitrouter/.
     #[arg(long, conflicts_with = "remove")]
     pub display_name: Option<String>,
     /// Complete Codex ModelsResponse catalog; defaults to its current catalog/cache.
     #[arg(long, conflicts_with = "remove")]
     pub codex_catalog: Option<PathBuf>,
-    /// Actual OpenCode config file/directory, Pi agent directory, or DSH home.
+    /// Actual client config file/directory or agent home.
     #[arg(long)]
     pub instance: Option<PathBuf>,
-    /// Initialized DeepSeek Harness profile to configure (repeatable).
+    /// Initialized DeepSeek Harness or Hermes profile to configure (repeatable).
     #[arg(long = "profile")]
     pub profiles: Vec<String>,
-    /// Gateway protocol for OpenCode, Pi and DeepSeek Harness.
+    /// Gateway protocol for clients with independent custom providers.
     #[arg(long, value_enum, conflicts_with = "remove")]
     pub protocol: Option<Protocol>,
     /// Inspect the selected connection without network access or file changes.
@@ -289,6 +296,14 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
                         "DeepSeek Harness",
                         "Initialized Web, Desktop and headless profiles",
                     ),
+                    crate::prompt::Item::new(
+                        "Hermes Agent",
+                        "CLI/TUI + Desktop/Web using the selected profile",
+                    ),
+                    crate::prompt::Item::new(
+                        "OpenClaw",
+                        "CLI/TUI + Desktop/Web using the selected Gateway",
+                    ),
                 ],
                 0,
             )
@@ -298,11 +313,16 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
                 1 => Target::Claude,
                 2 => Target::OpenCode,
                 3 => Target::Pi,
-                _ => Target::Deepseek,
+                4 => Target::Deepseek,
+                5 => Target::Hermes,
+                _ => Target::OpenClaw,
             }
         }
     };
-    if matches!(target, Target::OpenCode | Target::Pi | Target::Deepseek) {
+    if matches!(
+        target,
+        Target::OpenCode | Target::Pi | Target::Deepseek | Target::Hermes | Target::OpenClaw
+    ) {
         return native::run(target, options, output).await;
     }
     ensure!(
@@ -312,7 +332,7 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             && !options.status
             && !options.check
             && !options.update,
-        "instance, profile, protocol, status, check and update flags apply to OpenCode, Pi and DeepSeek Harness"
+        "instance, profile, protocol, status, check and update flags require a client with independent custom providers"
     );
     ensure!(
         matches!(target, Target::Codex) || options.codex_catalog.is_none(),
@@ -473,7 +493,7 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             );
             changes
         }
-        Target::OpenCode | Target::Pi | Target::Deepseek => {
+        Target::OpenCode | Target::Pi | Target::Deepseek | Target::Hermes | Target::OpenClaw => {
             anyhow::bail!("native provider dispatch failed")
         }
     };

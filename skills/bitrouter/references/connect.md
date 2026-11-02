@@ -1,11 +1,16 @@
 # Persistent native model options
 
-`bro connect` presents a Codex / Claude / OpenCode / Pi / DeepSeek Harness menu, previews files and effects, and
+`bro connect` presents a Codex / Claude / OpenCode / Pi / DeepSeek Harness / Hermes Agent / OpenClaw menu, previews files and effects, and
 asks once before connecting the detected clients. It works in gateway-only
 builds (`--no-default-features`); neither `harness` nor `core` is required.
 `--model ID` selects an exact gateway model ID. New connections default to
 `bitrouter/automatos`. `--display-name LABEL` supplies a native display/detail name;
-Pi picker rows still use the model ID. It never creates a gateway alias.
+Pi and Hermes picker rows still use the model ID. It never creates a gateway alias.
+BitRouter is the provider; Automatos is its router model. For Hermes and OpenClaw,
+the default display label drops the `bitrouter/` prefix, while the exact gateway
+request ID is retained. Hermes has no separate native model label. OpenClaw's
+`automatos` provider alias resolves to the full gateway model ID, so the native
+selection can use `bitrouter/automatos` without changing the request model.
 Setup configures clients; it does not implement routing.
 
 ```sh
@@ -23,7 +28,7 @@ bro connect codex --remove
 - `--base-url URL` targets an existing gateway instead, without reading local
   BitRouter configuration or starting a daemon. It conflicts with `--config`.
   Gateway roots and `/v1` URLs, including reverse-proxy path prefixes, are
-  accepted. Scripted explicit gateways require `BITROUTER_API_KEY`; the three new
+  accepted. Scripted explicit gateways require `BITROUTER_API_KEY`; independent
   provider clients can prompt for a key interactively. Remote URLs require
   HTTPS. HTTP is permitted only on loopback.
 - `--model ID` is checked against the target gateway's `/v1/models` catalog.
@@ -50,15 +55,17 @@ remains false. A preview has state `preview`, a write has
 
 ## Independent provider clients
 
-OpenCode, Pi and DeepSeek Harness add a provider named BitRouter without changing
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw add a BitRouter provider without changing
 existing providers or the selected default. They support these additional flags:
 
-- `--instance PATH`: OpenCode config file/directory, Pi agent directory, or Harness home.
+- `--instance PATH`: OpenCode/OpenClaw config file/directory, Pi agent directory, or Harness/Hermes home.
   Receipt identity includes the resolved configuration path. Separate instances are independent.
 - `--protocol chat-completions|responses|messages`: choose the gateway wire API;
   default is Chat Completions. This is a configuration choice, not a protocol certification.
-- `--profile NAME`: Harness only; repeat for initialized profiles. Without it,
-  all detected initialized profiles are configured. The connector does not create profiles.
+- `--profile NAME`: Harness or Hermes; repeat for initialized profiles. Without it,
+  Harness configures all detected initialized profiles, while Hermes uses only
+  its selected home/current profile. The connector does not create named profiles.
+  OpenClaw instances are selected with `--instance`, not `--profile`.
 - `--status`: inspect saved settings offline without file writes.
 - `--check`: verify installed settings and the exact gateway model in the catalog
   using the stored client credential. No inference or tool request is sent.
@@ -85,6 +92,13 @@ Client details and acceptance boundaries:
 - [OpenCode CLI/TUI, Desktop and Web](connect-opencode.md)
 - [Pi CLI/TUI](connect-pi.md)
 - [DeepSeek Harness profiles](connect-deepseek.md)
+- [Hermes CLI/TUI, Desktop and Web profiles](connect-hermes.md)
+- [OpenClaw Gateway and connected clients](connect-openclaw.md)
+
+Hermes and OpenClaw initially support only `--protocol chat-completions`.
+Other protocol selections fail before connection files are written. Their
+Desktop/Web clients must use the configured backend; configuring a local home
+does not configure a remote backend or change a live session's model.
 
 `bro connect` configures the local server's instance. A Desktop/Web UI attached
 to another machine needs the connector run against that server's configuration.
