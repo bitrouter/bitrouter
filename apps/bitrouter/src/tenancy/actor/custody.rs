@@ -1293,120 +1293,123 @@ impl Worker {
     }
 
     /// Bootstrap and serving consumers share the existing transaction supervision.
-    async fn supervise<T>(
-        &self,
-        work: impl Future<Output = Result<T, Failure>>,
-        control: &Control,
+    fn supervise<'a, T: 'a>(
+        &'a self,
+        work: impl Future<Output = Result<T, Failure>> + 'a,
+        control: &'a Control,
         deadline: impl Into<Option<Instant>>,
         policy: Policy,
         operation: Option<bitrouter_ai::tenancy::identity::OperationId>,
-    ) -> Result<T, Failure> {
-        // Reject an already-expired queued job before polling any database
-        // future. A selected timer is the watchdog for work admitted here,
-        // not the admission check for an elapsed absolute deadline.
+    ) -> std::pin::Pin<Box<impl Future<Output = Result<T, Failure>> + 'a>> {
         let deadline = deadline.into();
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(Failure::new(
-                policy.expired(
-                    Disposition::NoTransaction,
-                    !self.live.0.load(std::sync::atomic::Ordering::Acquire),
-                ),
-                operation,
-            ));
-        }
-        let work = AssertUnwindSafe(work).catch_unwind();
-        tokio::pin!(work);
-        let mut progress = control.progress();
-        let mut expired = false;
-        let mut cleanup_fenced = false;
-        let mut observing = true;
-        loop {
-            let cleanup = if cleanup_fenced {
-                None
-            } else {
-                progress.borrow().cleanup_deadline
-            };
-            tokio::select! {
-                biased;
-                () = async {
-                    match deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => pending::<()>().await,
+        // Keep the supervisor out of the dispatcher's retained future state.
+        Box::pin(async move {
+            // Reject an already-expired queued job before polling any database
+            // future. A selected timer is the watchdog for work admitted here,
+            // not the admission check for an elapsed absolute deadline.
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(Failure::new(
+                    policy.expired(
+                        Disposition::NoTransaction,
+                        !self.live.0.load(std::sync::atomic::Ordering::Acquire),
+                    ),
+                    operation,
+                ));
+            }
+            let work = AssertUnwindSafe(work).catch_unwind();
+            tokio::pin!(work);
+            let mut progress = control.progress();
+            let mut expired = false;
+            let mut cleanup_fenced = false;
+            let mut observing = true;
+            loop {
+                let cleanup = if cleanup_fenced {
+                    None
+                } else {
+                    progress.borrow().cleanup_deadline
+                };
+                tokio::select! {
+                    biased;
+                    () = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => pending::<()>().await,
+                        }
+                    }, if !expired => {
+                        expired = true;
+                        if control.phase() == Phase::Preparing {
+                            // No transaction exists and no detached continuation may commit.
+                            return Err(Failure::new(policy.expired(Disposition::NoTransaction, !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation));
+                        }
+                        let keep_write = match policy {
+                            Policy::Management => !control.preparing_read(),
+                            Policy::Receipt | Policy::TerminalReceipt => true,
+                            Policy::CredentialRead => false,
+                            #[cfg(all(feature = "core", feature = "harness"))]
+                            Policy::Native => matches!(control.phase(), Phase::Committing)
+                                || self.proof.disposition() == Disposition::Committed,
+                            #[cfg(feature = "core")]
+                            Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
+                                || self.proof.disposition() == Disposition::Committed,
+                        };
+                        if keep_write {
+                            // Preserve the existing late durable management operation.
+                            self.proof.fenced();
+                        } else {
+                            // Do not drop BEGIN/SELECT. Finish the await, then roll back.
+                            control.stop_read();
+                        }
                     }
-                }, if !expired => {
-                    expired = true;
-                    if control.phase() == Phase::Preparing {
-                        // No transaction exists and no detached continuation may commit.
-                        return Err(Failure::new(policy.expired(Disposition::NoTransaction, !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation));
-                    }
-                    let keep_write = match policy {
-                        Policy::Management => !control.preparing_read(),
-                        Policy::Receipt | Policy::TerminalReceipt => true,
-                        Policy::CredentialRead => false,
-                        #[cfg(all(feature = "core", feature = "harness"))]
-                        Policy::Native => matches!(control.phase(), Phase::Committing)
-                            || self.proof.disposition() == Disposition::Committed,
-                        #[cfg(feature = "core")]
-                        Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
-                            || self.proof.disposition() == Disposition::Committed,
-                    };
-                    if keep_write {
-                        // Preserve the existing late durable management operation.
+                    () = async {
+                        match cleanup {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => pending::<()>().await,
+                        }
+                    } => {
+                        cleanup_fenced = true;
                         self.proof.fenced();
-                    } else {
-                        // Do not drop BEGIN/SELECT. Finish the await, then roll back.
-                        control.stop_read();
                     }
-                }
-                () = async {
-                    match cleanup {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => pending::<()>().await,
-                    }
-                } => {
-                    cleanup_fenced = true;
-                    self.proof.fenced();
-                }
-                response = &mut work => {
-                    let response = match response {
-                        Ok(response) => response,
-                        Err(_) => {
-                            tracing::error!("tenant authority work unwound; owner retained");
+                    response = &mut work => {
+                        let response = match response {
+                            Ok(response) => response,
+                            Err(_) => {
+                                tracing::error!("tenant authority work unwound; owner retained");
+                                self.proof.quarantine();
+                                Err(Failure::new(ErrorCode::AuthorityUnavailable, operation.clone()))
+                            }
+                        };
+                        let receipt_rollback = matches!(policy, Policy::TerminalReceipt)
+                            && matches!(self.proof.disposition(), Disposition::NoTransaction | Disposition::RolledBack);
+                        if response.as_ref().is_err_and(|error| error.0.code == ErrorCode::StorageUnavailable)
+                            && !receipt_rollback
+                        {
+                            control.storage_failed();
+                        }
+                        control.conclude();
+                        let response = if self.proof.disposition() == Disposition::Ambiguous {
                             self.proof.quarantine();
-                            Err(Failure::new(ErrorCode::AuthorityUnavailable, operation.clone()))
-                        }
-                    };
-                    let receipt_rollback = matches!(policy, Policy::TerminalReceipt)
-                        && matches!(self.proof.disposition(), Disposition::NoTransaction | Disposition::RolledBack);
-                    if response.as_ref().is_err_and(|error| error.0.code == ErrorCode::StorageUnavailable)
-                        && !receipt_rollback
-                    {
-                        control.storage_failed();
+                            match response {
+                                Ok(_) => Err(Failure::new(ErrorCode::AuthorityUnavailable, operation.clone())),
+                                Err(error) => Err(error),
+                            }
+                        } else { response };
+                        return if expired {
+                            Err(Failure::new(policy.expired(self.proof.disposition(), cleanup_fenced || !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation))
+                        } else {
+                            response
+                        };
                     }
-                    control.conclude();
-                    let response = if self.proof.disposition() == Disposition::Ambiguous {
-                        self.proof.quarantine();
-                        match response {
-                            Ok(_) => Err(Failure::new(ErrorCode::AuthorityUnavailable, operation.clone())),
-                            Err(error) => Err(error),
+                    changed = progress.changed(), if observing => {
+                        if changed.is_err() {
+                            observing = false;
+                            tracing::error!("tenant transaction phase watch closed; owner retained");
+                            self.proof.quarantine();
+                            // Retain the work even if its phase channel was lost.
                         }
-                    } else { response };
-                    return if expired {
-                        Err(Failure::new(policy.expired(self.proof.disposition(), cleanup_fenced || !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation))
-                    } else {
-                        response
-                    };
-                }
-                changed = progress.changed(), if observing => {
-                    if changed.is_err() {
-                        observing = false;
-                        tracing::error!("tenant transaction phase watch closed; owner retained");
-                        self.proof.quarantine();
-                        // Retain the work even if its phase channel was lost.
                     }
                 }
             }
-        }
+        })
     }
 
     async fn quarantine(
