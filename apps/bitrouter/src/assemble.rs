@@ -1797,6 +1797,7 @@ fn build_web_search_backends(
                 | WebSearchBackendConfig::Exa { .. }
                 | WebSearchBackendConfig::Firecrawl { .. }
                 | WebSearchBackendConfig::Tavily { .. }
+                | WebSearchBackendConfig::Keenable { .. }
         )
     });
     let http = needs_http.then(|| {
@@ -1814,11 +1815,13 @@ fn build_web_search_backends(
             WebSearchBackendConfig::Parallel { api_key, api_base }
             | WebSearchBackendConfig::Exa { api_key, api_base }
             | WebSearchBackendConfig::Firecrawl { api_key, api_base }
-            | WebSearchBackendConfig::Tavily { api_key, api_base } => {
+            | WebSearchBackendConfig::Tavily { api_key, api_base }
+            | WebSearchBackendConfig::Keenable { api_key, api_base } => {
                 let engine = match entry {
                     WebSearchBackendConfig::Exa { .. } => HttpEngine::Exa,
                     WebSearchBackendConfig::Firecrawl { .. } => HttpEngine::Firecrawl,
                     WebSearchBackendConfig::Tavily { .. } => HttpEngine::Tavily,
+                    WebSearchBackendConfig::Keenable { .. } => HttpEngine::Keenable,
                     _ => HttpEngine::Parallel,
                 };
                 if let (Some(client), Some(key)) = (

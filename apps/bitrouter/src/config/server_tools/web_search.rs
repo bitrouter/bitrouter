@@ -66,6 +66,15 @@ pub enum WebSearchBackendConfig {
         #[serde(default)]
         api_base: Option<String>,
     },
+    /// keenable.ai — key `api_key` or `KEENABLE_API_KEY`.
+    Keenable {
+        /// Explicit API key (else `KEENABLE_API_KEY`).
+        #[serde(default)]
+        api_key: Option<String>,
+        /// Endpoint override (else the engine default).
+        #[serde(default)]
+        api_base: Option<String>,
+    },
     /// A web-search-capable model whose *native* search tool is forwarded, made
     /// available to every model routed through BitRouter.
     Native {
