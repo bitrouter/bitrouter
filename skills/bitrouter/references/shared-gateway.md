@@ -167,6 +167,17 @@ holding unrelated local continuation/trajectory authorities.
 
 ## Operator listener
 
+For local tenant ordered dispatch, `tenancy.ordered_native_controls` defaults to
+`false`. Enabling it accepts explicitly opted-in Responses prior-response or
+conversation values and Messages context management under current provider
+credentials. It does not isolate state within a shared provider account or prove
+who created a raw reference. Clients must read the separate
+`/control/v1/tenancy/ordered/native-controls/capabilities` descriptor and explicitly
+select `Bitrouter-Native-Controls: provider_native_v1`; ordinary v2 behavior stays
+unchanged. Restart requires fresh instance/capability discovery. No managed public
+handle is created or resolved, and Generate Content cached content remains
+unsupported. See the service API's explicit provider-native controls contract.
+
 Shared process configuration can explicitly enable an independent operator
 listener. Omitting this block creates no operator listener or fallback credential:
 

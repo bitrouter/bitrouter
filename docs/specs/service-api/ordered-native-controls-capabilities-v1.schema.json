@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrderedNativeControlsCapabilitiesV1",
+  "description": "Separate discovery preserving the ordinary ordered-v2 capabilities format.",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "description": "Discovery version, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "installation_id": {
+      "description": "Persistent authority installation.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "instance_id": {
+      "description": "Actual process incarnation; a restart requires a fresh observation.",
+      "$ref": "#/$defs/InstanceId"
+    },
+    "capability_revision": {
+      "description": "Current dispatch capability binding.",
+      "$ref": "#/$defs/RevisionId"
+    },
+    "authority_revision": {
+      "description": "Authority observed during discovery, not a dispatch lease.",
+      "$ref": "#/$defs/AuthorityRevision"
+    },
+    "enabled": {
+      "description": "Operator opt-in and current ordered dispatch readiness both hold.",
+      "type": "boolean"
+    },
+    "controls": {
+      "description": "Exactly the three protocol-owned fields supported by version one.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NativeControlV1"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "const": [
+        "responses.previous_response_id",
+        "responses.conversation",
+        "messages.context_management"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "installation_id",
+    "instance_id",
+    "capability_revision",
+    "authority_revision",
+    "enabled",
+    "controls"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstanceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "NativeControlV1": {
+      "description": "A protocol-owned opaque request field supported by this contract.",
+      "oneOf": [
+        {
+          "description": "A Responses provider's opaque prior response reference.",
+          "type": "string",
+          "const": "responses.previous_response_id"
+        },
+        {
+          "description": "A Responses provider's native conversation value.",
+          "type": "string",
+          "const": "responses.conversation"
+        },
+        {
+          "description": "Native Messages context management, without cross-protocol conversion.",
+          "type": "string",
+          "const": "messages.context_management"
+        }
+      ]
+    }
+  }
+}

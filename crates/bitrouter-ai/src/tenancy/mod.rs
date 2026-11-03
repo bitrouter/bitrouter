@@ -12,6 +12,7 @@ pub mod execution;
 pub mod execution_v2;
 pub mod generation_defaults;
 pub mod identity;
+pub mod native_controls;
 pub mod operation;
 pub mod ordered;
 pub mod profile_observation;

@@ -102,8 +102,11 @@ impl TenantExecution {
             self.route.apply_generation_defaults(&mut request.input);
         }
         if self.route.is_ordered() {
-            super::ordered_prompt(request.input.generation_prompt())
-                .map_err(|code| self.reject(code))?;
+            super::native_controls::validate_input(
+                request.input.generation_prompt(),
+                self.submission.binding.native_controls,
+            )
+            .map_err(|code| self.reject(code))?;
         }
         #[cfg(feature = "core")]
         let registration = match self.observation.get() {
