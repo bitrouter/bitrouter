@@ -15,6 +15,8 @@ mod defaults;
 mod envelope;
 #[path = "gateway/envelope_v2.rs"]
 mod envelope_v2;
+#[path = "gateway/native_controls.rs"]
+mod native_controls;
 
 fn request(protocol: usize, stream: bool) -> Value {
     match protocol {

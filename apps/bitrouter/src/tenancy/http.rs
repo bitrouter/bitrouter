@@ -117,6 +117,10 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(super::ordered::capabilities),
         )
         .route(
+            "/control/v1/tenancy/ordered/native-controls/capabilities",
+            get(super::ordered::native_controls_capabilities),
+        )
+        .route(
             "/control/v1/tenancy/tenants/{tenant}/configurations/{revision}/candidates",
             get(super::ordered::manifest),
         )
@@ -284,6 +288,7 @@ async fn authenticate(State(state): State<AuthState>, request: Request, next: Ne
         if parts.method == Method::GET
             && parts.uri.path() != "/control/v1/tenancy/capabilities"
             && parts.uri.path() != "/control/v1/tenancy/ordered/capabilities"
+            && parts.uri.path() != "/control/v1/tenancy/ordered/native-controls/capabilities"
             && installation.is_none()
         {
             return Err(Failure::from(ErrorCode::InvalidRequest));

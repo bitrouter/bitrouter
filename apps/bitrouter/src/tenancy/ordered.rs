@@ -39,6 +39,30 @@ pub(super) async fn capabilities(
         .await
 }
 
+pub(super) async fn native_controls_capabilities(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<
+    Json<bitrouter_ai::tenancy::native_controls::OrderedNativeControlsCapabilitiesV1>,
+    Failure,
+> {
+    use bitrouter_ai::tenancy::native_controls::{CONTROLS, OrderedNativeControlsCapabilitiesV1};
+    service
+        .with_capability_authority(&caller, |state| {
+            Ok(Json(OrderedNativeControlsCapabilitiesV1 {
+                contract_version: 1,
+                installation_id: state.installation.clone(),
+                instance_id: service.instance.clone(),
+                capability_revision: service.capability_revision(state)?,
+                authority_revision: state.revision,
+                enabled: service.execution_settings.ordered_native_controls
+                    && service.ordered_dispatch_ready(state),
+                controls: CONTROLS,
+            }))
+        })
+        .await
+}
+
 pub(super) async fn receipt(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,

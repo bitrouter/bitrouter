@@ -1498,6 +1498,7 @@ pub(crate) async fn handle_tenant(
     // The opaque capture capability is never observed or converted upstream.
     headers.remove(crate::tenancy::execution::BLOCK_LINK_HEADER);
     headers.remove(crate::tenancy::execution::SELECTION_HEADER);
+    headers.remove(bitrouter_ai::tenancy::native_controls::HEADER);
     if let Err(error) = submission.validate_http_input(&input) {
         return error.into_response();
     }
