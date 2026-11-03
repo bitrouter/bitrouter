@@ -11,6 +11,145 @@ struct Fixture {
     old_secret: String,
 }
 
+// This event is after the real source BEGIN, while the target and READY are owned.
+struct CancelSourceAudit {
+    parent: CancellationToken,
+    target: PathBuf,
+    ready: PathBuf,
+    fenced: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Default)]
+struct SourceAuditEvent(bool);
+
+impl tracing::field::Visit for SourceAuditEvent {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "phase" {
+            self.0 = value == "recovery_source_audit_begin";
+        }
+    }
+
+    fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CancelSourceAudit {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() != "bitrouter::offline::diagnostic" {
+            return;
+        }
+        let mut phase = SourceAuditEvent::default();
+        event.record(&mut phase);
+        if !phase.0 {
+            return;
+        }
+        let target = crate::tenancy::ownership::acquire_path(&self.target, false)
+            .err()
+            .is_some_and(|error| {
+                matches!(
+                    error.downcast_ref::<std::fs::TryLockError>(),
+                    Some(std::fs::TryLockError::WouldBlock)
+                )
+            });
+        let ready = std::fs::File::open(&self.ready)
+            .is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        self.fenced
+            .store(target && ready, std::sync::atomic::Ordering::SeqCst);
+        self.parent.cancel();
+    }
+}
+
+// Called by the existing CI-selected parent under its key environment/watchdog.
+async fn linked_v2_cancel_joins_cleanup_and_success_keeps_parent_live(
+    fixture: &Fixture,
+) -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tracing::instrument::WithSubscriber;
+    use tracing_subscriber::prelude::*;
+
+    let target = std::fs::read(&fixture.target)?;
+    let source = std::fs::read(&fixture.source)?;
+    let archive = std::fs::read(fixture.bundle.join("snapshot.sqlite"))?;
+    let ready = std::fs::read(fixture.bundle.join("READY"))?;
+    let plan = fixture.home.join("linked-plan.json");
+    producer::private_json(&plan, &fixture.plan)?;
+
+    let parent = CancellationToken::new();
+    let legacy = fixture.home.join("linked-v1.json");
+    producer::private_json(
+        &legacy,
+        &json!({"format":"bitrouter.offline.recovery-plan.v1"}),
+    )?;
+    let refused_output = fixture.home.join("linked-v1-refused");
+    let refused = crate::offline::recovery::run_v2_with_options_for_test(
+        &legacy,
+        &refused_output,
+        ValidationBudget::default(),
+        options(&fixture.home),
+        &parent,
+    )
+    .await
+    .err()
+    .context("linked v2 entry accepted v1")?;
+    ensure!(refused.to_string() == "linked test entry requires v2 plan");
+    ensure!(!refused_output.exists() && !parent.is_cancelled());
+
+    let healthy = fixture.home.join("linked-healthy");
+    let report = crate::offline::recovery::run_v2_with_options_for_test(
+        &plan,
+        &healthy,
+        ValidationBudget::default(),
+        options(&fixture.home),
+        &parent,
+    )
+    .await?;
+    let report = serde_json::to_value(&report as &dyn crate::output::CliReport)?;
+    ensure!(
+        report["fresh_provisioning_verified"] == true
+            && report["static_closure_authenticated"] == true
+    );
+    ensure!(
+        !parent.is_cancelled(),
+        "successful recovery cancelled its parent"
+    );
+    ensure!(healthy.join("VERIFIED").is_file() && !healthy.join("INCOMPLETE").exists());
+
+    let fenced = Arc::new(AtomicBool::new(false));
+    let subscriber = tracing_subscriber::registry().with(CancelSourceAudit {
+        parent: parent.clone(),
+        target: fixture.target.clone(),
+        ready: fixture.bundle.join("READY"),
+        fenced: fenced.clone(),
+    });
+    let cancelled = fixture.home.join("linked-cancelled");
+    // Retain and await the real waiter: cancellation only reaches its child token.
+    let result = crate::offline::recovery::run_v2_with_options_for_test(
+        &plan,
+        &cancelled,
+        ValidationBudget::default(),
+        options(&fixture.home),
+        &parent,
+    )
+    .with_subscriber(subscriber)
+    .await;
+    ensure!(parent.is_cancelled() && fenced.load(Ordering::SeqCst));
+    ensure!(result.is_err(), "source audit ignored linked cancellation");
+    ensure!(cancelled.join("INCOMPLETE").exists() && !cancelled.join("VERIFIED").exists());
+    ensure!(!cancelled.join("report.json").exists());
+    drop(crate::tenancy::ownership::acquire_path(
+        &fixture.target,
+        false,
+    )?);
+    std::fs::File::open(fixture.bundle.join("READY"))?.try_lock()?;
+    unchanged(&fixture.target, &target)?;
+    unchanged(&fixture.source, &source)?;
+    ensure!(std::fs::read(fixture.bundle.join("snapshot.sqlite"))? == archive);
+    ensure!(std::fs::read(fixture.bundle.join("READY"))? == ready);
+    Ok(())
+}
+
 impl Fixture {
     async fn new() -> Result<Self> {
         crate::runtime_crypto::DeploymentKey::from_environment(producer::KEY_ENV)?;
@@ -205,6 +344,8 @@ async fn real_v2_runner_proves_closure_and_refuses_changed_approval_and_revoked_
         assert!(!published.join("INCOMPLETE").exists());
         unchanged(&fixture.target, &target)?;
         unchanged(&fixture.source, &source)?;
+
+        linked_v2_cancel_joins_cleanup_and_success_keeps_parent_live(&fixture).await?;
 
         let mut wrong = fixture.approval.clone();
         wrong[1]["definition"]["credential"]["data"]["value"] = json!("different-approved-key");

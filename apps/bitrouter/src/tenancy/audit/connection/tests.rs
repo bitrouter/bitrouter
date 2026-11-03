@@ -7,6 +7,7 @@ use anyhow::{Context, Result, ensure};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use tokio_util::sync::CancellationToken;
 
+mod directory;
 mod operations;
 
 #[tokio::test]

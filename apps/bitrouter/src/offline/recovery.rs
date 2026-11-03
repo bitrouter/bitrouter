@@ -130,6 +130,35 @@ pub(crate) async fn run_with_options(
     validation: super::ValidationBudget,
     options: super::large::Options,
 ) -> Result<impl crate::output::CliReport> {
+    run_options_inner(path, output, validation, options, None).await
+}
+
+/// Exercise the v2 adapter with linked cancellation and its original owner join.
+#[cfg(all(test, unix))]
+pub(crate) async fn run_v2_with_options_for_test(
+    path: &Path,
+    output: &Path,
+    validation: super::ValidationBudget,
+    options: super::large::Options,
+    parent: &CancellationToken,
+) -> Result<impl crate::output::CliReport> {
+    run_options_inner(
+        path,
+        output,
+        validation,
+        options,
+        Some(parent.child_token()),
+    )
+    .await
+}
+
+async fn run_options_inner(
+    path: &Path,
+    output: &Path,
+    validation: super::ValidationBudget,
+    options: super::large::Options,
+    linked: Option<CancellationToken>,
+) -> Result<VersionedReport> {
     #[derive(serde::Deserialize)]
     struct Version {
         format: String,
@@ -138,12 +167,21 @@ pub(crate) async fn run_with_options(
         v2::inputs::read_control_before_workspace::<Version>(path, options.working_bytes)?;
     drop(bytes);
     match version.format.as_str() {
-        plan::FORMAT => Ok(VersionedReport::V1(
-            run_with_budget(path, output, validation).await?,
-        )),
-        v2::format::PLAN => Ok(VersionedReport::V2(
-            v2::run::run(path, output, validation, options).await?,
-        )),
+        plan::FORMAT => {
+            ensure!(linked.is_none(), "linked test entry requires v2 plan");
+            Ok(VersionedReport::V1(
+                run_with_budget(path, output, validation).await?,
+            ))
+        }
+        v2::format::PLAN => {
+            let report = match linked {
+                Some(cancel) => {
+                    v2::run::run_with_token(path, output, validation, options, cancel).await?
+                }
+                None => v2::run::run(path, output, validation, options).await?,
+            };
+            Ok(VersionedReport::V2(report))
+        }
         _ => anyhow::bail!("unsupported recovery plan format"),
     }
 }

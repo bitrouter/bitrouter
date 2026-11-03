@@ -1,5 +1,7 @@
-use crate::storage::checkpoint::CheckpointBatchExt;
 use std::sync::Arc;
+
+#[cfg(test)]
+use crate::core::session::headroom_trace::{Region, RegionKind};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -8,14 +10,15 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::session::HarnessPort;
-#[cfg(test)]
-use crate::core::session::headroom_trace::{Region, RegionKind};
 use crate::harness::agent::{RunEvent, commit_execution};
 use crate::harness::storage::{CommitRequest, ExecutionRecord};
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
 use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
 
-use super::journal::Journal;
+use super::journal::{Journal, Prepared};
+
+#[cfg(test)]
+mod tests;
 
 pub(super) struct Port {
     pub(super) journal: Mutex<Journal>,
@@ -193,42 +196,52 @@ impl HarnessPort for Port {
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let mut journal = self.journal.lock().await;
-        let ack = journal.prepare(&batch)?;
-        if journal.head == ack.head() {
-            return Ok(ack);
-        }
-        let payload = batch.decode(&journal.limits)?;
-        let snapshot = serde_json::from_value(payload.checkpoint.state)
-            .map_err(|_| unavailable("native Core snapshot could not be decoded"))?;
-        let projection = super::projection::project(&snapshot, &journal.presented, &payload.events);
+        #[cfg(test)]
+        let mut prepare_timing = Region::new(RegionKind::PortPrepare);
+        let prepared = journal.prepare_owned(batch);
+        #[cfg(test)]
+        prepare_timing.returned(prepared.is_ok());
+        let pending = match prepared? {
+            Prepared::AlreadyAcknowledged(ack) => return Ok(ack),
+            Prepared::Append(pending) => pending,
+        };
+        let snapshot = pending.snapshot();
+        #[cfg(test)]
+        let mut projection_timing = Region::new(RegionKind::PortProjection);
+        let projection =
+            super::projection::project(snapshot, pending.presented(), pending.events());
+        #[cfg(test)]
+        projection_timing.returned(true);
         let _ = self.root_agent.set(snapshot.agent_id.clone());
         let mut records = vec![ExecutionRecord::CoreCheckpoint {
-            batch: batch.clone(),
-            limits: journal.limits.clone(),
+            batch: pending.batch().clone(),
+            limits: pending.limits().clone(),
         }];
         records.extend(projection.records);
-        if super::journal::continuation_boundary(&snapshot, &payload.events) {
+        if super::journal::continuation_boundary(snapshot, pending.events()) {
             let mut budget = self.budget.lock().await.clone();
-            budget.observe(&snapshot);
-            if let Some(checkpoint) = budget.checkpoint(&snapshot) {
+            budget.observe(snapshot);
+            if let Some(checkpoint) = budget.checkpoint(snapshot) {
                 records.push(checkpoint);
             }
         }
-        if let Err(error) = commit_execution(&self.commits, records).await {
+        #[cfg(test)]
+        let mut persist_timing = Region::new(RegionKind::PortPersist);
+        let committed = commit_execution(&self.commits, records).await;
+        #[cfg(test)]
+        persist_timing.returned(committed.is_ok());
+        if let Err(error) = committed {
             self.durable_error
                 .store(true, std::sync::atomic::Ordering::Release);
             self.stopped.cancel();
             return Err(unavailable(error));
         }
         #[cfg(test)]
-        {
-            let mut timing = Region::new(RegionKind::JournalApply);
-            let result = journal.apply(batch, &ack);
-            timing.returned(result.is_ok());
-            result?;
-        }
-        #[cfg(not(test))]
-        journal.apply(batch, &ack)?;
+        let mut apply_timing = Region::new(RegionKind::JournalApply);
+        let applied = pending.apply();
+        #[cfg(test)]
+        apply_timing.returned(applied.is_ok());
+        let (ack, snapshot) = applied?;
         self.budget.lock().await.observe(&snapshot);
         journal.presented.extend(projection.keys);
         self.recorded.lock().await.extend(projection.events.clone());

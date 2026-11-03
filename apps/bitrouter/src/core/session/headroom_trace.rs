@@ -155,6 +155,9 @@ impl Drop for Transition {
 // Fixed regions, not a general tracing API. Capacity is inside Prepare;
 // JournalApply is inside HarnessCommit; CoreRestore may contain transitions.
 // Their inclusive wall times must not be added to the six stage totals.
+// ThreadTransaction covers every Thread submission, including non-Port writes
+// and owner work that can outlive a cancelled Port waiter. Its process totals
+// cannot be subtracted from PortPersist totals.
 #[derive(Clone, Copy)]
 pub(crate) enum RegionKind {
     Capacity,
@@ -162,6 +165,14 @@ pub(crate) enum RegionKind {
     JournalApply,
     #[cfg(feature = "harness")]
     CoreRestore,
+    #[cfg(feature = "harness")]
+    PortPrepare,
+    #[cfg(feature = "harness")]
+    PortProjection,
+    #[cfg(feature = "harness")]
+    PortPersist,
+    #[cfg(feature = "harness")]
+    ThreadTransaction,
 }
 
 pub(crate) struct Region {
@@ -256,9 +267,10 @@ struct Tracker {
     masks: [u64; 64],
     partial_pending: Stats,
     unwinding: u64,
-    // Region order: Capacity, JournalApply, CoreRestore.
+    // Region order: Capacity, JournalApply, CoreRestore, PortPrepare,
+    // PortProjection, PortPersist, ThreadTransaction.
     // Outcome order: returned Ok, returned Err, no observed return.
-    regions: [[Stats; 3]; 3],
+    regions: [[Stats; 3]; 7],
     invalid: Option<Invalid>,
 }
 impl Tracker {
@@ -268,7 +280,7 @@ impl Tracker {
         masks: [0; 64],
         partial_pending: Stats::ZERO,
         unwinding: 0,
-        regions: [[Stats::ZERO; 3]; 3],
+        regions: [[Stats::ZERO; 3]; 7],
         invalid: None,
     };
 
@@ -330,7 +342,7 @@ fn record(event: Record) {
             Err(error) => (error.into_inner(), true),
         };
         // Preserve a first early failure/cancellation even before transition
-        // 256. At most one partial and six region-outcome snapshots are added.
+        // 256. At most one partial and fourteen region-outcome snapshots are added.
         let first_interruption = match &event {
             Record::Transition { completed, .. } => {
                 *completed != 0b11_1111 && tracker.partial_pending.count == 0
@@ -366,7 +378,7 @@ fn record(event: Record) {
         // intervals and the unprinted tail are absent if the process is killed.
         let _ = writeln!(
             std::io::stderr().lock(),
-            "native checkpoint phases: diagnostics_valid={} invalid={:?} tuple=count,sum_us,max_us transition_drops={:?} stages_commit_lock_prepare_choice_preflight_propose_harness_commit_adopt={:?} masks_0_to_63={:?} partial_pending={:?} unwinding={} region_outcomes=ok,err,unfinished regions_capacity_journal_apply_core_restore={:?} inclusive_wall_time=true capacity_in=prepare journal_apply_in=harness_commit restore_contains=transitions not_a_test_verdict=true",
+            "native checkpoint phases: diagnostics_valid={} invalid={:?} tuple=count,sum_us,max_us transition_drops={:?} stages_commit_lock_prepare_choice_preflight_propose_harness_commit_adopt={:?} masks_0_to_63={:?} partial_pending={:?} unwinding={} region_outcomes=ok,err,unfinished regions_capacity_journal_apply_core_restore_port_prepare_port_projection_port_persist_thread_transaction={:?} inclusive_wall_time=true capacity_in=prepare port_regions_in=harness_commit thread_transaction_scope=all_commit_thread_serialized thread_transaction_relation=overlap_only restore_contains=transitions not_a_test_verdict=true",
             summary.invalid.is_none(),
             summary.invalid,
             summary.transitions.tuple(),

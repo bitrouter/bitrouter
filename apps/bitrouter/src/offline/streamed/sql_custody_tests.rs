@@ -363,3 +363,43 @@ fn runtime_teardown_retains_input_and_restore_owner_after_worker_exit() -> Resul
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn linked_cancel_retains_waiter_ready_and_restore_owner_until_sql_close() -> Result<()> {
+    for restore in [false, true] {
+        let home = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        let (bundle, report) = bundle(home.path()).await?;
+        let original = contents(&bundle)?;
+        let destination = home.path().join("restored.sqlite");
+        let held = HeldSql::new(&bundle.join("snapshot.sqlite"), false)?;
+        let parent = CancellationToken::new();
+        let operation = tokio::spawn(run_with_token(
+            action(&bundle, &report, &destination, restore)?,
+            options(home.path()),
+            parent.child_token(),
+        ));
+        let reached = tokio::time::timeout(WAIT, held.gate.entered.notified()).await;
+        parent.cancel();
+        tokio::task::yield_now().await;
+        let observed = (|| -> Result<()> {
+            reached.context("SQL worker did not reach its real callback")?;
+            ensure!(!operation.is_finished() && !held.gate.state().closed);
+            fenced(&bundle, &destination, restore)
+        })();
+        held.gate.release();
+        // Never turn a cleanup timeout into dropping the retained owner waiter.
+        let completed = operation.await;
+        observed?;
+        ensure!(completed?.is_err(), "linked cancellation published success");
+        held.gate.wait_closed()?;
+        drop(held);
+        File::open(bundle.join("READY"))?.try_lock()?;
+        if restore {
+            drop(ownership::acquire_path(&destination, true)?);
+        }
+        ensure!(!destination.exists() && contents(&bundle)? == original);
+    }
+    Ok(())
+}

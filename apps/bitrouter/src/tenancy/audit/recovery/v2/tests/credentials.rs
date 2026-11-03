@@ -20,10 +20,27 @@ use sea_orm::sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 use sha2::{Digest, Sha256};
+use std::time::Instant;
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::prelude::*;
+
+mod progress;
 
 const ROWS: i64 = 1_000_001;
 const LAST: &str = "zz-historical-0001000000";
 const FLOOR: u64 = 2 * 1024 * 1024 * 1024;
+
+fn check_cancel(cancel: &CancellationToken) -> Result<()> {
+    ensure!(!cancel.is_cancelled(), "credential qualification cancelled");
+    Ok(())
+}
+
+fn phase(name: &'static str, started: Instant) {
+    eprintln!(
+        "credential diagnostic phase={name} elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+}
 
 fn working(home: &Path) -> large::Options {
     large::Options {
@@ -73,15 +90,19 @@ async fn writer(
 }
 
 async fn close_writer(owner: crate::tenancy::ownership::Lease, db: SqliteConnection) -> Result<()> {
+    let started = Instant::now();
+    phase("writer_close_begin", started);
     if let Err(error) = db.close().await {
         std::mem::forget(owner);
         return Err(error.into());
     }
+    phase("writer_close_acked", started);
     let path = owner.path.clone();
     let clean = large::Source::inspect(&path);
     drop(owner);
     drop(crate::tenancy::ownership::acquire_path(&path, false)?);
     clean?;
+    phase("writer_owner_reacquired", started);
     Ok(())
 }
 
@@ -140,11 +161,19 @@ async fn seed_source(path: &Path, cancel: &CancellationToken) -> Result<()> {
     work
 }
 
-async fn target(home: &Path, source: &producer::Provision) -> Result<Target> {
+async fn target(
+    home: &Path,
+    source: &producer::Provision,
+    cancel: &CancellationToken,
+    started: Instant,
+) -> Result<Target> {
+    check_cancel(cancel)?;
     let path = home.join("target.sqlite");
     let live = producer::Live::open(&path, None, Some(producer::KEY_ENV)).await?;
     let seeded = async {
+        check_cancel(cancel)?;
         let mut provision = producer::provision(&live).await?;
+        check_cancel(cancel)?;
         let mut output = JsonLines::create(&home.join("provisioning.jsonl"))?;
         output.record(&json!({"format":format::PROVISIONING,"installation_id":provision.installation,
             "operation_count":262,"configuration_count":1,"active_count":1,"resource_count":2}))?;
@@ -155,6 +184,7 @@ async fn target(home: &Path, source: &producer::Provision) -> Result<Target> {
         let caller = PrincipalId::for_control_credential("recovery-operator")?;
         let expiry = (Utc::now() + chrono::Duration::minutes(59)).to_rfc3339_opts(chrono::SecondsFormat::Secs,true);
         for ordinal in 1..257 {
+            check_cancel(cancel)?;
             let issued = client.issue_credential(&"tenant".try_into()?, &CredentialCreate {
                 operation_id: format!("credential-{ordinal:03}").as_str().try_into()?,
                 expected_authority_revision: provision.authority,
@@ -164,23 +194,37 @@ async fn target(home: &Path, source: &producer::Provision) -> Result<Target> {
                 expires_at: expiry.as_str().try_into()?, rotate_credential_id: None,
                 binding_id: "binding".try_into()?, installation_id: provision.installation.clone(),
             }).await?;
+            check_cancel(cancel)?;
             let retained = client.operation(&provision.installation, &issued.operation_id).await?;
             ensure!(retained.status == OperationStatus::Applied && retained.authority_revision == Some(issued.authority_revision));
             provision.authority = issued.authority_revision;
             output.record(&ProvisioningRecord::Operation { principal_id: caller.clone(), result: retained })?;
         }
+        check_cancel(cancel)?;
         Ok::<_, anyhow::Error>((provision,output))
     }.await;
+    phase("target_provision_close_begin", started);
     let closed = live.close(&path).await;
     closed?;
+    phase("target_provision_close_acked", started);
     let (mut provision, mut output) = seeded?;
+    check_cancel(cancel)?;
     let manifest = producer::manifest(&provision.installation);
     let import = home.join("import.json");
     producer::private_json(&import, &manifest)?;
+    check_cancel(cancel)?;
     let live = producer::Live::open(&path, Some(&import), Some(producer::KEY_ENV)).await?;
-    let configured = producer::configure(&live, &mut provision, source).await;
+    let configured = async {
+        check_cancel(cancel)?;
+        let observed = producer::configure(&live, &mut provision, source).await?;
+        check_cancel(cancel)?;
+        Ok::<_, anyhow::Error>(observed)
+    }
+    .await;
+    phase("target_configure_close_begin", started);
     let closed = live.close(&path).await;
     closed?;
+    phase("target_configure_close_acked", started);
     let observed = configured?;
     for operation in &provision.operations[4..] {
         output.record(&json!({"kind":"operation","principal_id":operation["principal_id"],"result":operation["result"]}))?;
@@ -211,13 +255,22 @@ async fn full_positive(
     source: &Path,
     installation: &InstallationId,
     target: &Target,
+    cancel: &CancellationToken,
+    started: Instant,
 ) -> Result<()> {
+    check_cancel(cancel)?;
     let bundle = home.join("source-bundle");
-    let evidence = crate::offline::snapshot_with_options(source, &bundle, working(home)).await?;
+    phase("positive_snapshot_begin", started);
+    let evidence =
+        crate::offline::snapshot_with_options_for_test(source, &bundle, working(home), cancel)
+            .await?;
+    phase("positive_snapshot_done", started);
+    check_cancel(cancel)?;
     let evidence = serde_json::to_value(&evidence as &dyn crate::output::CliReport)?;
     let commit = crate::artifact::current()
         .source_revision
         .context("producer revision")?;
+    phase("positive_witness_begin", started);
     let executable = witness(&std::env::current_exe()?)?;
     let attestation = producer::private_json(
         &home.join("producer.json"),
@@ -245,14 +298,19 @@ async fn full_positive(
     producer::private_json(&input, &plan)?;
     let before_source = witness(source)?;
     let before_target = witness(&target.database)?;
+    phase("positive_witness_done", started);
     let output = home.join("positive");
-    let result = crate::offline::recovery::run_with_options(
+    check_cancel(cancel)?;
+    phase("positive_recovery_begin", started);
+    let result = crate::offline::recovery::run_v2_with_options_for_test(
         &input,
         &output,
         ValidationBudget::default(),
         working(home),
+        cancel,
     )
     .await;
+    phase("positive_recovery_returned", started);
     // The real adapter joins its SQL/file owner before reporting either outcome.
     drop(crate::tenancy::ownership::acquire_path(
         &target.database,
@@ -270,6 +328,7 @@ async fn full_positive(
             && report["source"]["ordinary_operations"] == 4
     );
     ensure!(home.join("positive/VERIFIED").is_file() && !home.join("positive/INCOMPLETE").exists());
+    phase("positive_verified", started);
     Ok(())
 }
 
@@ -341,6 +400,7 @@ async fn rejected_source(
     installation: &InstallationId,
     target: &Target,
     cancel: &CancellationToken,
+    started: Instant,
 ) -> Result<()> {
     let source_before = witness(source)?;
     let target_before = witness(&target.database)?;
@@ -376,6 +436,7 @@ async fn rejected_source(
         let db = t.source.as_mut().context("target connection")?;
         sea_orm::sqlx::query("BEGIN").execute(&mut *db).await?;
         let target_result = async {
+            phase("negative_target_audit_begin", started);
             let inventory = large::inspect_in(db, &[71; 32], &workspace).await?;
             inspect_target_in(
                 db,
@@ -389,8 +450,10 @@ async fn rejected_source(
             .await
         }
         .await;
+        phase("negative_target_cleanup_begin", started);
         rollback(&mut t).await?;
         t.close().await?;
+        phase("negative_target_close_acked", started);
         let mut proof = target_result?;
         ensure!(
             proof.credentials.len() == 257,
@@ -401,6 +464,7 @@ async fn rejected_source(
         s.uncertain = true;
         let db = s.source.as_mut().context("source connection")?;
         sea_orm::sqlx::query("BEGIN").execute(&mut *db).await?;
+        phase("negative_source_audit_begin", started);
         let outcome = no_copied_credentials_in(
             db,
             installation,
@@ -409,8 +473,10 @@ async fn rejected_source(
             &workspace,
         )
         .await;
+        phase("negative_source_cleanup_begin", started);
         rollback(&mut s).await?;
         s.close().await?;
+        phase("negative_source_close_acked", started);
         let error = outcome
             .err()
             .context("historical hash intersection accepted")?;
@@ -444,23 +510,60 @@ async fn rejected_source(
     result
 }
 
-async fn run(home: PathBuf, cancel: CancellationToken) -> Result<()> {
+async fn run(home: PathBuf, cancel: CancellationToken, started: Instant) -> Result<()> {
+    check_cancel(&cancel)?;
     crate::runtime_crypto::DeploymentKey::from_environment(producer::KEY_ENV)?;
     let source = home.join("source.sqlite");
+    phase("source_provision_begin", started);
     let live = producer::Live::open(&source, None, None).await?;
-    let made = producer::provision(&live).await;
+    let made = async {
+        check_cancel(&cancel)?;
+        producer::provision(&live).await
+    }
+    .await;
+    phase("source_provision_close_begin", started);
     let closed = live.close(&source).await;
     closed?;
     let made = made?;
+    phase("source_provision_done", started);
+    check_cancel(&cancel)?;
+    phase("source_seed_begin", started);
     seed_source(&source, &cancel).await?;
-    let target = target(&home, &made).await?;
-    full_positive(&home, &source, &made.installation, &target).await?;
+    phase("source_seed_done", started);
+    check_cancel(&cancel)?;
+    phase("target_begin", started);
+    let target = target(&home, &made, &cancel, started).await?;
+    phase("target_done", started);
+    full_positive(
+        &home,
+        &source,
+        &made.installation,
+        &target,
+        &cancel,
+        started,
+    )
+    .await?;
+    check_cancel(&cancel)?;
+    phase("select_hashes_begin", started);
     let selected = hashes(&target, &cancel, &home).await?;
+    phase("select_hashes_done", started);
     for expired in [false, true] {
         for (rank, hash) in [0, 128, 256].into_iter().zip(&selected) {
             ensure!(!cancel.is_cancelled(), "credential qualification cancelled");
+            eprintln!(
+                "credential diagnostic phase=negative_begin expired={expired} target_hash_rank={rank} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
             late_match(&source, hash, expired, &cancel).await?;
-            rejected_source(&home, &source, &made.installation, &target, &cancel).await?;
+            rejected_source(
+                &home,
+                &source,
+                &made.installation,
+                &target,
+                &cancel,
+                started,
+            )
+            .await?;
             eprintln!(
                 "historical intersection rejected: expired={expired} target_hash_rank={rank} source_predecessors=1000000"
             );
@@ -473,6 +576,7 @@ async fn run(home: PathBuf, cancel: CancellationToken) -> Result<()> {
 #[ignore = "complete million-row credential qualification; requires private BITROUTER_C4_SCRATCH and recovery key"]
 async fn million_row_source_checks_every_fresh_hash_and_late_historical_match() -> Result<()> {
     let started = tokio::time::Instant::now();
+    let diagnostic_started = Instant::now();
     let root = PathBuf::from(
         std::env::var_os("BITROUTER_C4_SCRATCH")
             .context("explicit qualification scratch required")?,
@@ -489,17 +593,33 @@ async fn million_row_source_checks_every_fresh_hash_and_late_historical_match() 
     let outcome = {
         let work = async {
             let cancel = CancellationToken::new();
-            let mut task = tokio::spawn(run(home, cancel.clone()));
+            let subscriber = tracing_subscriber::registry()
+                .with(progress::CredentialProgress::new(diagnostic_started));
+            let mut task = tokio::spawn(
+                run(home, cancel.clone(), diagnostic_started).with_subscriber(subscriber),
+            );
             let first =
                 tokio::time::timeout_at(started + Duration::from_secs(3540), &mut task).await;
             let outcome = match first {
                 Ok(outcome) => outcome,
                 Err(_) => {
                     cancel.cancel();
+                    eprintln!(
+                        "credential diagnostic phase=deadline_cancel elapsed_ms={} cancel_requested={} task_finished={}",
+                        diagnostic_started.elapsed().as_millis(),
+                        cancel.is_cancelled(),
+                        task.is_finished()
+                    );
                     match tokio::time::timeout_at(started + Duration::from_secs(3590), &mut task)
                         .await
                     {
                         Ok(joined) => {
+                            eprintln!(
+                                "credential diagnostic phase=deadline_joined elapsed_ms={} cancel_requested={} task_finished={}",
+                                diagnostic_started.elapsed().as_millis(),
+                                cancel.is_cancelled(),
+                                task.is_finished()
+                            );
                             // Joined error cleanup is still a timeout, never a successful retry.
                             std::mem::forget(directory);
                             let cleanup = joined?;
@@ -509,6 +629,12 @@ async fn million_row_source_checks_every_fresh_hash_and_late_historical_match() 
                             );
                         }
                         Err(_) => {
+                            eprintln!(
+                                "credential diagnostic phase=cleanup_unconfirmed elapsed_ms={} cancel_requested={} task_finished={}",
+                                diagnostic_started.elapsed().as_millis(),
+                                cancel.is_cancelled(),
+                                task.is_finished()
+                            );
                             std::mem::forget(directory);
                             anyhow::bail!(
                                 "credential qualification cleanup unconfirmed; retained owned directory"

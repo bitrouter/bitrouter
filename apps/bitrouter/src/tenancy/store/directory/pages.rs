@@ -4,7 +4,10 @@ use super::*;
 use crate::tenancy::model::AuthorityClass;
 use anyhow::Context;
 use bitrouter_ai::tenancy::identity::Digest;
-use sea_orm::sea_query::Order;
+use sea_orm::{
+    DatabaseBackend,
+    sea_query::{Order, SelectStatement},
+};
 
 async fn page<T>(
     db: &impl ConnectionTrait,
@@ -13,6 +16,15 @@ async fn page<T>(
     budget: PageBudget,
     decode: fn(&sea_orm::QueryResult) -> Result<T>,
 ) -> Result<Vec<T>> {
+    query::read(db, page_query(db, table, after, budget)?, decode).await
+}
+
+fn page_query(
+    db: &impl ConnectionTrait,
+    table: Table,
+    after: Option<&str>,
+    budget: PageBudget,
+) -> Result<SelectStatement> {
     let mut query = select(db, table, budget.row_bytes()?)?;
     if let Some(after) = after {
         query.and_where(Expr::col((Alias::new(table.name()), Alias::new("id"))).gt(after));
@@ -22,7 +34,7 @@ async fn page<T>(
     query
         .order_by((Alias::new(table.name()), Alias::new("id")), Order::Asc)
         .limit(u64::try_from(budget.rows)?);
-    query::read(db, query, decode).await
+    Ok(query)
 }
 
 pub(super) async fn tenant_page_in(
@@ -101,6 +113,66 @@ pub(super) async fn binding_page_in(
         )
         .limit(u64::try_from(budget.rows)?);
     query::read(db, query, records::binding_from).await
+}
+
+struct CredentialLinks {
+    authority: bool,
+    unique_hash: bool,
+    binding: bool,
+}
+
+/// Only complete directory validation may use these scalar probes: its earlier
+/// walks decoded every tenant, principal and binding in the same fixed snapshot.
+/// Keep LIMIT 2 inside each probe to reject duplicate links without fetching
+/// linked payloads or issuing four driver round trips for every credential.
+/// Exact flags preserve Rust identity comparisons even with corrupt collations;
+/// do not narrow the matching set and thereby hide a second ambiguous match.
+async fn credential_validation_page_in(
+    db: &impl ConnectionTrait,
+    after: Option<&CredentialId>,
+    budget: PageBudget,
+) -> Result<Vec<(Credential, Option<CredentialLinks>)>> {
+    let mut query = page_query(
+        db,
+        Table::Credential,
+        after.map(CredentialId::as_str),
+        budget,
+    )?;
+    let sqlite = db.get_database_backend() == DatabaseBackend::Sqlite;
+    if sqlite {
+        query.expr_as(
+            Expr::cust(
+                "(SELECT count(*) FROM (SELECT 1 FROM tenancy_tenants AS linked WHERE linked.id=tenancy_credentials.tenant_id LIMIT 2))=1 AND (SELECT count(*) FROM (SELECT 1 FROM tenancy_principals AS linked WHERE linked.id=tenancy_credentials.principal_id LIMIT 2))=1",
+            ),
+            Alias::new("credential_authority_valid"),
+        );
+        query.expr_as(
+            Expr::cust(
+                "(SELECT count(*)=1 AND min(exact)=1 FROM (SELECT CAST(linked.id AS BLOB)=CAST(tenancy_credentials.id AS BLOB) AS exact FROM tenancy_credentials AS linked WHERE linked.key_hash=tenancy_credentials.key_hash LIMIT 2))",
+            ),
+            Alias::new("credential_hash_unique"),
+        );
+        query.expr_as(
+            Expr::cust(
+                "tenancy_credentials.audit_reader=1 OR (SELECT count(*)=1 AND min(exact)=1 FROM (SELECT CAST(linked.tenant_id AS BLOB)=CAST(tenancy_credentials.tenant_id AS BLOB) AS exact FROM tenancy_bindings AS linked WHERE linked.tenant_id=tenancy_credentials.tenant_id AND linked.id=tenancy_credentials.binding_id LIMIT 2))",
+            ),
+            Alias::new("credential_binding_valid"),
+        );
+    }
+    query::read(db, query, |row| {
+        let credential = records::credential_from(row)?;
+        let links = if sqlite {
+            Some(CredentialLinks {
+                authority: row.try_get::<i32>("", "credential_authority_valid")? == 1,
+                unique_hash: row.try_get::<i32>("", "credential_hash_unique")? == 1,
+                binding: row.try_get::<i32>("", "credential_binding_valid")? == 1,
+            })
+        } else {
+            None
+        };
+        Ok((credential, links))
+    })
+    .await
 }
 
 pub(super) async fn validate_directory_in(
@@ -200,24 +272,29 @@ pub(super) async fn validate_directory_in(
     }
     let mut after = None;
     loop {
-        let page = credential_page_in(db, after.as_ref(), budget).await?;
+        let page = credential_validation_page_in(db, after.as_ref(), budget).await?;
         if page.is_empty() {
             break;
         }
-        for credential in page {
+        for (credential, links) in page {
             chrono::DateTime::parse_from_rfc3339(&credential.created_at)?;
             let _: Digest = credential.key_hash.clone().try_into()?;
-            ensure!(
-                tenant_in(db, &credential.tenant, bytes).await?.is_some()
-                    && principal_in(db, &credential.principal, bytes)
-                        .await?
-                        .is_some(),
-                "orphan authority credential"
-            );
-            let exact = credential_by_hash_in(db, &credential.key_hash, bytes)
-                .await?
-                .context("credential digest index disagrees with directory")?;
-            ensure!(exact.id == credential.id, "credential digest is not unique");
+            if let Some(links) = &links {
+                ensure!(links.authority, "orphan authority credential");
+                ensure!(links.unique_hash, "credential digest is not unique");
+            } else {
+                ensure!(
+                    tenant_in(db, &credential.tenant, bytes).await?.is_some()
+                        && principal_in(db, &credential.principal, bytes)
+                            .await?
+                            .is_some(),
+                    "orphan authority credential"
+                );
+                let exact = credential_by_hash_in(db, &credential.key_hash, bytes)
+                    .await?
+                    .context("credential digest index disagrees with directory")?;
+                ensure!(exact.id == credential.id, "credential digest is not unique");
+            }
             ensure!(
                 credential.permissions.len() <= 10
                     && credential
@@ -238,13 +315,21 @@ pub(super) async fn validate_directory_in(
                     .binding
                     .as_ref()
                     .context("credential binding missing")?;
-                let binding = binding_in(db, &credential.tenant, id, bytes)
-                    .await?
-                    .context("orphan credential binding")?;
+                if let Some(links) = &links {
+                    ensure!(links.binding, "orphan credential binding");
+                } else {
+                    let binding = binding_in(db, &credential.tenant, id, bytes)
+                        .await?
+                        .context("orphan credential binding")?;
+                    ensure!(
+                        binding.tenant == credential.tenant,
+                        "invalid credential grant"
+                    );
+                }
                 // A binding can legitimately be reassigned after issuance. Its
                 // current principal mismatch denies use; it is not corruption.
                 ensure!(
-                    !credential.permissions.is_empty() && binding.tenant == credential.tenant,
+                    !credential.permissions.is_empty(),
                     "invalid credential grant"
                 );
             }

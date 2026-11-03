@@ -416,14 +416,21 @@ impl ThreadService {
                     }),
             )
         };
-        let result =
-            match self.thread_transaction(thread_id, version, facts, previous_context.as_ref()) {
-                Ok((facts, event)) => self
-                    .commit_fenced(thread_id, version, &facts)
-                    .await
-                    .map(|version| (version, event)),
-                Err(error) => Err(error.to_string()),
-            };
+        #[cfg(all(test, feature = "core"))]
+        let mut transaction_timing = crate::core::session::headroom_trace::Region::new(
+            crate::core::session::headroom_trace::RegionKind::ThreadTransaction,
+        );
+        let transaction =
+            self.thread_transaction(thread_id, version, facts, previous_context.as_ref());
+        #[cfg(all(test, feature = "core"))]
+        transaction_timing.returned(transaction.is_ok());
+        let result = match transaction {
+            Ok((facts, event)) => self
+                .commit_fenced(thread_id, version, &facts)
+                .await
+                .map(|version| (version, event)),
+            Err(error) => Err(error.to_string()),
+        };
         match result {
             Ok((version, event)) => {
                 let mut state = self.lock_state();

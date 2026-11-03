@@ -1225,6 +1225,25 @@ fn print_hint() {
     eprintln!();
 }
 
+#[cfg(not(feature = "harness"))]
+async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        flags.harnesses.is_empty(),
+        "agent configuration requires the harness feature"
+    );
+    Ok(Vec::new())
+}
+
+#[cfg(not(feature = "harness"))]
+async fn finish_launch(
+    _path: &std::path::Path,
+    _report: OnboardingReport,
+    _output: &Output,
+    _no_install: bool,
+) -> Result<()> {
+    anyhow::bail!("native harness launch requires the harness feature")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1498,23 +1517,4 @@ mod tests {
         assert_eq!(v["configured"], true);
         Ok(())
     }
-}
-
-#[cfg(not(feature = "harness"))]
-async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
-    anyhow::ensure!(
-        flags.harnesses.is_empty(),
-        "agent configuration requires the harness feature"
-    );
-    Ok(Vec::new())
-}
-
-#[cfg(not(feature = "harness"))]
-async fn finish_launch(
-    _path: &std::path::Path,
-    _report: OnboardingReport,
-    _output: &Output,
-    _no_install: bool,
-) -> Result<()> {
-    anyhow::bail!("native harness launch requires the harness feature")
 }
