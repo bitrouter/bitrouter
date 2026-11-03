@@ -25,6 +25,8 @@ use bitrouter_ai::harness::thread::ThreadView;
 use bitrouter_ai::harness::turn::TurnEventPayload;
 use bitrouter_ai::harness::turn::TurnStatus;
 
+mod framing;
+
 fn snapshot(observation: ThreadObservation) -> Result<ThreadView, String> {
     match observation {
         ThreadObservation::Snapshot { view, .. } => Ok(*view),
