@@ -68,11 +68,10 @@ configuration fix on its branch before merging. Only runs selected from `main`
 update `automation/registry-sync` and propose catalog changes; branch runs
 perform the same synchronization and checks without publishing a proposal.
 
-The v1 migration retained every native provider offer. Five delisted canonical
-bindings (`qwen/qwen3.8-max`, `deepseek/deepseek-v3.1`, and Xiaomi's
-`mimo-v2-flash`, `mimo-v2-omni`, `mimo-v2-pro`) are explicitly unbound;
-historical correspondence remains in `model-identities.yaml`. This migration
-is a reviewed source change, not an automatic sync rule. Azure now requires an
+The v1 migration retained every native provider offer. Delisted canonical
+bindings are explicitly unbound in provider source; historical correspondence
+remains in `model-identities.yaml`. These are reviewed source changes, not an
+automatic sync rule. Azure now requires an
 explicit concrete local endpoint; Bedrock's registry endpoint is the concrete
 `us-east-1` default. Registry URLs do not interpolate environment templates.
 
