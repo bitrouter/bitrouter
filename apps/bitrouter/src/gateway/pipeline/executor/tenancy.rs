@@ -63,6 +63,19 @@ impl AuthenticatedRequest {
                 execution
                     .revalidate()
                     .map_err(|code| execution.reject(code))?;
+                if execution.provider_native_controls() {
+                    let bytes = applied
+                        .body()
+                        .and_then(reqwest::Body::as_bytes)
+                        .ok_or_else(|| execution.reject(ErrorCode::InvalidRequest))?;
+                    let body = serde_json::from_slice(bytes)
+                        .map_err(|_| execution.reject(ErrorCode::InvalidRequest))?;
+                    execution.validate_native_controls_body(
+                        ctx.require_generation_prompt()?,
+                        &target.api_protocol,
+                        &body,
+                    )?;
+                }
                 let stamp = reservation
                     .as_ref()
                     .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?

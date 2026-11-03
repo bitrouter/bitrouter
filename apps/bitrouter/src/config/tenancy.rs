@@ -19,6 +19,10 @@ pub struct TenancyConfig {
     /// 64. This is a per-execution work budget; ordinary v1 stays bounded at 8.
     #[schemars(range(min = 1, max = 64))]
     pub ordered_attempt_limit: u8,
+    /// Accept explicitly opted-in provider-native controls on ordered requests.
+    /// Provider state may be shared by principals using the same upstream account;
+    /// this policy does not establish historical tenant ownership of opaque IDs.
+    pub ordered_native_controls: bool,
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
@@ -55,6 +59,7 @@ impl Default for TenancyConfig {
             enabled: false,
             capacity: capacity::CapacityConfig::default(),
             ordered_attempt_limit: 8,
+            ordered_native_controls: false,
             resource_import: None,
             learning_registrations: None,
             wrapping_key_env: None,
@@ -222,6 +227,28 @@ impl TenancyConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_control_policy_requires_an_explicit_boolean_and_defaults_off() -> anyhow::Result<()> {
+        let ordinary: super::TenancyConfig = serde_json::from_value(serde_json::json!({}))?;
+        assert!(!ordinary.ordered_native_controls);
+        let opted: super::TenancyConfig =
+            serde_json::from_value(serde_json::json!({"ordered_native_controls": true}))?;
+        assert!(opted.ordered_native_controls);
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(1),
+            serde_json::json!("true"),
+        ] {
+            assert!(
+                serde_json::from_value::<super::TenancyConfig>(
+                    serde_json::json!({"ordered_native_controls": value}),
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn ordered_attempt_budget_defaults_to_eight_and_is_bounded() -> anyhow::Result<()> {
         let mut config = super::TenancyConfig::default();
