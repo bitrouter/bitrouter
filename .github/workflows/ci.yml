@@ -610,6 +610,7 @@ jobs:
       run: |
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::guard::tests::snapshot::)'
     - name: Upload test evidence
       if: always()
