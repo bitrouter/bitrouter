@@ -1129,6 +1129,91 @@ execution ID or status. These observations do not cause automatic retries.
    for JSON and SSE; replacing or clearing them cannot change the binding,
    request body or another call's headers.
 
+### Exact retained admission-profile observations
+
+The installation operator can inspect explicitly retained admission profiles
+without attaching a route or configuration. The separate version-one reader is
+advisory: it creates no rate entry, health entry, probe lease, reservation,
+operation, execution receipt or dispatch authority. Existing manifest observation
+fields and profile versions retain their original wire formats and semantics.
+
+- `GET /control/v1/tenancy/admission-profiles/observations/capabilities`
+- `POST /control/v1/tenancy/admission-profiles/observations/v1`
+
+Both require the actual control operator with `control:tenancy` scope; tenant
+credentials, including tenant administrators, do not qualify. POST requires one
+`Bitrouter-Installation-Id` header. Discovery returns the actual installation and
+permits omission of that header; a supplied header must match. Every response
+uses `Cache-Control: no-store`. The POST is a read query with no operation ID or
+mutation recovery semantics. SDK methods are
+`TenancyClient::admission_profile_observation_capabilities` and
+`TenancyClient::observe_admission_profiles`; neither retries, batches, discovers
+routes nor falls back to another interface.
+
+The closed contracts are
+[discovery](profile-observation-capabilities-v1.schema.json),
+[request](profile-observation-request-v1.schema.json),
+[snapshot](profile-observation-snapshot-v1.schema.json) and
+[entry](profile-observation-entry-v1.schema.json). All fields are required,
+including nullable fields. Unknown and duplicate fields fail. Integer decoding
+accepts exact integral decimal/exponent spellings without floating-point
+rounding; fractions and values outside the declared bounds fail.
+
+A request contains schema version 1, the exact expected authority revision and
+1–256 distinct full operator-pool Policy ResourceRefs. Different pinned revisions
+of one key are valid; duplicate full refs are not. Both original request bytes
+and response bytes are limited to 1 MiB. Discovery reports version 1, actual
+installation/instance/authority, enabled state, count/byte limits and exactly
+profile versions `[1,2]`. Successful discovery reports enabled=true; no separate
+server setting is introduced by this contract.
+
+The snapshot preserves the exact request order, cardinality and full refs. It
+adds actual installation, instance, authority and UTC observation time. Each
+entry reports the current same-key profile revision, current member RPM/charged
+count when configured, the explicit observation-group count when configured,
+health and availability. Required null is distinct from a measured zero. If both
+count fields exist, their values must agree: retained profile validation requires
+the associations to name the same rate group. Rate-only, observation-only and
+both-null configurations remain valid. Zero RPM is a valid rate refusal.
+
+Both the pinned revision and its same-family current head must exist in the
+authenticated retained profile index and be nonrevoked. Unknown/nonprofile/revoked
+pins or missing/invalid/revoked heads produce complete entries with null current
+revision/rate/count, unavailable health and authority_denied availability. No
+other profile is substituted. Current-head RPM rotation does not replace the
+requested pin. V1 health remains local to its profile key; V2 uses the existing
+tagged installation/pool/group identity. Disabled fields remain null/disabled;
+an authorized unused runtime truthfully reports zero/healthy. The normal refusal
+priority is circuit_blocked, rate_limited, capacity_denied, then eligible.
+Capacity denial preserves actual fields and consumes no admission capacity.
+
+One five-second management deadline covers authentication, bounded body collection,
+decoding, one operational snapshot, encoding and final authority verification.
+Read capacity and synchronous authority/runtime locks are acquired without an
+unbounded wait. Contention or deadline exhaustion returns whole-read
+CapacityExceeded; inaccessible/poisoned runtime or nonlive authority returns
+AuthorityUnavailable. These read failures do not permanently fence the service.
+An authority change returns RevisionConflict for the whole batch without retry
+or rebasing. The runtime guard is dropped before final authority verification and
+is never held over I/O. The profile index uses existing retained authentication
+and reload rules; no per-read database decryption or earlier out-of-band tamper
+detection is promised. Installation callers retain existing ControlAuth lifecycle
+semantics, without a new durable operator registry.
+
+SDK response validation binds installation, expected authority, exact refs and
+order. Consumers additionally bind actual instance discovery and their own age,
+clock-skew and deadline policy. Separate batches have separate sampling times;
+no response extends a lease. Route/credential lifecycle, grants and reached-hop
+checks remain required for execution. A successful profile read never establishes
+an executable association or permission to send.
+
+Compatibility cases include standalone V1/V2 provisioning and restart; exact
+256-entry completeness; current RPM rotation and pin/head revocation; strict
+nullable/numeric/count consistency; operator-only direct/HTTP authorization;
+H1/H2 SDK transport; transient lock/body-deadline refusal followed by recovery;
+real authority publication between sampling and return; and unchanged durable
+and operational state before/after observations.
+
 ### Execution usage evidence
 
 Usage evidence contains bounded technical observations, not prices, charges or

@@ -14,6 +14,7 @@ pub mod generation_defaults;
 pub mod identity;
 pub mod operation;
 pub mod ordered;
+pub mod profile_observation;
 pub mod resources;
 pub mod resources_v2;
 pub mod usage_evidence;

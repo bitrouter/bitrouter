@@ -8,6 +8,7 @@
 mod directory;
 mod eval;
 mod ordered;
+mod profile_observation;
 mod resources;
 mod transport;
 mod usage_evidence;
