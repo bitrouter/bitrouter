@@ -185,9 +185,20 @@ async fn local_pipeline_waits_for_final_flush_and_keeps_aggregate_permit() -> Re
 
 #[tokio::test(start_paused = true)]
 async fn reused_http1_rearms_body_and_header_deadlines() -> Result<()> {
-    for partial in [
-        b"POST / HTTP/1.1\r\nHost: fixture\r\nContent-Length: 2\r\n\r\nx".as_slice(),
-        b"GET / HTTP/1.1\r\nHost: fixture\r\n".as_slice(),
+    let mut config = crate::config::tenancy::TenancyConfig::default();
+    config.capacity.transport.header_timeout_ms = 2_000;
+    config.submission_timeout_secs = 3;
+    config.stream_idle_timeout_secs = 5;
+    config.capacity.ingress.requests = 1;
+    for (partial, deadline) in [
+        (
+            b"POST / HTTP/1.1\r\nHost: fixture\r\nContent-Length: 2\r\n\r\nx".as_slice(),
+            Duration::from_secs(3),
+        ),
+        (
+            b"GET / HTTP/1.1\r\nHost: fixture\r\n".as_slice(),
+            Duration::from_secs(2),
+        ),
     ] {
         let router =
             Router::new().route("/", get(|| async { "ok" }).post(|_: Bytes| async { "ok" }));
@@ -196,7 +207,7 @@ async fn reused_http1_rearms_body_and_header_deadlines() -> Result<()> {
         let task = tokio::spawn(serve_http1(
             server,
             router,
-            local_limits(),
+            Limits::for_tenancy(&config),
             CancellationToken::new(),
             slots.clone(),
             Instant::now() + Duration::from_secs(2),
@@ -204,12 +215,22 @@ async fn reused_http1_rearms_body_and_header_deadlines() -> Result<()> {
         peer.write_all(b"GET / HTTP/1.1\r\nHost: fixture\r\n\r\n")
             .await?;
         ensure!(response(&mut peer).await? == b"ok");
+        let started = Instant::now();
         peer.write_all(partial).await?;
         for _ in 0..20 {
             tokio::task::yield_now().await;
         }
-        tokio::time::advance(Duration::from_secs(3)).await;
+        tokio::time::advance(deadline - Duration::from_millis(1)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        ensure!(!task.is_finished(), "configured deadline fired early");
+        tokio::time::advance(Duration::from_millis(1)).await;
         task.await?;
+        ensure!(
+            started.elapsed() == deadline,
+            "configured deadline closed late"
+        );
         ensure!(
             slots.available_permits() == 1,
             "expired reused request retained its permit"
@@ -251,13 +272,12 @@ async fn ignored_upload_closes_before_a_pipelined_request_and_releases_capacity(
 #[tokio::test]
 async fn local_connection_limit_precedes_headers_and_deadline_reclaims_slot() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(10), async {
+        let mut config = crate::config::tenancy::TenancyConfig::default();
+        config.capacity.transport.connections = 1;
+        config.capacity.transport.header_timeout_ms = 150;
         let (owner, address) = start(
             Router::new().route("/", get(|| async { "ok" })),
-            Limits {
-                connections: 1,
-                header_timeout: Duration::from_millis(150),
-                ..local_limits()
-            },
+            Limits::for_tenancy(&config),
         )
         .await?;
         let mut partial = tokio::net::TcpStream::connect(address).await?;

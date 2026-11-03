@@ -69,6 +69,51 @@ pub(super) fn full_authority(
 }
 
 #[test]
+fn byte_budget_rounding_preserves_registration_and_publication_boundaries() -> anyhow::Result<()> {
+    let initial = header()?;
+    let working = memory::registry(1).map_err(failure)? + view(&initial, "a")?.bytes;
+    for bytes in [3 * working - 1, 3 * working, 3 * working + 1] {
+        let authority = Authority::new(
+            initial.clone(),
+            &AuthorityViews { entries: 1, bytes },
+            Arc::new(AtomicBool::new(true)),
+        )
+        .map_err(failure)?;
+        let registered = authority.register(view(&initial, "a")?, 0);
+        if bytes < 3 * working {
+            assert!(matches!(registered, Err(ErrorCode::CapacityExceeded)));
+            assert!(
+                authority
+                    .state
+                    .read()
+                    .map_err(|_| failure(ErrorCode::AuthorityUnavailable))?
+                    .views
+                    .is_empty()
+            );
+        } else {
+            let lease = registered.map_err(failure)?;
+            let mut next = initial.clone();
+            next.revision = 2.try_into()?;
+            authority
+                .prepare(next, &[], None)
+                .map_err(failure)?
+                .publish()
+                .map_err(failure)?;
+            authority
+                .read()
+                .map_err(failure)?
+                .check(&lease, |view| {
+                    assert_eq!(view.facts.revision.get(), 2);
+                    Ok(())
+                })
+                .map_err(failure)?;
+            drop(lease);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn full_budget_large_scope_revoke_and_tenant_denial_update_every_lease() -> anyhow::Result<()> {
     let initial = header()?;
     let mut revoked = credential("credential", 256)?;

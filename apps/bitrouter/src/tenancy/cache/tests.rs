@@ -136,6 +136,16 @@ fn byte_cap_counts_reserved_key_heap_value_heap_metadata_and_alignment() -> Resu
     ensure!(aligned.insert(1, Aligned([9; 128]), 0, 0)?.0[0] == 9);
     let small = Cache::<u8, Aligned>::new(1, cap - 1)?;
     ensure!(small.insert(1, Aligned([9; 128]), 0, 0).err() == Some(CacheError::Capacity));
+    let larger = Cache::<u8, Aligned>::new(1, cap + 1)?;
+    ensure!(larger.insert(1, Aligned([9; 128]), 0, 0)?.0[0] == 9);
+    ensure!(
+        larger
+            .state
+            .lock()
+            .map_err(|_| CacheError::Unavailable)?
+            .bytes
+            == cap
+    );
     Ok(())
 }
 

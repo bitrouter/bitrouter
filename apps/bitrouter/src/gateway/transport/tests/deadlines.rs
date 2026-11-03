@@ -100,12 +100,17 @@ fn poll_write(
 
 #[tokio::test(start_paused = true)]
 async fn repeated_pending_reads_and_noop_flush_do_not_extend_write_deadline() -> Result<()> {
+    let mut config = crate::config::tenancy::TenancyConfig::default();
+    config.capacity.transport.header_timeout_ms = 17_000;
+    config.submission_timeout_secs = 23;
+    config.stream_idle_timeout_secs = 2;
     for vectored in [false, true] {
+        let started = Instant::now();
         let mut io = WriteDeadline::new(
             Fake {
                 writes: Arc::default(),
             },
-            Duration::from_secs(2),
+            Limits::for_tenancy(&config).write_timeout,
         );
         for _ in 0..3 {
             ensure!(
@@ -119,12 +124,15 @@ async fn repeated_pending_reads_and_noop_flush_do_not_extend_write_deadline() ->
             io.read_exact(&mut read).await?;
             tokio::time::advance(Duration::from_millis(500)).await;
         }
-        let stalled = tokio::spawn(async move {
-            std::future::poll_fn(|cx| poll_write(&mut io, vectored, cx)).await
-        });
-        tokio::time::advance(Duration::from_millis(500)).await;
-        let result = stalled.await?;
+        tokio::time::advance(Duration::from_millis(499)).await;
+        ensure!(
+            std::future::poll_fn(|cx| Poll::Ready(poll_write(&mut io, vectored, cx).is_pending()))
+                .await
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let result = std::future::poll_fn(|cx| poll_write(&mut io, vectored, cx)).await;
         ensure!(result.is_err_and(|error| error.kind() == std::io::ErrorKind::TimedOut));
+        ensure!(started.elapsed() == Duration::from_secs(2));
     }
     Ok(())
 }

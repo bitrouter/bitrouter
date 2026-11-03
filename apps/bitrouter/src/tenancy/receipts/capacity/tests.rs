@@ -5,6 +5,144 @@ fn failure(code: ErrorCode) -> anyhow::Error {
 }
 
 #[test]
+fn configured_receipt_gates_reject_independently_without_partial_reservation() -> Result<()> {
+    use crate::config::tenancy::capacity::Receipts;
+
+    // Keep every other gate open so each refusal identifies this byte budget.
+    for (high_water_bytes, fits) in [
+        (2 * RESERVATION - 1, false),
+        (2 * RESERVATION, true),
+        (2 * RESERVATION + 1, true),
+    ] {
+        let mut state = Accounting::configured(&Receipts {
+            high_water_bytes,
+            ..Default::default()
+        });
+        state
+            .initialize(
+                Inventory {
+                    live_bytes: RESERVATION,
+                    ..Default::default()
+                },
+                u64::MAX,
+            )
+            .map_err(failure)?;
+        let before = state.totals;
+        ensure!(state.ready(0, 0) == fits);
+        let reserved = state.reserve(0, 0);
+        if fits {
+            reserved.map_err(failure)?;
+            ensure!(state.totals.reserved == RESERVATION && state.totals.uncovered == 1);
+        } else {
+            ensure!(reserved == Err(ErrorCode::CapacityExceeded) && state.totals == before);
+        }
+    }
+    for tenant_gate in [false, true] {
+        for count in [2, 3, 4] {
+            let limits = Receipts {
+                unknown_instance: if tenant_gate { 8 } else { 3 },
+                unknown_tenant: if tenant_gate { 3 } else { 2 },
+                ..Default::default()
+            };
+            let mut state = Accounting::configured(&limits);
+            state
+                .initialize(
+                    Inventory {
+                        unknown_count: count,
+                        ..Default::default()
+                    },
+                    u64::MAX,
+                )
+                .map_err(failure)?;
+            let tenant_unknown = if tenant_gate { count } else { 0 };
+            if tenant_gate {
+                ensure!(
+                    state.globally_ready(),
+                    "instance budget masked tenant boundary"
+                );
+            }
+            let before = state.totals;
+            ensure!(state.ready(tenant_unknown, 0) == (count < 3));
+            let reserved = state.reserve(tenant_unknown, 0);
+            if count < 3 {
+                reserved.map_err(failure)?;
+                ensure!(state.totals.uncovered == 1 && state.totals.reserved == RESERVATION);
+            } else {
+                ensure!(reserved == Err(ErrorCode::CapacityExceeded) && state.totals == before);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn configured_free_space_floors_have_byte_exact_boundaries_and_release() -> Result<()> {
+    use crate::config::tenancy::capacity::Receipts;
+
+    let admission = 3 * RESERVATION;
+    for free in [admission - 1, admission, admission + 1] {
+        let mut state = Accounting::configured(&Receipts {
+            admission_free_bytes: admission,
+            maintenance_free_bytes: RESERVATION,
+            ..Default::default()
+        });
+        state
+            .initialize(Inventory::default(), free)
+            .map_err(failure)?;
+        let fits = free >= admission;
+        let before = state.totals;
+        ensure!(state.ready(0, 0) == fits);
+        let reserved = state.reserve(0, 0);
+        if fits {
+            reserved.map_err(failure)?;
+        } else {
+            ensure!(reserved == Err(ErrorCode::CapacityExceeded) && state.totals == before);
+        }
+        ensure!(state.reserve_physical_write(1, false).is_ok() == fits);
+        ensure!(state.physical_write_reserved == u64::from(fits));
+        if fits {
+            state.finish_physical_write(1).map_err(failure)?;
+            state.reserve_physical_write(1, false).map_err(failure)?;
+            state.finish_physical_write(1).map_err(failure)?;
+        }
+    }
+    for floor in [RESERVATION - 1, RESERVATION, RESERVATION + 1] {
+        let mut state = Accounting::configured(&Receipts {
+            admission_free_bytes: 2 * RESERVATION,
+            maintenance_free_bytes: floor,
+            ..Default::default()
+        });
+        state
+            .initialize(Inventory::default(), 2 * RESERVATION)
+            .map_err(failure)?;
+        let fits = floor <= RESERVATION;
+        ensure!(state.ready(0, 0) == fits);
+        let reserved = state.reserve_physical_write(RESERVATION, false);
+        if fits {
+            reserved.map_err(failure)?;
+            state.finish_physical_write(RESERVATION).map_err(failure)?;
+            state
+                .reserve_physical_write(RESERVATION, false)
+                .map_err(failure)?;
+            state.finish_physical_write(RESERVATION).map_err(failure)?;
+        } else {
+            ensure!(reserved == Err(ErrorCode::CapacityExceeded));
+        }
+        ensure!(state.physical_write_reserved == 0 && state.totals == Totals::default());
+        // Maintenance still fits the physical volume even if ordinary work cannot.
+        state
+            .reserve_physical_write(2 * RESERVATION, true)
+            .map_err(failure)?;
+        ensure!(state.reserve_physical_write(1, true) == Err(ErrorCode::CapacityExceeded));
+        state
+            .finish_physical_write(2 * RESERVATION)
+            .map_err(failure)?;
+        ensure!(state.ready(0, 0) == fits);
+    }
+    Ok(())
+}
+
+#[test]
 fn future_completion_and_physical_writes_share_fresh_free_space() -> Result<()> {
     let mut state = Accounting::default();
     state

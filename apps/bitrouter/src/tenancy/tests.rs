@@ -191,6 +191,7 @@ async fn process_stop_fences_sends_without_waiting_for_database_or_accounting() 
 #[tokio::test]
 async fn startup_applies_capacity_before_publishing_the_service() -> Result<()> {
     let fixture = Fixture::new().await?;
+    let issued = fixture.issue("capacity-safety").await?;
     fixture.service.shutdown().await?;
     let mut settings = crate::config::tenancy::TenancyConfig::default();
     settings.capacity.ingress.requests = 1;
@@ -224,7 +225,79 @@ async fn startup_applies_capacity_before_publishing_the_service() -> Result<()> 
     ensure!(service.read_permit().is_ok());
     ensure!(service.commands.max_capacity() == 3 && service.safety.max_capacity() == 2);
     ensure!(service.completions.max_capacity() == 17);
+    let principal = || -> Result<Command> {
+        Ok(Command::Principal(
+            "capacity-principal".try_into()?,
+            PrincipalPut {
+                operation_id: "capacity-principal-put".try_into()?,
+                expected_revision: None,
+                issuer: "capacity-fixture".into(),
+                subject: "capacity-principal".into(),
+                installation_id: fixture.installation.clone(),
+            },
+        ))
+    };
+    let revoke = || -> Result<Command> {
+        Ok(Command::Revoke(
+            fixture.tenant.clone(),
+            issued.credential_id.clone(),
+            Mutation {
+                operation_id: "capacity-safety-revoke".try_into()?,
+                expected_revision: issued.credential_revision.clone(),
+                installation_id: fixture.installation.clone(),
+            },
+        ))
+    };
+    let gate = service.cleanup.hold(super::transaction::Phase::Active);
+    let mut blocked = Box::pin(service.execute(fixture.operator.clone(), principal()?));
+    let mut queued = Vec::new();
+    let mut ordinary = Box::pin(service.execute(fixture.operator.clone(), principal()?));
+    let checked: Result<()> = async {
+        ensure!(futures::poll!(&mut blocked).is_pending());
+        tokio::time::timeout(std::time::Duration::from_secs(5), gate.entered.notified()).await?;
+        // Retain a real channel permit while the first revoke enters. Releasing
+        // just that permit must admit the next revoke while the first stays queued.
+        let mut held = Some(service.safety.clone().try_reserve_owned()?);
+        for remaining in [1, 0] {
+            ensure!(service.safety.capacity() == 1);
+            let mut request = Box::pin(service.execute(fixture.operator.clone(), revoke()?));
+            ensure!(futures::poll!(&mut request).is_pending());
+            queued.push(request);
+            ensure!(service.safety.capacity() == 0);
+            drop(held.take());
+            ensure!(service.safety.capacity() == remaining);
+        }
+        let mut excess = Box::pin(service.execute(fixture.operator.clone(), revoke()?));
+        ensure!(matches!(futures::poll!(&mut excess), std::task::Poll::Ready(Err(error)) if error.0.code == ErrorCode::CapacityExceeded));
+        ensure!(service.safety.capacity() == 0 && service.commands.capacity() == 3);
+        ensure!(futures::poll!(&mut ordinary).is_pending());
+        ensure!(
+            service.commands.capacity() == 2,
+            "safety pressure consumed ordinary capacity"
+        );
+        Ok(())
+    }
+    .await;
+    service.cleanup.release_gate();
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        result(blocked.await.map_err(failure)?)?;
+        for request in queued {
+            result(request.await.map_err(failure)?)?;
+        }
+        result(ordinary.await.map_err(failure)?)?;
+        result(
+            service
+                .execute(fixture.operator.clone(), revoke()?)
+                .await
+                .map_err(failure)?,
+        )?;
+        ensure!(service.safety.capacity() == 2 && service.commands.capacity() == 3);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
     service.shutdown().await?;
+    checked?;
+    settled??;
 
     settings.capacity.caches.execution_bytes = 1;
     let refused = Service::open_profile(
