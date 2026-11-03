@@ -15,6 +15,7 @@ const WINDOW: Duration = Duration::from_secs(60);
 // One process's timestamp allocation budget, not a ceiling on a profile's RPM.
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Rates {
     windows: HashMap<Key, VecDeque<Instant>>,
     slots: usize,

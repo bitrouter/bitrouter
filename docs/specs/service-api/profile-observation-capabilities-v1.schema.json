@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdmissionProfileObservationCapabilitiesV1",
+  "description": "Explicit discovery for the separately versioned profile observation reader.",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "description": "Discovery version, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "installation_id": {
+      "description": "Persistent authority installation.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "instance_id": {
+      "description": "Actual process incarnation.",
+      "$ref": "#/$defs/InstanceId"
+    },
+    "authority_revision": {
+      "description": "Authority observed during discovery, without a lease or reservation.",
+      "$ref": "#/$defs/AuthorityRevision"
+    },
+    "observation_enabled": {
+      "description": "Whether this service supports observations.",
+      "type": "boolean"
+    },
+    "max_profiles": {
+      "description": "Maximum references per explicitly submitted batch.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 256
+    },
+    "max_request_bytes": {
+      "description": "Maximum original request JSON bytes.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1048576
+    },
+    "max_response_bytes": {
+      "description": "Maximum original response JSON bytes.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1048576
+    },
+    "profile_versions": {
+      "description": "Supported retained profile versions, exactly [1, 2].",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "const": [
+        1,
+        2
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "installation_id",
+    "instance_id",
+    "authority_revision",
+    "observation_enabled",
+    "max_profiles",
+    "max_request_bytes",
+    "max_response_bytes",
+    "profile_versions"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstanceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    }
+  }
+}
