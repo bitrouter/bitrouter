@@ -146,6 +146,78 @@ async fn reconnect_adopts_or_retransmits_the_exact_input_batch() -> TestResult {
 }
 
 #[tokio::test]
+async fn lost_input_ack_resets_prior_run_activity_and_counts_new_work() -> TestResult {
+    use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
+
+    for committed in [false, true] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port = Arc::new(FaultPort::new(harness.clone(), "input.accepted", committed));
+        port.set_enabled(false);
+        let (session, executor, _) = setup(
+            vec![
+                output(vec![call("old")]),
+                output(vec![text("old done")]),
+                output(vec![call("new")]),
+                output(vec![text("new done")]),
+            ],
+            port.clone(),
+            false,
+        )
+        .await?;
+        for (index, operation) in ["old-input", "new-input"].into_iter().enumerate() {
+            let revision = session.head().await.state_revision;
+            let started = session.start(operation, revision, input()).await;
+            if index == 0 {
+                started?;
+            } else {
+                assert_eq!(
+                    started.err().map(|error| error.commit_status),
+                    Some(CommitStatus::Unknown)
+                );
+                let previous = session.snapshot().await.run.ok_or("previous run")?;
+                assert_eq!(previous.status, RunStatus::Completed);
+                assert!(previous.active_ms >= 20);
+                reconnect(&session, &harness).await?;
+                assert_eq!(session.snapshot().await.run.ok_or("new run")?.active_ms, 0);
+                assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+                session.start(operation, revision, input()).await?;
+                assert_eq!(session.snapshot().await.run.ok_or("new run")?.active_ms, 0);
+            }
+            session.drive().await?;
+            let command = harness
+                .sent
+                .lock()
+                .await
+                .last()
+                .cloned()
+                .ok_or("tool dispatch")?;
+            session
+                .tool_status(
+                    &format!("running-{index}"),
+                    ToolObservation {
+                        invocation_id: command.invocation_id.clone(),
+                        attempt_id: command.attempt_id.clone(),
+                        status: ToolStatus::Running,
+                        evidence: Vec::new(),
+                    },
+                )
+                .await?;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            session
+                .tool_result(&format!("result-{index}"), result(&command))
+                .await?;
+            let finished = session.drive().await?.run.ok_or("completed run")?;
+            assert_eq!(finished.status, RunStatus::Completed);
+            assert!(finished.active_ms >= 20);
+            port.set_enabled(true);
+        }
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(harness.sent.lock().await.len(), 2);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn reconnect_applies_acknowledged_output_without_reexecuting_provider_or_tools() -> TestResult
 {
     let harness = Arc::new(Harness::new(None, None));

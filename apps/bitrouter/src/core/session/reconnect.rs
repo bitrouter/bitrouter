@@ -38,10 +38,10 @@ impl CoreSession {
                 "provider evidence overflow requires external reconciliation",
             ));
         }
-        let reconciled = live.gate.reconnect(durable);
+        let reconciled = live.gate.reconnect_transition(durable);
         live.gate.disconnect();
-        if let Some(payload) = reconciled? {
-            adopt_pending(&mut live, &payload)?;
+        if let Some(()) = reconciled? {
+            adopt_pending(&mut live)?;
         }
         if live.gate.pending().is_some() {
             return Err(reject(
@@ -121,8 +121,8 @@ impl CoreSession {
             }
             live.reconnecting = true;
             live.gate.block_dispatch();
-            if let Some(payload) = live.gate.reconnect(durable)? {
-                adopt_pending(&mut live, &payload)?;
+            if let Some(()) = live.gate.reconnect_transition(durable)? {
+                adopt_pending(&mut live)?;
             }
             live.connection_generation =
                 live.connection_generation.checked_add(1).ok_or_else(|| {
@@ -196,9 +196,8 @@ impl CoreSession {
                     } => ack,
                 }.map_err(unknown_commit)?;
                 let mut live = self.shared.live.lock().await;
-                let payload = live
-                    .gate
-                    .acknowledge(&ack)
+                live.gate
+                    .acknowledge_transition(&ack)
                     .map_err(unknown_commit)?
                     .ok_or_else(|| {
                         unknown_commit(reject(
@@ -206,7 +205,7 @@ impl CoreSession {
                             "retransmission ACK did not adopt the pending batch",
                         ))
                     })?;
-                adopt_pending(&mut live, &payload)?;
+                adopt_pending(&mut live)?;
             }
         }
         self.initialize().await?;
@@ -410,10 +409,7 @@ impl CoreSession {
     }
 }
 
-pub(super) fn adopt_pending(
-    live: &mut LiveSession,
-    payload: &CheckpointPayload,
-) -> Result<(), CoreError> {
+pub(super) fn adopt_pending(live: &mut LiveSession) -> Result<(), CoreError> {
     let pending = live.pending.take().ok_or_else(|| {
         reject(
             ErrorCode::CheckpointConflict,
@@ -436,11 +432,7 @@ pub(super) fn adopt_pending(
     if live.provisional_blocks.is_empty() && !live.reconnecting {
         live.gate.clear_dispatch_block();
     }
-    if payload
-        .events
-        .iter()
-        .any(|event| event.kind == "input.accepted")
-    {
+    if pending.input_accepted {
         live.activity = Activity::restored(live.state.run.as_ref().map_or(0, |run| run.active_ms));
     }
     release::fence(live);

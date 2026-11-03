@@ -442,7 +442,7 @@ impl Driver {
             ));
         }
         let mut live = session.shared.live.lock().await;
-        let payload = live.gate.reconnect(&durable)?.ok_or_else(|| {
+        live.gate.reconnect_transition(&durable)?.ok_or_else(|| {
             reject(
                 ErrorCode::CheckpointUnavailable,
                 "owned Choice pending ACK not established",
@@ -474,7 +474,7 @@ impl Driver {
                 "owned Choice readback outcome changed",
             ));
         }
-        reconnect::adopt_pending(&mut live, &payload)?;
+        reconnect::adopt_pending(&mut live)?;
         live.gate.disconnect();
         live.disconnected.cancel();
         Ok(())
