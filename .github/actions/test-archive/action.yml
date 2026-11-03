@@ -3,6 +3,20 @@ description: Restore the exact build for this revision without running Cargo.
 runs:
   using: composite
   steps:
+    - name: Reclaim unused Android SDK before restoring tests
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ci-evidence
+        df -Pk "$GITHUB_WORKSPACE" | tee ci-evidence/disk-before-restore.txt
+        # These consumers run prebuilt Rust tests, with no Android targets.
+        # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+        if [[ -d /usr/local/lib/android && ! -L /usr/local/lib/android ]]; then
+          sudo du -sh -- /usr/local/lib/android | tee ci-evidence/preinstalled-cleanup.txt
+          sudo rm -rf -- /usr/local/lib/android
+        fi
+        df -Pk "$GITHUB_WORKSPACE" | tee ci-evidence/disk-after-cleanup.txt
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
