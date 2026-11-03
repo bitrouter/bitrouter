@@ -32,6 +32,7 @@ pub(crate) mod operational;
 mod ordered;
 pub(crate) mod origin;
 pub(crate) mod ownership;
+mod profile_observation;
 pub(crate) mod receipts;
 pub(crate) mod resources;
 pub(crate) mod routing;

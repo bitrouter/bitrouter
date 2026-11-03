@@ -108,6 +108,7 @@ pub(crate) async fn dispatch(
 }
 
 pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
+    let observations = super::profile_observation::http::router(service.clone(), operators.clone());
     let router = Router::new()
         .route("/control/v1/tenancy/capabilities", get(capabilities))
         .route("/control/v1/tenancy/directory", get(super::directory::http))
@@ -205,7 +206,7 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
         .with_state(service.clone());
     #[cfg(feature = "core")]
     let router = router.merge(super::eval::http::router(service));
-    router
+    router.merge(observations)
 }
 
 pub(super) fn one_header<'a>(

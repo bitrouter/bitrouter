@@ -530,6 +530,17 @@ impl Authority {
         Ok(bytes)
     }
 
+    pub fn try_snapshot(&self) -> Result<Snapshot> {
+        if !self.live.load(Ordering::Acquire) {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        let state = self.state.try_read().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => ErrorCode::CapacityExceeded,
+            std::sync::TryLockError::Poisoned(_) => ErrorCode::AuthorityUnavailable,
+        })?;
+        Ok(ReadGuard { owner: self, state }.snapshot())
+    }
+
     pub fn initialize_admission(
         &self,
         admission: crate::tenancy::resources::admission::State,

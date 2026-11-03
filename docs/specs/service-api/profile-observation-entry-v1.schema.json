@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProfileObservationV1",
+  "description": "Advisory state for one exact pin, using the current same-key profile head.",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "description": "Original requested pin, never replaced by its current head.",
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "properties": {
+            "owner_kind": {
+              "const": "operator_pool"
+            },
+            "resource_kind": {
+              "const": "policy"
+            }
+          }
+        }
+      ]
+    },
+    "current_profile_revision": {
+      "description": "Current head; required null means profile authority could not be established.",
+      "$ref": "#/$defs/RequiredNullable_RevisionId"
+    },
+    "rate": {
+      "description": "Current ceiling and actual charged count; required null when unconfigured or denied.",
+      "$ref": "#/$defs/RequiredNullable_RateObservationV1"
+    },
+    "observed_shared_count": {
+      "description": "Actual explicit observation-group count; absent configuration is required null.",
+      "$ref": "#/$defs/RequiredNullable_uint64",
+      "maximum": 9007199254740991
+    },
+    "health": {
+      "description": "Existing version-specific local or shared circuit observation.",
+      "$ref": "#/$defs/HealthObservation"
+    },
+    "availability": {
+      "description": "Advisory priority: circuit refusal, rate refusal, capacity refusal, eligible.",
+      "$ref": "#/$defs/AvailabilityObservation"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "current_profile_revision",
+    "rate",
+    "observed_shared_count",
+    "health",
+    "availability"
+  ],
+  "$defs": {
+    "RequiredNullable_RevisionId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RequiredNullable_RateObservationV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RateObservationV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RateObservationV1": {
+      "description": "Observed shared count and this member's current ceiling.",
+      "type": "object",
+      "properties": {
+        "member_rpm": {
+          "description": "Current live member ceiling; zero is a valid local refusal.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "shared_count": {
+          "description": "Shared count, decoded as an exact JSON integer.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "member_rpm",
+        "shared_count"
+      ]
+    },
+    "RequiredNullable_uint64": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "HealthObservation": {
+      "description": "Compact circuit state without operational authority.",
+      "oneOf": [
+        {
+          "description": "The current profile explicitly disables health admission.",
+          "type": "string",
+          "const": "disabled"
+        },
+        {
+          "description": "The circuit is closed.",
+          "type": "string",
+          "const": "healthy"
+        },
+        {
+          "description": "Cooldown or another active probe blocks admission.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "A probe could be claimed by a subsequent actual hop.",
+          "type": "string",
+          "const": "probe_ready"
+        },
+        {
+          "description": "Current authority or state could not be established.",
+          "type": "string",
+          "const": "unavailable"
+        }
+      ]
+    },
+    "AvailabilityObservation": {
+      "description": "Compact eligibility result; no result promises later admission.",
+      "oneOf": [
+        {
+          "description": "Eligible at the observation instant.",
+          "type": "string",
+          "const": "eligible"
+        },
+        {
+          "description": "Shared count reaches this member's ceiling.",
+          "type": "string",
+          "const": "rate_limited"
+        },
+        {
+          "description": "Circuit cooldown or an active probe blocks admission.",
+          "type": "string",
+          "const": "circuit_blocked"
+        },
+        {
+          "description": "Current profile authority is missing, revoked or otherwise invalid.",
+          "type": "string",
+          "const": "authority_denied"
+        },
+        {
+          "description": "Bounded operational state cannot admit another entry.",
+          "type": "string",
+          "const": "capacity_denied"
+        }
+      ]
+    }
+  }
+}
