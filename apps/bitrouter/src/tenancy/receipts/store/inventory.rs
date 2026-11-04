@@ -55,6 +55,59 @@ pub(in crate::tenancy::receipts) async fn scan(
     scan_locations(db, installation, |candidate, _| visit(candidate)).await
 }
 
+fn key_page(
+    backend: DatabaseBackend,
+    installation: &InstallationId,
+    after: Option<&(TenantId, ExecutionId)>,
+) -> Statement {
+    let column = |name| (Alias::new(TABLE), Alias::new(name));
+    let mut query = Query::select();
+    // Seek and order on the indexed columns. The bounded CASE projections
+    // below use the same names and would otherwise require a sort on each page.
+    query
+        .from(Alias::new(TABLE))
+        .and_where(Expr::col(column("installation_id")).eq(installation.as_str()))
+        .order_by(column("tenant_id"), Order::Asc)
+        .order_by(column("execution_id"), Order::Asc)
+        .limit(PAGE_ROWS);
+    if backend == DatabaseBackend::Sqlite {
+        query.column(Alias::new("storage_kind"));
+    }
+    for name in ["tenant_id", "execution_id"] {
+        let kind = if backend == DatabaseBackend::Sqlite {
+            format!("typeof({name})='text' AND ")
+        } else {
+            String::new()
+        };
+        query.expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {kind}{} BETWEEN 1 AND 128 THEN {name} ELSE NULL END",
+                octets(backend, name)
+            )),
+            Alias::new(name),
+        );
+    }
+    if let Some((tenant, id)) = after {
+        let tenant_key = Expr::col(column("tenant_id"));
+        let execution_key = Expr::col(column("execution_id"));
+        if backend == DatabaseBackend::Sqlite {
+            query.and_where(Expr::tuple([tenant_key.into(), execution_key.into()]).gt(
+                Expr::tuple([
+                    Expr::val(tenant.as_str()).into(),
+                    Expr::val(id.as_str()).into(),
+                ]),
+            ));
+        } else {
+            query.and_where(
+                tenant_key.clone().gt(tenant.as_str()).or(tenant_key
+                    .eq(tenant.as_str())
+                    .and(execution_key.gt(id.as_str()))),
+            );
+        }
+    }
+    backend.build(&query)
+}
+
 async fn scan_locations(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
@@ -64,40 +117,9 @@ async fn scan_locations(
     let backend = db.get_database_backend();
     let mut after: Option<(TenantId, ExecutionId)> = None;
     loop {
-        let mut query = Query::select();
-        query
-            .from(Alias::new(TABLE))
-            .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-            .order_by(Alias::new("tenant_id"), Order::Asc)
-            .order_by(Alias::new("execution_id"), Order::Asc)
-            .limit(PAGE_ROWS);
-        if backend == DatabaseBackend::Sqlite {
-            query.column(Alias::new("storage_kind"));
-        }
-        for name in ["tenant_id", "execution_id"] {
-            let kind = if backend == DatabaseBackend::Sqlite {
-                format!("typeof({name})='text' AND ")
-            } else {
-                String::new()
-            };
-            query.expr_as(
-                Expr::cust(format!(
-                    "CASE WHEN {kind}{} BETWEEN 1 AND 128 THEN {name} ELSE NULL END",
-                    octets(backend, name)
-                )),
-                Alias::new(name),
-            );
-        }
-        if let Some((tenant, id)) = &after {
-            query.and_where(
-                Expr::col(Alias::new("tenant_id"))
-                    .gt(tenant.as_str())
-                    .or(Expr::col(Alias::new("tenant_id"))
-                        .eq(tenant.as_str())
-                        .and(Expr::col(Alias::new("execution_id")).gt(id.as_str()))),
-            );
-        }
-        let page = db.query_all(backend.build(&query)).await?;
+        let page = db
+            .query_all(key_page(backend, installation, after.as_ref()))
+            .await?;
         if page.is_empty() {
             break;
         }

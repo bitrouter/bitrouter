@@ -21,6 +21,85 @@ async fn archive(db: &DatabaseConnection, value: &Candidate) -> Result<()> {
 }
 
 #[tokio::test]
+async fn key_pages_seek_past_the_cursor_across_tenants() -> Result<()> {
+    let db = open().await?;
+    let installation: InstallationId = "installation".try_into()?;
+    let keys = [("tenant-a", "z"), ("tenant-b", "a"), ("tenant-b", "z")];
+    for &(tenant, id) in keys.iter().rev() {
+        ensure!(commit(&db, &candidate("installation", tenant, id, "creator")?).await?);
+    }
+    let cursor = ("tenant-a".try_into()?, "z".try_into()?);
+    for (after, expected) in [(None, &keys[..]), (Some(&cursor), &keys[1..])] {
+        let query = key_page(db.get_database_backend(), &installation, after);
+        let explain = Statement {
+            sql: format!("EXPLAIN QUERY PLAN {}", query.sql),
+            ..query.clone()
+        };
+        let details = db
+            .query_all(explain)
+            .await?
+            .iter()
+            .map(|row| row.try_get::<String>("", "detail"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ensure!(
+            details
+                .iter()
+                .all(|line| !line.contains("TEMP B-TREE") && !line.starts_with("SCAN ")),
+            "receipt key page must use index order: {details:?}"
+        );
+        let search = details
+            .iter()
+            .find(|line| line.starts_with("SEARCH ") && line.contains(TABLE))
+            .context("missing indexed receipt search")?;
+        if after.is_some() {
+            let (_, constraints) = search
+                .split_once('(')
+                .context("missing index constraints")?;
+            ensure!(
+                constraints.contains("tenant_id") && constraints.contains("execution_id"),
+                "receipt key page must seek both cursor columns: {search}"
+            );
+        }
+        let rows = db.query_all(query).await?;
+        ensure!(rows.len() == expected.len());
+        for (row, &(tenant, id)) in rows.iter().zip(expected) {
+            ensure!(
+                row.try_get::<String>("", "tenant_id")? == tenant
+                    && row.try_get::<String>("", "execution_id")? == id
+            );
+        }
+    }
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn inventory_rejects_a_malformed_key_after_the_first_page() -> Result<()> {
+    let db = open().await?;
+    let installation: InstallationId = "installation".try_into()?;
+    for index in 0..=PAGE_ROWS {
+        let id = format!("execution-{index:04}");
+        ensure!(commit(&db, &candidate("installation", "tenant", &id, "creator")?).await?);
+    }
+    let damaged = format!("execution-{PAGE_ROWS:04}");
+    let changed = db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "UPDATE tenancy_execution_receipts SET execution_id=CAST(execution_id AS BLOB) WHERE installation_id=? AND tenant_id=? AND execution_id=?",
+        [installation.as_str().into(), "tenant".into(), damaged.into()],
+    )).await?;
+    ensure!(changed.rows_affected() == 1);
+    let mut visited = 0_u64;
+    let result = scan(&db, &installation, |_| {
+        visited += 1;
+        Ok(())
+    })
+    .await;
+    ensure!(visited == PAGE_ROWS && result.is_err());
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn complete_mixed_history_scan_preserves_unknowns_and_detects_late_digest_corruption()
 -> Result<()> {
     let db = open().await?;
