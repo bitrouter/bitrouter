@@ -215,6 +215,7 @@ jobs:
             ;;
           *) exit 1 ;;
         esac
+        history_status=0
         for suite in "${suites[@]}"; do
           case "$suite" in
             history) selector=tenancy::tests::capacity_history::large_history_qualification ;;
@@ -248,8 +249,23 @@ jobs:
           sha256sum -c ci-evidence/qualification-binaries.sha256 || status=$?
           printf '%s\n' "$status" > "ci-evidence/$suite-exit-status.txt"
           df -Pk "$BITROUTER_C4_SCRATCH" > "ci-evidence/$suite-disk-after.txt"
-          if (( status != 0 )); then exit "$status"; fi
+          if (( status != 0 )); then
+            # Native uses an independent database. Continue only if history
+            # timed out after a full archive cycle, retaining the failed result.
+            if [[ "$suite" != history || "$status" != 100 ]] ||
+               ! grep -Eq '^[[:space:]]*<failure type="test timeout"/>' "ci-evidence/history-junit.xml" ||
+               ! grep -Fq 'history reuse cycle=0 inserted=' "ci-evidence/history.log"; then
+              exit "$status"
+            fi
+            history_status=$status
+            free_kib="$(awk 'NR == 2 { print $4 }' "ci-evidence/$suite-disk-after.txt")"
+            if ! [[ "$free_kib" =~ ^[0-9]+$ ]] || (( free_kib < 40 * 1024 * 1024 )); then
+              echo '::error::Insufficient scratch space to continue to native after history failed.'
+              exit "$status"
+            fi
+          fi
         done
+        exit "$history_status"
     - name: Run isolated full-capacity and long-history campaigns
       if: ${{ !inputs.qualification }}
       env:
