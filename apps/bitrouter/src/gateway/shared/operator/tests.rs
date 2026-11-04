@@ -30,8 +30,14 @@ async fn fixture() -> Result<()> {
     let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
         .context("dedicated PostgreSQL test URL is required")?;
     let first_db = store::connect(&url, 3, Duration::from_secs(3)).await?;
-    let second_db = store::connect(&url, 3, Duration::from_secs(3)).await?;
     let namespace = format!("operator-{}", uuid::Uuid::new_v4());
+    // Identify this peer's only active reader even when other tests wait on
+    // the shared table in the same database.
+    let mut peer_url = url::Url::parse(&url)?;
+    peer_url
+        .query_pairs_mut()
+        .append_pair("application_name", &namespace);
+    let second_db = store::connect(peer_url.as_str(), 3, Duration::from_secs(3)).await?;
     let first = Store::new(first_db.clone(), &namespace, Duration::from_secs(3))?;
     let second = Store::new(second_db.clone(), &namespace, Duration::from_secs(3))?;
     let result = async {
@@ -58,6 +64,7 @@ async fn fixture() -> Result<()> {
             .into(),
         )?;
         policy_receipts(&a, &b, &actor).await?;
+        read_across_head_update(&a, &b, &actor).await?;
         invalid_reads(&a, &actor, deployment_key).await?;
         credentials_and_publication(&a, &b, &actor).await?;
         principals(&a, &b, &actor).await?;
@@ -216,6 +223,42 @@ async fn policy_receipts(a: &Operator, b: &Operator, actor: &Actor) -> Result<()
         .await?
         .context("resource missing")?;
     ensure!(row.value["active"] == 1);
+    Ok(())
+}
+
+async fn read_across_head_update(a: &Operator, b: &Operator, actor: &Actor) -> Result<()> {
+    let store = a.authority.store();
+    let tx = store.begin().await?;
+    let mut head = a.authority.fence_exclusive(&tx).await?;
+    let status = head.status().to_owned();
+    store
+        .save(&tx, &mut head, &status, None, Store::now(&tx).await?)
+        .await?;
+    let pid: i32 = tx
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid() AS pid",
+        ))
+        .await?
+        .context("writer PID")?
+        .try_get("", "pid")?;
+    let release = async {
+        loop {
+            let waiting: bool = store.database().query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=$2 AND $1 = ANY(pg_blocking_pids(pid))) AS waiting",
+                [pid.into(), store.namespace().into()],
+            )).await?.context("head lock waiter")?.try_get("", "waiting")?;
+            if waiting {
+                tx.commit().await?;
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    // The reader has an older Serializable snapshot when the writer commits.
+    let (policy, ()) = tokio::try_join!(b.resource(actor, "pool"), release)?;
+    ensure!(policy.revision == 2);
     Ok(())
 }
 

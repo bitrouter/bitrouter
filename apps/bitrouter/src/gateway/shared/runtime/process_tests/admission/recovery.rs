@@ -817,10 +817,7 @@ fn retain_logs(fixture: &Fixture, result: Result<()>) -> Result<()> {
     if result.is_ok() {
         return result;
     }
-    let prefix = std::env::temp_dir().join(format!(
-        "bitrouter-recovery-failure-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let prefix = failure_log_prefix();
     let copied = fixture
         .children
         .iter()
