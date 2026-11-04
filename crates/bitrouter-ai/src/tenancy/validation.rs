@@ -48,24 +48,40 @@ pub(super) fn unique<T: Eq + std::hash::Hash>(
 }
 
 pub(super) fn bytes<T: Serialize>(value: &T, max: usize) -> Result<(), ValidationError> {
-    // A bounded writer avoids allocating a second full copy of evidence.
-    struct Counter {
+    write_json(value, max, std::io::sink())
+}
+
+pub(super) fn write_json(
+    value: &impl Serialize,
+    max: usize,
+    output: impl std::io::Write,
+) -> Result<(), ValidationError> {
+    struct Bounded<W> {
         remaining: usize,
+        output: W,
     }
-    impl std::io::Write for Counter {
+    impl<W: std::io::Write> std::io::Write for Bounded<W> {
         fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-            self.remaining = self
+            let remaining = self
                 .remaining
                 .checked_sub(buffer.len())
                 .ok_or_else(|| std::io::Error::other("contract byte limit"))?;
+            self.output.write_all(buffer)?;
+            self.remaining = remaining;
             Ok(buffer.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
+            self.output.flush()
         }
     }
-    serde_json::to_writer(Counter { remaining: max }, value)
-        .map_err(|_| ValidationError("serialized byte limit"))
+    serde_json::to_writer(
+        Bounded {
+            remaining: max,
+            output,
+        },
+        value,
+    )
+    .map_err(|_| ValidationError("serialized byte limit"))
 }
 
 // `deserialize_with` without `default` makes nullable fields REQUIRED. Plain
@@ -76,4 +92,23 @@ where
     T: Deserialize<'de>,
 {
     Option::deserialize(deserializer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ValidationError, write_json};
+
+    #[test]
+    fn bounded_writer_counts_encoded_bytes_before_appending() -> Result<(), ValidationError> {
+        let mut output = Vec::new();
+        write_json(&"é", 4, &mut output)?;
+        assert_eq!(output, "\"é\"".as_bytes());
+        output.clear();
+        assert_eq!(
+            write_json(&"é", 3, &mut output),
+            Err(ValidationError("serialized byte limit"))
+        );
+        assert!(output.len() <= 3);
+        Ok(())
+    }
 }

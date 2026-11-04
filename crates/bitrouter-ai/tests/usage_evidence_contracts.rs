@@ -12,6 +12,65 @@ fn valid(value: Value) -> bool {
     serde_json::from_value::<ExecutionUsageEvidenceV1>(value)
         .is_ok_and(|value| value.validate().is_ok())
 }
+
+#[test]
+fn validated_json_preserves_the_wire_bytes_and_validation_errors() -> TestResult {
+    let mut evidence: ExecutionUsageEvidenceV1 = serde_json::from_value(document())?;
+    assert_eq!(
+        evidence.to_validated_json()?,
+        serde_json::to_string(&evidence)?
+    );
+    evidence.frames[0].sequence = 1;
+    assert_eq!(
+        evidence.to_validated_json().err(),
+        evidence.validate().err()
+    );
+    assert!(evidence.to_validated_json().is_err());
+    Ok(())
+}
+
+#[test]
+fn validated_json_rejects_an_oversized_document_with_valid_frame_counts() -> TestResult {
+    use bitrouter_ai::tenancy::usage_evidence::{MAX_ATTEMPT_FRAMES, MAX_BYTES, MAX_FRAMES};
+    let mut input = document();
+    let quantities = [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "input_audio_tokens",
+        "output_audio_tokens",
+    ]
+    .map(|dimension| json!({"dimension": dimension, "value": 9007199254740991_u64}));
+    input["frames"][0]["quantities"] = json!(quantities);
+    let mut evidence: ExecutionUsageEvidenceV1 = serde_json::from_value(input)?;
+    let attempt = evidence.attempts.remove(0);
+    let frame = evidence.frames.remove(0);
+    for i in 0..MAX_FRAMES / MAX_ATTEMPT_FRAMES {
+        let mut attempt = attempt.clone();
+        attempt.attempt_id = format!("attempt-{i}").try_into()?;
+        for _ in 0..MAX_ATTEMPT_FRAMES {
+            let mut frame = frame.clone();
+            frame.sequence = evidence.frames.len().try_into()?;
+            frame.attempt_id = attempt.attempt_id.clone();
+            evidence.frames.push(frame);
+        }
+        evidence.attempts.push(attempt);
+    }
+    assert!(serde_json::to_vec(&evidence)?.len() > MAX_BYTES);
+    let error = evidence
+        .validate()
+        .err()
+        .ok_or("accepted oversized evidence")?;
+    assert_eq!(
+        error.to_string(),
+        "invalid tenancy contract: serialized byte limit"
+    );
+    assert_eq!(evidence.to_validated_json().err(), Some(error));
+    Ok(())
+}
 #[test]
 fn required_fields_zero_absence_and_exact_numbers() -> TestResult {
     assert!(valid(document()));

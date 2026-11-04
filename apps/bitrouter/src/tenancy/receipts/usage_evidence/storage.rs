@@ -4,7 +4,6 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::{ExecutionReceipt, Outcome, ReceiptState},
     usage_evidence::{Capture, ExecutionUsageEvidenceV1, MAX_BYTES},
-    validation::Validate,
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend,
@@ -20,7 +19,7 @@ pub(in crate::tenancy::receipts) struct Evidence {
 }
 impl Evidence {
     pub fn new(document: ExecutionUsageEvidenceV1, receipt: &ExecutionReceipt) -> Result<Self> {
-        document.validate()?;
+        let json = document.to_validated_json()?;
         ensure!(
             (document.capture == Capture::Captured
                 || (document.capture == Capture::Unavailable
@@ -41,7 +40,6 @@ impl Evidence {
                 "usage evidence attempt binding"
             );
         }
-        let json = serde_json::to_string(&document)?;
         let mut hash = Sha256::new();
         hash.update(b"bitrouter.execution.usage-evidence.v1");
         hash.update((json.len() as u64).to_be_bytes());
