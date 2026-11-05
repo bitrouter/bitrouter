@@ -1,8 +1,42 @@
 {
   "api_base": "https://token-plan-ams.xiaomimimo.com/v1",
-  "weight": 1,
-  "submitted_at": "2026-07-06T00:00:00Z",
-  "status": "active",
+  "auth": {
+    "env": "XIAOMI_TOKEN_PLAN_EU_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "xiaomi-token-plan-ams",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:28.861201Z"
+        }
+      }
+    ]
+  },
   "billing": "subscription",
   "display_name": "Xiaomi MiMo Token Plan (Europe)",
   "metadata": {
@@ -17,149 +51,227 @@
   },
   "models": [
     {
-      "provider_model_id": "mimo-v2.5-pro",
-      "status": "active",
+      "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
           "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
           "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
+          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
+          "protocol": "messages",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic"
+          }
         }
       ],
-      "canonical_id": "xiaomi/mimo-v2.5-pro"
-    },
-    {
       "provider_model_id": "mimo-v2.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic"
-        }
-      ],
-      "canonical_id": "xiaomi/mimo-v2.5"
+      "status": "active"
     },
     {
+      "canonical_id": "xiaomi/mimo-v2.5-pro",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "mimo-v2.5-pro",
+      "status": "active"
+    },
+    {
+      "provider_model_id": "mimo-v2.5-tts",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:28.861201Z"
+      },
+      "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "name": "MiMo-V2.5-TTS",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:28.861201Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mimo-v2.5-tts-voiceclone",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:28.861201Z"
+      },
+      "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "name": "MiMo-V2.5-TTS-VoiceClone",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:28.861201Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mimo-v2.5-tts-voicedesign",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:28.861201Z"
+      },
+      "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "name": "MiMo-V2.5-TTS-VoiceDesign",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:28.861201Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "xiaomi/mimo-v2.6-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic",
+          "operation": "generation",
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "mimo-v2.6-flash",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic"
+      "description": "MiMo Flash model for multimodal coding agents and long-context automation",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "xiaomi/mimo-v2.6-flash"
+      },
+      "name": "MiMo-V2.6-Flash"
     },
     {
-      "provider_model_id": "mimo-v2.6-pro",
-      "status": "active",
+      "canonical_id": "xiaomi/mimo-v2.6-pro",
       "interfaces": [
         {
+          "operation": "generation",
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
+          "operation": "generation",
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
+          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic",
           "operation": "generation",
+          "protocol": "messages",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "base_url": "https://token-plan-ams.xiaomimimo.com/anthropic"
+          }
         }
       ],
-      "canonical_id": "xiaomi/mimo-v2.6-pro"
+      "provider_model_id": "mimo-v2.6-pro",
+      "status": "active",
+      "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "MiMo-V2.6-Pro"
     }
   ],
   "name": "xiaomi_token_plan_eu",
-  "auth": {
-    "kind": "bearer",
-    "env": "XIAOMI_TOKEN_PLAN_EU_API_KEY"
-  }
+  "status": "active",
+  "submitted_at": "2026-07-06T00:00:00Z",
+  "weight": 1
 }

@@ -48,6 +48,15 @@ impl Transport {
         }
         let client = builder
             .https_only(true)
+            // Every feed consumes JSON; negotiate that representation explicitly.
+            // https://www.rfc-editor.org/rfc/rfc9110.html#name-accept
+            .default_headers(HeaderMap::from_iter([(
+                http::header::ACCEPT,
+                HeaderValue::from_static("application/json"),
+            )]))
+            // Identify this client consistently in provider diagnostics.
+            // https://docs.rs/reqwest/0.13/reqwest/struct.ClientBuilder.html#method.user_agent
+            .user_agent(concat!("bitrouter-registry/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
@@ -104,6 +113,13 @@ impl Transport {
                     .first()
                     .ok_or_else(|| invalid("Missing OpenRouter page"))?,
             )
+        } else if feed["kind"] == crate::models_dev::KIND {
+            crate::models_dev::observation(
+                feed,
+                pages
+                    .first()
+                    .ok_or_else(|| invalid("Missing models.dev page"))?,
+            )
         } else {
             normalize(feed, &pages)
         }
@@ -158,13 +174,14 @@ impl Transport {
                 continue;
             }
             if status.as_u16() != 200 {
+                let message = match status.as_u16() {
+                    401 | 403 => "Feed access or authentication rejected; no anonymous retry",
+                    300..=399 => "Feed redirect rejected; update its configured URL",
+                    _ => "Feed returned an unsuccessful HTTP status",
+                };
                 return Err(error(
                     "registry.http",
-                    match status.as_u16() {
-                        401 | 403 => "Feed authentication rejected; no anonymous retry",
-                        300..=399 => "Feed redirect rejected; update its configured URL",
-                        _ => "Feed returned an unsuccessful HTTP status",
-                    },
+                    &format!("{message} (HTTP {})", status.as_u16()),
                 ));
             }
             if response
@@ -206,6 +223,7 @@ struct Request {
     has_more: Option<String>,
     parameter: String,
     max_pages: usize,
+    missing_cursor_end: bool,
 }
 
 impl Request {
@@ -243,6 +261,25 @@ impl Request {
             }
         }
         let pagination = &feed["pagination"];
+        if pagination.get("missing_cursor").is_some()
+            && (pagination["kind"] != "cursor" || pagination.get("has_more_path").is_some())
+        {
+            return Err(invalid(
+                "missing_cursor applies only to cursor pagination without has_more_path",
+            ));
+        }
+        // Some native lists omit their terminal page token rather than send null.
+        // https://ai.google.dev/api/models#method:-models.list
+        let missing_cursor_end = match pagination.get("missing_cursor").map(text).transpose()? {
+            None | Some("error") => false,
+            Some("end") => true,
+            _ => {
+                return Err(error(
+                    "registry.unsupported",
+                    "Unsupported missing-cursor policy; update software",
+                ));
+            }
+        };
         let (cursor_path, has_more, parameter, max_pages) = match text(&pagination["kind"])? {
             "none" => (None, None, String::new(), 1),
             "cursor" => {
@@ -282,6 +319,7 @@ impl Request {
             has_more,
             parameter,
             max_pages,
+            missing_cursor_end,
         })
     }
 
@@ -297,6 +335,7 @@ impl Request {
             }
         }
         match read(page, path)? {
+            None if self.missing_cursor_end && self.has_more.is_none() => Ok(None),
             Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
             Some(Value::Null) | Some(Value::String(_)) if self.has_more.is_none() => Ok(None),
             _ => Err(invalid("Pagination cursor is missing or invalid")),

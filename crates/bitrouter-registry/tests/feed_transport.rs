@@ -244,7 +244,49 @@ async fn identity_bearer_credentials_only_appear_in_the_header() -> TestResult {
         Some("GET /models?scope=public HTTP/1.1")
     );
     assert!(request.contains("authorization: Bearer fixture-token\r\n"));
+    assert!(request.contains("accept: application/json\r\n"));
+    assert!(request.contains("user-agent: bitrouter-registry/"));
     assert!(!request.contains("x-api-key:"));
     assert!(!request.contains("cookie:"));
+    Ok(())
+}
+
+/// SDV for documented APIs that omit the terminal cursor, such as Gemini.
+#[tokio::test]
+async fn sdv_missing_terminal_cursor_requires_explicit_policy() -> TestResult {
+    for allow_missing in [false, true] {
+        let fixture = fixture(vec![
+            (200, json!({"data":[{"id":"A"}],"next":"two"}).to_string()),
+            (200, json!({"data":[{"id":"B"}]}).to_string()),
+        ])
+        .await?;
+        let mut config = feed(&fixture.url);
+        config["pagination"]
+            .as_object_mut()
+            .ok_or("pagination object")?
+            .remove("has_more_path");
+        if allow_missing {
+            config["pagination"]["missing_cursor"] = json!("end");
+        }
+        let observation = transport(&fixture.root)?
+            .observe(&config, |_| Some("fixture-token".into()))
+            .await;
+        if allow_missing {
+            assert_eq!(observation?.models.len(), 2);
+        } else {
+            assert!(observation.is_err());
+        }
+        fixture.job.await??;
+    }
+    let fixture = fixture(vec![]).await?;
+    let mut config = feed(&fixture.url);
+    config["pagination"]["missing_cursor"] = json!("end");
+    assert!(
+        transport(&fixture.root)?
+            .observe(&config, |_| Some("fixture-token".into()))
+            .await
+            .is_err()
+    );
+    fixture.job.await??;
     Ok(())
 }

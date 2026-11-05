@@ -387,6 +387,9 @@ fn writes(feed: &Value) -> Result<BTreeSet<&str>, RegistryError> {
 /// # Errors
 /// Returns malformed/unsupported configuration with no feed side effects.
 pub fn validate(feed: &Value) -> Result<(), RegistryError> {
+    if feed["kind"] == crate::models_dev::KIND {
+        return crate::models_dev::validate(feed);
+    }
     if feed["kind"] == crate::openrouter::KIND {
         return crate::openrouter::validate(feed);
     }
@@ -456,18 +459,35 @@ pub fn validate(feed: &Value) -> Result<(), RegistryError> {
             .as_object()
             .ok_or_else(|| invalid("Transforms must be an object"))?
         {
-            if target == "/provider_model_id" || !paths.iter().any(|(path, _)| path == target) {
-                return Err(invalid(
-                    "Transform target must be mapped and cannot alter native identity",
-                ));
+            if !paths.iter().any(|(path, _)| path == target) {
+                return Err(invalid("Transform target must be mapped"));
             }
             let steps = steps
                 .as_array()
                 .filter(|v| v.len() <= 64)
                 .ok_or_else(|| invalid("Invalid or excessive transform list"))?;
+            if target == "/provider_model_id"
+                && (steps.len() != 1
+                    || steps
+                        .first()
+                        .is_none_or(|step| step["kind"] != "strip_prefix"))
+            {
+                return Err(invalid(
+                    "Native identity permits only one checked resource-prefix removal",
+                ));
+            }
             for step in steps {
+                if step["kind"] == "strip_prefix" && target != "/provider_model_id" {
+                    return Err(invalid(
+                        "Resource-prefix removal applies only to native model IDs",
+                    ));
+                }
                 match step["kind"].as_str() {
                     Some("prefix") if step["value"].is_string() => {}
+                    Some("strip_prefix")
+                        if step["value"]
+                            .as_str()
+                            .is_some_and(|value| !value.is_empty()) => {}
                     Some("parse_decimal") => {}
                     Some("multiply") if step["factor"].is_number() => {
                         decimal(&step["factor"].to_string())?;
@@ -487,7 +507,7 @@ pub fn validate(feed: &Value) -> Result<(), RegistryError> {
                             }
                         }
                     }
-                    Some("prefix" | "multiply") => {
+                    Some("prefix" | "strip_prefix" | "multiply") => {
                         return Err(invalid("Malformed transform parameters"));
                     }
                     _ => return Err(unsupported("Unknown transform kind")),
@@ -541,6 +561,21 @@ fn transformed(value: &Value, steps: Option<&Value>) -> Result<Value, RegistryEr
     };
     for step in steps {
         value = match step["kind"].as_str() {
+            Some("strip_prefix") => {
+                // Native resource names can wrap the generation model ID.
+                // https://ai.google.dev/api/models#resource:-model
+                let prefix = step["value"]
+                    .as_str()
+                    .ok_or_else(|| invalid("Missing literal resource prefix"))?;
+                let stripped = value
+                    .as_str()
+                    .and_then(|value| value.strip_prefix(prefix))
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        invalid("Resource name must contain its declared prefix and a nonempty ID")
+                    })?;
+                Value::String(stripped.to_owned())
+            }
             Some("prefix") => Value::String(format!(
                 "{}{}",
                 step["value"].as_str().unwrap_or_default(),
@@ -635,7 +670,7 @@ pub fn normalize(feed: &Value, pages: &[Value]) -> Result<Observation, RegistryE
         .get("defaults")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let mut models = BTreeMap::<String, (Value, ObservedModel)>::new();
+    let mut models = BTreeMap::<String, ObservedModel>::new();
     let mut excluded = 0;
     let mut total_bytes = 0usize;
     let mut total_nodes = 0usize;
@@ -748,14 +783,14 @@ pub fn normalize(feed: &Value, pages: &[Value]) -> Result<Observation, RegistryE
                 json!({"version":1,"spec_revision":SPEC_REVISION,"as_of":"1970-01-01T00:00:00Z","data":{"models":[],"providers":[{"name":"validation","status":"active","billing":"usage","models":[validated]}]}}),
                 &ReaderPolicy::default(),
             )?;
-            if let Some((previous, _)) = models.get(&native) {
-                if !typed_equal(previous, item) {
+            if let Some(previous) = models.get(&native) {
+                if !typed_equal(&previous.value, &value) || previous.observed != observed {
                     return Err(invalid(
                         "Conflicting duplicate native identity across listing pages",
                     ));
                 }
             } else {
-                models.insert(native, (item.clone(), ObservedModel { value, observed }));
+                models.insert(native, ObservedModel { value, observed });
             }
         }
     }
@@ -764,7 +799,7 @@ pub fn normalize(feed: &Value, pages: &[Value]) -> Result<Observation, RegistryE
         return Err(incomplete("Empty inventory is not allowed by this feed"));
     }
     Ok(Observation {
-        models: models.into_values().map(|(_, row)| row).collect(),
+        models: models.into_values().collect(),
         excluded,
     })
 }
@@ -826,6 +861,63 @@ mod tests {
 
     fn feed() -> Value {
         json!({"kind":"v1_models","writes":["models","metadata","pricing"],"response":{"items_path":"/data","mapping":{"/id":"/provider_model_id","/input":"/interfaces/0/pricing/input_tokens/no_cache"},"defaults":{"status":"active","interfaces":[{"protocol":"chat_completions","operation":"generation","pricing":{"kind":"token","currency":"USD"}}]},"transforms":{"/interfaces/0/pricing/input_tokens/no_cache":[{"kind":"parse_decimal"},{"kind":"multiply","factor":1000000}]}},"inventory":{"allow_empty":false}})
+    }
+
+    /// UT for injective resource-name normalization before native identity joins.
+    #[test]
+    fn ut_resource_prefix_removal_is_explicit_and_checked() -> Result<(), RegistryError> {
+        let mut config = feed();
+        config["response"]["transforms"]["/provider_model_id"] =
+            json!([{"kind":"strip_prefix","value":"models/"}]);
+        let result = normalize(&config, &[json!({"data":[{"id":"models/Case-A"}]})])?;
+        assert_eq!(result.models[0].value["provider_model_id"], "Case-A");
+        for id in ["Case-A", "models/"] {
+            assert!(normalize(&config, &[json!({"data":[{"id":id}]})]).is_err());
+        }
+        for steps in [
+            json!([{"kind":"prefix","value":"x/"}]),
+            json!([{"kind":"strip_prefix","value":""}]),
+            json!([{"kind":"strip_prefix","value":"models/"},{"kind":"strip_prefix","value":"Case"}]),
+        ] {
+            config["response"]["transforms"]["/provider_model_id"] = steps;
+            assert!(validate(&config).is_err());
+        }
+        let mut other_target = feed();
+        other_target["response"]["mapping"]["/canonical"] = json!("/canonical_id");
+        other_target["response"]["transforms"]["/canonical_id"] =
+            json!([{"kind":"strip_prefix","value":"models/"}]);
+        assert!(validate(&other_target).is_err());
+        Ok(())
+    }
+
+    /// UT for duplicate observations independent of unmapped upstream metadata.
+    #[test]
+    fn ut_duplicate_identity_compares_normalized_values_and_presence() -> Result<(), RegistryError>
+    {
+        let config = feed();
+        let observed = normalize(
+            &config,
+            &[json!({"data":[{"id":"A","ignored":1},{"id":"A","ignored":2}]})],
+        )?;
+        assert_eq!(observed.models.len(), 1);
+        assert!(
+            normalize(
+                &config,
+                &[json!({"data":[{"id":"A","input":"1"},{"id":"A","input":"2"}]})]
+            )
+            .is_err()
+        );
+        let mut named = config;
+        named["response"]["defaults"]["name"] = json!("same");
+        named["response"]["mapping"]["/name"] = json!("/name");
+        assert!(
+            normalize(
+                &named,
+                &[json!({"data":[{"id":"A"},{"id":"A","name":"same"}]})]
+            )
+            .is_err()
+        );
+        Ok(())
     }
 
     #[test]

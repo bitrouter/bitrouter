@@ -1,0 +1,22 @@
+{
+  "example": {
+    "id": "example",
+    "models": {
+      "Native-Decision": {
+        "id": "Native-Decision",
+        "name": "Example decision model",
+        "type": "decision",
+        "canonical_model_id": "example/decision",
+        "cost": {"input": 0.1, "output": 0.2}
+      },
+      "Native-Future": {
+        "id": "Native-Future",
+        "type": "future-type"
+      },
+      "Native-Old": {
+        "id": "Native-Old",
+        "status": "deprecated"
+      }
+    }
+  }
+}

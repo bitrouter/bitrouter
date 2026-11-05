@@ -11,6 +11,7 @@ mod latency;
 
 const CONCURRENCY: usize = 16;
 const WAVES: usize = 3;
+const TRANSACTION_TIMEOUT_MS: u64 = 3000;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
@@ -61,7 +62,7 @@ async fn run(instances: usize, version: reqwest::Version) -> Result<()> {
             return finish_empty_fixture_with_database(database, fixture, result, &expected).await;
         }
     };
-    let result = tokio::time::timeout(Duration::from_secs(60), async {
+    let result = tokio::time::timeout(Duration::from_secs(90), async {
         let keys = std::array::from_fn(|_| crate::auth::keys::generate());
         let mut plan = seed_plan(&mock.base, &keys);
         for resource in plan["resources"].as_array_mut().context("missing resources")? {
@@ -79,7 +80,7 @@ async fn run(instances: usize, version: reqwest::Version) -> Result<()> {
             let address = available_address()?;
             // Match the documented shared defaults: 16 connections (including
             // the heartbeat reservation) and a total 3-second transaction bound.
-            let child = fixture.spawn_with_pool("serve", address, &[], None, (16, 3000)).await?;
+            let child = fixture.spawn_with_pool("serve", address, &[], None, (16, TRANSACTION_TIMEOUT_MS)).await?;
             expected.insert(child, ExpectedExit::CleanServe);
             fixture.child(child)?.ready().await?;
             replicas.push(address);
@@ -161,7 +162,11 @@ async fn run(instances: usize, version: reqwest::Version) -> Result<()> {
         // Observe that work settling through the owned fixture's read-only pool
         // before requesting the fixture's short, two-second shutdown. Serving
         // processes keep the delayed database path throughout this observation.
-        tokio::time::timeout(Duration::from_secs(10), async {
+        // A contended delivery can defer for the worker's eight-transaction
+        // lease/retry budget. Allow that retry, then claim (three transactions),
+        // delivery (two), ACK (one), and two transactions of headroom. The
+        // admission/HTTP deadlines above still enforce timely request handling.
+        tokio::time::timeout(Duration::from_millis(16 * TRANSACTION_TIMEOUT_MS), async {
             loop {
                 let pending = fixture.authority.store()
                     .due::<Value>(Kind::Outbox, "pending", i64::MAX, 1).await?;

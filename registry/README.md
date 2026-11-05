@@ -11,30 +11,67 @@ checks; they do not claim a fresh OpenRouter audit. `registry sync` always fetch
 the complete OpenRouter identity list and gates the complete candidate before
 writing any source. `--report` writes JSON, including required-feed failures.
 
-Own-provider model feeds currently cover OpenAI, Anthropic, OpenRouter, and
-BitRouter. OpenAI, Anthropic, and BitRouter listings are account-scoped merge
-feeds: a missing account-visible model cannot prove global withdrawal. New
-heterogeneous offers have empty interfaces until endpoint support is verified;
-unknown prices stay absent. The remaining providers retain manually maintained
-inventories until a documented own-provider feed is configured. Third-party
-models.dev data is not used as provider membership authority.
+Curated model ID selection is configured in `model-discovery.yaml`. Family
+`pattern` and `exclude_variants` regular expressions are evaluated against the
+canonical ID when selecting new recommendations. To exclude an ID immediately, add an
+evidence-backed `retired_models` entry and remove its existing recommendation
+from `models/` before rebuilding. This exact-ID exclusion bypasses the rolling
+retention grace period and prevents rediscovery until explicitly removed.
+Provider offers and canonical bindings remain independent of this selection.
 
-Trusted CI binds `OPENAI_REGISTRY_API_KEY`, `ANTHROPIC_REGISTRY_API_KEY`, and
-`BITROUTER_REGISTRY_API_KEY` to GitHub repository secrets with those exact names.
-They are independent listing credentials; local inference keys are not inherited.
-OpenRouter's public full-list endpoint uses explicit `auth: {kind: none}`.
+Prefer the provider's own model-list GET feed. Public lists use explicit
+anonymous authentication; credentialed lists use their own named listing key
+and account scope. A missing account-visible model cannot prove global
+withdrawal. Native feeds use merge mode unless provider-authoritative complete
+coverage has been established. New heterogeneous offers have empty interfaces
+until endpoint support is verified; unknown prices stay absent.
+
+The `models_dev` adapter is a merge-only directory fallback where a native
+listing is unavailable to CI, including missing usable listing credentials,
+resource-specific discovery, or unsupported interactive authentication.
+Selecting it is an explicit reviewed source change, never an automatic fallback
+after a native feed fails. It selects an explicit reviewed provider
+key, excludes deprecated rows, and imports new offers as staging with empty
+interfaces. It cannot establish provider lifecycle, execution, canonical
+bindings or tariff authority. It preserves existing manual data. When replacing
+a native feed, release its ownership of existing verified statuses so directory
+staging defaults cannot downgrade them. Private native candidates can remain
+manual; a declared feed must not receive a CI listing credential until its complete
+observation and publication admission pass validation.
+
+Feed authentication is independent of the provider's inference authentication.
+Configure each listing according to its own endpoint contract. Examples:
+
+| Feed | Listing authentication | CI secret |
+| --- | --- | --- |
+| [Google](https://ai.google.dev/api/models) | `x-goog-api-key` | `GEMINI_REGISTRY_API_KEY` |
+| [models.dev](https://github.com/anomalyco/models.dev#api) | Explicit `auth: {kind: none}` | None |
+| [BitRouter](https://api.bitrouter.ai/v1/models) | Explicit `auth: {kind: none}` | None |
+| [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | Explicit `auth: {kind: none}` | None |
+
+Trusted CI explicitly binds each configured listing variable to the GitHub
+repository secret of the same name; local inference keys are not inherited.
+When enabling a private feed, validate its complete observation and publication
+admission before configuring that secret and its workflow environment binding.
+Do not put credential values in feed URLs, command arguments, source, or reports.
+Current requests and environment names are declared in `providers/*.yaml` and
+`.github/workflows/registry-sync.yml`.
+The independent OpenRouter identity request also uses `auth: {kind: none}`.
 Its importer excludes `:batch` catalog variants in this release and creates chat
 interfaces only when the upstream model explicitly advertises the chat endpoint.
 The independent identity audit still reads the complete unfiltered listing.
 Missing required secrets fail the run, while an independently validated public
 feed can still produce a reviewable proposal after the global audit passes.
 The workflow uploads the exact public identity response and JSON report.
+Manual runs check out the selected commit, so a contributor can validate a
+configuration fix on its branch before merging. Only runs selected from `main`
+update `automation/registry-sync` and propose catalog changes; branch runs
+perform the same synchronization and checks without publishing a proposal.
 
-The v1 migration retained every native provider offer. Five delisted canonical
-bindings (`qwen/qwen3.8-max`, `deepseek/deepseek-v3.1`, and Xiaomi's
-`mimo-v2-flash`, `mimo-v2-omni`, `mimo-v2-pro`) are explicitly unbound;
-historical correspondence remains in `model-identities.yaml`. This migration
-is a reviewed source change, not an automatic sync rule. Azure now requires an
+The v1 migration retained every native provider offer. Delisted canonical
+bindings are explicitly unbound in provider source; historical correspondence
+remains in `model-identities.yaml`. These are reviewed source changes, not an
+automatic sync rule. Azure now requires an
 explicit concrete local endpoint; Bedrock's registry endpoint is the concrete
 `us-east-1` default. Registry URLs do not interpolate environment templates.
 
@@ -43,6 +80,9 @@ Provider feed references:
 - [Anthropic model listing and cursor contract](https://platform.claude.com/docs/en/api/models/list)
 - [OpenRouter complete listing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
 - [BitRouter API](https://docs.bitrouter.ai)
+- [Google native model resources and pagination](https://ai.google.dev/api/models)
+- [SiliconFlow authenticated model listing](https://docs.siliconflow.com/en/api-reference/models/get-model-list)
+- [models.dev public directory API](https://github.com/anomalyco/models.dev#api)
 
 ### Agents and runtimes
 

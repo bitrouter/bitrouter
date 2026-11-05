@@ -1,11 +1,43 @@
 {
   "api_base": "https://api.openai.com/v1",
-  "billing": "usage",
   "auth": {
     "env": "OPENAI_API_KEY",
     "kind": "bearer"
   },
-  "submitted_at": "2026-05-25T00:00:00Z",
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "openai",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:04.325800Z"
+        }
+      }
+    ]
+  },
+  "billing": "usage",
   "display_name": "OpenAI",
   "doc_url": "https://platform.openai.com/docs/api-reference",
   "kind": "first_party",
@@ -19,292 +51,623 @@
   },
   "models": [
     {
-      "provider_model_id": "gpt-5.6-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "medium",
-            "levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "compatibility": {
-            "token_limit_field": "max_completion_tokens"
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "cache_read": 1,
-                  "cache_write": 12.5,
-                  "no_cache": 10
-                },
-                "output_tokens": {
-                  "text": 45
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 30
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "medium",
-            "levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "cache_read": 1,
-                  "cache_write": 12.5,
-                  "no_cache": 10
-                },
-                "output_tokens": {
-                  "text": 45
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 30
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-sol",
+      "provider_model_id": "gpt-4.1",
+      "interfaces": [],
       "sync": {
-        "owner": "catalog",
+        "owner": "directory",
         "field_owners": {
-          "/status": "catalog"
-        }
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Long-lived GPT workhorse for coding, instruction following, and production apps",
+      "name": "GPT-4.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
       }
     },
     {
-      "provider_model_id": "gpt-5.6-terra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "medium",
-            "levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "compatibility": {
-            "token_limit_field": "max_completion_tokens"
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "cache_read": 0.5,
-                  "cache_write": 6.25,
-                  "no_cache": 5
-                },
-                "output_tokens": {
-                  "text": 22.5
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 12
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "medium",
-            "levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "cache_read": 0.5,
-                  "cache_write": 6.25,
-                  "no_cache": 5
-                },
-                "output_tokens": {
-                  "text": 22.5
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 12
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-terra",
+      "provider_model_id": "gpt-4.1-mini",
+      "interfaces": [],
       "sync": {
-        "owner": "catalog",
+        "owner": "directory",
         "field_owners": {
-          "/status": "catalog"
-        }
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Affordable GPT-4.1 lane for fast coding help and structured extraction",
+      "name": "GPT-4.1 mini",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
       }
     },
     {
+      "provider_model_id": "gpt-4o",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Omni-era GPT for multimodal chat, practical coding, and general assistants",
+      "name": "GPT-4o",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-4o-2024-08-06",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+      "name": "GPT-4o (2024-08-06)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-4o-2024-11-20",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+      "name": "GPT-4o (2024-11-20)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-4o-mini",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Small omni GPT for cheap multimodal assistance and production-scale traffic",
+      "name": "GPT-4o mini",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Original GPT-5 workhorse for reasoning, coding, writing, and tool workflows",
+      "name": "GPT-5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5-mini",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Small GPT-5 for responsive agents, coding help, and everyday automation",
+      "name": "GPT-5 Mini",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5-nano",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Tiny GPT-5 lane for routing, extraction, classification, and bulk jobs",
+      "name": "GPT-5 Nano",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Higher-accuracy GPT-5 tier for tough analysis, coding reviews, and planning",
+      "name": "GPT-5 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Sharper GPT-5 generation for coding, product work, and tool-assisted tasks",
+      "name": "GPT-5.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Reliable GPT generation for broad coding, writing, and tool-assisted product work",
+      "name": "GPT-5.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.2-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Higher-accuracy GPT-5.2 variant for tougher reasoning and review workflows",
+      "name": "GPT-5.2 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.3-codex",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Coding-optimized GPT model for repository edits, reviews, and agentic software work",
+      "name": "GPT-5.3 Codex",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.3-codex-spark",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Coding-optimized GPT model for repository edits, reviews, and agentic software work",
+      "name": "GPT-5.3 Codex Spark",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.4",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Agent-ready GPT for coding and computer-use workflows at a lower cost",
+      "name": "GPT-5.4",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.4-mini",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Strong small GPT for coding subagents, quick tool use, and high-volume work",
+      "name": "GPT-5.4 mini",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.4-nano",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Cheapest GPT-5.4 lane for simple routing, extraction, and bulk automation",
+      "name": "GPT-5.4 nano",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.4-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "More exact GPT-5.4 tier for demanding professional reasoning and agent tasks",
+      "name": "GPT-5.4 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Default frontier GPT for coding, computer use, research, and knowledge work",
+      "name": "GPT-5.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.5-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Highest-accuracy GPT-5.5 tier for slower, precision-heavy reasoning and coding",
+      "name": "GPT-5.5 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "name": "GPT-5.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-luna",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          },
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 9
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 9
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
       "provider_model_id": "gpt-5.6-luna",
       "status": "active",
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-5.6 Luna"
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-sol",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "structured_outputs",
             "tools"
           ],
-          "reasoning_effort": {
-            "default": "medium",
-            "levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "compatibility": {
             "token_limit_field": "max_completion_tokens"
           },
+          "operation": "generation",
           "pricing": {
             "context_tiers": [
               {
                 "above_input_tokens": 272000,
                 "input_tokens": {
-                  "cache_read": 0.2,
-                  "cache_write": 2.5,
-                  "no_cache": 2
+                  "cache_read": 1,
+                  "cache_write": 12.5,
+                  "no_cache": 10
                 },
                 "output_tokens": {
-                  "text": 9
+                  "text": 45
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.25,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.2
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
             },
             "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
+            "output_tokens": {
+              "text": 30
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
           "reasoning_effort": {
             "default": "medium",
             "levels": [
@@ -315,159 +678,288 @@
               "xhigh",
               "max"
             ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "operation": "generation",
           "pricing": {
             "context_tiers": [
               {
                 "above_input_tokens": 272000,
                 "input_tokens": {
-                  "cache_read": 0.2,
-                  "cache_write": 2.5,
-                  "no_cache": 2
+                  "cache_read": 1,
+                  "cache_write": 12.5,
+                  "no_cache": 10
                 },
                 "output_tokens": {
-                  "text": 9
+                  "text": 45
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.02,
-              "cache_write": 0.25,
-              "no_cache": 0.2
-            },
-            "output_tokens": {
-              "text": 1.2
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 30
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         }
       ],
-      "canonical_id": "openai/gpt-5.6-luna",
+      "provider_model_id": "gpt-5.6-sol",
+      "status": "active",
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
-          "/status": "catalog"
+          "/description": "directory",
+          "/name": "directory"
         }
-      }
+      },
+      "name": "GPT-5.6 Sol"
     },
     {
+      "canonical_id": "openai/gpt-5.6-terra",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          },
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 12
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 12
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
+      "provider_model_id": "gpt-5.6-terra",
+      "status": "active",
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-5.6 Terra"
+    },
+    {
+      "canonical_id": "openai/gpt-6-astra",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 50
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 50
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "gpt-6-astra",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 1,
-              "cache_write": 12.5,
-              "no_cache": 10
-            },
-            "output_tokens": {
-              "text": 50
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 1,
-              "cache_write": 12.5,
-              "no_cache": 10
-            },
-            "output_tokens": {
-              "text": 50
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6-astra",
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
-          "/status": "catalog"
+          "/description": "directory",
+          "/name": "directory"
         }
-      }
+      },
+      "name": "GPT-6 Astra"
     },
     {
-      "provider_model_id": "gpt-6-luna",
-      "status": "active",
+      "canonical_id": "openai/gpt-6-luna",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
+          }
+        },
+        {
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.01,
               "cache_write": 0.125,
               "no_cache": 0.1
             },
+            "kind": "token",
             "output_tokens": {
               "text": 0.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01,
-              "cache_write": 0.125,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.5
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "decisions",
-          "operation": "decisions",
-          "question_types": [
-            "predicate",
-            "choice",
-            "score"
-          ],
+          "extensions": {
+            "verification_url": "https://developers.openai.com/api/docs/guides/decisions"
+          },
           "input_modalities": [
             "text",
             "image"
           ],
+          "operation": "decisions",
           "output_modalities": [
             "structured"
           ],
-          "extensions": {
-            "verification_url": "https://developers.openai.com/api/docs/guides/decisions"
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
             "context_tiers": [
               {
@@ -477,249 +969,420 @@
                 }
               }
             ],
+            "currency": "USD",
             "endpoint_profile": "openai_global",
             "input_tokens": {
               "cache_read": 0,
               "cache_write": 0,
               "no_cache": 0.1
             },
+            "kind": "token",
             "output_tokens": {
               "text": 0
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "decisions",
+          "question_types": [
+            "predicate",
+            "choice",
+            "score"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "openai/gpt-6-luna",
+      "provider_model_id": "gpt-6-luna",
+      "status": "active",
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
-          "/status": "catalog"
+          "/description": "directory",
+          "/name": "directory"
         }
-      }
+      },
+      "name": "GPT-6 Luna"
     },
     {
+      "canonical_id": "openai/gpt-6-sol",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "gpt-6-sol",
       "status": "active",
+      "description": "OpenAI model for complex coding and agentic workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6 Sol"
+    },
+    {
+      "canonical_id": "openai/gpt-6.1-sol",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.2,
+              "cache_read": 0.1,
               "cache_write": 2.5,
               "no_cache": 2
             },
+            "kind": "token",
             "output_tokens": {
               "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "responses",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.2,
+              "cache_read": 0.1,
               "cache_write": 2.5,
               "no_cache": 2
             },
+            "kind": "token",
             "output_tokens": {
               "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "openai/gpt-6-sol",
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/status": "catalog"
-        }
-      }
-    },
-    {
       "provider_model_id": "gpt-6.1-sol",
       "status": "active",
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6.1 Sol"
+    },
+    {
+      "canonical_id": "openai/gpt-6.1-terra",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
           },
+          "operation": "generation",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.1,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 7.5
+                }
+              }
+            ],
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "responses",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.1,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 7.5
+                }
+              }
+            ],
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.1,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "openai/gpt-6.1-sol",
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
-          "/status": "catalog"
+          "/description": "directory",
+          "/name": "directory"
         }
+      },
+      "name": "GPT-6.1 Terra"
+    },
+    {
+      "provider_model_id": "gpt-daybreak-blue-latest",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Alias for flagship general-purpose models with safeguards for defensive cybersecurity work",
+      "name": "Daybreak Blue",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
       }
     },
     {
-      "provider_model_id": "gpt-6.1-terra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.0,
-              "cache_read": 0.05,
-              "cache_write": 1.25
-            },
-            "output_tokens": {
-              "text": 5.0
-            },
-            "kind": "token",
-            "currency": "USD",
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "no_cache": 2,
-                  "cache_read": 0.1,
-                  "cache_write": 2.5
-                },
-                "output_tokens": {
-                  "text": 7.5
-                }
-              }
-            ]
-          },
-          "compatibility": {
-            "token_limit_field": "max_completion_tokens"
-          }
+      "provider_model_id": "gpt-daybreak-red-latest",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
         },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 1.0,
-              "cache_read": 0.05,
-              "cache_write": 1.25
-            },
-            "output_tokens": {
-              "text": 5.0
-            },
-            "kind": "token",
-            "currency": "USD",
-            "context_tiers": [
-              {
-                "above_input_tokens": 272000,
-                "input_tokens": {
-                  "no_cache": 2,
-                  "cache_read": 0.1,
-                  "cache_write": 2.5
-                },
-                "output_tokens": {
-                  "text": 7.5
-                }
-              }
-            ]
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6.1-terra"
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Alias for advanced cybersecurity models for authorized vulnerability research and security testing",
+      "name": "Daybreak Red",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-image-2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+      "name": "gpt-image-2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gpt-realtime-2.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Realtime speech-to-speech model with configurable reasoning, tool use, and robust voice-agent behavior",
+      "name": "GPT-Realtime-2.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "o3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Deliberate o-series reasoner for hard math, coding, and multi-step analysis",
+      "name": "o3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "o3-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "High-effort o3 tier for difficult technical reasoning and careful answers",
+      "name": "o3-pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "text-embedding-3-large",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "name": "text-embedding-3-large",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "text-embedding-3-small",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "name": "text-embedding-3-small",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "text-embedding-ada-002",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      },
+      "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "name": "text-embedding-ada-002",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:04.325800Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "openai",
-  "weight": 1,
   "status": "active",
-  "auto_sync": {
-    "feeds": [
-      {
-        "id": "catalog",
-        "kind": "v1_models",
-        "writes": [
-          "models",
-          "metadata"
-        ],
-        "request": {
-          "url": "https://api.openai.com/v1/models",
-          "auth": {
-            "kind": "bearer",
-            "env": "OPENAI_REGISTRY_API_KEY"
-          },
-          "headers": {
-          }
-        },
-        "pagination": {
-          "kind": "none"
-        },
-        "inventory": {
-          "mode": "merge",
-          "scope": "account",
-          "complete": false,
-          "allow_empty": false
-        },
-        "response": {
-          "items_path": "/data",
-          "mapping": {
-            "/id": "/provider_model_id",
-            "/name": "/name"
-          },
-          "defaults": {
-            "status": "active",
-            "interfaces": [
-
-            ]
-          }
-        }
-      }
-    ]
-  }
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "weight": 1
 }

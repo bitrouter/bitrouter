@@ -7,6 +7,7 @@ pub mod document;
 pub mod feed;
 pub mod json;
 pub mod mapping;
+pub mod models_dev;
 pub mod openrouter;
 pub mod pricing;
 pub mod reconcile;

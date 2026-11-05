@@ -1,7 +1,43 @@
 {
   "api_base": "https://tokenhub.tencentmaas.com/v1",
+  "auth": {
+    "env": "TENCENT_CN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "tencent-tokenhub",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:19.504323Z"
+        }
+      }
+    ]
+  },
   "billing": "usage",
-  "submitted_at": "2026-05-23T00:00:00Z",
   "metadata": {
     "datacenters": [
       "CN"
@@ -15,121 +51,213 @@
   },
   "models": [
     {
+      "canonical_id": "z-ai/glm-5.2",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "glm-5.2",
-      "status": "active",
+      "status": "active"
+    },
+    {
+      "provider_model_id": "hy3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+      },
+      "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "name": "Hy3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:19.504323Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "hy3-preview",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+      },
+      "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "name": "Hy3 preview",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:19.504323Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "hy4-preview",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+      },
+      "description": "A next-generation productivity model with significantly enhanced Agent and complex task execution capabilities.",
+      "name": "Hy4 preview",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:19.504323Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "minimax/minimax-m2.7",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
+              "cache_read": 0.06,
+              "no_cache": 0.3
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
-    },
-    {
       "provider_model_id": "minimax-m2.7",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "minimax/minimax-m2.7"
+      "status": "active"
     },
     {
-      "provider_model_id": "minimax-m3",
-      "status": "active",
+      "canonical_id": "minimax/minimax-m3",
       "interfaces": [
         {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 2.4
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "operation": "generation",
           "pricing": {
             "context_tiers": [
               {
@@ -143,61 +271,27 @@
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.12,
               "no_cache": 0.6
             },
+            "kind": "token",
             "output_tokens": {
               "text": 2.4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 512000,
-                "input_tokens": {
-                  "cache_read": 0.24,
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.12,
-              "no_cache": 0.6
-            },
-            "output_tokens": {
-              "text": 2.4
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "operation": "generation",
           "pricing": {
             "context_tiers": [
               {
@@ -211,26 +305,28 @@
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.12,
               "no_cache": 0.6
             },
+            "kind": "token",
             "output_tokens": {
               "text": 2.4
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "minimax/minimax-m3"
+      "provider_model_id": "minimax-m3",
+      "status": "active"
     }
   ],
   "name": "tencent_cn",
-  "weight": 1,
   "status": "active",
-  "auth": {
-    "kind": "bearer",
-    "env": "TENCENT_CN_API_KEY"
-  }
+  "submitted_at": "2026-05-23T00:00:00Z",
+  "weight": 1
 }

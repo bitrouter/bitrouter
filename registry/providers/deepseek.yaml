@@ -1,7 +1,54 @@
 {
   "api_base": "https://api.deepseek.com",
+  "auth": {
+    "env": "DEEPSEEK_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:50.327775Z",
+          "sequence": 6
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "account"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "env": "DEEPSEEK_REGISTRY_API_KEY",
+            "kind": "bearer"
+          },
+          "url": "https://api.deepseek.com/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "status": "active",
   "metadata": {
     "datacenters": [
       "CN"
@@ -13,13 +60,47 @@
     "terms_of_service_url": "https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html"
   },
   "models": [
-
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.327775Z",
+        "scope": "account",
+        "source_url": "https://api.deepseek.com/models"
+      },
+      "interfaces": [],
+      "name": "DeepSeek-V4.1-Flash",
+      "provider_model_id": "deepseek-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.327775Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.327775Z",
+        "scope": "account",
+        "source_url": "https://api.deepseek.com/models"
+      },
+      "interfaces": [],
+      "name": "DeepSeek-V4-Pro",
+      "provider_model_id": "deepseek-v4-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.327775Z",
+        "owner": "catalog"
+      }
+    }
   ],
   "name": "deepseek",
+  "status": "active",
   "submitted_at": "2026-05-25T00:00:00Z",
-  "weight": 1,
-  "auth": {
-    "kind": "bearer",
-    "env": "DEEPSEEK_API_KEY"
-  }
+  "weight": 1
 }

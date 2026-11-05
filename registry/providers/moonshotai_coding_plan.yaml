@@ -1,7 +1,42 @@
 {
   "api_base": "https://api.kimi.com/coding/v1",
-  "weight": 1,
-  "status": "active",
+  "auth": {
+    "env": "MOONSHOTAI_CODING_PLAN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "kimi-code-plan-cn",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:01.074680Z"
+        }
+      }
+    ]
+  },
   "billing": "subscription",
   "metadata": {
     "datacenters": [
@@ -15,28 +50,139 @@
   },
   "models": [
     {
-      "provider_model_id": "kimi-for-coding",
-      "status": "active",
+      "provider_model_id": "k3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      },
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "name": "Kimi K3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:01.074680Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "k3-256k",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      },
+      "description": "256K-context version of Kimi K3, reducing token consumption for shorter coding sessions",
+      "name": "Kimi K3-256K",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:01.074680Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "k3.1-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      },
+      "description": "Multimodal Kimi model with 1M context and always-on reasoning for coding, 3D creation, financial research, and agentic work",
+      "name": "Kimi K3.1 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:01.074680Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "k3.1-pro-highspeed",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      },
+      "description": "Multimodal Kimi model with 1M context and always-on reasoning for coding, 3D creation, financial research, and agentic work",
+      "name": "Kimi K3.1 Pro Highspeed",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:01.074680Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3"
+      "provider_model_id": "kimi-for-coding",
+      "status": "active",
+      "description": "Kimi coding model with more efficient thinking and up to 1M context, available through Kimi Code",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Kimi K2.8 Preview"
+    },
+    {
+      "provider_model_id": "kimi-for-coding-highspeed",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      },
+      "description": "Lower-latency Kimi Code variant for interactive edits and coding-agent loops",
+      "name": "Kimi For Coding HighSpeed",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:27:01.074680Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "moonshotai_coding_plan",
+  "status": "active",
   "submitted_at": "2026-06-05T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "MOONSHOTAI_CODING_PLAN_API_KEY"
-  }
+  "weight": 1
 }

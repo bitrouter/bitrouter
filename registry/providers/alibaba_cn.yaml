@@ -1,8 +1,43 @@
 {
   "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "auth": {
+    "env": "ALIBABA_CN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "alibaba-cn",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:36.902331Z"
+        }
+      }
+    ]
+  },
   "billing": "usage",
-  "status": "active",
-  "weight": 1,
   "display_name": "Alibaba Cloud Model Studio (China Beijing)",
   "metadata": {
     "datacenters": [
@@ -17,1057 +52,1802 @@
   },
   "models": [
     {
-      "provider_model_id": "qwen3.8-2.4t-a95b",
-      "status": "active",
+      "provider_model_id": "MiniMax-M2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "MiniMax model for chat, coding, office work, and agentic tasks",
+      "name": "MiniMax-M2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "minimax/minimax-m2.7",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "qwen/qwen3.8-2.4t-a95b"
-    },
-    {
-      "provider_model_id": "qwen3.8-27b",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.042,
-              "cache_write": 0.521,
-              "no_cache": 0.417
-            },
-            "output_tokens": {
-              "text": 1.667
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.042,
-              "cache_write": 0.521,
-              "no_cache": 0.417
-            },
-            "output_tokens": {
-              "text": 1.667
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "reasoning_effort": {
-            "default": "xhigh",
-            "levels": [
-              "low",
-              "medium",
-              "xhigh"
-            ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.042,
-              "cache_write": 0.521,
-              "no_cache": 0.417
-            },
-            "output_tokens": {
-              "text": 1.667
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.8-27b"
-    },
-    {
-      "provider_model_id": "qwen3.8-max",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.167,
-              "cache_write": 2.083,
-              "no_cache": 1.667
-            },
-            "output_tokens": {
-              "text": 5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ]
-    },
-    {
-      "provider_model_id": "qwen3.7-max",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 3.125,
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 3.125,
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 3.125,
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.7-max"
-    },
-    {
-      "provider_model_id": "qwen3.7-plus",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 0.826
-                },
-                "output_tokens": {
-                  "text": 3.301
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.7-plus"
-    },
-    {
-      "provider_model_id": "qwen3.6-plus",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 256000,
-                "input_tokens": {
-                  "no_cache": 1.101
-                },
-                "output_tokens": {
-                  "text": 6.602
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.05,
-              "cache_write": 0.625,
-              "no_cache": 0.5
-            },
-            "output_tokens": {
-              "text": 3
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.6-plus"
-    },
-    {
       "provider_model_id": "MiniMax/MiniMax-M2.7",
       "status": "active",
+      "description": "MiniMax model for chat, coding, office work, and agentic tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "MiniMax-M2.7"
+    },
+    {
+      "provider_model_id": "deepseek-r1-distill-llama-70b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
+      "name": "DeepSeek R1 Distill Llama 70B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-r1-distill-qwen-1-5b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "DeepSeek R1 Distill Qwen 1.5B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek-v4-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Open MoE flagship with million-token context for coding and long agent runs",
+      "name": "DeepSeek V4 Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "deepseek/deepseek-v4.1-flash",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01488,
+              "no_cache": 0.29754
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.19015
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01488,
+              "no_cache": 0.29754
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.19015
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.06,
-              "cache_write": 0.375,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
+              "cache_read": 0.01488,
+              "no_cache": 0.29754
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 1.19015
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "minimax/minimax-m2.7"
-    },
-    {
-      "provider_model_id": "glm-5.2",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "z-ai/glm-5.2"
-    },
-    {
-      "provider_model_id": "qwen3.7-flash",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.002962,
-              "cache_write": 0.03703,
-              "no_cache": 0.02962
-            },
-            "output_tokens": {
-              "text": 0.1185
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.002962,
-              "cache_write": 0.03703,
-              "no_cache": 0.02962
-            },
-            "output_tokens": {
-              "text": 0.1185
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.002962,
-              "cache_write": 0.03703,
-              "no_cache": 0.02962
-            },
-            "output_tokens": {
-              "text": 0.1185
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.7-flash"
-    },
-    {
-      "provider_model_id": "qwen3.8-flash",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01187,
-              "cache_write": 0.14844,
-              "no_cache": 0.11875
-            },
-            "output_tokens": {
-              "text": 0.40073
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01187,
-              "cache_write": 0.14844,
-              "no_cache": 0.11875
-            },
-            "output_tokens": {
-              "text": 0.40073
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01187,
-              "cache_write": 0.14844,
-              "no_cache": 0.11875
-            },
-            "output_tokens": {
-              "text": 0.40073
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.8-flash"
-    },
-    {
       "provider_model_id": "deepseek-v4.1-flash",
       "status": "active",
+      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "DeepSeek V4.1 Flash"
+    },
+    {
+      "provider_model_id": "glm-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
+      "name": "GLM-5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "glm-5.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
+      "name": "GLM-5.1",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01488,
-              "no_cache": 0.29754
-            },
-            "output_tokens": {
-              "text": 1.19015
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.01488,
-              "no_cache": 0.29754
-            },
-            "output_tokens": {
-              "text": 1.19015
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.01488,
-              "no_cache": 0.29754
-            },
-            "output_tokens": {
-              "text": 1.19015
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "deepseek/deepseek-v4.1-flash"
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "description": "Open flagship GLM for long-horizon coding agents and million-token context work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GLM-5.2"
     },
     {
+      "canonical_id": "z-ai/glm-5.3",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0,
+              "no_cache": 1.1
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "glm-5.3",
       "status": "active",
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GLM-5.3"
+    },
+    {
+      "provider_model_id": "kimi-k2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+      "name": "Moonshot Kimi K2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "kimi-k2.6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+      "name": "Moonshot Kimi K2.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.283,
+              "no_cache": 2.827
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 14.133
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.283,
+              "no_cache": 2.827
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 14.133
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.275,
-              "cache_write": 0,
-              "no_cache": 1.1
-            },
-            "output_tokens": {
-              "text": 3.851
+              "cache_read": 0.283,
+              "no_cache": 2.827
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 14.133
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "z-ai/glm-5.3"
-    },
-    {
       "provider_model_id": "kimi-k3",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.283,
-              "no_cache": 2.827
-            },
-            "output_tokens": {
-              "text": 14.133
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.283,
-              "no_cache": 2.827
-            },
-            "output_tokens": {
-              "text": 14.133
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.283,
-              "no_cache": 2.827
-            },
-            "output_tokens": {
-              "text": 14.133
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "moonshotai/kimi-k3"
+      },
+      "name": "Kimi K3"
     },
     {
-      "provider_model_id": "qwen3.8-omni-flash",
-      "status": "active",
+      "provider_model_id": "kimi/kimi-k2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+      "name": "kimi/kimi-k2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-deep-research",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen Deep Research",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-doc-turbo",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Efficient Qwen model for fast chat, extraction, and high-volume workloads",
+      "name": "Qwen Doc Turbo",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Efficient Qwen model for fast chat, extraction, and high-volume workloads",
+      "name": "Qwen Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-long",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen Long",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-max",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Flagship Qwen model for complex reasoning, coding, and agentic workflows",
+      "name": "Qwen Max",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-mt-plus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Translation model for multilingual conversion, localization, and cross-language workflows",
+      "name": "Qwen-MT Plus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-plus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen Plus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-plus-character",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen Plus Character",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen-vl-ocr",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "OCR model for extracting structured text from documents and screenshots",
+      "name": "Qwen-VL OCR",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3-asr-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Speech transcription model for accurate audio-to-text and captioning workflows",
+      "name": "Qwen3-ASR Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3-coder-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen coding model for software agents, repository edits, and code reasoning",
+      "name": "Qwen3 Coder Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3-omni-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen omni model for text, vision, audio, and multimodal agent tasks",
+      "name": "Qwen3-Omni Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3-vl-plus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3-VL Plus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3.5-397b-a17b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 397B-A17B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3.5-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3.5-plus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.5 Plus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen3.6-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3.6 Flash",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "qwen/qwen3.6-plus",
       "interfaces": [
         {
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3
+            }
+          },
           "protocol": "chat_completions",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.014,
-              "no_cache": 0.113
-            },
-            "output_tokens": {
-              "text": 0.382
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3
+            }
+          },
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.014,
-              "no_cache": 0.113
-            },
-            "output_tokens": {
-              "text": 0.382
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
           "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.101
+                },
+                "output_tokens": {
+                  "text": 6.602
+                }
+              }
+            ],
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.014,
-              "no_cache": 0.113
-            },
-            "output_tokens": {
-              "text": 0.382
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 3
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "qwen/qwen3.8-omni-flash"
+      "provider_model_id": "qwen3.6-plus",
+      "status": "active",
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.6 Plus"
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.002962,
+              "cache_write": 0.03703,
+              "no_cache": 0.02962
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.1185
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.002962,
+              "cache_write": 0.03703,
+              "no_cache": 0.02962
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.1185
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.002962,
+              "cache_write": 0.03703,
+              "no_cache": 0.02962
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.1185
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.7-flash",
+      "status": "active",
+      "description": "Lightweight multimodal Qwen model for high-throughput text, image, and video tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.7 Flash"
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-max",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.7-max",
+      "status": "active",
+      "description": "Qwen frontier model tuned for agent frameworks, coding assistants, and long tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.7 Max"
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-plus",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 0.826
+                },
+                "output_tokens": {
+                  "text": 3.301
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.7-plus",
+      "status": "active",
+      "description": "Multimodal Qwen workhorse for long-context agents, visual inputs, and coding",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.7 Plus"
+    },
+    {
+      "canonical_id": "qwen/qwen3.8-2.4t-a95b",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.8-2.4t-a95b",
+      "status": "active"
+    },
+    {
+      "canonical_id": "qwen/qwen3.8-27b",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.042,
+              "cache_write": 0.521,
+              "no_cache": 0.417
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.667
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.042,
+              "cache_write": 0.521,
+              "no_cache": 0.417
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.667
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.042,
+              "cache_write": 0.521,
+              "no_cache": 0.417
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.667
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.8-27b",
+      "status": "active"
+    },
+    {
+      "canonical_id": "qwen/qwen3.8-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01187,
+              "cache_write": 0.14844,
+              "no_cache": 0.11875
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.40073
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01187,
+              "cache_write": 0.14844,
+              "no_cache": 0.11875
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.40073
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.01187,
+              "cache_write": 0.14844,
+              "no_cache": 0.11875
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.40073
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.8-flash",
+      "status": "active",
+      "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.8 Flash"
+    },
+    {
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "capabilities": [
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "capabilities": [
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.167,
+              "cache_write": 2.083,
+              "no_cache": 1.667
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.8-max",
+      "status": "active",
+      "description": "2.4-trillion-parameter MoE flagship for coding, professional work, multimodal understanding, and long-horizon agentic workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.8 Max"
+    },
+    {
+      "canonical_id": "qwen/qwen3.8-omni-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.113
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.382
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.113
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.382
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://dashscope.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.113
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.382
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.8-omni-flash",
+      "status": "active",
+      "description": "Qwen omni model for text, vision, audio, and multimodal agent tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Qwen3.8 Omni Flash"
+    },
+    {
+      "provider_model_id": "siliconflow/deepseek-r1-0528",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
+      "name": "siliconflow/deepseek-r1-0528",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "siliconflow/deepseek-v3-0324",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "siliconflow/deepseek-v3-0324",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "siliconflow/deepseek-v3.1-terminus",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "siliconflow/deepseek-v3.1-terminus",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "siliconflow/deepseek-v3.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "DeepSeek chat model for instruction following, coding, and analysis",
+      "name": "siliconflow/deepseek-v3.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "tongyi-intent-detect-v3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:36.902331Z"
+      },
+      "description": "General-purpose chat model for instruction following, writing, and analysis",
+      "name": "Tongyi Intent Detect V3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:36.902331Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "alibaba_cn",
+  "status": "active",
   "submitted_at": "2026-07-06T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "ALIBABA_CN_API_KEY"
-  }
+  "weight": 1
 }
