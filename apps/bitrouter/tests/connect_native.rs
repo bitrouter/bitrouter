@@ -541,8 +541,74 @@ async fn unsupported_recovery_receipts_are_rejected_before_any_write() -> Result
 }
 
 #[tokio::test]
+async fn openclaw_prefixed_selectors_use_native_policy_and_restore_keys() -> Result<()> {
+    let secondary = "bitrouter/background";
+    for allow in [json!([]), json!(["automatos", secondary])] {
+        let fixture = Fixture::new()?;
+        fixture.initialize_clients()?;
+        let config_path = fixture.config_path("openclaw");
+        let mut config = fixture.config("openclaw")?;
+        config["agents"]["defaults"]["modelPolicy"]["allow"] = allow;
+        std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer fixture-key"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"data":[{"id":MODEL},{"id":secondary}]})),
+            )
+            .mount(&server)
+            .await;
+        fixture
+            .run(
+                &[
+                    "connect",
+                    "openclaw",
+                    "--base-url",
+                    &server.uri(),
+                    "--model",
+                    MODEL,
+                    "--model",
+                    secondary,
+                    "--yes",
+                ],
+                Some("fixture-key"),
+                None,
+                true,
+            )
+            .await?;
+        for action in ["--update", "--remove"] {
+            let mut config = fixture.config("openclaw")?;
+            config["agents"]["defaults"]["model"]["primary"] = json!(secondary);
+            std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
+            fixture
+                .run(&["connect", "openclaw", "--check"], None, None, true)
+                .await?;
+            fixture
+                .run(&["connect", "openclaw", action, "--yes"], None, None, true)
+                .await?;
+            assert_eq!(
+                fixture
+                    .config("openclaw")?
+                    .pointer("/agents/defaults/model/primary"),
+                Some(&json!("native/original"))
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn additional_native_key_collisions_are_rejected_before_configuration() -> Result<()> {
-    for target in ["opencode", "openclaw"] {
+    for (target, primary, secondary) in [
+        ("opencode", MODEL, "automatos"),
+        ("openclaw", MODEL, "automatos"),
+        ("openclaw", "daily", "bitrouter/automatos"),
+        ("openclaw", "background", "bitrouter/background"),
+        ("openclaw", "background", "Background"),
+        ("openclaw", MODEL, "bitrouter/bitrouter/automatos"),
+    ] {
         let fixture = Fixture::new()?;
         fixture.initialize_clients()?;
         let server = gateway().await;
@@ -554,9 +620,9 @@ async fn additional_native_key_collisions_are_rejected_before_configuration() ->
                     "--base-url",
                     &server.uri(),
                     "--model",
-                    MODEL,
+                    primary,
                     "--model",
-                    "automatos",
+                    secondary,
                     "--yes",
                 ],
                 Some("fixture-key"),

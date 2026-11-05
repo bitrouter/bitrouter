@@ -119,10 +119,22 @@ fn ref_for(model: &str) -> String {
     format!("{PROVIDER}/{model}")
 }
 
+fn catalog_ref(model: &str) -> String {
+    if model
+        .split_once('/')
+        .is_some_and(|(provider, _)| provider.eq_ignore_ascii_case(PROVIDER))
+    {
+        model.into()
+    } else {
+        ref_for(model)
+    }
+}
+
 fn alias_refs(model: &str) -> Vec<String> {
     let mut refs = vec![ref_for(model)];
-    if model.starts_with("bitrouter/") {
-        refs.push(model.into());
+    let canonical = catalog_ref(model);
+    if refs[0] != canonical {
+        refs.push(canonical);
     }
     refs
 }
@@ -139,7 +151,9 @@ fn aliases_match(actual: &Value, expected: &Value, model: &str) -> bool {
     !values.is_empty() && values.iter().all(|value| Some(*value) == owned)
 }
 
-fn allows(policy: Option<&Value>, reference: &str, scope: &str, primary: bool) -> Result<()> {
+fn allows(policy: Option<&Value>, model: &str, scope: &str, primary: bool) -> Result<()> {
+    let reference = catalog_ref(model);
+    let references = alias_refs(model);
     let Some(policy) = policy else {
         return Ok(());
     };
@@ -160,7 +174,7 @@ fn allows(policy: Option<&Value>, reference: &str, scope: &str, primary: bool) -
         allow.is_empty()
             || allow.iter().filter_map(Value::as_str).any(|entry| {
                 let entry = entry.trim();
-                entry == reference
+                references.iter().any(|reference| entry == reference)
                     || (primary && (entry == ALIAS || entry == "bitrouter/automatos"))
                     || entry.strip_suffix("/*").is_some_and(|prefix| {
                         !prefix.is_empty()
@@ -168,9 +182,11 @@ fn allows(policy: Option<&Value>, reference: &str, scope: &str, primary: bool) -
                             && !prefix.split('/').any(|segment| {
                                 segment.is_empty() || segment.chars().any(char::is_whitespace)
                             })
-                            && reference
-                                .strip_prefix(prefix)
-                                .is_some_and(|suffix| suffix.starts_with('/'))
+                            && references.iter().any(|reference| {
+                                reference
+                                    .strip_prefix(prefix)
+                                    .is_some_and(|suffix| suffix.starts_with('/'))
+                            })
                     })
             }),
         "OpenClaw {scope}.modelPolicy.allow excludes {reference}; explicitly permit that exact model in OpenClaw before connecting"
@@ -178,7 +194,8 @@ fn allows(policy: Option<&Value>, reference: &str, scope: &str, primary: bool) -
     Ok(())
 }
 
-fn permitted(value: &Value, reference: &str, primary: bool) -> Result<()> {
+fn permitted(value: &Value, model: &str, primary: bool) -> Result<()> {
+    let reference = catalog_ref(model);
     no_includes(value)?;
     ensure!(
         value.pointer("/agents/list").is_none(),
@@ -193,11 +210,14 @@ fn permitted(value: &Value, reference: &str, primary: bool) -> Result<()> {
             .and_then(Value::as_object)
     {
         ensure!(
-            models.is_empty() || models.contains_key(reference),
+            models.is_empty()
+                || alias_refs(model)
+                    .iter()
+                    .any(|reference| models.contains_key(reference)),
             "OpenClaw agents.defaults.models is a legacy model allowlist that excludes {reference}; migrate and explicitly permit that model before connecting"
         );
     }
-    allows(policy, reference, "agents.defaults", primary)?;
+    allows(policy, model, "agents.defaults", primary)?;
     if let Some(entries) = value.pointer("/agents/entries") {
         for (id, entry) in entries
             .as_object()
@@ -207,7 +227,7 @@ fn permitted(value: &Value, reference: &str, primary: bool) -> Result<()> {
             let own_policy = entry
                 .get("modelPolicy")
                 .filter(|policy| policy.get("allow").is_some());
-            allows(own_policy.or(policy), reference, &scope, primary)?;
+            allows(own_policy.or(policy), model, &scope, primary)?;
             if let Some(models) = entry.get("models").and_then(Value::as_object) {
                 ensure!(
                     !models.values().any(|value| value
@@ -343,16 +363,26 @@ pub(super) fn prepare(
         models.iter().all(|id| !id.contains("${")),
         "OpenClaw model contains environment substitution syntax; supply a literal value"
     );
-    ensure!(
-        models.iter().skip(1).all(|id| id != ALIAS),
-        "additional OpenClaw model automatos conflicts with the primary native alias"
-    );
+    let mut native_keys = BTreeSet::new();
+    for (index, id) in models.iter().enumerate() {
+        let key = catalog_ref(id);
+        ensure!(
+            index == 0 || !key.eq_ignore_ascii_case("bitrouter/automatos"),
+            "additional OpenClaw model {id} conflicts with the primary native alias"
+        );
+        for reference in alias_refs(id) {
+            ensure!(
+                native_keys.insert(reference.to_lowercase()),
+                "OpenClaw models have an ambiguous native ref: {reference}"
+            );
+        }
+    }
     let path = instance(explicit)?;
     let (text, before) = read(&path)?;
     let root = document::parse(&text).context("invalid OpenClaw JSON5 configuration")?;
     let reference = ref_for(model);
     for (index, id) in models.iter().enumerate() {
-        permitted(&root.value, &ref_for(id), index == 0)?;
+        permitted(&root.value, id, index == 0)?;
     }
     ensure!(
         root.value
@@ -517,7 +547,7 @@ pub(super) fn config_installed(
             entry
                 .get("id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| permitted(&actual, &ref_for(id), index == 0).is_ok())
+                .is_some_and(|id| permitted(&actual, id, index == 0).is_ok())
         });
     Ok(permitted
         && untracked(instance, &actual, catalogs).is_ok()
@@ -637,19 +667,18 @@ pub(super) fn restore_config(
         .and_then(Value::as_str)
         .context("missing owned OpenClaw model")?;
     let reference = ref_for(model);
-    let references: Vec<_> = expected
+    let mut references = Vec::new();
+    for entry in expected
         .pointer("/models/providers/bitrouter/models")
         .and_then(Value::as_array)
         .context("missing owned OpenClaw models")?
-        .iter()
-        .map(|entry| {
-            entry
-                .get("id")
-                .and_then(Value::as_str)
-                .context("invalid owned OpenClaw model ID")
-                .map(ref_for)
-        })
-        .collect::<Result<_>>()?;
+    {
+        let id = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .context("invalid owned OpenClaw model ID")?;
+        references.extend(alias_refs(id));
+    }
     let expected_secret = expected
         .pointer("/secrets/providers/bitrouter-connect")
         .context("missing owned OpenClaw secret provider")?;

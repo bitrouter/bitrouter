@@ -11,9 +11,10 @@ bro connect openclaw --base-url http://127.0.0.1:4356 --yes
 ```
 
 The default model is `bitrouter/automatos`; `--model` changes the exact gateway wire ID. `--display-name` changes the first entry's catalog label. Repeat `--model` to add
-selectors to the same provider. Additional native refs are `bitrouter/<wire-ID>`;
-only the first entry receives the existing `automatos` alias. The additional
-wire ID `automatos` is refused because it conflicts with that alias. Every ID
+selectors to the same provider. Native picker refs are `bitrouter/<wire-ID>`,
+without repeating the prefix when the wire ID already starts with `bitrouter/`.
+Only the first entry receives the existing `automatos` alias. Additional refs
+that collide with that alias, or IDs with overlapping native refs, are refused. Every ID
 must pass existing agent model policies; permission for the primary alias does
 not authorize other models. Configure agent/session/job selections in OpenClaw
 itself. Updates replace the full list when model flags are supplied, and keep
@@ -62,7 +63,7 @@ The config retains native JSON5 comments and unrelated formatting during connect
 
 ## Policies and removal
 
-Nonempty `agents.defaults.modelPolicy.allow` and effective per-agent `modelPolicy.allow` must permit the exact native model ref, its configured alias, or a matching segment wildcard. For the default route, the full native ref is `bitrouter/bitrouter/automatos`; the alias makes `bitrouter/automatos` usable without changing the wire ID. The connector names a blocking policy and refuses the operation. It does not append a model or provider wildcard to that policy.
+Nonempty `agents.defaults.modelPolicy.allow` and effective per-agent `modelPolicy.allow` must permit each native model ref, the first entry's configured alias, or a matching segment wildcard. For the default route, OpenClaw canonicalizes `bitrouter/bitrouter/automatos` to `bitrouter/automatos` without changing the wire ID. Both forms are recognized for exact policy entries and selection restoration. The connector names a blocking policy and refuses the operation. It does not append a model or provider wildcard to that policy.
 
 On fresh legacy configurations, adding model metadata could otherwise cause OpenClaw to infer a new allowlist. The connector adds an explicit empty `modelPolicy` only to preserve the existing unrestricted behavior; removal retains it if later unrelated model metadata still needs that protection. Existing legacy model allowlists that exclude BitRouter must be migrated explicitly first.
 
