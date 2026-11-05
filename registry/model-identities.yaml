@@ -4340,6 +4340,123 @@
     ]
   },
   {
+    "canonical_id": "mongodb/rerank-2.5",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/rerank-2.5",
+        "source_url": "https://openrouter.ai/voyageai/rerank-2.5",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/rerank-2.5-lite",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/rerank-2.5-lite",
+        "source_url": "https://openrouter.ai/voyageai/rerank-2.5-lite",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/rerank-3",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/rerank-3",
+        "source_url": "https://openrouter.ai/voyageai/rerank-3",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/rerank-3-lite",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/rerank-3-lite",
+        "source_url": "https://openrouter.ai/voyageai/rerank-3-lite",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/voyage-4",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/voyage-4",
+        "source_url": "https://openrouter.ai/voyageai/voyage-4",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/voyage-4-large",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/voyage-4-large",
+        "source_url": "https://openrouter.ai/voyageai/voyage-4-large",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/voyage-4-lite",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/voyage-4-lite",
+        "source_url": "https://openrouter.ai/voyageai/voyage-4-lite",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/voyage-code-4",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/voyage-code-4",
+        "source_url": "https://openrouter.ai/voyageai/voyage-code-4",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "mongodb/voyage-multimodal-3.5",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-11-05T03:12:11.076Z",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "voyageai/voyage-multimodal-3.5",
+        "source_url": "https://openrouter.ai/voyageai/voyage-multimodal-3.5",
+        "verified_at": "2026-11-05T03:12:11.076Z"
+      }
+    ]
+  },
+  {
     "canonical_id": "moondream/moondream3-preview",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
     "observed_at": "2026-10-31T18:49:26.697912Z",
@@ -8630,123 +8747,6 @@
       {
         "provider": "openrouter",
         "provider_model_id": "upstage/solar-pro4",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/rerank-2.5",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/rerank-2.5",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/rerank-2.5-lite",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/rerank-2.5-lite",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/rerank-3",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/rerank-3",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/rerank-3-lite",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/rerank-3-lite",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/voyage-4",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/voyage-4",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/voyage-4-large",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/voyage-4-large",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/voyage-4-lite",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/voyage-4-lite",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/voyage-code-4",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/voyage-code-4",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "verified_at": "2026-10-31T18:49:26.697912Z"
-      }
-    ]
-  },
-  {
-    "canonical_id": "voyageai/voyage-multimodal-3.5",
-    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-31T18:49:26.697912Z",
-    "bindings": [
-      {
-        "provider": "openrouter",
-        "provider_model_id": "voyageai/voyage-multimodal-3.5",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
       }
