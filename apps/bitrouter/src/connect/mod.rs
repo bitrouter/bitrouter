@@ -104,10 +104,10 @@ pub struct Options {
     /// Existing gateway root URL; use BITROUTER_API_KEY for scripted setup.
     #[arg(long, conflicts_with_all = ["remove", "config"])]
     pub base_url: Option<String>,
-    /// Exact gateway model ID; new connections default to bitrouter/automatos.
+    /// Exact advertised gateway ID; repeat for native providers (first is primary).
     #[arg(long, conflicts_with = "remove")]
-    pub model: Option<String>,
-    /// Native label where supported; Hermes/OpenClaw defaults omit bitrouter/.
+    pub model: Vec<String>,
+    /// Native label for the first ID; additional entries use their exact IDs.
     #[arg(long, conflicts_with = "remove")]
     pub display_name: Option<String>,
     /// Complete Codex ModelsResponse catalog; defaults to its current catalog/cache.
@@ -326,6 +326,10 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
         return native::run(target, options, output).await;
     }
     ensure!(
+        options.model.len() <= 1,
+        "multiple --model values require opencode, pi, deepseek-harness, hermes or openclaw"
+    );
+    ensure!(
         options.instance.is_none()
             && options.profiles.is_empty()
             && options.protocol.is_none()
@@ -369,7 +373,7 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             ensure!(
                 options
                     .model
-                    .as_ref()
+                    .first()
                     .is_none_or(|model| model == &receipt.model),
                 "already connected to another model; use --remove before changing it"
             );
@@ -399,7 +403,11 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
         "no saved {} connection to remove",
         target.name()
     );
-    let model = options.model.as_deref().unwrap_or(DEFAULT_MODEL);
+    let model = options
+        .model
+        .first()
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_MODEL);
     validate_model(model)?;
     let display_name = options.display_name.as_deref().unwrap_or(model);
     validate_display_name(display_name)?;
@@ -604,6 +612,10 @@ fn loopback(input: &str) -> Result<bool> {
 }
 
 async fn verify_gateway(endpoint: &str, token: &str, model: &str) -> Result<()> {
+    verify_gateway_models(endpoint, token, &[model.to_owned()]).await
+}
+
+async fn verify_gateway_models(endpoint: &str, token: &str, models: &[String]) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
@@ -620,15 +632,17 @@ async fn verify_gateway(endpoint: &str, token: &str, model: &str) -> Result<()> 
         response.status()
     );
     let catalog: serde_json::Value = response.json().await.context("invalid gateway catalog")?;
-    ensure!(
-        catalog
-            .get("data")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|models| models
-                .iter()
-                .any(|m| m.get("id").and_then(serde_json::Value::as_str) == Some(model))),
-        "gateway does not advertise {model}; choose a model from its /v1/models catalog before connecting"
-    );
+    for model in models {
+        ensure!(
+            catalog
+                .get("data")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|models| models
+                    .iter()
+                    .any(|m| m.get("id").and_then(serde_json::Value::as_str) == Some(model))),
+            "gateway does not advertise {model}; choose a model from its /v1/models catalog before connecting"
+        );
+    }
     Ok(())
 }
 

@@ -13,6 +13,26 @@ request ID is retained. Hermes has no separate native model label. OpenClaw's
 selection can use `bitrouter/automatos` without changing the request model.
 Setup configures clients; it does not implement routing.
 
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw accept repeated `--model`
+flags to register several selectors in the same provider:
+
+```sh
+bro connect hermes --model bitrouter/automatos --model team/background
+bro connect openclaw --model bitrouter/automatos --model team/background
+```
+
+Both IDs must already be advertised by that gateway. The first is the primary
+entry: the existing `model`/`display_name` report fields and native primary alias
+retain their meaning. The ordered `models` report lists every registered ID.
+`--display-name` applies to the first entry; additional labels use their exact IDs
+(Hermes picker rows always use IDs). Duplicate IDs are refused. Codex and Claude
+retain their single-model connector contract and reject repeated `--model`.
+
+Define strategies and model combinations on the gateway. Select routes for
+agents, sessions and scheduled jobs in the native harness. The connector does
+not modify schedules or migrate saved workflow bindings when a route is removed.
+Registering a selector does not create a policy or activate a Flex service tier.
+
 ```sh
 bro connect
 bro connect codex --dry-run
@@ -75,6 +95,10 @@ existing providers or the selected default. They support these additional flags:
   A recoverable journal protects the old connection if replacement fails.
   Successful updates restore the earlier native default; select BitRouter again if desired.
   An interrupted update is recovered by the next mutating connect invocation.
+  Supplying `--model` replaces the complete ordered selector set; omitting it
+  preserves the set. To drop a selector, supply the full remaining list.
+  Setup and `--check` validate every ID in one catalog fetch. A missing ID fails
+  before configuration writes or update restoration.
 
 Fresh setup reports `configured`, repeat setup `already_configured`, updates
 `updated`, and offline status `configuration_changed` when owned settings drift.
@@ -196,6 +220,11 @@ Version-5 receipts add native provider ownership and instance metadata. Version-
 the endpoint, request model, optional display name and Claude Desktop ownership
 rules. Earlier receipts remain readable with their original recovery behavior;
 existing Codex exact-file receipts do not silently acquire relaxed checks.
+Version-7 receipts store the ordered native selector set and Pi's complete owned
+selection set. This CLI reads versions 1–6 as single-selector connections and
+upgrades them on replacement while retaining their original restoration baseline.
+Use this CLI for version-7 removal and interrupted-update recovery; older CLIs
+are unsupported for these records.
 For Codex/Claude, rotate keys, refresh catalogs or include newly installed clients
 by removing and reconnecting. The three independent-provider clients also support `--update`.
 

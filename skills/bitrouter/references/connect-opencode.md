@@ -17,7 +17,13 @@ model picker entry named `bitrouter/automatos` by default. The stable OpenCode
 selection ID is `bitrouter/automatos`: provider `bitrouter`, model key
 `automatos`. The model's `id` is the exact gateway model supplied by `--model`;
 its `name` is the independent `--display-name`. A label never creates a gateway
-alias. Existing provider entries and the selected `model`/`small_model` stay
+alias. Repeat `--model` for additional entries under the same provider. Their
+model keys are the exact wire IDs, selected as `bitrouter/<wire-ID>`; the primary
+keeps the stable `automatos` key. An additional ID equal to `automatos` is refused
+to avoid a key collision. `--display-name` applies only to the first entry.
+Updates preserve the complete list when model flags are omitted and replace it
+when supplied. Removal recognizes main/small-model selections of every owned
+entry. Workflow bindings remain native OpenCode settings. Existing provider entries and the selected `model`/`small_model` stay
 unchanged during setup.
 
 The provider SDK matches the selected gateway protocol:

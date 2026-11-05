@@ -25,13 +25,16 @@ selected scope, and update/removal must cover that scope.
 
 For an existing gateway, `--base-url` is the gateway root; use
 `BITROUTER_API_KEY` for scripted setup. The provider receives `<root>/v1`,
-`transport: chat_completions`, `discover_models: false`, and only the exact
-connected model. Chat Completions is the supported connector protocol. Responses
+`transport: chat_completions`, `discover_models: false`, and all exact
+connected models. Chat Completions is the supported connector protocol. Responses
 and Messages are rejected until separately verified with native Hermes.
 
 In Hermes, reopen the model picker or restart the selected profile/backend, then
 choose **BitRouter** and the connected model. The default wire ID is
-`bitrouter/automatos`. Hermes' picker uses exact ID strings and has no separate
+`bitrouter/automatos`. Repeat `--model` to register additional IDs under the same
+provider; its `default_model` is the first ID. `--update` replaces the list when
+model flags are supplied and preserves it otherwise. Select chat, cron, and
+auxiliary routes in Hermes itself; connection setup leaves those settings alone. Hermes' picker uses exact ID strings and has no separate
 model display label; `--display-name automatos` therefore cannot rename the row.
 Its chat chip can shorten the ID to `automatos` natively. The connector never
 changes the gateway model to obtain a shorter label and does not produce a
@@ -53,7 +56,7 @@ existing BitRouter provider. Native user-created backups or corrupt-config
 recovery snapshots are outside the connector receipt; removal does not claim to
 erase historical copies.
 
-Removal deletes only the owned provider. If the connected BitRouter model is
+Removal deletes only the owned provider. If any connected BitRouter model is
 still the main selection, it restores the previous main route while retaining
 unrelated native preferences. A later choice of another model/provider remains.
 Hermes Desktop stores a manual composer selection in its own local preferences.

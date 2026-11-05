@@ -110,19 +110,20 @@ pub(super) fn config_paths(home: &Path, requested: &[String]) -> Result<Vec<Path
 pub(super) fn prepare(
     endpoint: &str,
     token: &str,
-    model: &str,
+    models: &[String],
     _display_name: &str,
     explicit: Option<&Path>,
     requested: &[String],
     protocol: Protocol,
 ) -> Result<Prepared> {
+    let model = models.first().context("missing Hermes model")?;
     ensure!(
         matches!(protocol, Protocol::ChatCompletions),
         "Hermes connector currently verifies chat-completions only"
     );
     // Hermes expands ${ENV} throughout config.yaml before resolving inline keys.
     ensure!(
-        !endpoint.contains("${") && !model.contains("${"),
+        !endpoint.contains("${") && models.iter().all(|model| !model.contains("${")),
         "Hermes cannot persist literal endpoint/model values containing an environment expression"
     );
     ensure!(
@@ -164,7 +165,7 @@ pub(super) fn prepare(
             "transport": "chat_completions",
             "discover_models": false,
             "default_model": model,
-            "models": {model: {}},
+            "models": models.iter().map(|id| (id.clone(), json!({}))).collect::<Map<String, Value>>(),
             "extra_headers": {"x-bitrouter-harness": "hermes"}
         });
         let after = set_child(
@@ -398,7 +399,13 @@ pub(super) fn restore_config(
         && selected
             .and_then(|value| value.get("default"))
             .and_then(Value::as_str)
-            == Some(model)
+            .is_some_and(|selected| {
+                selected == model
+                    || owned
+                        .get("models")
+                        .and_then(Value::as_object)
+                        .is_some_and(|models| models.contains_key(selected))
+            })
     {
         let previous = prior.get("model");
         for key in [
@@ -468,7 +475,7 @@ mod tests {
         let prepared = prepare(
             "http://127.0.0.1:4356",
             "fixture-key",
-            "bitrouter/automatos",
+            &["bitrouter/automatos".into()],
             "automatos",
             Some(directory.path()),
             &[],
@@ -621,7 +628,7 @@ mod tests {
             prepare(
                 "http://127.0.0.1:4356",
                 "key",
-                "m",
+                &["m".into()],
                 "m",
                 Some(directory.path()),
                 &[],
@@ -637,7 +644,7 @@ mod tests {
                 prepare(
                     endpoint,
                     "key",
-                    model,
+                    &[model.into()],
                     "automatos",
                     Some(directory.path()),
                     &[],
@@ -650,7 +657,7 @@ mod tests {
             prepare(
                 "http://127.0.0.1:4356",
                 "${TOKEN}",
-                "m",
+                &["m".into()],
                 "m",
                 Some(directory.path()),
                 &[],

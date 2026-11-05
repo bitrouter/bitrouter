@@ -5,7 +5,7 @@ mod jsonc;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::{Prepared, Protocol, files};
 
@@ -167,12 +167,25 @@ fn literal_inputs(endpoint: &str, token: &str, model: &str, display_name: &str) 
 pub(super) fn prepare(
     endpoint: &str,
     token: &str,
-    model: &str,
+    models: &[String],
     display_name: &str,
     explicit: Option<&Path>,
     protocol: Protocol,
 ) -> Result<Prepared> {
-    literal_inputs(endpoint, token, model, display_name)?;
+    let model = models.first().context("missing OpenCode model")?;
+    let mut entries = Map::new();
+    for (index, id) in models.iter().enumerate() {
+        literal_inputs(endpoint, token, id, display_name)?;
+        ensure!(
+            index == 0 || id != "automatos",
+            "additional OpenCode model automatos conflicts with the primary native selection key"
+        );
+        let key = if index == 0 { "automatos" } else { id };
+        entries.insert(
+            key.into(),
+            json!({"id":id,"name":if index == 0 {display_name} else {id}}),
+        );
+    }
     let path = instance(explicit)?;
     conflicting_layers(&path, explicit.is_some())?;
     let before = files::read(&path)?;
@@ -196,9 +209,7 @@ pub(super) fn prepare(
             "baseURL": format!("{}/v1", endpoint.trim_end_matches('/')),
             "apiKey": token
         },
-        "models": {
-            "automatos": { "id": model, "name": display_name }
-        }
+        "models": entries
     });
     let after = if let Some(member) = document.member("provider") {
         jsonc::insert(text, &member.node, PROVIDER, &provider)?
@@ -282,7 +293,18 @@ pub(super) fn restore_config(
     for key in ["model", "small_model"] {
         let document = jsonc::parse(&restored)?;
         if let Some(member) = document.member(key)
-            && member.node.value.as_str() == Some(SELECTOR)
+            && member
+                .node
+                .value
+                .as_str()
+                .and_then(|selected| selected.strip_prefix("bitrouter/"))
+                .is_some_and(|key| {
+                    expected
+                        .value
+                        .pointer("/provider/bitrouter/models")
+                        .and_then(Value::as_object)
+                        .is_some_and(|models| models.contains_key(key))
+                })
         {
             if let Some(value) = original.value.get(key) {
                 restored.replace_range(member.node.span.clone(), &serde_json::to_string(value)?);

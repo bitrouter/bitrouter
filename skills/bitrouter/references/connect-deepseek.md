@@ -31,7 +31,13 @@ with `--update`.
 The built-in `llm-pi-ai` adapter supports `--protocol chat-completions`
 (default), `responses`, and `messages`. It writes these as
 `openai-completions`, `openai-responses`, and `anthropic-messages`. One provider
-uses one protocol. The gateway request model is exact; `--display-name` changes
+uses one protocol. Repeat `--model` to register multiple exact IDs in each selected profile.
+`--display-name` applies to the first entry and additional labels use wire IDs.
+Updates replace the full ordered list when model flags are provided and preserve
+it otherwise. Select models for tasks/profiles in Harness itself; the connector
+does not manage workflow bindings.
+
+The gateway request model is exact; `--display-name` changes
 only its native label. Text input is declared; image and reasoning capabilities
 are not inferred from a model ID.
 OpenAI protocols use the gateway root plus `/v1`; Anthropic Messages uses the

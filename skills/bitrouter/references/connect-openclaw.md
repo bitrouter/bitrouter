@@ -10,7 +10,14 @@ bro connect openclaw --base-url http://127.0.0.1:4356 --dry-run
 bro connect openclaw --base-url http://127.0.0.1:4356 --yes
 ```
 
-The default model is `bitrouter/automatos`; `--model` changes the exact gateway wire ID. `--display-name` changes its catalog label. This connector accepts only `--protocol chat-completions`; Responses and Messages are not claimed.
+The default model is `bitrouter/automatos`; `--model` changes the exact gateway wire ID. `--display-name` changes the first entry's catalog label. Repeat `--model` to add
+selectors to the same provider. Additional native refs are `bitrouter/<wire-ID>`;
+only the first entry receives the existing `automatos` alias. The additional
+wire ID `automatos` is refused because it conflicts with that alias. Every ID
+must pass existing agent model policies; permission for the primary alias does
+not authorize other models. Configure agent/session/job selections in OpenClaw
+itself. Updates replace the full list when model flags are supplied, and keep
+the list otherwise. Saved job bindings are not rewritten on update/removal. This connector accepts only `--protocol chat-completions`; Responses and Messages are not claimed.
 
 ## Select the gateway instance
 

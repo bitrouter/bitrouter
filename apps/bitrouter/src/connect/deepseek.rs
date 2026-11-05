@@ -283,12 +283,14 @@ fn route(document: &PatchDocument) -> Result<Option<&Value>> {
 pub(super) fn prepare(
     endpoint: &str,
     token: &str,
-    model: &str,
+    models: &[String],
     display_name: &str,
     explicit: Option<&Path>,
     requested: &[String],
     protocol: Protocol,
 ) -> Result<Prepared> {
+    ensure!(!models.is_empty(), "missing Harness models");
+    let entries: Vec<_> = models.iter().enumerate().map(|(index,id)| json!({"id":id,"name":if index == 0 {display_name} else {id},"input":["text"]})).collect();
     let home = instance(explicit)?;
     let selected = profiles(&home, requested)?;
     let global = PatchDocument::parse(files::read(&home.join(PATCH))?.as_deref())?;
@@ -333,7 +335,7 @@ pub(super) fn prepare(
     };
     let provider = json!({"displayName":"BitRouter", "apiKeyEnv":CREDENTIAL, "api":api,
         "baseURL":base_url,
-        "models":[{"id":model,"name":display_name,"input":["text"]}]});
+        "models":entries});
     let mut surfaces = vec![];
     for (name, path) in selected.iter().zip(owned) {
         let before = files::read(&path)?;
@@ -720,7 +722,7 @@ mod tests {
         let prepared = prepare(
             "http://127.0.0.1:4356/team",
             "fixture",
-            "bitrouter/automatos",
+            &["bitrouter/automatos".into()],
             "bitrouter/automatos",
             Some(&home),
             &["web".into()],

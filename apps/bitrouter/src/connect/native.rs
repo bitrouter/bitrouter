@@ -16,6 +16,7 @@ struct Report {
     state: &'static str,
     endpoint: String,
     model: String,
+    models: Vec<String>,
     display_name: String,
     protocol: Protocol,
     files: Vec<PathBuf>,
@@ -35,6 +36,7 @@ impl CliReport for Report {
             self.state
         ))?;
         h.line(&format!("  Instance: {}", self.instance))?;
+        h.line(&format!("  Models: {}", self.models.join(", ")))?;
         for path in &self.files {
             h.line(&format!("  {}", path.display()))?;
         }
@@ -56,6 +58,7 @@ fn report(target: Target, receipt: &files::Receipt, state: &'static str) -> Resu
         state,
         endpoint: receipt.endpoint.clone(),
         model: receipt.model.clone(),
+        models: receipt.models().to_vec(),
         display_name: receipt.display_name().into(),
         protocol: native.protocol,
         files: receipt.files.iter().map(|f| f.path.clone()).collect(),
@@ -103,33 +106,35 @@ fn prepare(
     target: Target,
     endpoint: &str,
     token: &str,
-    model_and_label: (&str, &str),
+    model_and_label: (&[String], &str),
     instance: Option<&Path>,
     profiles: &[String],
     protocol: Protocol,
 ) -> Result<files::Receipt> {
-    let (model, label) = model_and_label;
+    let (models, label) = model_and_label;
+    let model = models.first().context("missing connection model")?;
     let Prepared {
         files,
         instance,
         surfaces,
-        notes,
+        mut notes,
     } = match target {
         Target::OpenCode => {
-            super::opencode::prepare(endpoint, token, model, label, instance, protocol)?
+            super::opencode::prepare(endpoint, token, models, label, instance, protocol)?
         }
-        Target::Pi => super::pi::prepare(endpoint, token, model, label, instance, protocol)?,
+        Target::Pi => super::pi::prepare(endpoint, token, models, label, instance, protocol)?,
         Target::Deepseek => {
-            super::deepseek::prepare(endpoint, token, model, label, instance, profiles, protocol)?
+            super::deepseek::prepare(endpoint, token, models, label, instance, profiles, protocol)?
         }
         Target::Hermes => {
-            super::hermes::prepare(endpoint, token, model, label, instance, profiles, protocol)?
+            super::hermes::prepare(endpoint, token, models, label, instance, profiles, protocol)?
         }
         Target::OpenClaw => {
-            super::openclaw::prepare(endpoint, token, model, label, instance, profiles, protocol)?
+            super::openclaw::prepare(endpoint, token, models, label, instance, profiles, protocol)?
         }
         _ => anyhow::bail!("unsupported native provider client"),
     };
+    notes.push("Select routes for agents, sessions and jobs in the native client. This connection manages the provider catalog; updates/removal do not migrate saved workflow bindings.".into());
     let mut receipt = files::Receipt::new(endpoint.into(), model.into(), files)
         .with_display_name(Some(label.into()));
     receipt.native = Some(files::Native {
@@ -138,6 +143,7 @@ fn prepare(
         profiles: profiles.into(),
         surfaces,
         notes,
+        models: models.to_vec(),
     });
     Ok(receipt)
 }
@@ -202,6 +208,7 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
             profiles: vec![],
             surfaces: vec![],
             notes: vec![],
+            models: vec![],
         });
         return output
             .emit(&report(target, &receipt, "not_configured")?)
@@ -233,7 +240,7 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
         }
         if !options.update {
             ensure!(
-                options.model.as_ref().is_none_or(|v| v == &receipt.model)
+                (options.model.is_empty() || options.model == receipt.models())
                     && options
                         .display_name
                         .as_deref()
@@ -264,8 +271,12 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
                 );
             }
             if options.check {
-                super::verify_gateway(&receipt.endpoint, &receipt.stored_token()?, &receipt.model)
-                    .await?;
+                super::verify_gateway_models(
+                    &receipt.endpoint,
+                    &receipt.stored_token()?,
+                    receipt.models(),
+                )
+                .await?;
                 result.gateway_catalog_verified = true;
                 result.state = "catalog_verified";
             }
@@ -275,8 +286,8 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
             receipt.installed()?,
             "connection files changed; resolve changes before --update"
         );
-        if options.model.is_none() {
-            options.model = Some(receipt.model.clone());
+        if options.model.is_empty() {
+            options.model = receipt.models().to_vec();
         }
         if options.display_name.is_none() {
             options.display_name = Some(receipt.display_name().into());
@@ -296,7 +307,16 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
             "no saved connection for this instance"
         );
     }
-    let model = options.model.as_deref().unwrap_or(super::DEFAULT_MODEL);
+    if options.model.is_empty() {
+        options.model.push(super::DEFAULT_MODEL.into());
+    }
+    let models = &options.model;
+    let mut seen = std::collections::HashSet::new();
+    for model in models {
+        super::validate_model(model)?;
+        ensure!(seen.insert(model), "duplicate --model value: {model}");
+    }
+    let model = models.first().context("missing connection model")?.as_str();
     let label = options.display_name.as_deref().unwrap_or_else(|| {
         if matches!(target, Target::Hermes | Target::OpenClaw) {
             model.strip_prefix("bitrouter/").unwrap_or(model)
@@ -372,7 +392,7 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
             target,
             &endpoint,
             &token,
-            (model, label),
+            (models, label),
             if options.instance.is_some() || matches!(target, Target::Hermes | Target::OpenClaw) {
                 Some(instance.as_path())
             } else {
@@ -404,12 +424,14 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
         let mut result = report(target, receipt, "updated")?;
         result.endpoint = endpoint.clone();
         result.model = model.into();
+        result.models = models.clone();
         result.display_name = label.into();
         result.protocol = protocol;
         result.notes = vec![
             format!("Replace the saved provider: display {label}, request model {model}, protocol {protocol:?}."),
             "Updating restores the earlier native startup default; select BitRouter again afterward if desired. Unrelated settings are retained.".into(),
             "The previous connection remains recoverable if the replacement fails or is interrupted.".into(),
+            "The supplied --model list replaces the complete catalog. Saved job/session route bindings are not migrated.".into(),
         ];
         if matches!(target, Target::Deepseek) {
             result.notes.push(format!(
@@ -452,7 +474,7 @@ pub(super) async fn run(target: Target, mut options: Options, output: &Output) -
     {
         local_gateway::ensure_local_daemon(source, config, false).await;
     }
-    super::verify_gateway(&endpoint, &token, model).await?;
+    super::verify_gateway_models(&endpoint, &token, models).await?;
     let receipt = if let Some(previous) = previous {
         previous.replace(&receipt_path, build)?
     } else {
@@ -474,6 +496,7 @@ fn preview(report: &Report) {
         report.endpoint
     );
     eprintln!("  Instance: {}", report.instance);
+    eprintln!("  Models: {}", report.models.join(", "));
     for path in &report.files {
         eprintln!("  {}", path.display());
     }

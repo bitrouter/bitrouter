@@ -19,6 +19,8 @@ pub(super) enum Restore {
     PiAuth,
     PiSettings {
         model: String,
+        #[serde(default)]
+        models: Vec<String>,
     },
     DeepseekProfile,
     DeepseekCredentials {
@@ -142,8 +144,13 @@ impl Change {
             }
             Restore::PiModels => return super::pi::restore_models(before, &self.after, current),
             Restore::PiAuth => return super::pi::restore_auth(before, &self.after, current),
-            Restore::PiSettings { model } => {
-                return super::pi::restore_settings(before, &self.after, current, model);
+            Restore::PiSettings { model, models } => {
+                let models = if models.is_empty() {
+                    std::slice::from_ref(model)
+                } else {
+                    models
+                };
+                return super::pi::restore_settings(before, &self.after, current, models);
             }
             Restore::DeepseekProfile => {
                 return super::deepseek::restore_profile(before, &self.after, current);
@@ -349,6 +356,8 @@ pub(super) struct Native {
     pub profiles: Vec<String>,
     pub surfaces: Vec<String>,
     pub notes: Vec<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -362,7 +371,7 @@ struct Replacement {
 impl Receipt {
     pub fn new(endpoint: String, model: String, files: Vec<Change>) -> Self {
         Self {
-            version: 6,
+            version: 7,
             endpoint,
             model,
             display_name: None,
@@ -380,23 +389,57 @@ impl Receipt {
         self.display_name.as_deref().unwrap_or(&self.model)
     }
 
+    pub fn models(&self) -> &[String] {
+        if let Some(native) = &self.native
+            && !native.models.is_empty()
+        {
+            &native.models
+        } else if self.model.is_empty() {
+            &[]
+        } else {
+            std::slice::from_ref(&self.model)
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Option<Self>> {
         read(path)?
             .map(|text| {
                 let mut receipt: Self =
                     serde_json::from_str(&text).context("invalid connection receipt")?;
-                ensure!(
-                    matches!(receipt.version, 1..=6),
-                    "unsupported connection receipt version"
-                );
-                if receipt.version == 1 && receipt.model.is_empty() {
-                    receipt.model = super::default_model();
-                }
-                super::validate_model(&receipt.model)?;
-                super::validate_display_name(receipt.display_name())?;
+                receipt.validate()?;
                 Ok(receipt)
             })
             .transpose()
+    }
+
+    fn validate(&mut self) -> Result<()> {
+        ensure!(
+            matches!(self.version, 1..=7),
+            "unsupported connection receipt version"
+        );
+        if self.version == 1 && self.model.is_empty() {
+            self.model = super::default_model();
+        }
+        super::validate_model(&self.model)?;
+        if self.version >= 7
+            && let Some(native) = &self.native
+        {
+            ensure!(
+                !native.models.is_empty(),
+                "missing native connection models"
+            );
+        }
+        let mut seen = std::collections::HashSet::new();
+        for model in self.models() {
+            super::validate_model(model)?;
+            ensure!(seen.insert(model), "duplicate model in connection receipt");
+        }
+        ensure!(
+            self.models().first() == Some(&self.model),
+            "connection receipt primary model differs from its models"
+        );
+        super::validate_display_name(self.display_name())?;
+        Ok(())
     }
 
     pub fn installed(&self) -> Result<bool> {
@@ -561,6 +604,8 @@ impl Receipt {
         };
         let mut recovery: Replacement =
             serde_json::from_str(&text).context("invalid update recovery record")?;
+        recovery.previous.validate()?;
+        recovery.rollback.validate()?;
         if !recovery.active_restored {
             if let Some(active) = Self::load(path)? {
                 active.restore_files()?;

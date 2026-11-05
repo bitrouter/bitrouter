@@ -12,11 +12,18 @@ const PROVIDER: &str = "bitrouter";
 pub(super) fn prepare(
     endpoint: &str,
     token: &str,
-    model: &str,
+    models: &[String],
     display_name: &str,
     instance: Option<&Path>,
     protocol: Protocol,
 ) -> Result<Prepared> {
+    let model = models.first().context("missing Pi model")?;
+    let entries: Vec<_> = models
+        .iter()
+        .enumerate()
+        .map(|(index, id)| json!({"id":id,"name":if index == 0 {display_name} else {id}}))
+        .collect();
+    let owned_models = models.to_vec();
     let home = self::instance(instance)?;
     let (mut models, models_before) = files::json_snapshot(&home.join("models.json"))?;
     let providers = models
@@ -43,7 +50,7 @@ pub(super) fn prepare(
             "api": api,
             "authHeader": true,
             "headers": {"x-bitrouter-harness": "pi-acp"},
-            "models": [{"id": model, "name": display_name}]
+            "models": entries
         }),
     );
 
@@ -79,7 +86,7 @@ pub(super) fn prepare(
             Change::json(home.join("auth.json"), auth_before, &auth)?
                 .with_restore(Restore::PiAuth),
             Change::snapshot(home.join("settings.json"), settings_before, settings_after)
-                .with_restore(Restore::PiSettings { model: model.into() }),
+                .with_restore(Restore::PiSettings { model: model.into(), models: owned_models }),
         ],
         instance: home.display().to_string(),
         surfaces: vec!["cli".into(), "tui".into()],
@@ -245,11 +252,14 @@ pub(super) fn restore_settings(
     before: Option<&str>,
     _after: &str,
     current: Option<&str>,
-    model: &str,
+    models: &[String],
 ) -> Result<Option<String>> {
     let mut value = object(current)?;
     if value.get("defaultProvider").and_then(Value::as_str) == Some(PROVIDER)
-        && value.get("defaultModel").and_then(Value::as_str) == Some(model)
+        && value
+            .get("defaultModel")
+            .and_then(Value::as_str)
+            .is_some_and(|model| models.iter().any(|id| id == model))
     {
         let before_value = object(before)?;
         for key in ["defaultProvider", "defaultModel"] {
@@ -291,7 +301,7 @@ mod tests {
             let prepared = prepare(
                 "http://127.0.0.1:4356",
                 "gateway-key",
-                MODEL,
+                &[MODEL.into()],
                 "bitrouter/automatos",
                 Some(&root),
                 Protocol::ChatCompletions,
@@ -324,7 +334,7 @@ mod tests {
                 prepare(
                     "http://127.0.0.1:4356",
                     "key",
-                    MODEL,
+                    &[MODEL.into()],
                     MODEL,
                     Some(&root),
                     Protocol::Responses
@@ -363,7 +373,7 @@ mod tests {
             prepare(
                 "http://localhost",
                 "!secret$KEY",
-                MODEL,
+                &[MODEL.into()],
                 MODEL,
                 Some(&root),
                 Protocol::Responses,
@@ -417,7 +427,7 @@ mod tests {
             let changes = prepare(
                 "http://localhost/proxy",
                 "key",
-                MODEL,
+                &[MODEL.into()],
                 MODEL,
                 Some(&root),
                 protocol,
@@ -436,7 +446,7 @@ mod tests {
             prepare(
                 "http://localhost",
                 "key",
-                MODEL,
+                &[MODEL.into()],
                 MODEL,
                 Some(&root),
                 Protocol::ChatCompletions

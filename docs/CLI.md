@@ -20,6 +20,14 @@ while Hermes' picker displays the exact model ID under BitRouter.
 the saved credential, without inference; `--update` replaces an existing connection.
 See the connection contract for per-client reload and recovery behavior.
 
+For these five independent-provider clients, repeat `--model ID` to register
+several advertised selectors under one provider. The first retains the existing
+primary alias/display-name behavior; JSON reports also list all `models`.
+`--update` replaces the full list when model flags are supplied and preserves it
+otherwise. Catalog checks cover every ID. Codex/Claude remain single-model.
+Select routes for agents, sessions, and jobs in the native harness; connection
+setup does not rewrite workflow bindings or create routing strategies.
+
 MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
 Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.

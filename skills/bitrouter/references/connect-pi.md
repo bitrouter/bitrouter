@@ -22,7 +22,12 @@ does not require `BITROUTER_API_KEY`. Runtime `--api-key` and provider extension
 can still override authentication. Existing `bitrouter` provider/auth entries
 are conflicts, so setup cannot overwrite a manually configured provider.
 
-The default request model is exactly `bitrouter/automatos`. `--model ID` changes
+The default request model is exactly `bitrouter/automatos`. Repeat `--model` to
+register several exact IDs in the same provider. The first keeps the custom
+`--display-name`; additional entries use their exact IDs as labels. Updates
+replace the complete list when model flags are supplied and preserve it
+otherwise. Removal restores the saved startup route if any owned ID is selected.
+Workflow bindings remain native Pi settings. `--model ID` changes
 the wire ID, which must exist in the gateway catalog. Pi picker rows display
 the wire ID; `--display-name` supplies the model's detail/search name and cannot
 rename that ID. Select the entry under `[bitrouter]` in `/model`. Its fully

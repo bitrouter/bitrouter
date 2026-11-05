@@ -139,7 +139,7 @@ fn aliases_match(actual: &Value, expected: &Value, model: &str) -> bool {
     !values.is_empty() && values.iter().all(|value| Some(*value) == owned)
 }
 
-fn allows(policy: Option<&Value>, reference: &str, scope: &str) -> Result<()> {
+fn allows(policy: Option<&Value>, reference: &str, scope: &str, primary: bool) -> Result<()> {
     let Some(policy) = policy else {
         return Ok(());
     };
@@ -161,8 +161,7 @@ fn allows(policy: Option<&Value>, reference: &str, scope: &str) -> Result<()> {
             || allow.iter().filter_map(Value::as_str).any(|entry| {
                 let entry = entry.trim();
                 entry == reference
-                    || entry == ALIAS
-                    || entry == "bitrouter/automatos"
+                    || (primary && (entry == ALIAS || entry == "bitrouter/automatos"))
                     || entry.strip_suffix("/*").is_some_and(|prefix| {
                         !prefix.is_empty()
                             && !prefix.contains('*')
@@ -179,7 +178,7 @@ fn allows(policy: Option<&Value>, reference: &str, scope: &str) -> Result<()> {
     Ok(())
 }
 
-fn permitted(value: &Value, reference: &str) -> Result<()> {
+fn permitted(value: &Value, reference: &str, primary: bool) -> Result<()> {
     no_includes(value)?;
     ensure!(
         value.pointer("/agents/list").is_none(),
@@ -198,7 +197,7 @@ fn permitted(value: &Value, reference: &str) -> Result<()> {
             "OpenClaw agents.defaults.models is a legacy model allowlist that excludes {reference}; migrate and explicitly permit that model before connecting"
         );
     }
-    allows(policy, reference, "agents.defaults")?;
+    allows(policy, reference, "agents.defaults", primary)?;
     if let Some(entries) = value.pointer("/agents/entries") {
         for (id, entry) in entries
             .as_object()
@@ -208,7 +207,7 @@ fn permitted(value: &Value, reference: &str) -> Result<()> {
             let own_policy = entry
                 .get("modelPolicy")
                 .filter(|policy| policy.get("allow").is_some());
-            allows(own_policy.or(policy), reference, &scope)?;
+            allows(own_policy.or(policy), reference, &scope, primary)?;
             if let Some(models) = entry.get("models").and_then(Value::as_object) {
                 ensure!(
                     !models.values().any(|value| value
@@ -310,12 +309,13 @@ fn catalog_paths(instance: &Path, value: &Value) -> Result<Vec<PathBuf>> {
 pub(super) fn prepare(
     endpoint: &str,
     token: &str,
-    model: &str,
+    models: &[String],
     display_name: &str,
     explicit: Option<&Path>,
     profiles: &[String],
     protocol: Protocol,
 ) -> Result<Prepared> {
+    let model = models.first().context("missing OpenClaw model")?;
     ensure!(
         profiles.is_empty(),
         "OpenClaw --profile is unsupported; select the gateway state directory with --instance"
@@ -339,11 +339,21 @@ pub(super) fn prepare(
             "OpenClaw {name} contains environment substitution syntax; supply a literal value"
         );
     }
+    ensure!(
+        models.iter().all(|id| !id.contains("${")),
+        "OpenClaw model contains environment substitution syntax; supply a literal value"
+    );
+    ensure!(
+        models.iter().skip(1).all(|id| id != ALIAS),
+        "additional OpenClaw model automatos conflicts with the primary native alias"
+    );
     let path = instance(explicit)?;
     let (text, before) = read(&path)?;
     let root = document::parse(&text).context("invalid OpenClaw JSON5 configuration")?;
     let reference = ref_for(model);
-    permitted(&root.value, &reference)?;
+    for (index, id) in models.iter().enumerate() {
+        permitted(&root.value, &ref_for(id), index == 0)?;
+    }
     ensure!(
         root.value
             .pointer("/models/providers")
@@ -386,7 +396,12 @@ pub(super) fn prepare(
             .is_none_or(|providers| !providers.contains_key(SECRET_PROVIDER)),
         "OpenClaw already owns the bitrouter-connect secret provider"
     );
-    let provider = json!({"baseUrl":format!("{}/v1",endpoint.trim_end_matches('/')), "api":"openai-completions", "auth":"api-key", "authHeader":true, "headers":{"x-bitrouter-harness":"openclaw"}, "apiKey":{"source":"file","provider":SECRET_PROVIDER,"id":"/apiKey"}, "models":[{"id":model,"name":display_name}]});
+    let entries: Vec<_> = models
+        .iter()
+        .enumerate()
+        .map(|(index, id)| json!({"id":id,"name":if index == 0 {display_name} else {id}}))
+        .collect();
+    let provider = json!({"baseUrl":format!("{}/v1",endpoint.trim_end_matches('/')), "api":"openai-completions", "auth":"api-key", "authHeader":true, "headers":{"x-bitrouter-harness":"openclaw"}, "apiKey":{"source":"file","provider":SECRET_PROVIDER,"id":"/apiKey"}, "models":entries});
     let mut after = set(&text, &["models", "providers", PROVIDER], &provider)?;
     after = set(
         &after,
@@ -492,20 +507,25 @@ pub(super) fn config_installed(
         .pointer("/models/providers/bitrouter/models/0/id")
         .and_then(Value::as_str)
         .context("missing owned OpenClaw model")?;
-    let reference = ref_for(model);
-    Ok(permitted_installed(&actual, &reference).is_ok()
+    let permitted = expected
+        .pointer("/models/providers/bitrouter/models")
+        .and_then(Value::as_array)
+        .context("missing owned OpenClaw models")?
+        .iter()
+        .enumerate()
+        .all(|(index, entry)| {
+            entry
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| permitted(&actual, &ref_for(id), index == 0).is_ok())
+        });
+    Ok(permitted
         && untracked(instance, &actual, catalogs).is_ok()
         && actual.pointer("/models/providers/bitrouter")
             == expected.pointer("/models/providers/bitrouter")
         && actual.pointer("/secrets/providers/bitrouter-connect")
             == expected.pointer("/secrets/providers/bitrouter-connect")
         && aliases_match(&actual, &expected, model))
-}
-
-fn permitted_installed(value: &Value, reference: &str) -> Result<()> {
-    // The owned inherited alias is expected during checks; per-agent alias edits
-    // still require explicit reconciliation rather than changing their meaning.
-    permitted(value, reference)
 }
 
 fn cleanup_empty(mut text: String, before: &Value, paths: &[&[&str]]) -> Result<String> {
@@ -523,8 +543,10 @@ fn cleanup_empty(mut text: String, before: &Value, paths: &[&[&str]]) -> Result<
     Ok(text)
 }
 
-fn owned_selection(value: &str, reference: &str) -> bool {
-    value == reference || value == "bitrouter/automatos" || value == ALIAS
+fn owned_selection(value: &str, references: &[String]) -> bool {
+    references.iter().any(|reference| value == reference)
+        || value == "bitrouter/automatos"
+        || value == ALIAS
 }
 
 fn uses_secret(value: &Value, path: Option<&Value>) -> bool {
@@ -540,7 +562,12 @@ fn uses_secret(value: &Value, path: Option<&Value>) -> bool {
     }
 }
 
-fn restore_selection(text: &str, before: &Value, keys: &[&str], reference: &str) -> Result<String> {
+fn restore_selection(
+    text: &str,
+    before: &Value,
+    keys: &[&str],
+    references: &[String],
+) -> Result<String> {
     let root = document::parse(text)?.value;
     let Some(value) = keys.iter().try_fold(&root, |value, key| value.get(*key)) else {
         return Ok(text.into());
@@ -549,7 +576,7 @@ fn restore_selection(text: &str, before: &Value, keys: &[&str], reference: &str)
     let mut restored = value.clone();
     if value
         .as_str()
-        .is_some_and(|value| owned_selection(value, reference))
+        .is_some_and(|value| owned_selection(value, references))
     {
         return match previous {
             Some(previous) => set(text, keys, previous),
@@ -560,7 +587,7 @@ fn restore_selection(text: &str, before: &Value, keys: &[&str], reference: &str)
         if object
             .get("primary")
             .and_then(Value::as_str)
-            .is_some_and(|value| owned_selection(value, reference))
+            .is_some_and(|value| owned_selection(value, references))
         {
             match previous
                 .and_then(|value| value.get("primary"))
@@ -578,7 +605,7 @@ fn restore_selection(text: &str, before: &Value, keys: &[&str], reference: &str)
             fallbacks.retain(|value| {
                 !value
                     .as_str()
-                    .is_some_and(|value| owned_selection(value, reference))
+                    .is_some_and(|value| owned_selection(value, references))
             });
         }
         if object.is_empty() {
@@ -610,6 +637,19 @@ pub(super) fn restore_config(
         .and_then(Value::as_str)
         .context("missing owned OpenClaw model")?;
     let reference = ref_for(model);
+    let references: Vec<_> = expected
+        .pointer("/models/providers/bitrouter/models")
+        .and_then(Value::as_array)
+        .context("missing owned OpenClaw models")?
+        .iter()
+        .map(|entry| {
+            entry
+                .get("id")
+                .and_then(Value::as_str)
+                .context("invalid owned OpenClaw model ID")
+                .map(ref_for)
+        })
+        .collect::<Result<_>>()?;
     let expected_secret = expected
         .pointer("/secrets/providers/bitrouter-connect")
         .context("missing owned OpenClaw secret provider")?;
@@ -682,7 +722,7 @@ pub(super) fn restore_config(
         for key in ["model", "imageModel", "utilityModel"] {
             let mut keys = scope.clone();
             keys.push(key);
-            text = restore_selection(&text, &original, &keys, &reference)?;
+            text = restore_selection(&text, &original, &keys, &references)?;
         }
     }
     text = cleanup_empty(
