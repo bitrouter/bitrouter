@@ -1,7 +1,7 @@
 //! Core acknowledgement barrier. Checkpoint codecs and append validation live
 //! in application storage; only this scheduler gate authorizes new dispatch.
 
-use crate::storage::checkpoint::CheckpointBatchExt;
+use crate::storage::checkpoint::{CheckpointBatchExt, ack_for_batch};
 use bitrouter_ai::core::checkpoint::{
     CheckpointAck, CheckpointBatch, CheckpointPayload, DurableHead,
 };
@@ -13,19 +13,10 @@ pub struct CommitGate {
     grant: OwnershipGrant,
     head: DurableHead,
     limits: Limits,
-    pending: Option<PendingBatch>,
+    pending: Option<CheckpointBatch>,
     connected: bool,
     provisionally_blocked: bool,
     released: bool,
-}
-
-struct PendingBatch {
-    batch: CheckpointBatch,
-    // Established by full append validation before retention. The encoded
-    // batch stays immutable, so ACK reconciliation need not decode it again
-    // when the session already retains the corresponding typed candidate.
-    state_revision: u64,
-    through_event_seq: u64,
 }
 
 impl CommitGate {
@@ -63,7 +54,7 @@ impl CommitGate {
         &self.grant
     }
     pub fn pending(&self) -> Option<&CheckpointBatch> {
-        self.pending.as_ref().map(|pending| &pending.batch)
+        self.pending.as_ref()
     }
 
     pub fn can_dispatch(&self) -> bool {
@@ -135,13 +126,10 @@ impl CommitGate {
             .iter()
             .map(|reference| (reference.artifact_id.clone(), reference.clone()))
             .collect();
-        let ack = batch.validate_append(&self.grant, &self.head, &self.limits, &artifacts, None)?;
-        self.pending = Some(PendingBatch {
-            batch,
-            state_revision: ack.state_revision,
-            through_event_seq: ack.through_event_seq,
-        });
-        self.pending()
+        batch.validate_append(&self.grant, &self.head, &self.limits, &artifacts, None)?;
+        self.pending = Some(batch);
+        self.pending
+            .as_ref()
             .ok_or_else(|| conflict("checkpoint proposal was not retained"))
     }
 
@@ -151,22 +139,6 @@ impl CommitGate {
         &mut self,
         ack: &CheckpointAck,
     ) -> Result<Option<CheckpointPayload>, CoreError> {
-        self.acknowledge_with(ack, CheckpointBatch::decode)
-    }
-
-    /// Publish only the ACK barrier; the session adopts its retained candidate.
-    pub(crate) fn acknowledge_transition(
-        &mut self,
-        ack: &CheckpointAck,
-    ) -> Result<Option<()>, CoreError> {
-        self.acknowledge_with(ack, |_, _| Ok(()))
-    }
-
-    fn acknowledge_with<T>(
-        &mut self,
-        ack: &CheckpointAck,
-        extract: impl FnOnce(&CheckpointBatch, &Limits) -> Result<T, CoreError>,
-    ) -> Result<Option<T>, CoreError> {
         if ack.execution_epoch != self.grant.execution_epoch {
             return Err(CoreError::rejected(
                 ErrorCode::StaleEpoch,
@@ -176,24 +148,19 @@ impl CommitGate {
         if ack.head() == self.head {
             return Ok(None);
         }
-        let pending = self
+        let batch = self
             .pending
             .as_ref()
             .ok_or_else(|| conflict("no pending batch matches acknowledgement"))?;
-        let committed = extract(&pending.batch, &self.limits)?;
-        if ack.batch_id != pending.batch.identity.batch_id
-            || ack.payload_sha256 != pending.batch.payload_sha256
-            || ack.execution_epoch != pending.batch.identity.execution_epoch
-            || ack.state_revision != pending.state_revision
-            || ack.through_event_seq != pending.through_event_seq
-        {
+        let payload = batch.decode(&self.limits)?;
+        if *ack != ack_for_batch(batch, &payload) {
             return Err(conflict(
                 "acknowledgement does not match the complete pending batch",
             ));
         }
         self.head = ack.head();
         self.pending = None;
-        Ok(Some(committed))
+        Ok(Some(payload))
     }
 
     /// Reconcile an ACK lost after atomic harness commit. A different head is
@@ -202,22 +169,6 @@ impl CommitGate {
         &mut self,
         durable: &DurableHead,
     ) -> Result<Option<CheckpointPayload>, CoreError> {
-        self.reconnect_with(durable, CheckpointBatch::decode)
-    }
-
-    /// Reconcile a lost ACK without reconstructing the retained candidate.
-    pub(crate) fn reconnect_transition(
-        &mut self,
-        durable: &DurableHead,
-    ) -> Result<Option<()>, CoreError> {
-        self.reconnect_with(durable, |_, _| Ok(()))
-    }
-
-    fn reconnect_with<T>(
-        &mut self,
-        durable: &DurableHead,
-        extract: impl FnOnce(&CheckpointBatch, &Limits) -> Result<T, CoreError>,
-    ) -> Result<Option<T>, CoreError> {
         self.connected = false;
         durable.validate()?;
         if durable == &self.head {
@@ -237,7 +188,7 @@ impl CommitGate {
             state_revision: durable.state_revision,
             execution_epoch: durable.execution_epoch,
         };
-        let committed = self.acknowledge_with(&ack, extract)?;
+        let committed = self.acknowledge(&ack)?;
         self.connected = true;
         Ok(committed)
     }
@@ -246,6 +197,3 @@ impl CommitGate {
 fn conflict(message: impl Into<String>) -> CoreError {
     CoreError::rejected(ErrorCode::CheckpointConflict, message)
 }
-
-#[cfg(test)]
-mod tests;

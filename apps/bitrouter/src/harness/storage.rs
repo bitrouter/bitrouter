@@ -225,10 +225,8 @@ pub struct StoredExecution {
 
 #[async_trait::async_trait]
 pub trait ExecutionStore: Send + Sync {
-    /// Monotonic root positions at a fixed discovery cutoff, with each execution
-    /// ID appearing exactly once across all pages at that cutoff. Backends
-    /// must enforce this identity invariant without relying on a caller's cache.
-    /// Heads describe current versions, not a snapshot of mutable journal content. Execution
+    /// Monotonic root positions at a fixed discovery cutoff. Heads describe
+    /// current versions, not a snapshot of mutable journal content. Execution
     /// admission stays closed until a claimed owner finishes its startup scan.
     async fn read_index(
         &self,

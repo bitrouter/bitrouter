@@ -104,10 +104,6 @@ slow-timeout = { period = "60s", terminate-after = 35 }
 filter = 'test(=tenancy::tests::capacity_history::large_history_qualification)'
 slow-timeout = { period = "60s", terminate-after = 120 }
 
-[[profile.default.overrides]]
-filter = 'test(=harness::service::tests::startup::scale::real_sqlite_native_history_crosses_old_startup_limits_without_replay)'
-slow-timeout = { period = "60s", terminate-after = 60 }
-
 # Separate opt-in offline proofs retain actual large inputs. Ordinary adapter
 # tests keep their existing deadline; these allowances apply only to these names.
 [[profile.default.overrides]]

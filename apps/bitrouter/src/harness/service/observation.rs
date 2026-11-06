@@ -338,16 +338,13 @@ impl ThreadService {
         facts: &[ExecutionRecord],
         previous_context: Option<&(String, bitrouter_ai::harness::inspection::Inspection)>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
-        let mut framed =
-            super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
+        let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
             .checked_add(u64::try_from(framed.len()).map_err(|error| error.to_string())?)
             .and_then(|seq| seq.checked_add(1))
             .ok_or("Thread cursor exhausted")?;
         let mut records = facts.to_vec();
-        // Thread snapshots are never split. Patch both views of their cursor,
-        // retaining the already framed, unchanged Core checkpoint bytes.
-        for record in records.iter_mut().chain(&mut framed) {
+        for record in &mut records {
             if let ExecutionRecord::ThreadCreated { snapshot, .. }
             | ExecutionRecord::ThreadCheckpoint { snapshot, .. } = record
             {
@@ -395,10 +392,12 @@ impl ThreadService {
                 "Thread transaction projection exceeds history byte bound",
             ));
         }
-        framed.push(ExecutionRecord::ThreadEvent {
+        let mut records =
+            super::checkpoint_pages::split(&records, self.inner.limits.recovery_page_bytes)?;
+        records.push(ExecutionRecord::ThreadEvent {
             event: event.clone(),
         });
-        Ok((framed, event))
+        Ok((records, event))
     }
 }
 

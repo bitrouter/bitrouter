@@ -404,10 +404,9 @@ async fn serve_with_options(
         #[cfg(feature = "harness")]
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
         #[cfg(feature = "harness")]
-        let task_service = crate::harness::service::ThreadService::with_startup_and_store(
+        let task_service = crate::harness::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
-            &cfg.agent_api.startup,
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())
                 .with_storage_budget(assembled.tenancy.as_ref().map(|service| service.storage_budget()))),
         )

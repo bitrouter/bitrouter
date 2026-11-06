@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.4**. This is the single
+Status: **beta, specification revision 1.0.0-beta.3**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -32,10 +32,6 @@ for independently updated management clients, SDKs and receipt consumers. Their
 wire discriminators remain 1; the existing strict tenancy capability and receipt
 schemas are unchanged. Retained resource authority and evidence require the
 migration and rollback rules below, even when an older client uses only receipts.
-
-Revision beta.4 changes the meaning of three existing native runtime startup
-limit fields while retaining their types, defaults and HTTP v2 response shape.
-Unchanged decoding does not establish behavioral compatibility.
 
 ### Offline recovery evidence v2
 
@@ -1070,76 +1066,6 @@ unknown error codes as failures and resynchronize when required. The API's
 request types are not uniformly closed to unknown fields; no blanket unknown
 field rejection or forward-preservation guarantee is implied. Feature-disabled
 operations MUST NOT be inferred from their path alone.
-
-### Native startup discovery
-
-Under beta.4, the three existing
-[`RuntimeLimits`](../../../crates/bitrouter-ai/src/harness/runtime.rs) startup
-fields have the following meanings. The HTTP namespace remains `/agent/v2`;
-this specification revision does not introduce a negotiation field.
-
-| Capability field | Default | Beta.4 meaning | Earlier meaning |
-| --- | --- | --- | --- |
-| `startup_roots` | 1,024 | Retained unresolved execution roots | All discovered roots |
-| `startup_metadata_bytes` | 4,194,304 bytes | Retained unresolved metadata and map allocation allowance | Metadata for all discovered roots |
-| `startup_records` | 1,000,000 | Records per cooperative audit batch | Aggregate records before startup refusal |
-
-Discovery MUST inspect the complete retained index through bounded pages under
-the existing ownership fence. A clean root is discarded from startup retention
-only after its owner proof and complete bounded audit establish that it has no
-unresolved blockers; a terminal flag alone is insufficient. Exhausting a record
-batch yields and resumes the current audit. It MUST NOT impose a replacement
-per-root limit or publish a completed prefix. Clean historical root, metadata
-and record totals have no cardinality quota from these fields.
-
-Without a writer fence, discovery may enumerate headers for visibility but MUST
-NOT classify roots as clean or authorize execution. A complete report with
-`writer_fenced: false` is not evidence of a complete, stable journal audit.
-
-Unresolved roots remain charged independently even when they share a workspace.
-An unresolved count/metadata-budget failure reports `overloaded` with incomplete
-discovery. Cancellation or a failed storage read MUST NOT become a successful
-prefix scan; missing ownership proof or invalid evidence MUST NOT establish a
-clean root or grant execution. `complete` describes scan completion, not proof
-that every workspace is unblocked. A lowered budget does not erase evidence or
-resolve unknown effects. Per-page/object and explicit
-recovery/query limits remain in force; startup acceptance does not promise that
-one unbounded recovery response can be materialized.
-
-`StartupDiscovery.inspected_roots` and `scanned_records` remain checked totals
-over the scan, including clean history, and MAY exceed the startup values.
-Clients MUST NOT treat that fact alone as an invalid response. Old clients
-that assumed those fields bounded totals can reject a newly successful report;
-such clients require an update. New clients MUST still accept older reports
-and handle an older server's total-limit refusal without inferring corruption
-or automatically resubmitting native work. Capability decoding or HTTP v2 alone
-cannot distinguish these policies; deployments requiring the new behavior MUST
-establish server support rather than infer it from the unchanged field names.
-
-Operator defaults and restart behavior are defined by the
-[configuration contract](../configuration/README.md#native-startup-settings).
-This change does not migrate the native journal; an older binary can again
-refuse the same intact history on rollback. Complete paged validation can take
-time proportional to history; no startup latency or maximum tested size is
-implied by removing aggregate ceilings.
-
-#### Native startup compatibility cases
-
-1. New reports whose complete clean-history root/record totals exceed the former
-   limits decode with the existing DTO shape. An old total-checking client is
-   explicitly incompatible; a new client accepts both old and new reports.
-2. A clean root spanning many record batches completes; exhaustion yields and
-   resumes rather than returning `overloaded` or skipping its tail.
-3. A late unresolved root, malformed tail or missing stopped-owner proof after
-   earlier totals exceeded the defaults still blocks or fails as appropriate.
-   No incomplete scan permits native execution.
-4. A full unresolved budget still permits scanning later clean roots. One extra
-   unresolved root fails closed; recovery of one root cannot clear a different
-   unresolved root in the same workspace.
-5. Cancellation, nonprogressing pages and storage failures preserve incomplete
-   discovery. A retry performs complete validation under ownership before
-   publishing readiness; existing recovery/query bounds remain independently
-   enforced.
 
 ### Thread API compatibility cases
 

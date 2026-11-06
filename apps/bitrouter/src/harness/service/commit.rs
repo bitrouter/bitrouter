@@ -1,7 +1,6 @@
 //! Serialize facts, checkpoints and publication through the Thread commit gate.
 
 use crate::harness::turn::TurnSnapshotExt;
-use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -113,18 +112,18 @@ impl ThreadService {
         let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
         let steering = self.native_steering_events(turn_id, records)?;
-        let mut facts = Cow::Borrowed(records);
+        let mut facts = records.to_vec();
         for event in &steering {
             if let TurnEventPayload::SteeringUpdated { receipt, .. } = &event.payload {
-                facts.to_mut().push(ExecutionRecord::SteeringResolved {
+                facts.push(ExecutionRecord::SteeringResolved {
                     receipt: receipt.clone(),
                 });
             }
             if let Some(fact) = lifecycle_fact(event) {
-                facts.to_mut().push(fact);
+                facts.push(fact);
             }
         }
-        self.commit_serialized(turn_id, facts.as_ref()).await?;
+        self.commit_serialized(turn_id, &facts).await?;
         if !steering.is_empty() {
             let mut state = self.lock_state();
             for event in steering {

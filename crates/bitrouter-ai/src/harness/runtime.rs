@@ -18,12 +18,8 @@ pub struct RuntimeCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLimits {
-    /// Retained unresolved execution roots; clean history does not consume this budget.
     pub startup_roots: usize,
-    /// Records per cooperative startup audit batch. Exhaustion yields and resumes;
-    /// the total scanned history can exceed this value.
     pub startup_records: u64,
-    /// Retained unresolved workspace/key bytes, including map allocation allowance.
     pub startup_metadata_bytes: usize,
     pub recovery_readers: usize,
     pub recovery_page_records: usize,

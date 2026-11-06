@@ -14,15 +14,15 @@ name: Capacity campaigns
         description: Qualification group; both groups must pass on the same candidate
         type: choice
         options:
-        - history-native
+        - history
         - offline
-        default: history-native
+        default: history
   schedule:
   - cron: 40 2 * * 6
 permissions:
   contents: read
 concurrency:
-  group: capacity-${{ github.ref }}-${{ inputs.qualification && (inputs.qualification_group || 'history-native') || 'standard' }}
+  group: capacity-${{ github.ref }}-${{ inputs.qualification && (inputs.qualification_group || 'history') || 'standard' }}
   cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
@@ -41,7 +41,7 @@ jobs:
     env:
       QUALIFICATION: ${{ inputs.qualification || false }}
       EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
-      QUALIFICATION_GROUP: ${{ inputs.qualification_group || 'history-native' }}
+      QUALIFICATION_GROUP: ${{ inputs.qualification_group || 'history' }}
     steps:
     - uses: actions/checkout@v6
     - name: Prepare memory for the capacity build
@@ -76,7 +76,7 @@ jobs:
         [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
         [[ "$EXPECTED_CANDIDATE_SHA" == "$GITHUB_SHA" ]]
         [[ "$(git rev-parse HEAD)" == "$EXPECTED_CANDIDATE_SHA" ]]
-        case "$QUALIFICATION_GROUP" in history-native|offline) ;; *) exit 1 ;; esac
+        case "$QUALIFICATION_GROUP" in history|offline) ;; *) exit 1 ;; esac
         mkdir -p ci-evidence
         umask 077
         scratch="$(mktemp -d "$RUNNER_TEMP/bitrouter-capacity.XXXXXX")"
@@ -208,18 +208,16 @@ jobs:
           --binaries-metadata "$PWD/ci-evidence/binaries-metadata.json"
           --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
         case "$QUALIFICATION_GROUP" in
-          history-native) suites=(history native) ;;
+          history) suites=(history) ;;
           offline)
             suites=(fresh credentials evaluation cli)
             export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
             ;;
           *) exit 1 ;;
         esac
-        history_status=0
         for suite in "${suites[@]}"; do
           case "$suite" in
             history) selector=tenancy::tests::capacity_history::large_history_qualification ;;
-            native) selector=harness::service::tests::startup::scale::real_sqlite_native_history_crosses_old_startup_limits_without_replay ;;
             fresh) selector=tenancy::audit::recovery::v2::tests::scale::large_fresh_target_streams_complete_sections_and_rejects_late_mismatch ;;
             credentials) selector=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match ;;
             evaluation) selector=offline::evaluation::tests::scale::bounded_selected_graph_imports_into_large_fresh_authority_and_refuses_replay ;;
@@ -250,22 +248,9 @@ jobs:
           printf '%s\n' "$status" > "ci-evidence/$suite-exit-status.txt"
           df -Pk "$BITROUTER_C4_SCRATCH" > "ci-evidence/$suite-disk-after.txt"
           if (( status != 0 )); then
-            # Native uses an independent database. Continue only if history
-            # timed out after a full archive cycle, retaining the failed result.
-            if [[ "$suite" != history || "$status" != 100 ]] ||
-               ! grep -Eq '^[[:space:]]*<failure type="test timeout"/>' "ci-evidence/history-junit.xml" ||
-               ! grep -Fq 'history reuse cycle=0 inserted=' "ci-evidence/history.log"; then
-              exit "$status"
-            fi
-            history_status=$status
-            free_kib="$(awk 'NR == 2 { print $4 }' "ci-evidence/$suite-disk-after.txt")"
-            if ! [[ "$free_kib" =~ ^[0-9]+$ ]] || (( free_kib < 40 * 1024 * 1024 )); then
-              echo '::error::Insufficient scratch space to continue to native after history failed.'
-              exit "$status"
-            fi
+            exit "$status"
           fi
         done
-        exit "$history_status"
     - name: Run isolated full-capacity and long-history campaigns
       if: ${{ !inputs.qualification }}
       env:

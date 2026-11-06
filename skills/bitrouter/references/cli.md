@@ -188,25 +188,6 @@ first-party composer, menu or persistent conversation input loop.
 See [the control reference](#single-operation-native-and-acp-controls) for
 flags, exact retries, history limits and explicit recovery.
 
-The beta.4 native startup contract adds restart-only
-[`agent_api.startup`](../../../docs/specs/configuration/README.md#native-startup-settings)
-settings: `unresolved_roots` defaults to 1,024,
-`unresolved_metadata_bytes` to 4 MiB and `records_per_batch` to 1,000,000.
-Older strict configuration readers reject these keys; use a compatible binary.
-The settings apply to the actual shared native
-runtime even with the HTTP listener disabled and adds no worker. The minimum
-gateway profile does not construct that runtime.
-
-Under that contract, only unresolved roots consume the retained count/metadata
-budgets. Every clean-history page is still validated, while record-batch
-exhaustion yields and continues instead of imposing a lifetime count limit.
-Lowering a budget never clears unknown effects or deletes history. Native
-capability field names and HTTP v2 shapes stay unchanged, but older clients may
-assume the former aggregate limits; see the
-[behavioral compatibility rules](../../../docs/specs/service-api/README.md#native-startup-discovery).
-Explicit recovery/query limits remain separate. Measure startup time and memory
-on the deployment; complete scanning has no promised constant cost.
-
 The same Thread service can expose an optional HTTP listener:
 
 ```yaml
@@ -269,10 +250,8 @@ Verification asks for its own identified approval; denial reports `denied`.
 Cancellation joins started work before clean release. Storage failures and
 unknown effects retain workspace exclusion as `recovery_required`.
 
-Startup claims one database owner and completes cold discovery before admission.
-The default working set retains at most 1024 unresolved roots and 4 MiB of
-unresolved metadata. Scanning yields cooperatively every 1,000,000 records and
-then continues through the complete history; this is not a total-record limit.
+Startup claims one database owner and completes bounded cold discovery before
+admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
 or prompts. New/updated roots use runtime format 7; formats 2–6 remain readable

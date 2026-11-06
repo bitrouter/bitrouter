@@ -471,9 +471,6 @@ fn restart_required_fields(
     if current.control != candidate.control {
         fields.insert("control".to_string());
     }
-    if current.agent_api.startup != candidate.agent_api.startup {
-        fields.insert("agent_api.startup".to_string());
-    }
     if current.tenancy != candidate.tenancy {
         fields.insert("tenancy".to_string());
     }
@@ -2694,29 +2691,6 @@ mod tests {
             restart_required_fields(&omitted, &changed, None),
             ["tenancy"]
         );
-        Ok(())
-    }
-
-    #[test]
-    fn native_startup_budgets_require_restart_with_http_disabled() -> anyhow::Result<()> {
-        let current = crate::config::parse_resolved("agent_api: {enabled: false}")?;
-        let explicit = crate::config::parse_resolved(
-            "agent_api: {enabled: false, startup: {unresolved_roots: 1024, unresolved_metadata_bytes: 4194304, records_per_batch: 1000000}}",
-        )?;
-        assert!(restart_required_fields(&current, &explicit, None).is_empty());
-        for field in [
-            "unresolved_roots",
-            "unresolved_metadata_bytes",
-            "records_per_batch",
-        ] {
-            let candidate = crate::config::parse_resolved(&format!(
-                "agent_api: {{enabled: false, startup: {{{field}: 7}}}}",
-            ))?;
-            assert_eq!(
-                restart_required_fields(&current, &candidate, None),
-                vec!["agent_api.startup"]
-            );
-        }
         Ok(())
     }
 

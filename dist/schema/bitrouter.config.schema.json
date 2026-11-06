@@ -97,10 +97,6 @@
           "description": "Loopback host and port, distinct from inference and control.",
           "type": "string"
         },
-        "startup": {
-          "$ref": "#/$defs/StartupConfig",
-          "description": "Shared native startup budgets, also effective when HTTP is disabled."
-        },
         "token_env": {
           "default": "",
           "description": "Environment variable containing the dedicated task bearer token.",
@@ -2449,34 +2445,6 @@
           "type": "string"
         }
       ]
-    },
-    "StartupConfig": {
-      "additionalProperties": false,
-      "description": "Restart-only budgets for the shared native service, including local transports.",
-      "properties": {
-        "records_per_batch": {
-          "default": 1000000,
-          "description": "Records per cooperative audit batch; exhaustion yields and continues.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unresolved_metadata_bytes": {
-          "default": 4194304,
-          "description": "Retained unresolved keys, workspace paths and map allocation allowance.",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unresolved_roots": {
-          "default": 1024,
-          "description": "Maximum unresolved execution roots retained to protect their workspaces.",
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
     },
     "TenancyConfig": {
       "additionalProperties": false,

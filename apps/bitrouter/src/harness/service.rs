@@ -37,11 +37,10 @@ pub(crate) mod workspace;
 const MAX_EVENT_PAGE: usize = 1000;
 
 pub(crate) fn default_runtime_limits() -> RuntimeLimits {
-    let startup = crate::config::startup::StartupConfig::default();
     RuntimeLimits {
-        startup_roots: startup.unresolved_roots,
-        startup_records: startup.records_per_batch,
-        startup_metadata_bytes: startup.unresolved_metadata_bytes,
+        startup_roots: 1024,
+        startup_records: 1_000_000,
+        startup_metadata_bytes: 4 * 1024 * 1024,
         recovery_readers: 2,
         recovery_page_records: 64,
         recovery_page_bytes: 4 * 1024 * 1024,
@@ -162,22 +161,6 @@ impl ThreadService {
         )
     }
 
-    /// Construct the shared native runtime with host-owned startup budgets.
-    pub(crate) fn with_startup_and_store(
-        app: Arc<App>,
-        allowed_workspaces: &[PathBuf],
-        startup: &crate::config::startup::StartupConfig,
-        store: Arc<dyn ExecutionStore>,
-    ) -> Result<Self, ServiceError> {
-        let limits = RuntimeLimits {
-            startup_roots: startup.unresolved_roots,
-            startup_records: startup.records_per_batch,
-            startup_metadata_bytes: startup.unresolved_metadata_bytes,
-            ..default_runtime_limits()
-        };
-        Self::with_limits_and_store(app, allowed_workspaces, limits, store)
-    }
-
     #[cfg(all(test, feature = "core"))]
     fn with_limits(
         app: Arc<App>,
@@ -198,13 +181,13 @@ impl ThreadService {
         limits: RuntimeLimits,
         store: Arc<dyn ExecutionStore>,
     ) -> Result<Self, ServiceError> {
-        crate::config::startup::StartupConfig {
-            unresolved_roots: limits.startup_roots,
-            unresolved_metadata_bytes: limits.startup_metadata_bytes,
-            records_per_batch: limits.startup_records,
-        }
-        .validate()?;
-        if limits.active_turns == 0
+        if limits.startup_roots == 0
+            || limits.startup_roots > 100_000
+            || limits.startup_records == 0
+            || limits.startup_records > 10_000_000
+            || limits.startup_metadata_bytes == 0
+            || limits.startup_metadata_bytes > 64 * 1024 * 1024
+            || limits.active_turns == 0
             || limits.recovery_readers == 0
             || !(1..=128).contains(&limits.recovery_page_records)
             || !(1..=4 * 1024 * 1024).contains(&limits.recovery_page_bytes)

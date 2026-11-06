@@ -1,3 +1,4 @@
+use crate::storage::checkpoint::CheckpointBatchExt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,10 +13,7 @@ use crate::harness::storage::{CommitRequest, ExecutionRecord};
 use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, ToolStartFence};
 use bitrouter_ai::core::protocol::{ArtifactRef, CoreError, ErrorCode, ServerMessage};
 
-use super::journal::{Journal, Prepared};
-
-#[cfg(test)]
-mod tests;
+use super::journal::Journal;
 
 pub(super) struct Port {
     pub(super) journal: Mutex<Journal>,
@@ -193,23 +191,24 @@ impl HarnessPort for Port {
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let mut journal = self.journal.lock().await;
-        let pending = match journal.prepare_owned(batch)? {
-            Prepared::AlreadyAcknowledged(ack) => return Ok(ack),
-            Prepared::Append(pending) => pending,
-        };
-        let snapshot = pending.snapshot();
-        let projection =
-            super::projection::project(snapshot, pending.presented(), pending.events());
+        let ack = journal.prepare(&batch)?;
+        if journal.head == ack.head() {
+            return Ok(ack);
+        }
+        let payload = batch.decode(&journal.limits)?;
+        let snapshot = serde_json::from_value(payload.checkpoint.state)
+            .map_err(|_| unavailable("native Core snapshot could not be decoded"))?;
+        let projection = super::projection::project(&snapshot, &journal.presented, &payload.events);
         let _ = self.root_agent.set(snapshot.agent_id.clone());
         let mut records = vec![ExecutionRecord::CoreCheckpoint {
-            batch: pending.batch().clone(),
-            limits: pending.limits().clone(),
+            batch: batch.clone(),
+            limits: journal.limits.clone(),
         }];
         records.extend(projection.records);
-        if super::journal::continuation_boundary(snapshot, pending.events()) {
+        if super::journal::continuation_boundary(&snapshot, &payload.events) {
             let mut budget = self.budget.lock().await.clone();
-            budget.observe(snapshot);
-            if let Some(checkpoint) = budget.checkpoint(snapshot) {
+            budget.observe(&snapshot);
+            if let Some(checkpoint) = budget.checkpoint(&snapshot) {
                 records.push(checkpoint);
             }
         }
@@ -219,7 +218,7 @@ impl HarnessPort for Port {
             self.stopped.cancel();
             return Err(unavailable(error));
         }
-        let (ack, snapshot) = pending.apply()?;
+        journal.apply(batch, &ack)?;
         self.budget.lock().await.observe(&snapshot);
         journal.presented.extend(projection.keys);
         self.recorded.lock().await.extend(projection.events.clone());

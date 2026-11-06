@@ -418,39 +418,34 @@ pub(super) fn projected_bytes(
         .into_iter()
         .max()
         .unwrap_or(0);
+    let mut payload = proposed.clone();
+    payload.identity = identity;
+    payload.base_state_revision = u64::MAX;
+    payload.base_event_seq = u64::MAX;
+    payload.checkpoint.state_revision = u64::MAX;
     // Repeated recovery evidence occupies an immutable archive, not another
     // online history entry. Reserve the root even before the first recovery;
     // changing its content then replaces a fixed-size reference.
     let mut prepared = archive::prepare(&projected, true, host)?;
     archive::pad_reference(&mut prepared.state);
-    let checkpoint = Checkpoint {
-        schema_version: proposed.checkpoint.schema_version,
-        state_revision: u64::MAX,
-        state: encode(&prepared.state)?,
-        artifact_refs: recovery::artifacts(&prepared.state)?
-            .into_values()
-            .collect(),
-    };
-    let payload = CheckpointPayload {
-        identity,
-        base_state_revision: u64::MAX,
-        base_event_seq: u64::MAX,
-        checkpoint,
-        tool_start_fences: unresolved
-            .iter()
-            .map(|call| ToolStartFence {
-                invocation_id: call.dispatch.invocation_id.clone(),
-                attempt_id: call.dispatch.attempt_id.clone(),
-            })
-            .collect(),
-        events: vec![DurableEvent {
-            event_seq: u64::MAX,
-            kind: "x".repeat(128),
-            run_id: original_run.map(|run| run.run_id.clone()),
-            agent_id: Some("x".repeat(128)),
-            payload: Value::Null,
-        }],
-    };
+    payload.checkpoint.state = encode(&prepared.state)?;
+    payload.checkpoint.artifact_refs = recovery::artifacts(&prepared.state)?
+        .into_values()
+        .collect();
+    payload.tool_start_fences = unresolved
+        .iter()
+        .map(|call| ToolStartFence {
+            invocation_id: call.dispatch.invocation_id.clone(),
+            attempt_id: call.dispatch.attempt_id.clone(),
+        })
+        .collect();
+    payload.events = vec![DurableEvent {
+        event_seq: u64::MAX,
+        kind: "x".repeat(128),
+        run_id: original_run.map(|run| run.run_id.clone()),
+        agent_id: Some("x".repeat(128)),
+        payload: Value::Null,
+    }];
     let bytes = serialized_bytes(&payload)?.saturating_sub(4);
     let bytes = sum(
         sum(sum(bytes, event_bytes)?, reserve.event_extra)?,

@@ -1,6 +1,6 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.4**. This is the single
+Status: **beta, specification revision 1.0.0-beta.3**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
 referenced `policy-lock.yaml`. These are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
@@ -64,53 +64,6 @@ registry:
 
 This example only illustrates fields; it does not supply provider credentials
 or guarantee a runnable inference route.
-
-## Native startup settings
-
-Revision beta.4 adds native startup working budgets. Older strict configuration
-readers reject these new keys; operators must select a compatible binary.
-
-`agent_api.startup` configures the shared native runtime's startup audit, including
-local native transports when `agent_api.enabled` is false. It does not enable
-the HTTP listener, native execution in a feature-disabled build, or an additional
-worker. The minimum gateway profile does not construct this native runtime.
-These settings are independent of `tenancy.capacity`.
-
-```yaml
-agent_api:
-  enabled: false
-  startup:
-    unresolved_roots: 1024
-    unresolved_metadata_bytes: 4194304
-    records_per_batch: 1000000
-```
-
-The example shows finite defaults. Omitted fields and empty mappings retain
-their defaults. Counts and bytes MUST be positive integers within their declared
-machine representation, with checked allocation/accounting arithmetic; unknown
-keys, nulls, fractions, negatives and overflow are rejected. There is no extra
-product maximum. Allocation is incremental rather than proportional to the
-record-batch value.
-
-`unresolved_roots` counts retained unresolved execution roots, not distinct
-workspaces or all historical roots. `unresolved_metadata_bytes` covers their
-retained keys, workspace paths and map allocation allowance, not total process
-RSS. Clean history consumes neither retained budget. `records_per_batch` bounds
-cooperative audit work before yielding and continuing; exhausting a batch MUST
-NOT terminate the scan or impose a cumulative or per-root history ceiling.
-Page, decoder, reconstruction and explicit recovery/query bounds remain separate.
-These budgets do not impose an elapsed-time startup deadline. The audit checks
-service closure between bounded reads; it does not make an arbitrary stalled
-storage await cancellable or guarantee a host shutdown latency.
-
-Changed effective settings require restart, even with the HTTP listener off;
-reload MUST reject them before publishing a new configuration. A new reader
-accepts old configuration through defaults. An older strict reader rejects the
-new keys, so use a compatible binary rather than assuming ignored fields took
-effect. This amendment needs no native journal migration; rollback can still
-make an older binary refuse intact history above its former startup totals.
-The [service contract](../service-api/README.md#native-startup-discovery)
-defines the changed meanings of the existing capability fields.
 
 ## Tenancy and routing compatibility
 
@@ -353,13 +306,6 @@ implementation ownership are documented in the
 - An old document without tenancy settings stays disabled. Omitted and null
   optional values retain their absence semantics; reject null required values,
   unknown tenancy keys and invalid timeout bounds, including schema-valid zero.
-- For native startup settings, omitted and partial startup
-  mappings retain defaults; reject unknown keys, invalid numeric values and
-  unaddressable metadata accounting. Values above the former arbitrary maxima
-  are accepted when representation and allocation checks permit them. With the
-  HTTP listener disabled, nondefault values still reach the shared native
-  runtime, and changed effective values require restart. Old strict readers
-  reject the new keys rather than silently enabling the new behavior.
 - Enabled tenancy rejects anonymous ingress, absent operator authority, shared
   mode, in-memory/non-SQLite databases, non-Unix ownership and the host task API.
   Changed effective tenancy settings reject reload before publishing a candidate.

@@ -1787,17 +1787,6 @@ mod discovery_tests {
             )
             .await
             .map_err(anyhow::Error::msg)?;
-        // Startup discards clean IDs, so uniqueness belongs to the durable
-        // index itself rather than an unbounded service-side seen set.
-        assert!(
-            discovery::ActiveModel {
-                execution_id: Set("first".into()),
-                ..Default::default()
-            }
-            .insert(&store.db)
-            .await
-            .is_err()
-        );
         store
             .commit("second", 0, &[fact()])
             .await

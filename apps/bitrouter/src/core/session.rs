@@ -266,7 +266,6 @@ struct PendingInitialization {
 
 struct PendingTransition {
     state: SessionSnapshot,
-    input_accepted: bool,
     // Only blockers resolved by the discarded candidate belong to its failure
     // replacement. Keep them tied to the pending batch until its ACK is proven.
     superseded_blocks: BTreeSet<String>,
@@ -3710,10 +3709,6 @@ impl CoreSession {
             }
             #[cfg(test)]
             timing.mark(headroom_trace::Stage::ChoicePreflight);
-            let input_accepted = proposed
-                .events
-                .iter()
-                .any(|event| event.kind == "input.accepted");
             let proposed = live.gate.propose(proposed);
             #[cfg(test)]
             if let Err(error) = &proposed {
@@ -3738,7 +3733,6 @@ impl CoreSession {
             let manifest = next.manifest.clone();
             live.pending = Some(PendingTransition {
                 state: next,
-                input_accepted,
                 superseded_blocks,
             });
             (
@@ -3763,9 +3757,9 @@ impl CoreSession {
         timing.mark(headroom_trace::Stage::HarnessCommit);
         let mut live = self.shared.live.lock().await;
         let result = match acknowledgement {
-            Ok(ack) => match live.gate.acknowledge_transition(&ack) {
-                Ok(Some(())) => {
-                    reconnect::adopt_pending(&mut live)?;
+            Ok(ack) => match live.gate.acknowledge(&ack) {
+                Ok(Some(payload)) => {
+                    reconnect::adopt_pending(&mut live, &payload)?;
                     budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
                     self.shared.skill_consents_changed.notify_waiters();
