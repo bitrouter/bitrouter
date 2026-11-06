@@ -19,6 +19,8 @@ use bitrouter_ai::{
 };
 use sea_orm::ConnectionTrait;
 
+use crate::tenancy::configuration_store;
+
 use super::{
     Resources, lifecycle,
     manifest::{Artifact, Definition, Import},
@@ -28,16 +30,61 @@ use super::{
 #[cfg(test)]
 mod tests;
 
-/// Index bounded by the existing 4,096 immutable-resource catalog limit.
+// Limit the feature's retained operational facts, independent of the directory
+// and ordinary resource catalog. One conservative allowance covers each retained
+// profile/route identity, its compact rules, lifecycle facts and map capacity.
+const MAX_ADMISSION_FACTS: usize = 4096;
+const FACT_BYTES: usize = 4096;
+
+/// Shared authenticated admission metadata, published under the authority gate.
 #[derive(Clone, Default)]
 pub(in crate::tenancy) struct State {
     profiles: HashMap<ResourceRef, AdmissionProfileV1>,
+    lifecycle: lifecycle::State,
     policy_keys: HashSet<ResourceKey>,
     protected_keys: HashSet<ResourceKey>,
     profiled_routes: HashSet<ResourceRef>,
 }
 
 impl State {
+    pub(in crate::tenancy) fn working_bytes(&self) -> std::result::Result<usize, ErrorCode> {
+        let count = self.profiles.len() + self.profiled_routes.len();
+        if count > MAX_ADMISSION_FACTS {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        Ok(count * FACT_BYTES)
+    }
+
+    pub(in crate::tenancy) fn has_profile_key(&self, key: &ResourceKey) -> bool {
+        self.profiles
+            .keys()
+            .any(|reference| &reference.key() == key)
+    }
+
+    pub(in crate::tenancy) fn tracks(&self, reference: &ResourceRef) -> bool {
+        self.profiles.contains_key(reference)
+    }
+
+    pub(in crate::tenancy) fn apply_lifecycle(&mut self, record: &lifecycle::Record) {
+        self.lifecycle.insert(record.clone());
+    }
+
+    pub(in crate::tenancy) fn current_profile(
+        &self,
+        pinned: &ResourceRef,
+    ) -> Option<(ResourceRef, &AdmissionProfileV1)> {
+        if !self.profiles.contains_key(pinned) || self.lifecycle.revoked(pinned) {
+            return None;
+        }
+        let mut current = pinned.clone();
+        current.revision_id = self.lifecycle.head(&pinned.key())?.clone();
+        if self.lifecycle.revoked(&current) {
+            return None;
+        }
+        Some((current.clone(), self.profiles.get(&current)?))
+    }
+
+
     pub(in crate::tenancy) fn protected(&self, route: &ResourceRef) -> bool {
         self.protected_keys.contains(&route.key())
     }
@@ -150,18 +197,43 @@ impl Resources {
     pub(in crate::tenancy) async fn admission_state(
         &self,
         db: &impl ConnectionTrait,
-        lifecycle: &lifecycle::State,
+        budget: usize,
     ) -> Result<State> {
         let mut state = State::default();
-        for reference in storage::references(db).await? {
-            let artifact = self
-                .load(db, &reference)
-                .await
-                .map_err(|_| anyhow::anyhow!("admission resource unavailable"))?;
-            state.insert(&artifact)?;
+        let mut after = None;
+        loop {
+            let page = storage::reference_page(db, after.as_ref()).await?;
+            if page.is_empty() {
+                break;
+            }
+            after = page.last().cloned();
+            for reference in page {
+                if !matches!(
+                    reference.resource_kind,
+                    ResourceKind::Policy | ResourceKind::Route
+                ) {
+                    continue;
+                }
+                let artifact = self
+                    .load(db, &reference)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("admission resource unavailable"))?;
+                if !artifact.definition.is_profiled() {
+                    continue;
+                }
+                ensure_admission_capacity(&state, budget)?;
+                state.insert(&artifact)?;
+                if artifact.definition.is_admission_profile() {
+                    let record = lifecycle::exact(db, &self.installation, &reference)
+                        .await?
+                        .context("admission profile has no managed lifecycle")?;
+                    state.apply_lifecycle(&record);
+                }
+            }
         }
         for reference in state.profiles.keys() {
-            let revision = lifecycle
+            let revision = state
+                .lifecycle
                 .head(&reference.key())
                 .context("admission profile has no managed head")?;
             let mut head = reference.clone();
@@ -173,6 +245,16 @@ impl Resources {
         }
         Ok(state)
     }
+}
+
+fn ensure_admission_capacity(state: &State, budget: usize) -> Result<()> {
+    let bytes = state
+        .working_bytes()
+        .map_err(|_| crate::tenancy::store::directory::CapacityExceeded)?;
+    if bytes + FACT_BYTES > budget || bytes / FACT_BYTES >= MAX_ADMISSION_FACTS {
+        return Err(crate::tenancy::store::directory::CapacityExceeded.into());
+    }
+    Ok(())
 }
 
 pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
@@ -271,58 +353,31 @@ pub(super) async fn preflight_import(
     }) {
         return Ok(());
     }
-    let retained = storage::references(db).await?;
-    let mut state = State::default();
-    for reference in &retained {
-        if reference.resource_kind == ResourceKind::Policy {
-            state.insert(
-                &resources
-                    .load(db, reference)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("retained profile unavailable"))?,
-            )?;
-        }
-    }
-    let mut initial = HashMap::new();
-    let existing_heads = if imported.iter().any(|item| {
-        matches!(item.definition, Definition::AdmissionProfile { .. })
-            && retained.contains(&item.reference)
-    }) {
-        Some(
-            crate::tenancy::store::load_existing(db, chrono::Utc::now())
-                .await?
-                .resource_lifecycle,
-        )
-    } else {
-        None
-    };
+    let budget = crate::config::tenancy::capacity::AuthorityViews::default().bytes / 3;
+    let mut state = resources.admission_state(db, budget).await?;
+    let mut initial = HashSet::new();
     for item in imported {
-        if matches!(item.definition, Definition::AdmissionProfile { .. })
-            && retained.contains(&item.reference)
-        {
-            ensure!(
-                existing_heads
-                    .as_ref()
-                    .and_then(|heads| heads.head(&item.reference.key()))
-                    .is_some(),
-                "retained admission profile has no managed head"
-            );
+        let key = item.reference.key();
+        if item.definition.is_admission_profile() {
+            if configuration_store::resource(db, &item.reference)
+                .await?
+                .is_none()
+            {
+                ensure!(
+                    !storage::resource_key_exists(db, &key).await? && initial.insert(key.clone()),
+                    "profile rotations require authenticated CAS"
+                );
+            } else {
+                ensure!(
+                    lifecycle::head(db, &resources.installation, &key)
+                        .await?
+                        .is_some(),
+                    "retained admission profile has no managed head"
+                );
+            }
         }
-        if matches!(item.definition, Definition::AdmissionProfile { .. })
-            && !retained.contains(&item.reference)
-        {
-            ensure!(
-                !retained
-                    .iter()
-                    .any(|reference| reference.key() == item.reference.key()),
-                "profile rotations require authenticated CAS"
-            );
-            ensure!(
-                initial
-                    .insert(item.reference.key(), &item.reference.revision_id)
-                    .is_none(),
-                "ambiguous initial profile head"
-            );
+        if item.definition.is_profiled() {
+            ensure_admission_capacity(&state, budget)?;
         }
         state.insert(&Artifact {
             reference: item.reference.clone(),
@@ -340,22 +395,24 @@ pub(super) async fn initialize_import_heads(
 ) -> Result<()> {
     if !imported
         .iter()
-        .any(|item| matches!(item.definition, Definition::AdmissionProfile { .. }))
+        .any(|item| item.definition.is_admission_profile())
     {
         return Ok(());
     }
-    let state = crate::tenancy::store::load_existing(db, chrono::Utc::now()).await?;
+    let state = crate::tenancy::store::startup::read_header_in(db, 4096)
+        .await?
+        .context("admission import authority missing")?
+        .header;
     ensure!(
         state.installation == resources.installation,
         "admission import installation mismatch"
     );
     for item in imported {
-        if !matches!(item.definition, Definition::AdmissionProfile { .. }) {
+        if !item.definition.is_admission_profile() {
             continue;
         }
-        if state
-            .resource_lifecycle
-            .head(&item.reference.key())
+        if lifecycle::head(db, &resources.installation, &item.reference.key())
+            .await?
             .is_some()
         {
             continue;

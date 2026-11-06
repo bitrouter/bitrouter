@@ -1031,18 +1031,10 @@ fn authorize_effect(
             .iter()
             .filter(|reference| reference.resource_kind == ResourceKind::Policy)
         {
-            let revision = state
-                .resource_lifecycle
-                .head(&pinned.key())
+            state
+                .resource_admission
+                .current_profile(pinned)
                 .ok_or(ErrorCode::Forbidden)?;
-            let mut current = pinned.clone();
-            current.revision_id = revision.clone();
-            if state.resource_admission.profile(pinned).is_none()
-                || state.resource_admission.profile(&current).is_none()
-            {
-                return Err(ErrorCode::Forbidden);
-            }
-            authorize_route(state, submission, std::slice::from_ref(&current))?;
         }
         // Runtime admission is consumed separately at the actual arm boundary.
         // Authority-only reads and queue admission never spend rate capacity.

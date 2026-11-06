@@ -87,7 +87,12 @@ impl Worker {
         } = *write;
         let publication = self
             .authority
-            .prepare(next.header(), &changes, None)
+            .prepare_with_admission(
+                next.header(),
+                &changes,
+                None,
+                Some(next.resource_admission.clone()),
+            )
             .map_err(Failure::from)?;
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
@@ -125,12 +130,8 @@ impl Worker {
         control
             .check_read()
             .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
-        let header = self
-            .authority
-            .read()
-            .map_err(Failure::from)?
-            .header()
-            .clone();
+        let authority = self.authority.read().map_err(Failure::from)?.snapshot();
+        let header = authority.header();
         let facts = store::directory::load_command_in(
             tx,
             &header,
@@ -146,7 +147,8 @@ impl Worker {
                 self.directory_failure(error)
             }
         })?;
-        let old = facts.snapshot;
+        let mut old = facts.snapshot;
+        old.resource_admission = authority.resource_admission;
         // Upserts can replace larger old rows. Include the bounded command-local
         // facts rather than estimating only the new payload or directory count.
         let replaced_bytes = crate::tenancy::storage::encoded_size(&(

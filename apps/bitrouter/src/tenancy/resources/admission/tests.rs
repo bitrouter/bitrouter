@@ -78,10 +78,7 @@ async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>
 }
 
 async fn state(resources: &Resources, db: &DatabaseConnection) -> Result<State> {
-    let authority = crate::tenancy::store::load_existing(db, chrono::Utc::now()).await?;
-    resources
-        .admission_state(db, &authority.resource_lifecycle)
-        .await
+    resources.admission_state(db, 32 * 1024 * 1024).await
 }
 
 #[tokio::test]

@@ -57,7 +57,7 @@ pub(super) async fn grant_pool(fixture: &Fixture, count: usize) -> Result<Creden
         )
         .await
         .map_err(failure)?;
-    let mut input = fixture.issuance("ordered-client")?;
+    let mut input = fixture.issuance("ordered-client").await?;
     input.scope = scope;
     issued(
         fixture
@@ -263,6 +263,7 @@ async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<
         .fixture
         .service
         .submission(&caller_timeout::ordered_headers(&harness, &binding)?)
+        .await
         .map_err(failure)?;
     harness
         .fixture
