@@ -15,6 +15,7 @@ use super::super as recovery;
 use super::*;
 
 const STALL_MS: u64 = 10_000;
+const SUSTAINED_PENDING: Duration = Duration::from_secs(1);
 const CHUNK_TEXT: usize = 16 * 1024;
 const MAX_FRAMES: usize = 2048;
 const MAX_WIRE: usize = 40 * 1024 * 1024;
@@ -499,7 +500,7 @@ impl Probe {
                     let deadline = state
                         .pending_since
                         .context("Pending write had no timestamp")?
-                        + Duration::from_millis(200);
+                        + SUSTAINED_PENDING;
                     if now >= deadline {
                         return Ok(state);
                     }
@@ -925,5 +926,39 @@ fn check_wire_decoder() -> Result<()> {
         partial_event.byte(byte)?;
     }
     ensure!(!partial_event.terminal && !partial_event.http_complete);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn pressure_barrier_rejects_transient_pending_and_restarts_after_write_progress() -> Result<()>
+{
+    let probe = Probe::new();
+    probe.write(&Poll::Ready(Ok(1024 * 1024)));
+    probe.write(&Poll::Pending);
+    let stalled = probe.stalled(1024 * 1024, 1);
+    tokio::pin!(stalled);
+    // The Linux failure resumed after about233ms despite the old200ms barrier.
+    ensure!(
+        tokio::time::timeout(Duration::from_millis(250), &mut stalled)
+            .await
+            .is_err(),
+        "transient initial Pending was accepted as stable backpressure"
+    );
+    probe.write(&Poll::Ready(Ok(1024 * 1024)));
+    probe.write(&Poll::Pending);
+    let restarted = probe.snapshot();
+    ensure!(
+        tokio::time::timeout(Duration::from_millis(750), &mut stalled)
+            .await
+            .is_err(),
+        "write progress did not restart the sustained Pending interval"
+    );
+    let settled = stalled.await?;
+    ensure!(settled.pending && settled.written == 2 * 1024 * 1024);
+    ensure!(settled.blocks == 2 && settled.pending_since == restarted.pending_since);
+    ensure!(
+        Instant::now() - settled.pending_since.context("stable Pending timestamp")?
+            >= SUSTAINED_PENDING
+    );
     Ok(())
 }

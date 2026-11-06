@@ -218,7 +218,8 @@ impl Service {
         guard.check(&submission.authority, |view| {
             let state = view.facts();
             if !self.dispatch_ready(state)
-                || (submission.binding.native_controls && !self.execution_settings.ordered_native_controls)
+                || (submission.binding.native_controls
+                    && !self.execution_settings.ordered_native_controls)
                 || (submission.binding.selection.is_some() && !self.ordered_dispatch_ready(state))
                 || submission.binding.installation_id != state.installation
                 || submission.binding.instance_id != self.instance
