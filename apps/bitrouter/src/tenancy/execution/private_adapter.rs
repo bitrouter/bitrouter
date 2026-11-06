@@ -34,7 +34,7 @@ pub(in crate::tenancy) struct Peer {
 }
 
 impl Peer {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) fn for_test(endpoint: Url, key: [u8; 32]) -> anyhow::Result<Self> {
         Self::new(
             "fixture-peer".into(),
