@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-11-05T03:12:11.076Z",
+  "as_of": "2026-11-06T06:36:27.794Z",
   "version": 1,
   "spec_revision": "1.0.0-beta.6",
   "data": {
@@ -27556,7 +27556,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-01",
             "description": "MiniMax-01 is a combines MiniMax-Text-01 for text generation and MiniMax-VL-01 for image understanding. It has 456 billion parameters, with 45.9 billion parameters activated per inference, and can handle a context...",
             "interfaces": [
               {
@@ -27622,7 +27621,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2",
             "description": "MiniMax-M2 is a compact, high-efficiency large language model optimized for end-to-end coding and agentic workflows. With 10 billion activated parameters (230 billion total), it delivers near-frontier intelligence across general reasoning,...",
             "interfaces": [
               {
@@ -27656,7 +27654,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2-her",
             "description": "MiniMax M2-her is a dialogue-first large language model built for immersive roleplay, character-driven chat, and expressive multi-turn conversations. Designed to stay consistent in tone and personality, it supports rich message...",
             "interfaces": [
               {
@@ -27687,7 +27684,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2.1",
             "description": "MiniMax-M2.1 is a lightweight, state-of-the-art large language model optimized for coding, agentic workflows, and modern application development. With only 10 billion activated parameters, it delivers a major jump in real-world...",
             "interfaces": [
               {
