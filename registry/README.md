@@ -71,7 +71,10 @@ perform the same synchronization and checks without publishing a proposal.
 The v1 migration retained every native provider offer. Delisted canonical
 bindings are explicitly unbound in provider source; historical correspondence
 remains in `model-identities.yaml`. These are reviewed source changes, not an
-automatic sync rule. Azure now requires an
+automatic sync rule. When OpenRouter changes a canonical ID, verify the same-model
+correspondence, move the ledger binding and provider `canonical_id` together,
+and preserve the native `provider_model_id`. Absence from the canonical list
+alone does not establish that the native offer is withdrawn. Azure now requires an
 explicit concrete local endpoint; Bedrock's registry endpoint is the concrete
 `us-east-1` default. Registry URLs do not interpolate environment templates.
 

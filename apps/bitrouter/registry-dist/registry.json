@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-11-03T18:12:30.865Z",
+  "as_of": "2026-11-06T06:36:27.794Z",
   "version": 1,
   "spec_revision": "1.0.0-beta.6",
   "data": {
@@ -27556,7 +27556,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-01",
             "description": "MiniMax-01 is a combines MiniMax-Text-01 for text generation and MiniMax-VL-01 for image understanding. It has 456 billion parameters, with 45.9 billion parameters activated per inference, and can handle a context...",
             "interfaces": [
               {
@@ -27622,7 +27621,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2",
             "description": "MiniMax-M2 is a compact, high-efficiency large language model optimized for end-to-end coding and agentic workflows. With 10 billion activated parameters (230 billion total), it delivers near-frontier intelligence across general reasoning,...",
             "interfaces": [
               {
@@ -27656,7 +27654,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2-her",
             "description": "MiniMax M2-her is a dialogue-first large language model built for immersive roleplay, character-driven chat, and expressive multi-turn conversations. Designed to stay consistent in tone and personality, it supports rich message...",
             "interfaces": [
               {
@@ -27687,7 +27684,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "minimax/minimax-m2.1",
             "description": "MiniMax-M2.1 is a lightweight, state-of-the-art large language model optimized for coding, agentic workflows, and modern application development. With only 10 billion activated parameters, it delivers a major jump in real-world...",
             "interfaces": [
               {
@@ -37520,7 +37516,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "thinkingmachines/inkling-small:free",
             "description": "Inkling Small is an open-weight multimodal mixture-of-experts model from Thinking Machines Lab, with 12B active parameters out of 276B total. It is positioned as the smaller, more efficient member of...",
             "interfaces": [
               {
@@ -37556,7 +37551,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "thinkingmachines/inkling:free",
             "description": "Inkling is an open-weight multimodal mixture-of-experts model from Thinking Machines Lab, with 41B active parameters out of 975B total. It is designed for general-purpose reasoning, coding, agentic and tool-use systems,...",
             "interfaces": [
               {
@@ -37874,7 +37868,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/rerank-2.5",
+            "canonical_id": "mongodb/rerank-2.5",
             "description": "rerank-2.5 is a cutting-edge reranker optimized for quality, delivering a 7.94% improvement in retrieval accuracy over Cohere Rerank v3.5 across 93 datasets. It also outperformed Cohere Rerank v3.5 by 12.70%...",
             "interfaces": [],
             "model_types": [],
@@ -37888,7 +37882,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/rerank-2.5-lite",
+            "canonical_id": "mongodb/rerank-2.5-lite",
             "description": "rerank-2.5-lite is a reranker optimized for both latency and quality, delivering a 7.16% improvement in retrieval accuracy over Cohere Rerank v3.5 across 93 datasets. It also outperformed Cohere Rerank v3.5...",
             "interfaces": [],
             "model_types": [],
@@ -37902,7 +37896,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/rerank-3",
+            "canonical_id": "mongodb/rerank-3",
             "description": "rerank-3 is a reranker optimized for quality and a drop-in upgrade to rerank-2.5, improving on it by 0.80% NDCG@10 on average across domain evaluations and by 3.35% on long-document evaluations,...",
             "interfaces": [],
             "model_types": [],
@@ -37916,7 +37910,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/rerank-3-lite",
+            "canonical_id": "mongodb/rerank-3-lite",
             "description": "rerank-3-lite is a reranker optimized for both latency and quality and a drop-in upgrade to rerank-2.5-lite, improving on it by 0.94% NDCG@10 on average across domain evaluations and by 1.86%...",
             "interfaces": [],
             "model_types": [],
@@ -37930,7 +37924,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/voyage-4",
+            "canonical_id": "mongodb/voyage-4",
             "description": "voyage-4 is a general-purpose (including multilingual) embedding model optimized for retrieval/search and AI applications. voyage-4 supports embedd about voyage-4 here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
             "interfaces": [],
             "model_types": [],
@@ -37944,7 +37938,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/voyage-4-large",
+            "canonical_id": "mongodb/voyage-4-large",
             "description": "voyage-4-large is a state-of-the-art general-purpose and multilingual embedding optimized for retrieval quality. Enabled by Matryoshka learning and quantization-aware training, voyage-4-large supports embeddings  voyage-4-large here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
             "interfaces": [],
             "model_types": [],
@@ -37958,7 +37952,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/voyage-4-lite",
+            "canonical_id": "mongodb/voyage-4-lite",
             "description": "voyage-4-lite is a lightweight, general-purpose embedding model optimized for low latency and cost. Enabled by Matryoshka learning and quantization-aware training, voyage-4-lite supports embeddings t voyage-4-lite here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
             "interfaces": [],
             "model_types": [],
@@ -37972,7 +37966,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/voyage-code-4",
+            "canonical_id": "mongodb/voyage-code-4",
             "description": "voyage-code-4 is a code embedding model from Voyage AI, a MongoDB company. It is designed for coding agents and code retrieval, with Matryoshka embeddings at 2048t voyage-code-4 here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
             "interfaces": [],
             "model_types": [],
@@ -37986,7 +37980,7 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "voyageai/voyage-multimodal-3.5",
+            "canonical_id": "mongodb/voyage-multimodal-3.5",
             "description": "voyage-multimodal-3.5 is a state-of-the-art multimodal embedding model capable of vectorizing not only text, images, and video individually, but also content that interleaves all three modalities. It delivers excellent performance for...",
             "interfaces": [],
             "model_types": [],
