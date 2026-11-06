@@ -943,17 +943,20 @@ jobs:
   test-platform:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
         - os: macos-latest
+          timeout-minutes: 45
           expected-tests: 16
           targets: --test daemon --test host_lifecycle --test mcp_config_pty --test onboarding_pty
           filter: (binary(=daemon) & (test(=status_route_and_stop_roundtrip_over_the_control_socket) | test(=concurrent_clients_are_all_served) | test(=socket_file_has_owner_only_permissions)))
             | (binary(=host_lifecycle) & test(=sigterm_control_error_drains_inflight_inference_before_nonzero_exit)) | binary(=mcp_config_pty) | binary(=onboarding_pty)
         - os: windows-latest
+          # Leave time for the test suite after the all-features MSVC build.
+          timeout-minutes: 60
           expected-tests: 20
           targets: --lib --test daemon --test invocation
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
