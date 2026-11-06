@@ -458,6 +458,7 @@ impl HttpExecutor {
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
             let mut native_attempt = None;
+            let mut private_adapter = false;
             let response = native_work::observe(
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
@@ -468,23 +469,23 @@ impl HttpExecutor {
                         None
                     };
                     record_native_dispatch(prompt, target, ctx)?;
-                    native_attempt = super::tenancy::admit_send(
+                    let admission = super::tenancy::admit_send(
                         tenant_binding.as_ref(),
                         &mut tenant_attempt,
                         &mut request,
                         target,
                         ctx,
+                        Some(true),
                     )?;
                     if let Some(guard) = routing_guard {
                         guard.sent()?;
                     }
-                    client
-                        .send(request, &super::tenancy::cancellation(ctx)?)
-                        .await
-                        .map_err(|error| {
-                            super::tenancy::transport_failed(ctx, &error);
-                            error_scrubber.scrub_error(error.into())
-                        })
+                    let response = admission
+                        .send(&client, request, ctx, &mut error_scrubber)
+                        .await;
+                    private_adapter = admission.adapter.is_some();
+                    native_attempt = admission.attempt_id;
+                    response
                 },
                 |response| Some(response.status().as_u16()),
             )
@@ -528,6 +529,7 @@ impl HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
+                && !private_adapter
                 && !attempted_auth_refresh
                 && self
                     .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)

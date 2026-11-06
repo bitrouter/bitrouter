@@ -270,6 +270,14 @@ fn provider_headers_reject_invalid_reserved_and_duplicate_names() {
             "provider header 'authorization' is reserved",
         ),
         (
+            "x-bitrouter-adapter-attempt: value",
+            "provider header 'x-bitrouter-adapter-attempt' is reserved",
+        ),
+        (
+            "x-bitrouter-adapter-outcome: value",
+            "provider header 'x-bitrouter-adapter-outcome' is reserved",
+        ),
+        (
             "User-Agent: first\n      user-agent: second",
             "duplicate provider header 'user-agent'",
         ),

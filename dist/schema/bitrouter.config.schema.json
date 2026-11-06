@@ -1524,6 +1524,33 @@
       ],
       "type": "object"
     },
+    "PrivateAdapterConfig": {
+      "additionalProperties": false,
+      "description": "Operator-only pairing for private ordered generation adapters.",
+      "properties": {
+        "audience": {
+          "description": "Stable peer identifier used in signed attempt claims.",
+          "type": "string"
+        },
+        "endpoints": {
+          "description": "Exact generation URLs at one HTTPS origin.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key_env": {
+          "description": "Environment variable holding an unpadded base64url 32-byte peer key.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audience",
+        "endpoints",
+        "key_env"
+      ],
+      "type": "object"
+    },
     "PromptCommandConfig": {
       "description": "One user-authored command that expands to a prompt.",
       "properties": {
@@ -2489,6 +2516,17 @@
           "default": false,
           "description": "Accept explicitly opted-in provider-native controls on ordered requests.\nProvider state may be shared by principals using the same upstream account;\nthis policy does not establish historical tenant ownership of opaque IDs.",
           "type": "boolean"
+        },
+        "private_adapter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrivateAdapterConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional private adapter reached through an ordered, profiled route."
         },
         "resource_import": {
           "default": null,
