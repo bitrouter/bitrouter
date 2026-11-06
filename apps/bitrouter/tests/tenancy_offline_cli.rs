@@ -53,6 +53,86 @@ fn parsed(output: &std::process::Output) -> Result<Value> {
 }
 
 #[tokio::test]
+async fn v2_cli_requires_scratch_preserves_source_and_rejects_old_readers() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let home = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let path = home.path().join("source.sqlite");
+    source(&path).await?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let original = std::fs::read(&path)?;
+    let base = [
+        "tenancy",
+        "offline",
+        "snapshot",
+        "--database",
+        "source.sqlite",
+        "--bundle",
+        "v2",
+        "--format",
+        "v2",
+    ];
+    let refused = invoke(home.path(), &base).await?;
+    ensure!(!refused.status.success() && !home.path().join("v2").exists());
+    parsed(&refused)?;
+    let scratch = home
+        .path()
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("scratch path"))?;
+    let mut args = base.to_vec();
+    args.extend(["--scratch-directory", scratch]);
+    let output = invoke(home.path(), &args).await?;
+    let report = parsed(&output)?;
+    ensure!(output.status.success(), "v2 snapshot failed: {report}");
+    ensure!(report["evidence"]["format"] == "bitrouter.offline.sqlite-evidence.v2");
+    ensure!(
+        report["evidence"]["complete"] == false && report["evidence"]["cutover_ready"] == false
+    );
+    ensure!(report["evidence"]["inventory"]["rows"] == 2);
+    let digest = report["evidence_digest"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("evidence digest"))?;
+    let verify = [
+        "tenancy",
+        "offline",
+        "verify",
+        "--bundle",
+        "v2",
+        "--evidence-digest",
+        digest,
+    ];
+    let refused = invoke(home.path(), &verify).await?;
+    ensure!(!refused.status.success());
+    parsed(&refused)?;
+    let mut verify = verify.to_vec();
+    verify.extend(["--scratch-directory", scratch]);
+    let output = invoke(home.path(), &verify).await?;
+    let verified = parsed(&output)?;
+    ensure!(output.status.success(), "v2 verify failed: {verified}");
+    ensure!(
+        verified["evidence"] == report["evidence"] && verified["evidence_anchor_checked"] == true
+    );
+    let mut duplicate = verify.clone();
+    duplicate.extend([
+        "--working-bytes",
+        "67108864",
+        "--validation-bytes",
+        "67108864",
+    ]);
+    ensure!(!invoke(home.path(), &duplicate).await?.status.success());
+    let mut small = verify;
+    small.extend(["--working-bytes", "1"]);
+    let refused = invoke(home.path(), &small).await?;
+    ensure!(!refused.status.success());
+    parsed(&refused)?;
+    ensure!(std::fs::read(&path)? == original);
+    ensure!(std::fs::read(home.path().join("v2/snapshot.sqlite"))? == original);
+    ensure!(!home.path().join("v2/INCOMPLETE").exists());
+    Ok(())
+}
+
+#[tokio::test]
 async fn db_only_cli_preserves_source_and_refuses_remote_config_or_cutover_claims() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir()?;

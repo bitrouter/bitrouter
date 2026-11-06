@@ -78,7 +78,6 @@ async fn killed_file_backed_paid_owner_cannot_restart_or_replay_its_uncertain_pr
         let attempt = Service::start_prepared(
             db.clone(),
             Some(owner.clone()),
-            OperationLimits::default(),
             snapshot,
             Arc::new(resources),
         )

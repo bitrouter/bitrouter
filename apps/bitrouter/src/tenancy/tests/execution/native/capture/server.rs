@@ -183,10 +183,7 @@ async fn provision(
     db: &DatabaseConnection,
     url: &str,
 ) -> Result<(Ready, Ready)> {
-    let mut a = Fixture::with_database(db.clone(), OperationLimits::default(), &mut |s| {
-        database.retain(s)
-    })
-    .await?;
+    let mut a = Fixture::with_database(db.clone(), &mut |s| database.retain(s)).await?;
     let tenant: TenantId = "tenant-b".try_into()?;
     let binding: BindingId = "binding-b".try_into()?;
     result(
@@ -369,7 +366,6 @@ async fn campaign(database: &mut database::Fixture, consumers: &mut Consumers) -
     a.fixture.service = Service::start_prepared(
         fresh.clone(),
         None,
-        OperationLimits::default(),
         initial,
         Arc::new(Resources::with_key(
             a.fixture.installation.clone(),

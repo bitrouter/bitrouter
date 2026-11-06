@@ -20,12 +20,22 @@ pub mod candidates;
 #[derive(Clone)]
 pub struct EvolutionRuntime {
     pub(crate) db: DatabaseConnection,
+    pub(crate) storage_budget:
+        Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
     routing: Arc<ConfigRoutingTable>,
     policies: Arc<PolicyRuntime>,
     pub(crate) worker_status: Arc<Mutex<super::scheduler::WorkerStatus>>,
 }
 
 impl EvolutionRuntime {
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
     pub fn new(
         db: DatabaseConnection,
         routing: Arc<ConfigRoutingTable>,
@@ -34,6 +44,7 @@ impl EvolutionRuntime {
         Self {
             worker_status: Arc::new(Mutex::new(Default::default())),
             db,
+            storage_budget: None,
             routing,
             policies,
         }
@@ -87,6 +98,7 @@ impl EvolutionRuntime {
 
     pub fn service(&self, owner: &str) -> Result<BlockPolicyStore> {
         BlockPolicyStore::new(self.db.clone(), owner)
+            .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
     /// Operator-owned definitions are validated against the live route catalog.

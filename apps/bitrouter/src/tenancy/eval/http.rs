@@ -150,7 +150,9 @@ async fn handle(
         return Err(ErrorCode::InvalidRequest.into());
     }
     let action = endpoint.action();
-    let identity = service.eval_identity(request.headers(), tenant, action)?;
+    let identity = service
+        .eval_identity(request.headers(), tenant, action)
+        .await?;
     let lease = service.eval_lease()?;
     let one = crate::tenancy::http::one_header;
     let content_type = one(request.headers(), "content-type")?;

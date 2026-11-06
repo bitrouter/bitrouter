@@ -167,7 +167,7 @@ impl Operator {
         let key = operation_key(&actor.id, operation_id)?;
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let record: Option<Stored<Record>> =
@@ -200,7 +200,7 @@ impl Operator {
         super::engine::validate_id(id).map_err(|_| Failure(ErrorCode::InvalidInput))?;
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let result = management::tenant(&self.authority, &tx, id).await?;
@@ -216,7 +216,7 @@ impl Operator {
         super::engine::validate_id(id).map_err(|_| Failure(ErrorCode::InvalidInput))?;
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let result = management::resource(&self.authority, &tx, id).await?;
@@ -242,7 +242,7 @@ impl Operator {
         super::engine::validate_id(id).map_err(|_| Failure(ErrorCode::InvalidInput))?;
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let result = principals::read(&self.authority, &tx, id).await?;
@@ -269,7 +269,7 @@ impl Operator {
         };
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let stamp = super::credentials::Credentials::new(self.authority.clone())
@@ -296,7 +296,7 @@ impl Operator {
         super::engine::validate_id(id).map_err(|_| Failure(ErrorCode::InvalidInput))?;
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let view = management::execution(&self.authority, &tx, id).await?;

@@ -7,7 +7,7 @@
 use super::{
     execution::{Outcome, Target},
     identity::{AttemptId, AuthorityRevision, ExecutionId, InstallationId, TenantId},
-    validation::{Validate, ValidationError, bytes, nullable, require, unique},
+    validation::{Validate, ValidationError, bytes, nullable, require, unique, write_json},
 };
 use serde::{Deserialize, Serialize};
 
@@ -237,6 +237,24 @@ pub struct ExecutionUsageEvidenceV1 {
 }
 impl Validate for ExecutionUsageEvidenceV1 {
     fn validate(&self) -> Result<(), ValidationError> {
+        self.validate_fields()?;
+        bytes(self, MAX_BYTES)
+    }
+}
+
+impl ExecutionUsageEvidenceV1 {
+    /// Encode the validated v1 document as compact JSON within its wire byte limit.
+    ///
+    /// # Errors
+    /// Returns the same contract violations as [`Validate::validate`].
+    pub fn to_validated_json(&self) -> Result<String, ValidationError> {
+        self.validate_fields()?;
+        let mut json = Vec::new();
+        write_json(self, MAX_BYTES, &mut json)?;
+        String::from_utf8(json).map_err(|_| ValidationError("invalid JSON encoding"))
+    }
+
+    fn validate_fields(&self) -> Result<(), ValidationError> {
         require(
             self.schema_version == 1 && self.extractor_version == 1,
             "usage evidence version",
@@ -354,7 +372,7 @@ impl Validate for ExecutionUsageEvidenceV1 {
                 "extractor semantics",
             )?;
         }
-        bytes(self, MAX_BYTES)
+        Ok(())
     }
 }
 

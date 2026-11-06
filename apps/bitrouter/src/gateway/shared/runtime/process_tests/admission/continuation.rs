@@ -6,7 +6,7 @@
 use bitrouter_ai::gateway::operator as admin;
 
 use super::*;
-use crate::gateway::shared::transport::{Limits, owned::Transport};
+use crate::gateway::transport::{Limits, owned::Transport};
 
 const REPLACEMENT: &str = "fixture-native-replacement-secret";
 

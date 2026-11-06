@@ -35,7 +35,7 @@ pub(super) async fn prepare(
     capacity: u16,
     started: &mut dyn FnMut(&Service),
 ) -> Result<Bound> {
-    let mut fixture = Fixture::with_database(db, OperationLimits::default(), started).await?;
+    let mut fixture = Fixture::with_database(db, started).await?;
     fixture.service.shutdown().await?;
     let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
     let reference = |kind, id: &str| -> Result<ResourceRef> {
@@ -80,14 +80,8 @@ pub(super) async fn prepare(
         ]
     }))?).await?;
     let snapshot = store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        lease,
-        OperationLimits::default(),
-        snapshot,
-        resources,
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), lease, snapshot, resources).await?;
     started(&fixture.service);
     let mut config = fixture.configuration_input("choice-config")?;
     config.document.routes = vec![route.clone()];

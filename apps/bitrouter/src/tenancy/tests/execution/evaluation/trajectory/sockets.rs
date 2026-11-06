@@ -227,12 +227,6 @@ async fn real_sockets_revoke_queued_execution_before_begin_has_no_provider_or_st
     Ok(())
 }
 
-struct ReleaseGate(Service);
-impl Drop for ReleaseGate {
-    fn drop(&mut self) {
-        self.0.cleanup.release_gate();
-    }
-}
 struct Paused;
 impl Paused {
     fn new() -> Self {
@@ -261,11 +255,14 @@ async fn real_socket_begin_deadline_and_shutdown_wait_for_rollback_acknowledgmen
         .await?;
         let (_, headers) = issue(&fixture, &revision).await?;
         let ingress = Listener::start(router(&fixture)).await?;
-        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
-        let gate = fixture.service.cleanup.hold(Phase::Active);
+        let gate = fixture
+            .service
+            .cleanup
+            .hold_for(Phase::Active, JobTarget::TrajectoryBegin);
         let _release = ReleaseGate(fixture.service.clone());
         let client = Client::start(protocol, ingress.address, &headers).await?;
         tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
+        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
         client.disconnect().await?;
         let mut shutdown = Box::pin(fixture.service.shutdown());
         ensure!(futures::poll!(&mut shutdown).is_pending());

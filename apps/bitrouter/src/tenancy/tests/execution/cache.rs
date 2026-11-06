@@ -33,7 +33,7 @@ use sea_orm::{
     sea_query::{Alias, Expr, Query},
 };
 use serde_json::{Value, json};
-use tokio::sync::{SemaphorePermit, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio_util::task::AbortOnDropHandle;
 use tower::ServiceExt;
 
@@ -42,13 +42,12 @@ use crate::{
     gateway::{
         pipeline::{
             routing::{RoutingPrefs, RoutingTable},
-            types::RoutingTarget,
+            types::{PipelineInput, PipelineOutput, PipelineRequest, RoutingTarget},
         },
         providers::auth::credentials::Credential,
     },
     tenancy::{
         Service,
-        actor::OperationLimits,
         command::Command,
         execution::{TenantExecution, cached::Caches},
         model::Deadline,
@@ -139,6 +138,39 @@ impl Provider {
         let (status, response) = dispatch(service, binding).await?;
         ensure!(status == StatusCode::OK, "dispatch returned {status}");
         ensure!(response["choices"][0]["message"]["content"] == "cached reply");
+        self.observed(tokens, secret).await
+    }
+
+    async fn generation_admitted(
+        &mut self,
+        execution: Arc<TenantExecution>,
+        tokens: u32,
+        secret: &str,
+    ) -> Result<()> {
+        // Authentication and the dependency read already own completed custody.
+        // Only retained immutable route/key use runs under the read pressure.
+        let input = crate::gateway::http::parse_input(
+            &ApiProtocol::ChatCompletions,
+            json!({"model":MODEL,"messages":[{"role":"user","content":"hello"}]}),
+        )?;
+        let PipelineInput::Generation(prompt) = input else {
+            anyhow::bail!("expected generation input");
+        };
+        let mut request = PipelineRequest::new(MODEL, execution.caller(), *prompt);
+        request.request_id = execution.id().to_string();
+        request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
+        let pipeline = execution.pipeline()?;
+        execution.attach(pipeline.clone(), &mut request)?;
+        let response = tokio::time::timeout(TIMEOUT, pipeline.execute_detached(request)).await??;
+        let PipelineOutput::Generation(result) = response.result else {
+            anyhow::bail!("expected generation output");
+        };
+        ensure!(result.content.iter().any(|content| matches!(content,
+            bitrouter_ai::types::Content::Text { text, .. } if text == "cached reply")));
+        self.observed(tokens, secret).await
+    }
+
+    async fn observed(&mut self, tokens: u32, secret: &str) -> Result<()> {
         let (headers, body) = tokio::time::timeout(TIMEOUT, self.received.recv())
             .await?
             .context("provider request missing")?;
@@ -183,10 +215,12 @@ async fn dispatch(service: &Service, binding: &HeaderMap) -> Result<(StatusCode,
     Ok((status, serde_json::from_slice(&body)?))
 }
 
-fn occupy_reads(service: &Service) -> Result<Vec<SemaphorePermit<'_>>> {
-    let permits = (0..8)
-        .map(|_| service.read_permit().map_err(failure))
-        .collect::<Result<Vec<_>>>()?;
+async fn occupy_reads(service: &Service) -> Result<OwnedSemaphorePermit> {
+    // Wait for an acknowledged read's actor-owned permit to finish dropping,
+    // then hold the entire configured budget rather than sampling availability.
+    let count = u32::try_from(service.execution_settings.capacity.management.reads)?;
+    let permits =
+        tokio::time::timeout(TIMEOUT, service.reads.clone().acquire_many_owned(count)).await??;
     ensure!(matches!(service.read_permit(), Err(error)
         if error.0.code == ErrorCode::CapacityExceeded));
     Ok(permits)
@@ -212,12 +246,25 @@ async fn assert_static_key(execution: &TenantExecution, target: &RoutingTarget) 
 }
 
 async fn reject_admission(fixture: &Fixture, binding: &HeaderMap, code: ErrorCode) -> Result<()> {
-    let submission = fixture.service.submission(binding).map_err(failure)?;
-    let admitted = fixture
-        .service
-        .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)
-        .await;
+    let admitted = async {
+        let submission = fixture.service.submission(binding).await?;
+        fixture
+            .service
+            .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)
+            .await
+    }
+    .await;
     ensure!(matches!(admitted, Err(error) if error.0.code == code));
+    Ok(())
+}
+
+async fn reject_saturated_ingress(service: &Service, binding: &HeaderMap) -> Result<()> {
+    let (status, rejection) = dispatch(service, binding).await?;
+    ensure!(status == StatusCode::TOO_MANY_REQUESTS);
+    ensure!(rejection["code"] == "capacity_exceeded");
+    ensure!(rejection["dispatch_state"] == "not_started");
+    ensure!(rejection["execution_id"].is_null());
+    ensure!(service.current().is_ok(), "read pressure fenced authority");
     Ok(())
 }
 
@@ -268,7 +315,8 @@ async fn corrupt_credential(fixture: &Fixture, reference: &ResourceRef) -> Resul
 }
 
 #[tokio::test]
-async fn warm_dispatch_needs_no_read_slot_and_cold_revision_pressure_is_retryable() -> Result<()> {
+async fn prepared_warm_dispatch_needs_no_immutable_read_and_cold_revision_pressure_is_retryable()
+-> Result<()> {
     let mut provider = Provider::start().await?;
     let (fixture, route, _) = provision(&provider.url).await?;
     // All mutations precede the first load, so only the revision key differs.
@@ -284,15 +332,20 @@ async fn warm_dispatch_needs_no_read_slot_and_cold_revision_pressure_is_retryabl
         .generation(&fixture.service, &first_headers, 25)
         .await?;
 
-    let permits = occupy_reads(&fixture.service)?;
-    provider
-        .generation(&fixture.service, &first_headers, 25)
-        .await?;
-    let (status, rejection) = dispatch(&fixture.service, &second_headers).await?;
-    ensure!(status == StatusCode::TOO_MANY_REQUESTS);
-    ensure!(rejection["code"] == "capacity_exceeded");
-    ensure!(rejection["dispatch_state"] == "not_started");
-    ensure!(rejection["execution_id"].is_null());
+    let warm = admitted(&fixture, &first_headers).await?;
+    let cold = fixture
+        .service
+        .submission(&second_headers)
+        .await
+        .map_err(failure)?;
+    let permits = occupy_reads(&fixture.service).await?;
+    provider.generation_admitted(warm, 25, SECRET).await?;
+    // Authentication has finished; this refusal is the cold immutable revision
+    // read, before admission reaches its indexed dependency extension.
+    ensure!(
+        matches!(fixture.service.admit_execution(cold, MODEL, &ApiProtocol::ChatCompletions).await,
+        Err(error) if error.0.code == ErrorCode::CapacityExceeded)
+    );
     ensure!(provider.calls() == 2, "cold rejection reached the provider");
     // Management reads must still participate in the bounded DB read budget.
     ensure!(matches!(fixture.service.configuration(
@@ -307,12 +360,12 @@ async fn warm_dispatch_needs_no_read_slot_and_cold_revision_pressure_is_retryabl
     provider
         .generation(&fixture.service, &second_headers, 37)
         .await?;
-    let permits = occupy_reads(&fixture.service)?;
+    let first_warm = admitted(&fixture, &first_headers).await?;
+    let second_warm = admitted(&fixture, &second_headers).await?;
+    let permits = occupy_reads(&fixture.service).await?;
+    provider.generation_admitted(first_warm, 25, SECRET).await?;
     provider
-        .generation(&fixture.service, &first_headers, 25)
-        .await?;
-    provider
-        .generation(&fixture.service, &second_headers, 37)
+        .generation_admitted(second_warm, 37, SECRET)
         .await?;
     ensure!(provider.calls() == 5);
     drop(permits);
@@ -321,8 +374,8 @@ async fn warm_dispatch_needs_no_read_slot_and_cold_revision_pressure_is_retryabl
 }
 
 #[tokio::test]
-async fn warm_route_with_cold_credential_returns_retryable_http_capacity_without_a_send()
--> Result<()> {
+async fn prepared_warm_route_with_cold_credential_needs_read_custody_without_a_send() -> Result<()>
+{
     let mut provider = Provider::start().await?;
     let (fixture, route, _) = provision(&provider.url).await?;
     let revision = draft(&fixture, &route, "cache-draft", 25).await?;
@@ -333,25 +386,56 @@ async fn warm_route_with_cold_credential_returns_retryable_http_capacity_without
         credential.secret.as_deref().context("secret")?,
         &revision.revision_id,
     )?;
-    // Admission loads the route, but authentication has not loaded its key.
-    drop(admitted(&fixture, &binding).await?);
-    let permits = occupy_reads(&fixture.service)?;
-    let (status, rejection) = dispatch(&fixture.service, &binding).await?;
-    ensure!(
-        status == StatusCode::TOO_MANY_REQUESTS,
-        "credential cache pressure was misclassified as {status}"
-    );
-    ensure!(rejection["code"] == "capacity_exceeded");
-    ensure!(rejection["dispatch_state"] == "not_started");
-    ensure!(rejection["execution_id"].as_str().is_some());
+    // Admission loads authority metadata and the route, not immutable key bytes.
+    let execution = admitted(&fixture, &binding).await?;
+    let target = selected_target(&execution).await?;
+    let permits = occupy_reads(&fixture.service).await?;
+    ensure!(matches!(
+        execution.credential(&target).await,
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    execution
+        .revalidate()
+        .map_err(|code| anyhow::anyhow!("{code:?}"))?;
     ensure!(provider.calls() == 0);
     ensure!(
         fixture.service.current().is_ok(),
         "credential read pressure fenced authority"
     );
     drop(permits);
-    provider.generation(&fixture.service, &binding, 25).await?;
+    assert_static_key(&execution, &target).await?;
+    let permits = occupy_reads(&fixture.service).await?;
+    provider.generation_admitted(execution, 25, SECRET).await?;
     ensure!(provider.calls() == 1);
+    drop(permits);
+    fixture.service.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn saturated_http_authentication_is_retryable_before_execution_id_even_with_warm_caches()
+-> Result<()> {
+    let mut provider = Provider::start().await?;
+    let (fixture, route, _) = provision(&provider.url).await?;
+    let revision = draft(&fixture, &route, "cache-ingress", 25).await?;
+    let credential = fixture.issue("cache-ingress-user").await?;
+    enable_dispatch(&fixture);
+    let binding = headers(
+        &fixture,
+        credential.secret.as_deref().context("secret")?,
+        &revision.revision_id,
+    )?;
+    provider.generation(&fixture.service, &binding, 25).await?;
+    let permits = occupy_reads(&fixture.service).await?;
+    reject_saturated_ingress(&fixture.service, &binding).await?;
+    reject_admission(&fixture, &binding, ErrorCode::CapacityExceeded).await?;
+    ensure!(
+        provider.calls() == 1,
+        "saturated authentication reached provider"
+    );
+    drop(permits);
+    provider.generation(&fixture.service, &binding, 25).await?;
+    ensure!(provider.calls() == 2, "read pressure was not retryable");
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -397,8 +481,16 @@ async fn authority_publication_separates_both_route_and_static_key_cache_namespa
         "unrelated mutation changed eligibility"
     );
 
-    let permits = occupy_reads(&fixture.service)?;
-    reject_admission(&fixture, &binding, ErrorCode::CapacityExceeded).await?;
+    let submission = fixture
+        .service
+        .submission(&binding)
+        .await
+        .map_err(failure)?;
+    let permits = occupy_reads(&fixture.service).await?;
+    ensure!(
+        matches!(fixture.service.admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions).await,
+        Err(error) if error.0.code == ErrorCode::CapacityExceeded)
+    );
     // An already retained route must not reuse a key from the old authority namespace.
     ensure!(matches!(
         original.credential(&target).await,
@@ -409,7 +501,7 @@ async fn authority_publication_separates_both_route_and_static_key_cache_namespa
 
     let current = admitted(&fixture, &binding).await?;
     let current_target = selected_target(&current).await?;
-    let permits = occupy_reads(&fixture.service)?;
+    let permits = occupy_reads(&fixture.service).await?;
     // Loading the new route namespace must not accidentally warm the credential.
     ensure!(matches!(
         current.credential(&current_target).await,
@@ -417,8 +509,10 @@ async fn authority_publication_separates_both_route_and_static_key_cache_namespa
     ));
     drop(permits);
     assert_static_key(&current, &current_target).await?;
-    let permits = occupy_reads(&fixture.service)?;
     let warm = admitted(&fixture, &binding).await?;
+    let warm_target = selected_target(&warm).await?;
+    let permits = occupy_reads(&fixture.service).await?;
+    assert_static_key(&warm, &warm_target).await?;
     assert_static_key(&original, &target).await?;
     assert_static_key(&current, &current_target).await?;
     ensure!(fixture.service.current().is_ok());
@@ -463,15 +557,14 @@ async fn warm_dispatch_and_retained_execution_recheck_revocation_suspension_and_
                 TenantPut {
                     operation_id: "cache-suspend".try_into()?,
                     expected_revision: Some(
-                        fixture
-                            .service
-                            .current()
-                            .map_err(failure)?
-                            .tenants
-                            .get(&fixture.tenant)
-                            .context("tenant")?
-                            .revision
-                            .clone(),
+                        store::directory::tenant_in(
+                            &fixture.db,
+                            &fixture.tenant,
+                            fixture.service.authority.load_budget(),
+                        )
+                        .await?
+                        .context("tenant")?
+                        .revision,
                     ),
                     state: TenantState::Suspended,
                     installation_id: fixture.installation.clone(),
@@ -508,29 +601,12 @@ async fn warm_dispatch_and_retained_execution_recheck_revocation_suspension_and_
             "suspend" => ErrorCode::TenantInactive,
             _ => ErrorCode::Forbidden,
         };
-        let permits = occupy_reads(&fixture.service)?;
+        let permits = occupy_reads(&fixture.service).await?;
         ensure!(matches!(execution.credential(&target).await, Err(code) if code == expected));
         ensure!(matches!(execution.admit_send(&target), Err(code) if code == expected));
-        let (status, rejection) = dispatch(&fixture.service, &binding).await?;
-        // A scope publication invalidates the old immutable-cache namespace.
-        // A new invocation must read its selected dependency closure before it
-        // can observe that the credential grant was removed. The pinned old
-        // execution above already has that closure and denies without reading.
-        let busy_code = if change == "scope" {
-            ensure!(status == StatusCode::TOO_MANY_REQUESTS);
-            ErrorCode::CapacityExceeded
-        } else {
-            ensure!(
-                status
-                    == if change == "revoke" {
-                        StatusCode::UNAUTHORIZED
-                    } else {
-                        StatusCode::FORBIDDEN
-                    }
-            );
-            expected
-        };
-        ensure!(rejection["code"] == serde_json::to_value(busy_code)?);
+        // Existing leases deny immediately. A fresh HTTP caller first needs
+        // indexed authentication custody, so pressure wins before grant lookup.
+        reject_saturated_ingress(&fixture.service, &binding).await?;
         ensure!(provider.calls() == 1, "{change} allowed an additional send");
         ensure!(fixture.service.current().is_ok());
         drop(permits);
@@ -569,43 +645,76 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
         let target = selected_target(&execution).await?;
         assert_static_key(&execution, &target).await?;
         let before = fixture.service.current().map_err(failure)?.revision;
-        // Move only the checked deadline across now: expiry must work without a
-        // publication/cache-key change. No wall-clock sleeps or public clock API.
+        let publication = fixture
+            .service
+            .authority
+            .read()
+            .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?
+            .publication();
+        // Move the fixture deadline across now in the actual live views and DB.
+        // Neither the publication stamp nor the immutable cache namespace changes.
         let expired = Deadline::parse(
             (Utc::now() - chrono::Duration::seconds(1))
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 .try_into()?,
         )?;
-        {
-            let mut published = fixture
-                .service
-                .snapshot
-                .write()
-                .map_err(|_| anyhow::anyhow!("authority snapshot lock"))?;
-            let snapshot = Arc::make_mut(&mut *published);
-            if expire_binding {
-                snapshot
-                    .bindings
-                    .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
-                    .context("binding")?
-                    .expires = expired;
-            } else {
-                snapshot
-                    .credentials
-                    .get_mut(&credential.credential_id)
-                    .context("credential")?
-                    .expires = expired;
-            }
-        }
+        let (table, id) = if expire_binding {
+            ("tenancy_bindings", fixture.binding.as_str())
+        } else {
+            ("tenancy_credentials", credential.credential_id.as_str())
+        };
+        let update = Query::update()
+            .table(Alias::new(table))
+            .value(Alias::new("expires_at"), expired.wire.as_str())
+            .and_where(Expr::col(Alias::new("id")).eq(id))
+            .and_where(Expr::col(Alias::new("tenant_id")).eq(fixture.tenant.as_str()))
+            .to_owned();
+        ensure!(
+            fixture
+                .db
+                .execute(fixture.db.get_database_backend().build(&update))
+                .await?
+                .rows_affected()
+                == 1
+        );
+        fixture
+            .service
+            .authority
+            .mutate_views_for_test(|facts| {
+                if expire_binding {
+                    if let Some(binding) = facts
+                        .bindings
+                        .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
+                    {
+                        binding.expires = expired.clone();
+                    }
+                } else if let Some(credential) =
+                    facts.credentials.get_mut(&credential.credential_id)
+                {
+                    credential.expires = expired.clone();
+                }
+            })
+            .map_err(|code| anyhow::anyhow!("expiry fixture: {code:?}"))?;
         ensure!(fixture.service.current().map_err(failure)?.revision == before);
+        ensure!(
+            fixture
+                .service
+                .authority
+                .read()
+                .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?
+                .publication()
+                == publication
+        );
         let expected = if expire_binding {
             ErrorCode::Forbidden
         } else {
             ErrorCode::Unauthorized
         };
-        let permits = occupy_reads(&fixture.service)?;
+        let permits = occupy_reads(&fixture.service).await?;
         ensure!(matches!(execution.credential(&target).await, Err(code) if code == expected));
         ensure!(matches!(execution.admit_send(&target), Err(code) if code == expected));
+        reject_saturated_ingress(&fixture.service, &binding).await?;
+        drop(permits);
         let (status, rejection) = dispatch(&fixture.service, &binding).await?;
         ensure!(
             status
@@ -621,7 +730,6 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
             "expired authority reached the provider"
         );
         ensure!(fixture.service.current().is_ok());
-        drop(permits);
         drop(execution);
         fixture.service.shutdown().await?;
     }
@@ -684,7 +792,6 @@ async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart(
         let reopened = Service::start_prepared(
             fixture.db.clone(),
             None,
-            OperationLimits::default(),
             snapshot,
             fixture.service.resources.clone(),
         )
@@ -814,7 +921,6 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
     first.service = Service::start_prepared(
         first.db.clone(),
         None,
-        OperationLimits::default(),
         store::load(&first.db, Utc::now()).await?,
         first.service.resources.clone(),
     )
@@ -877,7 +983,7 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
     let second_revision = draft(&second, &second_route, "cache-second-tenant", 37).await?;
     let pool_revision = draft(&second, &pool_route, "cache-pool-revision", 49).await?;
     let first_key = first.issue("cache-first-user").await?;
-    let mut input = second.issuance("cache-second-user")?;
+    let mut input = second.issuance("cache-second-user").await?;
     input.scope = scope;
     let second_key = issued(
         second
@@ -906,14 +1012,19 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
             .generation_with_secret(&first.service, binding, tokens, secret)
             .await?;
     }
-    let permits = occupy_reads(&first.service)?;
-    for (binding, tokens, secret) in [
-        (&pool_headers, 49, "pool-secret"),
-        (&first_headers, 25, SECRET),
-        (&second_headers, 37, "tenant-b-secret"),
-    ] {
+    let prepared = [
+        (admitted(&second, &pool_headers).await?, 49, "pool-secret"),
+        (admitted(&first, &first_headers).await?, 25, SECRET),
+        (
+            admitted(&second, &second_headers).await?,
+            37,
+            "tenant-b-secret",
+        ),
+    ];
+    let permits = occupy_reads(&first.service).await?;
+    for (execution, tokens, secret) in prepared {
         provider
-            .generation_with_secret(&second.service, binding, tokens, secret)
+            .generation_admitted(execution, tokens, secret)
             .await?;
     }
     drop(permits);

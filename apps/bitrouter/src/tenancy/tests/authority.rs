@@ -72,7 +72,7 @@ use bitrouter_ai::tenancy::authority::{CredentialState, OwnerKind, ResourceKey, 
 #[tokio::test]
 async fn rotation_cannot_broaden_and_publishes_replacement_with_revocation() -> Result<()> {
     let fixture = Fixture::new().await?;
-    let mut initial = fixture.issuance("limited-key")?;
+    let mut initial = fixture.issuance("limited-key").await?;
     initial.permissions = vec![Permission::ResourceRead];
     let original = issued(
         fixture
@@ -85,7 +85,7 @@ async fn rotation_cannot_broaden_and_publishes_replacement_with_revocation() -> 
             .map_err(failure)?,
     )?;
     let original_secret = original.secret.as_deref().context("first secret missing")?;
-    let mut rotation = fixture.issuance("broaden-rotation")?;
+    let mut rotation = fixture.issuance("broaden-rotation").await?;
     rotation.rotate_credential_id = Some(original.credential_id.clone());
     let rejected = fixture
         .service
@@ -98,7 +98,7 @@ async fn rotation_cannot_broaden_and_publishes_replacement_with_revocation() -> 
     ensure!(
         matches!(rejected, StoredResponse::Failure(error) if error.code == ErrorCode::Forbidden)
     );
-    ensure!(fixture.service.authenticate(original_secret).is_ok());
+    ensure!(fixture.service.authenticate(original_secret).await.is_ok());
     rotation.operation_id = "bounded-rotation".try_into()?;
     rotation.permissions = initial.permissions;
     let replacement = issued(
@@ -111,7 +111,7 @@ async fn rotation_cannot_broaden_and_publishes_replacement_with_revocation() -> 
             .await
             .map_err(failure)?,
     )?;
-    ensure!(fixture.service.authenticate(original_secret).is_err());
+    ensure!(fixture.service.authenticate(original_secret).await.is_err());
     ensure!(
         fixture
             .service
@@ -121,6 +121,7 @@ async fn rotation_cannot_broaden_and_publishes_replacement_with_revocation() -> 
                     .as_deref()
                     .context("replacement secret missing")?
             )
+            .await
             .is_ok()
     );
     let old = fixture
@@ -184,7 +185,7 @@ async fn pool_authority_requires_a_live_installation_managed_binding() -> Result
             .await
             .map_err(failure)?,
     )?;
-    let mut grant = fixture.issuance("pool-key")?;
+    let mut grant = fixture.issuance("pool-key").await?;
     grant.scope = scope.clone();
     let credential = issued(
         fixture
@@ -196,27 +197,28 @@ async fn pool_authority_requires_a_live_installation_managed_binding() -> Result
             .await
             .map_err(failure)?,
     )?;
-    let caller = fixture
+    let authenticated = fixture
         .service
-        .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .authenticate_live(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     let requested = GrantScope::Resources {
         resources: vec![pool],
     };
-    ensure!(
-        fixture
-            .service
-            .current()
-            .map_err(failure)?
-            .authorize(
-                &caller,
-                &fixture.tenant,
-                Permission::ResourceRead,
-                &requested,
-                Utc::now(),
-            )
-            .is_ok()
-    );
+    let authorized = || {
+        fixture.service.authority.read().and_then(|mut guard| {
+            guard.check(&authenticated.lease, |view| {
+                view.facts().authorize(
+                    &authenticated.caller,
+                    &fixture.tenant,
+                    Permission::ResourceRead,
+                    &requested,
+                    Utc::now(),
+                )
+            })
+        })
+    };
+    ensure!(authorized().is_ok());
     let detached = result(
         fixture
             .service
@@ -237,20 +239,7 @@ async fn pool_authority_requires_a_live_installation_managed_binding() -> Result
             .await
             .map_err(failure)?,
     )?;
-    ensure!(
-        fixture
-            .service
-            .current()
-            .map_err(failure)?
-            .authorize(
-                &caller,
-                &fixture.tenant,
-                Permission::ResourceRead,
-                &requested,
-                Utc::now(),
-            )
-            .is_err()
-    );
+    ensure!(authorized().is_err());
     binding.operation_id = "stale-reconciler".try_into()?;
     binding.expected_revision = detached.resource_revision.clone();
     let stale = fixture
@@ -280,26 +269,21 @@ async fn pool_authority_requires_a_live_installation_managed_binding() -> Result
             .await
             .map_err(failure)?,
     )?;
-    let state = fixture.service.current().map_err(failure)?;
-    ensure!(
-        state
-            .bindings
-            .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-            .context("binding missing")?
-            .managed_by
-            .is_none()
-    );
-    ensure!(
-        state
-            .authorize(
-                &caller,
-                &fixture.tenant,
-                Permission::ResourceRead,
-                &requested,
-                Utc::now()
-            )
-            .is_err()
-    );
+    let unmanaged = fixture
+        .service
+        .authority
+        .read()
+        .and_then(|mut guard| {
+            guard.check(&authenticated.lease, |view| {
+                Ok(view
+                    .facts()
+                    .bindings
+                    .get(&(fixture.tenant.clone(), fixture.binding.clone()))
+                    .is_some_and(|binding| binding.managed_by.is_none()))
+            })
+        })
+        .map_err(|code| failure(code.into()))?;
+    ensure!(unmanaged && authorized().is_err());
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -307,7 +291,7 @@ async fn pool_authority_requires_a_live_installation_managed_binding() -> Result
 #[tokio::test]
 async fn delegated_binding_expiry_cannot_outlive_the_issuing_credential() -> Result<()> {
     let fixture = Fixture::new().await?;
-    let mut grant = fixture.issuance("short-lived-admin")?;
+    let mut grant = fixture.issuance("short-lived-admin").await?;
     grant.expires_at = (Utc::now() + chrono::Duration::hours(1))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         .try_into()?;
@@ -324,6 +308,7 @@ async fn delegated_binding_expiry_cannot_outlive_the_issuing_credential() -> Res
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     let mut binding = BindingPut {
         operation_id: "excessive-expiry".try_into()?,
@@ -370,6 +355,7 @@ async fn saved_result_access_tracks_current_scope_and_survives_valid_rotation() 
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     let scope = |id: &str| -> Result<GrantScope> {
         Ok(GrantScope::Resources {
@@ -464,7 +450,7 @@ async fn saved_result_access_tracks_current_scope_and_survives_valid_rotation() 
             .await
             .map_err(failure)?,
     )?;
-    let mut rotation = fixture.issuance("rotate-result-reader")?;
+    let mut rotation = fixture.issuance("rotate-result-reader").await?;
     rotation.rotate_credential_id = Some(credential.credential_id);
     let rotated = issued(
         fixture
@@ -484,6 +470,7 @@ async fn saved_result_access_tracks_current_scope_and_survives_valid_rotation() 
                 .as_deref()
                 .context("replacement secret missing")?,
         )
+        .await
         .map_err(failure)?;
     let state = fixture.service.current().map_err(failure)?;
     let recovered = fixture
@@ -515,6 +502,7 @@ async fn tenant_credentials_cannot_recover_installation_class_results() -> Resul
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     let operation = "create-principal".try_into()?;
     fixture

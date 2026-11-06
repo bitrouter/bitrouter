@@ -481,11 +481,14 @@ async fn capture_profile_rechecks_current_role_and_original_credential_permissio
             ("operator", TenantRole::TenantOperator, false),
             ("admin", TenantRole::TenantAdmin, true),
         ] {
-            let snapshot = fixture.service.current().map_err(failure)?;
-            let previous = snapshot
-                .bindings
-                .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-                .context("binding")?;
+            let previous = crate::tenancy::store::directory::binding_in(
+                &fixture.db,
+                &fixture.tenant,
+                &fixture.binding,
+                fixture.service.authority.load_budget(),
+            )
+            .await?
+            .context("binding")?;
             result(
                 fixture
                     .service
@@ -563,7 +566,9 @@ async fn capture_profile_rechecks_current_role_and_original_credential_permissio
                 .context("revision")?
                 .to_str()?
                 .try_into()?;
-            let mut input = fixture.issuance(&format!("capture-missing-{index}"))?;
+            let mut input = fixture
+                .issuance(&format!("capture-missing-{index}"))
+                .await?;
             input.permissions = full
                 .iter()
                 .copied()

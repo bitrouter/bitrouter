@@ -119,14 +119,6 @@ impl Resources {
         if self.key.is_none() {
             return Err(ErrorCode::CapabilityMismatch);
         }
-        if storage::references(db)
-            .await
-            .map_err(|_| ErrorCode::StorageUnavailable)?
-            .len()
-            >= super::MAX_CLOSURE
-        {
-            return Err(ErrorCode::CapacityExceeded);
-        }
         let revision = uuid::Uuid::new_v4()
             .to_string()
             .try_into()
@@ -198,9 +190,13 @@ impl Resources {
                 Permission::ResourceRead,
                 Utc::now(),
             )?;
-            if state.resource_lifecycle.revoked(&artifact.reference) {
-                return Err(ErrorCode::Forbidden);
-            }
+            super::lifecycle::check_in(
+                db,
+                &state.installation,
+                state.revision,
+                &artifact.reference,
+            )
+            .await?;
             if artifact.reference.resource_kind == ResourceKind::Credential {
                 configuration::authorize(
                     state,
@@ -415,11 +411,6 @@ pub(in crate::tenancy) fn apply(
         }
         _ => return Err(ErrorCode::InvalidRequest),
     };
-    if state.resource_lifecycle.record(&record.reference).is_none()
-        && state.resource_lifecycle.len() >= super::MAX_CLOSURE
-    {
-        return Err(ErrorCode::CapacityExceeded);
-    }
     let resource = record.reference.resource_id.clone();
     let revision = record.reference.revision_id.clone();
     state.resource_lifecycle.insert(record.clone());
@@ -437,11 +428,11 @@ pub(in crate::tenancy) fn apply(
 }
 
 impl Service {
-    pub(in crate::tenancy) fn resource_capabilities(
+    pub(in crate::tenancy) async fn resource_capabilities(
         &self,
         caller: &Caller,
     ) -> std::result::Result<ResourceCapabilities, Failure> {
-        let capabilities = self.capabilities(caller)?;
+        let capabilities = self.capabilities(caller).await?;
         Ok(ResourceCapabilities {
             format: 1,
             installation_id: capabilities.installation_id,
@@ -457,19 +448,30 @@ impl Service {
         tenant: &TenantId,
         reference: &ResourceRef,
     ) -> std::result::Result<ResourceStatus, Failure> {
+        let identity = self
+            .authority_read(crate::tenancy::actor::AuthoritySubject::Tenant {
+                caller: caller.clone(),
+                tenant: tenant.clone(),
+                active: false,
+                resource: Some(reference.clone()),
+            })
+            .await?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                authorize(
+                    view.facts(),
+                    caller,
+                    tenant,
+                    &reference.key(),
+                    Permission::ResourceRead,
+                    Utc::now(),
+                )
+            })
+            .map_err(Failure::from)?;
         let _permit = self.read_permit()?;
-        let before = self.current()?;
-        authorize(
-            &before,
-            caller,
-            tenant,
-            &reference.key(),
-            Permission::ResourceRead,
-            Utc::now(),
-        )
-        .map_err(Failure::from)?;
-        // Authenticate encrypted content without returning it; status is not a
-        // secret retrieval endpoint and absent/foreign references are not listed.
+        // Authenticate encrypted content without disclosing it.
         tokio::time::timeout(
             crate::tenancy::MANAGEMENT_TIMEOUT,
             self.resources.load(&self.db, reference),
@@ -477,23 +479,33 @@ impl Service {
         .await
         .map_err(|_| self.unavailable())?
         .map_err(Failure::from)?;
-        let state = self.current()?;
-        authorize(
-            &state,
-            caller,
-            tenant,
-            &reference.key(),
-            Permission::ResourceRead,
-            Utc::now(),
-        )
-        .map_err(Failure::from)?;
-        Ok(ResourceStatus {
-            format: 1,
-            installation_id: state.installation.clone(),
-            reference: reference.clone(),
-            authority_revision: state.revision,
-            head_revision: state.resource_lifecycle.head(&reference.key()).cloned(),
-            revoked: state.resource_lifecycle.revoked(reference),
-        })
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                let state = view.facts();
+                authorize(
+                    state,
+                    caller,
+                    tenant,
+                    &reference.key(),
+                    Permission::ResourceRead,
+                    Utc::now(),
+                )?;
+                // The exact revision's grant stays live, but a newly published head
+                // may be outside this read set. Never report it under a newer stamp.
+                if state.revision != identity.observed_revision {
+                    return Err(ErrorCode::AuthorityUnavailable);
+                }
+                Ok(ResourceStatus {
+                    format: 1,
+                    installation_id: state.installation.clone(),
+                    reference: reference.clone(),
+                    authority_revision: state.revision,
+                    head_revision: state.resource_lifecycle.head(&reference.key()).cloned(),
+                    revoked: state.resource_lifecycle.revoked(reference),
+                })
+            })
+            .map_err(Failure::from)
     }
 }

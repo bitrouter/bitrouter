@@ -1,43 +1,280 @@
 name: Capacity campaigns
 'on':
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      qualification:
+        description: Run the selected dedicated capacity qualification group
+        type: boolean
+        default: false
+      expected_candidate_sha:
+        description: Full candidate commit SHA, required for qualification mode
+        type: string
+        default: ''
+      qualification_group:
+        description: Qualification group; both groups must pass on the same candidate
+        type: choice
+        options:
+        - history
+        - offline
+        default: history
   schedule:
   - cron: 40 2 * * 6
 permissions:
   contents: read
 concurrency:
-  group: capacity-${{ github.ref }}
+  group: capacity-${{ github.ref }}-${{ inputs.qualification && (inputs.qualification_group || 'history') || 'standard' }}
   cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
-  CARGO_BUILD_JOBS: '2'
+  CARGO_BUILD_JOBS: '1'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
   RUSTFLAGS: --cfg bitrouter_capacity_tests -Dwarnings
 jobs:
   capacity:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.qualification && 330 || 90 }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      QUALIFICATION: ${{ inputs.qualification || false }}
+      EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
+      QUALIFICATION_GROUP: ${{ inputs.qualification_group || 'history' }}
     steps:
     - uses: actions/checkout@v6
+    - name: Prepare memory for the capacity build
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: ${{ runner.environment }}
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_ACTIONS" == true && "$RUNNER_KIND" == github-hosted ]]
+        [[ ! -e /swapfile-bitrouter-capacity && ! -L /swapfile-bitrouter-capacity ]]
+        mkdir -p ci-evidence
+        { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-before-swap.txt
+        # Allocate before the scratch gates so their 40 GiB is net of swap.
+        sudo fallocate --length 8G /swapfile-bitrouter-capacity
+        sudo chmod 600 /swapfile-bitrouter-capacity
+        sudo mkswap /swapfile-bitrouter-capacity
+        sudo swapon /swapfile-bitrouter-capacity
+        { free -h; swapon --show --bytes; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } | tee ci-evidence/memory-after-swap.txt
+    - name: Pin qualification candidate and inspect ephemeral runner space
+      if: inputs.qualification
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: ${{ runner.environment }}
+      run: |
+        set -euo pipefail
+        # Dispatch the candidate ref and independently check its full SHA via env.
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch
+        if [[ "$GITHUB_ACTIONS" != true || "$RUNNER_KIND" != github-hosted ]]; then
+          echo '::error::Qualification requires a fresh GitHub-hosted runner.'
+          exit 1
+        fi
+        [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$EXPECTED_CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+        [[ "$(git rev-parse HEAD)" == "$EXPECTED_CANDIDATE_SHA" ]]
+        case "$QUALIFICATION_GROUP" in history|offline) ;; *) exit 1 ;; esac
+        mkdir -p ci-evidence
+        umask 077
+        scratch="$(mktemp -d "$RUNNER_TEMP/bitrouter-capacity.XXXXXX")"
+        printf 'BITROUTER_C4_SCRATCH=%s\n' "$scratch" >> "$GITHUB_ENV"
+        printf 'candidate=%s\nref=%s\nprofile=ci-capacity\nfeatures=all\nRUSTFLAGS=%s\nrunner_image=%s/%s\n' \
+          "$GITHUB_SHA" "$GITHUB_REF" "$RUSTFLAGS" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
+          > ci-evidence/qualification.txt
+        printf 'qualification_group=%s\n' "$QUALIFICATION_GROUP" >> ci-evidence/qualification.txt
+        sha256sum Cargo.toml Cargo.lock .config/nextest.toml .github/workflows/capacity.yml \
+          > ci-evidence/qualification-source.sha256
+        df -Pk "$PWD" "$RUNNER_TEMP" "$scratch" | tee ci-evidence/disk-before-cache.txt
+        free_kib="$(df -Pk "$scratch" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          # This Rust-only job uses none of these preinstalled SDKs. Never remove
+          # Rust, checkout data, caches or built test artifacts to make a test fit.
+          # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+          for unused in /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL; do
+            if [[ -d "$unused" && ! -L "$unused" ]]; then
+              sudo du -sh -- "$unused" | tee -a ci-evidence/preinstalled-cleanup.txt
+              sudo rm -rf -- "$unused"
+            fi
+          done
+        fi
+        df -Pk "$scratch" | tee ci-evidence/disk-before-build.txt
+        free_kib="$(df -Pk "$scratch" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          echo '::error::Qualification requires at least 40 GiB free scratch space; no test was qualified.'
+          exit 1
+        fi
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
+        cache: ${{ !inputs.qualification }}
         cache-on-failure: false
         cache-key: complete-v1
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
     - name: Build capacity harness once without release LTO
+      # The binary/examples and libtest are separate serial compiler passes.
+      # Compilation time is separate from the unchanged workload deadlines.
+      timeout-minutes: ${{ inputs.qualification && 120 || 90 }}
       run: |
-        cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 2
-        cargo nextest run --locked -p bitrouter --all-features --lib --test core_execution --cargo-profile ci-capacity --build-jobs 2 --no-run
+        set -euo pipefail
+        mkdir -p ci-evidence
+        command -v vmstat
+        vmstat -w -t 30 240 &
+        sampler_pid=$!
+        finish_build() {
+          result=$?
+          trap - EXIT
+          kill "$sampler_pid" 2>/dev/null || true
+          wait "$sampler_pid" 2>/dev/null || true
+          printf '%s\n' "$result" > ci-evidence/build-exit-status.txt || true
+          { free -h; df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; } > ci-evidence/build-resources-final.txt 2>&1 || true
+          cat ci-evidence/build-resources-final.txt || true
+          exit "$result"
+        }
+        trap finish_build EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+        /usr/bin/time -v -o ci-evidence/build-fixtures.txt \
+          cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 1
+        # Listing binaries builds the harness once and preserves reusable metadata.
+        # https://nexte.st/docs/ci-features/archiving/#manually-creating-your-own-archives
+        /usr/bin/time -v -o ci-evidence/build-tests.txt \
+          cargo nextest list --locked -p bitrouter --all-features --lib --test core_execution \
+          --cargo-profile ci-capacity --build-jobs 1 --list-type binaries-only --message-format json \
+          > ci-evidence/binaries-metadata.json
+        cargo metadata --locked --all-features --format-version 1 > ci-evidence/cargo-metadata.json
+        if [[ "$QUALIFICATION" == true ]]; then
+          { rustc -Vv; cargo -Vv; cargo-nextest nextest --version; uname -a; } > ci-evidence/toolchain.txt
+          jq -er '."rust-binaries"[]."binary-path"' ci-evidence/binaries-metadata.json \
+            > ci-evidence/test-binary-paths.txt
+          while IFS= read -r binary; do
+            test -x "$binary"
+            sha256sum -- "$binary"
+          done < ci-evidence/test-binary-paths.txt > ci-evidence/qualification-binaries.sha256
+          sha256sum target/ci-capacity/bro >> ci-evidence/qualification-binaries.sha256
+          find target/ci-capacity/examples -maxdepth 1 -type f -executable -print0 \
+            | sort -z | xargs -0 -r sha256sum >> ci-evidence/qualification-binaries.sha256
+        fi
+    - name: Require real scratch capacity after cache restoration and build
+      if: inputs.qualification
+      timeout-minutes: 5
+      env:
+        RUNNER_KIND: ${{ runner.environment }}
+      run: |
+        set -euo pipefail
+        if [[ "$GITHUB_ACTIONS" != true || "$RUNNER_KIND" != github-hosted ]]; then
+          echo '::error::Qualification requires a fresh GitHub-hosted runner.'
+          exit 1
+        fi
+        df -Pk "$PWD/target" "$RUNNER_TEMP" "$BITROUTER_C4_SCRATCH" | tee ci-evidence/disk-after-build.txt
+        free_kib="$(df -Pk "$BITROUTER_C4_SCRATCH" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          # Only the same unused preinstalled SDKs may be reclaimed on this fresh runner.
+          for unused in /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL; do
+            if [[ -d "$unused" && ! -L "$unused" ]]; then
+              sudo du -sh -- "$unused" | tee -a ci-evidence/preinstalled-cleanup.txt
+              sudo rm -rf -- "$unused"
+            fi
+          done
+        fi
+        df -Pk "$BITROUTER_C4_SCRATCH" | tee ci-evidence/disk-before-qualification.txt
+        free_kib="$(df -Pk "$BITROUTER_C4_SCRATCH" | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kib" =~ ^[0-9]+$ ]]
+        if (( free_kib < 40 * 1024 * 1024 )); then
+          echo '::error::Build/cache storage leaves less than 40 GiB free; qualification must not be skipped or reduced.'
+          exit 1
+        fi
+        # The fixture additionally requires 2 * actual source size + 4 GiB before copying.
+        # Keep that runtime check; this runner preflight cannot replace it.
+    - name: Run the selected qualification group serially
+      if: inputs.qualification
+      timeout-minutes: 190
+      env:
+        BITROUTER_TEST_PREBUILT_ONLY: '1'
+        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/ci-capacity/bro
+        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/ci-capacity/examples
+        BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/ci-capacity/examples/owned_capture_fixture
+      run: |
+        set -euo pipefail
+        export TMPDIR="$BITROUTER_C4_SCRATCH"
+        metadata=(--cargo-metadata "$PWD/ci-evidence/cargo-metadata.json"
+          --binaries-metadata "$PWD/ci-evidence/binaries-metadata.json"
+          --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
+        case "$QUALIFICATION_GROUP" in
+          history) suites=(history) ;;
+          offline)
+            suites=(fresh credentials evaluation cli)
+            export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+            ;;
+          *) exit 1 ;;
+        esac
+        for suite in "${suites[@]}"; do
+          case "$suite" in
+            history) selector=tenancy::tests::capacity_history::large_history_qualification ;;
+            fresh) selector=tenancy::audit::recovery::v2::tests::scale::large_fresh_target_streams_complete_sections_and_rejects_late_mismatch ;;
+            credentials) selector=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match ;;
+            evaluation) selector=offline::evaluation::tests::scale::bounded_selected_graph_imports_into_large_fresh_authority_and_refuses_replay ;;
+            cli) selector=tenancy::audit::recovery::v2::tests::cli_scale::real_cli_dense_and_sparse_snapshot_verify_audit_restore ;;
+            *) exit 1 ;;
+          esac
+          filter="kind(lib) & test(=$selector)"
+          cargo-nextest nextest list "${metadata[@]}" --profile ci --run-ignored only \
+            -E "$filter" --message-format json > "ci-evidence/$suite-selection.json"
+          jq -e '
+            [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+            | length == 1 and all(.ignored == true)
+          ' "ci-evidence/$suite-selection.json"
+          sha256sum -c ci-evidence/qualification-source.sha256
+          sha256sum -c ci-evidence/qualification-binaries.sha256
+          rm -f target/nextest/ci/junit.xml
+          status=0
+          # Retain successful phase output too, without uploading any fixture database.
+          # https://nexte.st/docs/reporting/
+          /usr/bin/time -v -o "ci-evidence/$suite-resources.txt" \
+            cargo-nextest nextest run "${metadata[@]}" --profile ci --test-threads 1 \
+            --run-ignored only --retries 0 --no-tests fail --success-output immediate \
+            --failure-output immediate-final -E "$filter" 2>&1 | tee "ci-evidence/$suite.log" || status=$?
+          if [[ -f target/nextest/ci/junit.xml ]]; then
+            cp target/nextest/ci/junit.xml "ci-evidence/$suite-junit.xml"
+          fi
+          sha256sum -c ci-evidence/qualification-binaries.sha256 || status=$?
+          printf '%s\n' "$status" > "ci-evidence/$suite-exit-status.txt"
+          df -Pk "$BITROUTER_C4_SCRATCH" > "ci-evidence/$suite-disk-after.txt"
+          if (( status != 0 )); then
+            exit "$status"
+          fi
+        done
     - name: Run isolated full-capacity and long-history campaigns
+      if: ${{ !inputs.qualification }}
       env:
         BITROUTER_TEST_BRO: ${{ github.workspace }}/target/ci-capacity/bro
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/ci-capacity/examples
       run: |
         cargo nextest run --locked -p bitrouter --all-features --lib --test core_execution --cargo-profile ci-capacity --test-threads 1 --run-ignored all --retries 0 --no-tests fail -E 'test(tenancy::tests::execution::native::session::choice::headroom::) | test(capacity::tree_limits::) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort) | test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery)'
         export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
-        cargo nextest run --locked -p bitrouter --all-features --lib --cargo-profile ci-capacity --test-threads 1 --run-ignored only --retries 0 --no-tests fail -E 'test(=offline::recovery::tests::saturation::actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history)'
+        cargo nextest run --locked -p bitrouter --all-features --lib --cargo-profile ci-capacity --test-threads 1 --run-ignored only --retries 0 --no-tests fail -E 'test(=offline::recovery::tests::saturation::actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history)'
+    - name: Record final qualification storage
+      if: ${{ always() && inputs.qualification }}
+      timeout-minutes: 5
+      run: |
+        mkdir -p ci-evidence
+        df -Pk "$PWD" "$RUNNER_TEMP" "${BITROUTER_C4_SCRATCH:-$RUNNER_TEMP}" \
+          | tee ci-evidence/disk-final.txt
+        for directory in target ci-evidence; do
+          if [[ -d "$directory" ]]; then du -sh "$directory"; fi
+        done > ci-evidence/storage-final.txt
+    - name: Upload small qualification evidence
+      if: ${{ always() && inputs.qualification }}
+      timeout-minutes: 5
+      uses: actions/upload-artifact@v4
+      with:
+        name: capacity-qualification-${{ env.QUALIFICATION_GROUP }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+        path: ci-evidence/
+        retention-days: 7

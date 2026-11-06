@@ -14,7 +14,7 @@ async fn full_producer() -> Result<()> {
     let owner = crate::tenancy::ownership::acquire_path(&path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &owner)
         .await?;
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let provider = Provider::start(false).await?;
     let mut judge = Judge::new(true).await?;
     let ready = Ready::from_fixture(
@@ -29,12 +29,8 @@ async fn full_producer() -> Result<()> {
     .await?;
     ensure!(std::fs::metadata(&path)?.len() > 0);
     ensure!(
-        ready
-            .fixture
-            .service
-            .current()
-            .map_err(failure)?
-            .active_configurations
+        crate::tenancy::configuration_store::active_revision_page(&ready.fixture.db, None)
+            .await?
             .is_empty()
     );
     let transfer = Transfer {

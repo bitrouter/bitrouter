@@ -31,11 +31,21 @@ struct AdmissionFence {
 #[derive(Clone)]
 pub struct BlockPolicyRouter {
     db: DatabaseConnection,
+    pub(crate) storage_budget:
+        Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
     routing: Arc<ConfigRoutingTable>,
     policies: Arc<PolicyRuntime>,
 }
 
 impl BlockPolicyRouter {
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
     pub fn new(
         db: DatabaseConnection,
         routing: Arc<ConfigRoutingTable>,
@@ -43,6 +53,7 @@ impl BlockPolicyRouter {
     ) -> Self {
         Self {
             db,
+            storage_budget: None,
             routing,
             policies,
         }
@@ -50,6 +61,7 @@ impl BlockPolicyRouter {
 
     fn service(&self, owner: &str) -> Result<BlockPolicyStore> {
         BlockPolicyStore::new(self.db.clone(), owner)
+            .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
         let Some(session) = ctx.extension::<RequestSessionContext>() else {
@@ -149,8 +161,13 @@ impl BlockPolicyRouter {
 }
 
 fn internal(error: anyhow::Error) -> BitrouterError {
-    tracing::warn!(%error, "canonical evolution operation failed");
-    BitrouterError::internal("canonical evolution state could not be verified")
+    match error.downcast::<BitrouterError>() {
+        Ok(error) => error,
+        Err(error) => {
+            tracing::warn!(%error, "canonical evolution operation failed");
+            BitrouterError::internal("canonical evolution state could not be verified")
+        }
+    }
 }
 
 #[async_trait]

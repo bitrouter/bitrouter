@@ -11,7 +11,7 @@ use chrono::Utc;
 
 use super::{Service, Submission};
 use crate::tenancy::{
-    authority::{Effective, covers_key},
+    authority::{Effective, covers_key, live::ReadGuard},
     cache::Pin,
     error::Failure,
     resources::execution::RetainedExecutionRevision,
@@ -28,7 +28,7 @@ pub(crate) struct Authority {
 }
 
 impl Service {
-    pub(in crate::tenancy) fn host_authority(
+    pub(in crate::tenancy) async fn host_authority(
         &self,
         headers: &http::HeaderMap,
     ) -> Result<Arc<Authority>, Failure> {
@@ -36,7 +36,12 @@ impl Service {
         if headers.contains_key(super::BLOCK_LINK_HEADER) {
             return Err(ErrorCode::InvalidRequest.into());
         }
-        let identity = self.submission(headers)?;
+        let identity = self
+            .submission_with_intent(
+                headers,
+                crate::tenancy::authority::live::DependencyIntent::Owner,
+            )
+            .await?;
         let (credential_scope, binding_scope) = self
             .with_dispatch_authority(&identity, |state| {
                 let effective = state.effective(&identity.caller, &identity.tenant, Utc::now())?;
@@ -132,6 +137,8 @@ impl Authority {
         // A host's lifetime must not extend or reuse one operation deadline.
         Submission {
             caller: self.identity.caller.clone(),
+            authority: self.identity.authority.clone(),
+            preparation: crate::tenancy::authority::live::DependencyIntent::Owner,
             tenant: self.identity.tenant.clone(),
             principal: self.identity.principal.clone(),
             credential: self.identity.credential.clone(),
@@ -161,20 +168,45 @@ impl Authority {
         self.service.retained_execution(&self.submission()).await
     }
 
-    /// The current snapshot read lock covers both the complete resource check
-    /// and the consumer's synchronous permission check / dispatch admission.
+    /// Load the owner's complete dependency closure before synchronous checks.
+    pub(in crate::tenancy) async fn extend(
+        &self,
+        dependencies: &[ResourceRef],
+    ) -> Result<(), Failure> {
+        self.service
+            .extend_submission(&self.submission(), dependencies)
+            .await
+    }
+
+    pub(in crate::tenancy) fn with_guard<T>(
+        &self,
+        work: impl FnOnce(&mut ReadGuard<'_>) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        self.service.with_dispatch_guard(&self.submission(), work)
+    }
+
+    /// One publication guard covers resource checks and synchronous dispatch.
     pub(in crate::tenancy) fn with_authority<T>(
         &self,
         dependencies: &[ResourceRef],
         work: impl FnOnce(&Effective<'_>) -> Result<T, ErrorCode>,
     ) -> Result<T, ErrorCode> {
-        let submission = self.submission();
-        self.service.with_dispatch_authority(&submission, |state| {
-            self.in_snapshot(state, dependencies, work)
+        self.with_guard(|guard| self.in_guard(guard, dependencies, work))
+    }
+
+    /// Borrow this owner's lease, releasing its view before another owner check.
+    pub(in crate::tenancy) fn in_guard<T>(
+        &self,
+        guard: &mut ReadGuard<'_>,
+        dependencies: &[ResourceRef],
+        work: impl FnOnce(&Effective<'_>) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        guard.check(&self.identity.authority, |view| {
+            self.in_view(view.facts(), dependencies, work)
         })
     }
 
-    pub(in crate::tenancy) fn in_snapshot<T>(
+    fn in_view<T>(
         &self,
         state: &crate::tenancy::model::Snapshot,
         dependencies: &[ResourceRef],

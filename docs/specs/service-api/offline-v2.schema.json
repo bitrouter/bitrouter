@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Offline v2 control and JSON Lines envelopes",
+  "description": "Select a definition for a root or individual line. Stream order, exact EOF/counts, UTF-8 byte limits, compiler validation and authority proofs are additional requirements in the service API specification.",
+  "$defs": {
+    "Id": {"$ref": "../../../crates/bitrouter-ai/src/tenancy/wire-schema.json#/$defs/Id"},
+    "Digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "Path": {"type": "string", "minLength": 1, "pattern": "^/", "description": "At most 4096 UTF-8 bytes; no dot/parent components. Selected paths must be canonical."},
+    "Label": {"type": "string", "minLength": 1, "description": "At most 256 UTF-8 bytes; no Unicode control characters, including NUL."},
+    "Count": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+    "U64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "Revision": {"$ref": "../../../crates/bitrouter-ai/src/tenancy/wire-schema.json#/$defs/AuthorityRevision"},
+    "ResourceRef": {"$ref": "../../../crates/bitrouter-ai/src/tenancy/wire-schema.json#/$defs/ResourceRef"},
+    "Anchor": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"$ref": "#/$defs/Path"}, "sha256": {"$ref": "#/$defs/Digest"}}
+    },
+    "Plan": {
+      "type": "object", "additionalProperties": false, "required": ["format", "source", "target", "retirement"],
+      "properties": {
+        "format": {"const": "bitrouter.offline.recovery-plan.v2"},
+        "source": {
+          "type": "object", "additionalProperties": false,
+          "required": ["bundle", "evidence_digest", "installation_id", "producer", "tables"],
+          "properties": {
+            "bundle": {"$ref": "#/$defs/Path"}, "evidence_digest": {"$ref": "#/$defs/Digest"},
+            "installation_id": {"$ref": "#/$defs/Id"},
+            "producer": {
+              "type": "object", "additionalProperties": false, "required": ["commit", "artifact_sha256", "evidence"],
+              "properties": {"commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+                "artifact_sha256": {"$ref": "#/$defs/Digest"}, "evidence": {"$ref": "#/$defs/Anchor"}}
+            },
+            "tables": {
+              "type": "array", "minItems": 1, "maxItems": 256,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["table", "rows", "value_bytes", "digest", "disposition"],
+                "properties": {"table": {"$ref": "#/$defs/Label"}, "rows": {"$ref": "#/$defs/U64"},
+                  "value_bytes": {"$ref": "#/$defs/U64"}, "digest": {"$ref": "#/$defs/Digest"},
+                  "disposition": {"enum": ["retained_archive", "external_quarantine"]}}
+              }
+            }
+          }
+        },
+        "target": {
+          "type": "object", "additionalProperties": false,
+          "required": ["database", "installation_id", "provisioning", "wrapping_key_env", "static_manifest"],
+          "properties": {"database": {"$ref": "#/$defs/Path"}, "installation_id": {"$ref": "#/$defs/Id"},
+            "provisioning": {"$ref": "#/$defs/Anchor"}, "static_manifest": {"$ref": "#/$defs/Anchor"},
+            "wrapping_key_env": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}}
+        },
+        "retirement": {"$ref": "#/$defs/Anchor"}
+      }
+    },
+    "EvalBackfillPlan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["format", "bundle", "database_evidence_digest", "source_kind", "ownership_evidence_digest", "ownership_evidence", "manifest", "manifest_digest", "target", "target_bundle", "target_evidence_digest", "target_installation", "provisioning"],
+      "properties": {
+        "format": {"const": "bitrouter.offline.eval-backfill.v2"},
+        "bundle": {"$ref": "#/$defs/Path"},
+        "database_evidence_digest": {"$ref": "#/$defs/Digest"},
+        "source_kind": {"enum": ["local_user", "shared_user", "native_owner"]},
+        "ownership_evidence_digest": {"$ref": "#/$defs/Digest"},
+        "ownership_evidence": {"$ref": "#/$defs/Path"},
+        "manifest": {"$ref": "#/$defs/Path"},
+        "manifest_digest": {"$ref": "#/$defs/Digest"},
+        "target": {"$ref": "#/$defs/Path"},
+        "target_bundle": {"$ref": "#/$defs/Path"},
+        "target_evidence_digest": {"$ref": "#/$defs/Digest"},
+        "target_installation": {"$ref": "#/$defs/Id"},
+        "provisioning": {"$ref": "#/$defs/Anchor"}
+      }
+    },
+    "ProvisioningHeader": {
+      "type": "object", "additionalProperties": false,
+      "required": ["format", "installation_id", "operation_count", "configuration_count", "active_count", "resource_count"],
+      "properties": {"format": {"const": "bitrouter.offline.fresh-provisioning.v2"},
+        "installation_id": {"$ref": "#/$defs/Id"},
+        "operation_count": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "configuration_count": {"$ref": "#/$defs/Count"}, "active_count": {"$ref": "#/$defs/Count"},
+        "resource_count": {"$ref": "#/$defs/Count"}}
+    },
+    "ProvisioningRecord": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "principal_id", "result"],
+          "properties": {"kind": {"const": "operation"}, "principal_id": {"$ref": "#/$defs/Id"},
+            "result": {"$ref": "../../../crates/bitrouter-ai/src/tenancy/wire-schema.json#/$defs/OperationResult"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "revision"],
+          "properties": {"kind": {"const": "configuration"},
+            "revision": {"$ref": "../../../crates/bitrouter-ai/src/tenancy/wire-schema.json#/$defs/ConfigurationRevision"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "tenant_id", "revision_id", "authority_revision"],
+          "properties": {"kind": {"const": "active"}, "tenant_id": {"$ref": "#/$defs/Id"},
+            "revision_id": {"$ref": "#/$defs/Id"}, "authority_revision": {"$ref": "#/$defs/Revision"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "reference"],
+          "properties": {"kind": {"const": "resource"}, "reference": {"$ref": "#/$defs/ResourceRef"}}}
+      ]
+    },
+    "ApprovalHeader": {
+      "type": "object", "additionalProperties": false, "required": ["format", "installation_id", "resource_count"],
+      "properties": {"format": {"const": "bitrouter.offline.static-approval.v2"},
+        "installation_id": {"$ref": "#/$defs/Id"}, "resource_count": {"$ref": "#/$defs/Count"}}
+    },
+    "ApprovalRecord": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "reference", "definition"],
+      "properties": {"kind": {"const": "resource"}, "reference": {"$ref": "#/$defs/ResourceRef"},
+        "definition": {"$ref": "#/$defs/StaticDefinition"}}
+    },
+    "StaticDefinition": {
+      "description": "Fresh subset of the existing privileged import definition; embedded routing/policy documents additionally require their original compiler validation.",
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "credential"],
+          "properties": {"kind": {"const": "credential"}, "oauth_generation": {"const": 0, "default": 0},
+            "oauth": {"type": "null"}, "credential": {
+              "type": "object", "required": ["type", "data"],
+              "properties": {"type": {"const": "api_key"}, "data": {
+                "type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}
+              }}
+            }}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "document", "name"],
+          "properties": {"kind": {"const": "policy"}, "document": {"type": "object"}, "name": {"type": "string"},
+            "dependencies": {"type": "array", "items": {"$ref": "#/$defs/ResourceRef"}, "default": []}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "routing", "selector", "credentials"],
+          "properties": {"kind": {"const": "route"}, "routing": {}, "selector": {"type": "string", "minLength": 1},
+            "policy": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/ResourceRef"}]},
+            "credentials": {"type": "array", "maxItems": 256, "items": {
+              "type": "object", "additionalProperties": false, "required": ["provider", "account", "credential"],
+              "properties": {"provider": {"type": "string", "minLength": 1}, "account": {"type": "string", "minLength": 1},
+                "credential": {"$ref": "#/$defs/ResourceRef"}}
+            }}, "exploration": {"type": "array", "maxItems": 0, "default": []},
+            "core_choice": {"type": "null"}, "assessment": {"type": "null"}, "block": {"type": "null"}}}
+      ]
+    },
+    "RetirementHeader": {
+      "type": "object", "additionalProperties": false,
+      "required": ["format", "source_installation_id", "database_evidence_digest", "fence_maintained", "target_ingress_fenced", "selection_exhaustive", "unresolved_effects_remain_unknown", "writer_count", "selected_file_count"],
+      "properties": {"format": {"const": "bitrouter.offline.retirement-attestation.v2"},
+        "source_installation_id": {"$ref": "#/$defs/Id"}, "database_evidence_digest": {"$ref": "#/$defs/Digest"},
+        "fence_maintained": {"const": true}, "target_ingress_fenced": {"const": true},
+        "selection_exhaustive": {"const": true}, "unresolved_effects_remain_unknown": {"const": true},
+        "writer_count": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "selected_file_count": {"$ref": "#/$defs/U64"}}
+    },
+    "RetirementRecord": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "id", "process_identity", "restart_source", "retired"],
+          "properties": {"kind": {"const": "writer"}, "id": {"$ref": "#/$defs/Label"},
+            "process_identity": {"$ref": "#/$defs/Label"}, "restart_source": {"$ref": "#/$defs/Label"}, "retired": {"const": true}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "path", "writer", "keyed_digest", "bytes"],
+          "properties": {"kind": {"const": "file"}, "path": {"$ref": "#/$defs/Path"}, "writer": {"$ref": "#/$defs/Label"},
+            "keyed_digest": {"$ref": "#/$defs/Digest"}, "bytes": {"$ref": "#/$defs/U64"}}}
+      ]
+    }
+  }
+}

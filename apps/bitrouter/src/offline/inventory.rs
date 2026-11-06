@@ -7,17 +7,33 @@ use super::{
         Column, Inventory, LedgerEntry, MAX_BYTES, MAX_CELL, MAX_FILE, MAX_ROW, MAX_ROWS, Table,
     },
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use futures::TryStreamExt;
 use sea_orm::sqlx::{Connection, Row, SqliteConnection};
 
-#[derive(Default)]
-struct Budget {
+pub(super) struct Budget {
+    legacy: bool,
     rows: u64,
     bytes: u64,
 }
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            legacy: true,
+            rows: 0,
+            bytes: 0,
+        }
+    }
+}
 impl Budget {
-    fn charge(&mut self, rows: u64, bytes: u64) -> Result<()> {
+    pub(super) fn totals() -> Self {
+        Self {
+            legacy: false,
+            rows: 0,
+            bytes: 0,
+        }
+    }
+    pub(super) fn charge(&mut self, rows: u64, bytes: u64) -> Result<()> {
         self.rows = self
             .rows
             .checked_add(rows)
@@ -27,20 +43,20 @@ impl Budget {
             .checked_add(bytes)
             .ok_or_else(|| anyhow::anyhow!("byte count overflow"))?;
         ensure!(
-            self.rows <= MAX_ROWS && self.bytes <= MAX_BYTES,
+            !self.legacy || (self.rows <= MAX_ROWS && self.bytes <= MAX_BYTES),
             "offline inventory exceeds profile"
         );
         Ok(())
     }
 }
-fn identifier(value: &str) -> Result<()> {
+pub(super) fn identifier(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
         "unsupported schema identifier"
     );
     Ok(())
 }
-fn quoted(value: &str) -> String {
+pub(super) fn quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
@@ -126,7 +142,11 @@ pub(super) async fn inspect_in(db: &mut SqliteConnection, key: &[u8; 32]) -> Res
         installation_id,
     })
 }
-async fn schema(db: &mut SqliteConnection, key: &[u8; 32], budget: &mut Budget) -> Result<String> {
+pub(super) async fn schema(
+    db: &mut SqliteConnection,
+    key: &[u8; 32],
+    budget: &mut Budget,
+) -> Result<String> {
     let count: i64 = sea_orm::sqlx::query_scalar("SELECT count(*) FROM sqlite_schema")
         .fetch_one(&mut *db)
         .await?;
@@ -160,7 +180,7 @@ async fn schema(db: &mut SqliteConnection, key: &[u8; 32], budget: &mut Budget) 
     ensure!(seen == count, "schema changed during inspection");
     Ok(hex::encode(digest.finish()))
 }
-async fn columns(db: &mut SqliteConnection, name: &str) -> Result<Vec<Column>> {
+pub(super) async fn columns(db: &mut SqliteConnection, name: &str) -> Result<Vec<Column>> {
     let rows=sea_orm::sqlx::query("SELECT CASE WHEN length(CAST(name AS BLOB))<=256 THEN name ELSE NULL END AS name,pk,hidden FROM pragma_table_xinfo(?) ORDER BY cid LIMIT 129").bind(name).fetch_all(&mut *db).await?;
     ensure!(
         !rows.is_empty() && rows.len() <= 128,
@@ -181,7 +201,7 @@ async fn columns(db: &mut SqliteConnection, name: &str) -> Result<Vec<Column>> {
         })
         .collect()
 }
-async fn indexes(db: &mut SqliteConnection, table: &str) -> Result<()> {
+pub(super) async fn indexes(db: &mut SqliteConnection, table: &str) -> Result<()> {
     // Index expressions and partial predicates are executable during VACUUM and
     // integrity_check. All production indexes are ordinary column indexes.
     let rows = sea_orm::sqlx::query("SELECT CASE WHEN length(CAST(name AS BLOB))<=256 THEN name ELSE NULL END AS name,partial FROM pragma_index_list(?) LIMIT 2049")
@@ -208,7 +228,7 @@ async fn indexes(db: &mut SqliteConnection, table: &str) -> Result<()> {
     }
     Ok(())
 }
-fn row_query(name: &str, columns: &[Column]) -> String {
+pub(super) fn row_query(name: &str, columns: &[Column]) -> String {
     let sizes:Vec<_>=columns.iter().map(|c| {
         let c=quoted(&c.name);
         format!("CASE typeof({c}) WHEN 'null' THEN 0 WHEN 'integer' THEN 8 WHEN 'real' THEN 8 ELSE length(CAST({c} AS BLOB)) END")
@@ -229,6 +249,36 @@ fn row_query(name: &str, columns: &[Column]) -> String {
     }
     format!("SELECT {} FROM {}", projections.join(","), quoted(name))
 }
+
+/// The caller has qualified every schema object and bounded this table's cells
+/// in the same snapshot. Keep operand and statement allowances until clear ACK.
+pub(super) async fn validate_checks_in(db: &mut SqliteConnection, name: &str) -> Result<()> {
+    let sql: Option<String> = sea_orm::sqlx::query_scalar(
+        "SELECT CASE WHEN length(CAST(sql AS BLOB))<=1048576 THEN sql ELSE NULL END FROM main.sqlite_schema WHERE type='table' AND name=?",
+    )
+    .bind(name)
+    .fetch_one(&mut *db)
+    .await?;
+    let sql = sql.context("table definition missing or exceeds profile")?;
+    let mut checks = super::schema::CheckCursor::new(&sql)?;
+    while let Some(predicate) = checks.next_predicate()? {
+        // Readonly SQLite can omit CHECKs from integrity_check. Evaluate only
+        // accepted original spans, with no aliases or normalization: affinity,
+        // collation, TRUE/FALSE name resolution and CHECK-NULL remain SQLite's.
+        // https://sqlite.org/lang_createtable.html#check_constraints
+        // https://sqlite.org/lang_expr.html#booleanexpr
+        let query = format!(
+            "SELECT EXISTS(SELECT 1 FROM main.{} NOT INDEXED WHERE NOT{predicate})",
+            quoted(name)
+        );
+        let violated: i64 = sea_orm::sqlx::query_scalar(&query)
+            .fetch_one(&mut *db)
+            .await?;
+        ensure!(violated == 0, "SQLite integrity failed");
+    }
+    Ok(())
+}
+
 async fn table(
     db: &mut SqliteConnection,
     name: &str,
@@ -250,32 +300,11 @@ async fn table(
         value_bytes = value_bytes
             .checked_add(bytes as u64)
             .ok_or_else(|| anyhow::anyhow!("byte count overflow"))?;
-        let mut digest = Fingerprint::new(key, b"typed-row")?;
-        digest.field(name.as_bytes());
-        for (index, column) in columns.iter().enumerate() {
-            let start = 1 + index * 5;
-            let kind: String = row.try_get(start)?;
-            let size: i64 = row.try_get(start + 1)?;
-            ensure!(
-                size >= 0 && size as u64 <= MAX_CELL,
-                "cell exceeds offline profile"
-            );
-            digest.field(column.name.as_bytes());
-            digest.field(kind.as_bytes());
-            match kind.as_str() {
-                "null" => digest.field(&[]),
-                "integer" => digest.field(&row.try_get::<i64, _>(start + 3)?.to_be_bytes()),
-                "real" => digest.field(&row.try_get::<f64, _>(start + 4)?.to_bits().to_be_bytes()),
-                "text" | "blob" => {
-                    let bytes: Vec<u8> = row.try_get(start + 2)?;
-                    ensure!(bytes.len() as i64 == size, "cell projection mismatch");
-                    digest.field(&bytes);
-                }
-                _ => anyhow::bail!("unsupported SQLite value type"),
-            }
-        }
-        hashes.push(digest.finish());
+        hashes.push(row_digest(&row, name, &columns, key)?);
     }
+    drop(stream);
+    // Every row/cell has passed the bounded projection before CHECK evaluation.
+    validate_checks_in(db, name).await?;
     // Preserve duplicates; sorting fixed-size keyed hashes is independent of SQL
     // collation, insertion order, and VACUUM's physical btree layout.
     hashes.sort_unstable();
@@ -295,10 +324,42 @@ async fn table(
         digest: hex::encode(digest.finish()),
     })
 }
+pub(super) fn row_digest(
+    row: &sea_orm::sqlx::sqlite::SqliteRow,
+    name: &str,
+    columns: &[Column],
+    key: &[u8; 32],
+) -> Result<[u8; 32]> {
+    let mut digest = Fingerprint::new(key, b"typed-row")?;
+    digest.field(name.as_bytes());
+    for (index, column) in columns.iter().enumerate() {
+        let start = 1 + index * 5;
+        let kind: String = row.try_get(start)?;
+        let size: i64 = row.try_get(start + 1)?;
+        ensure!(
+            size >= 0 && size as u64 <= MAX_CELL,
+            "cell exceeds offline profile"
+        );
+        digest.field(column.name.as_bytes());
+        digest.field(kind.as_bytes());
+        match kind.as_str() {
+            "null" => digest.field(&[]),
+            "integer" => digest.field(&row.try_get::<i64, _>(start + 3)?.to_be_bytes()),
+            "real" => digest.field(&row.try_get::<f64, _>(start + 4)?.to_bits().to_be_bytes()),
+            "text" | "blob" => {
+                let bytes: Vec<u8> = row.try_get(start + 2)?;
+                ensure!(bytes.len() as i64 == size, "cell projection mismatch");
+                digest.field(&bytes);
+            }
+            _ => anyhow::bail!("unsupported SQLite value type"),
+        }
+    }
+    Ok(digest.finish())
+}
 pub(super) const LEDGER_SQL: &str = "SELECT CASE WHEN typeof(version)='text' AND length(CAST(version AS BLOB))<=256 THEN version ELSE NULL END AS version,CASE WHEN typeof(applied_at)='integer' THEN applied_at ELSE NULL END AS applied_at,typeof(applied_at) AS kind FROM seaql_migrations ORDER BY version COLLATE BINARY LIMIT 1025";
 pub(super) const INSTALLATION_SQL: &str = "SELECT CASE WHEN typeof(singleton)='integer' THEN singleton ELSE NULL END AS singleton,CASE WHEN typeof(installation_id)='text' AND length(CAST(installation_id AS BLOB))<=128 THEN installation_id ELSE NULL END AS installation_id FROM tenancy_installation LIMIT 2";
 
-async fn ledger(db: &mut SqliteConnection) -> Result<Vec<LedgerEntry>> {
+pub(super) async fn ledger(db: &mut SqliteConnection) -> Result<Vec<LedgerEntry>> {
     let rows = sea_orm::sqlx::query(LEDGER_SQL).fetch_all(&mut *db).await?;
     ensure!(rows.len() <= 1024, "ledger exceeds profile");
     rows.into_iter()
@@ -338,7 +399,7 @@ async fn ledger(db: &mut SqliteConnection) -> Result<Vec<LedgerEntry>> {
         })
         .collect()
 }
-async fn installation(db: &mut SqliteConnection) -> Result<Option<String>> {
+pub(super) async fn installation(db: &mut SqliteConnection) -> Result<Option<String>> {
     let rows = sea_orm::sqlx::query(INSTALLATION_SQL)
         .fetch_all(&mut *db)
         .await?;

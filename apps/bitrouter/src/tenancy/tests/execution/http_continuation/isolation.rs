@@ -72,14 +72,9 @@ async fn same_installation_tenant_route_and_revision_transplants_do_not_send() -
         credential(&second_slot),credential(&tenant_slot),route_record(&alias,&first_slot,&provider.url),route_record(&revised,&second_slot,&provider.url),route_record(&tenant_route,&tenant_slot,&provider.url)
     ]}))?).await?;
     let initial = crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?;
-    ready.fixture.service = Service::start_prepared(
-        ready.fixture.db.clone(),
-        None,
-        Default::default(),
-        initial,
-        Arc::new(resources),
-    )
-    .await?;
+    ready.fixture.service =
+        Service::start_prepared(ready.fixture.db.clone(), None, initial, Arc::new(resources))
+            .await?;
     ready
         .fixture
         .service

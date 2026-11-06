@@ -155,9 +155,21 @@ pub(super) async fn initialize(
     resources: &super::resources::Resources,
     import: Option<&[u8]>,
     control: &Control,
-    oauth: &super::oauth::State,
 ) -> Result<Option<PinnedCrypto>> {
     let crypto = resources.continuation_crypto();
+    // Import expansion and its bounded metadata/index rows share the same
+    // physical ledger. With no import, only the small epoch row can be created.
+    let bytes = match import {
+        Some(bytes) => bytes
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(4 * 1024 * 1024))
+            .ok_or_else(|| anyhow::anyhow!("bootstrap write estimate overflow"))?,
+        None => 4096,
+    };
+    control
+        .reserve_write(bytes, true)
+        .map_err(|code| anyhow::anyhow!("bootstrap storage capacity unavailable: {code:?}"))?;
     let transaction = control.begin(db).await?;
     let result = async {
         super::trajectory_profile::validate_startup(&transaction, &initial.installation, control)
@@ -171,29 +183,45 @@ pub(super) async fn initialize(
         .await?;
         verify_epoch(&transaction, &initial.installation, crypto.as_ref()).await?;
         resources.bootstrap(&transaction, import).await?;
-        for (tenant, revision) in &initial.active_configurations {
-            let stored = super::configuration_store::configuration(&transaction, tenant, revision)
-                .await
-                .map_err(|_| anyhow::anyhow!("active tenant configuration unavailable"))?
-                .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
-            resources.validate_executable(&stored).map_err(|_| {
-                anyhow::anyhow!(
-                    "active tenant configuration authentication or qualification failed"
+        let mut after = None;
+        loop {
+            let page =
+                super::configuration_store::active_revision_page(&transaction, after.as_ref())
+                    .await?;
+            if page.is_empty() {
+                break;
+            }
+            for pointer in page {
+                ensure!(
+                    pointer.authority_revision <= initial.revision,
+                    "active configuration exceeds published authority"
+                );
+                let stored = super::configuration_store::configuration(
+                    &transaction,
+                    &pointer.tenant,
+                    &pointer.revision,
                 )
-            })?;
-            super::configuration::validate_profile(&stored.revision.document).map_err(|_| {
-                anyhow::anyhow!("active tenant configuration requires unavailable features")
-            })?;
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
+                resources.validate_executable(&stored).map_err(|_| {
+                    anyhow::anyhow!(
+                        "active tenant configuration authentication or qualification failed"
+                    )
+                })?;
+                super::configuration::validate_profile(&stored.revision.document).map_err(
+                    |_| {
+                        anyhow::anyhow!("active tenant configuration requires unavailable features")
+                    },
+                )?;
+                after = Some(pointer.tenant);
+            }
         }
-        resources.oauth_metadata(&transaction).await
+        resources.validate_oauth(&transaction).await
     }
     .await;
     match result {
-        Ok(metadata) => {
+        Ok(()) => {
             control.commit(transaction).await?;
-            oauth
-                .initialize(metadata)
-                .map_err(|_| anyhow::anyhow!("OAuth startup state unavailable"))?;
             Ok(crypto.map(PinnedCrypto))
         }
         Err(error) => {

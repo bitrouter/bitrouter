@@ -47,6 +47,19 @@ async fn commit_pair(db: &DatabaseConnection, value: &Candidate) -> Result<bool>
     let result = async {
         let inserted = insert(&transaction, value).await?;
         auxiliary_store::insert(&transaction, value).await?;
+        if db.get_database_backend() == DatabaseBackend::Sqlite {
+            let change = obligations::reconcile(
+                &transaction,
+                &value.receipt.installation_id,
+                &obligations::Key {
+                    tenant: value.receipt.tenant_id.clone(),
+                    execution: value.receipt.execution_id.clone(),
+                },
+                &|_, _| Ok(()),
+            )
+            .await?;
+            drop(change);
+        }
         Ok::<_, anyhow::Error>(inserted)
     }
     .await;
@@ -176,19 +189,25 @@ pub(super) async fn after_reconnect(db: &DatabaseConnection, value: &Candidate) 
         .await?
         .is_none()
     );
-    let inventory = inventory(db, &value.receipt.installation_id).await?;
-    ensure!(
-        inventory
-            .unknown
-            .iter()
-            .any(|entry| entry.0.as_str() == "tenant" && entry.1.as_str() == "count-unknown")
-    );
-    ensure!(
-        !inventory
-            .unknown
-            .iter()
-            .any(|entry| entry.1.as_str() == "count-known")
-    );
+    // The owned-directory inventory is a SQLite profile. Canonical receipt and
+    // auxiliary round trips above remain covered on every supported backend.
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        let inventory = inventory(db, &value.receipt.installation_id).await?;
+        ensure!(inventory.unknown_count == 1);
+        for (id, present) in [("count-unknown", true), ("count-known", false)] {
+            let row = obligations::lookup(
+                db,
+                &value.receipt.installation_id,
+                &obligations::Key {
+                    tenant: "tenant".try_into()?,
+                    execution: id.try_into()?,
+                },
+                &|_, _| Ok(()),
+            )
+            .await?;
+            ensure!(row.is_some() == present);
+        }
+    }
     Ok(())
 }
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! Persisted ceilings are provenance. Only a fresh H check grants a read.
 use super::Registration;
 use crate::tenancy::{
-    authority::{covers_key, scope_subset},
+    authority::{covers_key, live, scope_subset},
     model::{Caller, Snapshot},
     transaction::Proof,
 };
@@ -16,7 +16,7 @@ use bitrouter_ai::tenancy::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 use tokio::time::Instant;
@@ -114,6 +114,7 @@ impl Ceiling {
             if !covers_key(&self.credential_scope, tenant, &reference.key())
                 || !covers_key(&self.binding_scope, tenant, &reference.key())
                 || !current.covers(&requested)
+                || state.resource_lifecycle.revoked(reference)
             {
                 return Err(ErrorCode::Forbidden);
             }
@@ -126,7 +127,8 @@ impl Ceiling {
 /// Construction stays inside H after loading a validated durable registration.
 pub(crate) struct ReadIdentity {
     registration: Arc<Registration>,
-    snapshot: Arc<RwLock<Arc<Snapshot>>>,
+    authority: Arc<live::Authority>,
+    lease: live::Lease,
     live: Arc<AtomicBool>,
     proof: Arc<Proof>,
     deadline: Instant,
@@ -139,12 +141,14 @@ impl ReadIdentity {
     pub(in crate::tenancy) fn checked(
         registration: Arc<Registration>,
         worker: &crate::tenancy::actor::Worker,
+        lease: live::Lease,
         deadline: Instant,
         stopped: Arc<crate::tenancy::hosts::StoppedRead>,
     ) -> Result<Self, ErrorCode> {
         let value = Self {
             registration,
-            snapshot: worker.snapshot.clone(),
+            authority: worker.authority.clone(),
+            lease,
             live: worker.live.0.clone(),
             proof: worker.proof.clone(),
             deadline,
@@ -192,6 +196,10 @@ impl ReadIdentity {
         &self.database
     }
 
+    pub(in crate::tenancy) fn load_budget(&self) -> usize {
+        self.authority.load_budget()
+    }
+
     pub(crate) fn source_revision(&self) -> &RevisionId {
         &self.registration.input.expected_active_revision
     }
@@ -205,16 +213,24 @@ impl ReadIdentity {
     }
 
     pub(crate) fn check(&self, dependencies: &[ResourceRef]) -> Result<(), ErrorCode> {
+        self.authority.read()?.check(&self.lease, |view| {
+            self.check_facts(view.facts(), dependencies)
+        })
+    }
+
+    /// Command-local facts are loaded in H's borrowed transaction. Candidate
+    /// resources are checked here without extending the source read lease.
+    pub(in crate::tenancy) fn check_facts(
+        &self,
+        state: &Snapshot,
+        dependencies: &[ResourceRef],
+    ) -> Result<(), ErrorCode> {
         if Instant::now() >= self.deadline {
             return Err(ErrorCode::CapacityExceeded);
         }
         if !self.live.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        let state = self
-            .snapshot
-            .read()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         let input = &self.registration.input;
         if state.installation != input.installation
             || state.active_configurations.get(&input.tenant)
@@ -224,7 +240,7 @@ impl ReadIdentity {
         }
         self.registration
             .ceiling
-            .check(&state, &input.tenant, dependencies)
+            .check(state, &input.tenant, dependencies)
     }
 
     pub(in crate::tenancy) fn origin(&self, proof: &Arc<Proof>) -> bool {

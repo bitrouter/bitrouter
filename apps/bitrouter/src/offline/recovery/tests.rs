@@ -4,7 +4,7 @@ use anyhow::Context;
 use serde_json::{Value, json};
 use std::{ffi::OsStr, io::Read, os::unix::fs::PermissionsExt, process::Stdio};
 use tokio::io::AsyncReadExt;
-mod fixture;
+pub(crate) mod fixture;
 mod saturation;
 mod selected_files;
 
@@ -68,9 +68,9 @@ fn executable_digest() -> Result<String> {
 }
 impl Fixture {
     async fn new() -> Result<Self> {
-        Self::with_saturated_source(false).await
+        Self::with_large_history_source(false).await
     }
-    async fn with_saturated_source(saturate: bool) -> Result<Self> {
+    async fn with_large_history_source(large_history: bool) -> Result<Self> {
         let directory = tempfile::Builder::new()
             .prefix("recovery-cli-")
             .permissions(std::fs::Permissions::from_mode(0o700))
@@ -80,7 +80,7 @@ impl Fixture {
         let source_live = fixture::Live::open(&source, None, None).await?;
         let source_result = async {
             let provision = fixture::provision(&source_live).await?;
-            if saturate {
+            if large_history {
                 saturation::fill(&source_live, &provision).await?;
             }
             Ok::<_, anyhow::Error>(provision)

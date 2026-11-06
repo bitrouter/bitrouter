@@ -15,7 +15,11 @@ pub(super) async fn case(root: &Path, mode: &str) -> Result<()> {
     let result = async {
         let expiry = if mode == "late-expiry" {
             let expires = Utc::now() + chrono::Duration::seconds(8);
-            let mut input = stopped.bound.fixture.issuance("recovery-expiring-reader")?;
+            let mut input = stopped
+                .bound
+                .fixture
+                .issuance("recovery-expiring-reader")
+                .await?;
             input.expires_at = expires
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 .try_into()?;

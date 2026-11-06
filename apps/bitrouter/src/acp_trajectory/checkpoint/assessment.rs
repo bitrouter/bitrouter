@@ -89,7 +89,7 @@ impl CanonicalStore {
         identity: &SessionIdentity,
         input: RevisionInput,
     ) -> Result<AssessmentRevision> {
-        self.submit_assessment_checked(identity, input, |_| Box::pin(async { Ok(()) }))
+        self.submit_assessment_checked(identity, input, |_, _| Box::pin(async { Ok(()) }))
             .await
     }
 
@@ -103,7 +103,10 @@ impl CanonicalStore {
         precondition: F,
     ) -> Result<AssessmentRevision>
     where
-        F: for<'a> FnOnce(&'a DatabaseTransaction) -> futures::future::BoxFuture<'a, Result<()>>
+        F: for<'a> FnOnce(
+                &'a DatabaseTransaction,
+                &'a mut crate::storage::write::Write,
+            ) -> futures::future::BoxFuture<'a, Result<()>>
             + Send,
     {
         let cp = self
@@ -147,134 +150,146 @@ impl CanonicalStore {
                 }
             }
         }
-        let tx = self.db.begin().await?;
-        precondition(&tx).await?;
-        let mut locked_sessions = BTreeMap::new();
-        for key in keys {
-            // Validate deletion when the corresponding manifest is used. An
-            // obsolete expected-head hint must not preempt duplicate handling.
-            if let Some(row) = lock_session_metadata(&tx, &key).await? {
-                locked_sessions.insert(key, row);
+        let (mut write, tx) =
+            crate::storage::write::Write::begin(&self.db, &self.storage_budget, false).await?;
+        let result = async {
+            precondition(&tx, &mut write).await?;
+            let mut locked_sessions = BTreeMap::new();
+            for key in keys {
+                // Validate deletion when the corresponding manifest is used. An
+                // obsolete expected-head hint must not preempt duplicate handling.
+                write.session(&tx, &key).await?;
+                if let Some(row) = lock_session_metadata(&tx, &key).await? {
+                    locked_sessions.insert(key, row);
+                }
             }
-        }
-        locked_manifest(&tx, identity, &input.checkpoint_id, &locked_sessions).await?;
-        if let Some(existing) = revisions::Entity::find_by_id(&revision_id)
-            .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
-            .lock_exclusive()
-            .one(&tx)
-            .await?
-        {
-            let value: AssessmentRevision = serde_json::from_str(&existing.revision_json)?;
-            ensure!(
-                value.input_digest == input_digest,
-                "submission ID already used for different input"
-            );
-            tx.commit().await?;
-            return Ok(value);
-        }
-        // The session fence does not refresh an older MySQL read view. The
-        // selected head and its revision must both be read at that fence.
-        let current_head = heads::Entity::find_by_id(&key)
-            .filter(crate::storage::legacy::scope("acp_effective_assessments"))
-            .lock_exclusive()
-            .one(&tx)
-            .await?;
-        let current_id = current_head
-            .as_ref()
-            .and_then(|head| head.revision_id.clone());
-        ensure!(
-            current_id == input.expected_revision,
-            "effective revision changed; refresh before submitting"
-        );
-        let current = match &current_id {
-            Some(id) => {
-                let row = revisions::Entity::find_by_id(id)
-                    .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
-                    .lock_exclusive()
-                    .one(&tx)
-                    .await?
-                    .context("assessment revision missing")?;
-                Some(serde_json::from_str::<AssessmentRevision>(
-                    &row.revision_json,
-                )?)
-            }
-            None => None,
-        };
-        let mut selected = true;
-        let mut selection_reason = "selected";
-        if let Some(current) = &current {
-            let previous = locked_manifest(
-                &tx,
-                identity,
-                &current.input.checkpoint_id,
-                &locked_sessions,
-            )
-            .await?;
-            if input.assessment.is_none() {
-                ensure!(
-                    current.input.assessment.is_some()
-                        && current.input.checkpoint_id == input.checkpoint_id,
-                    "retraction must target the current assessment"
-                );
-                selection_reason = "retracted";
-            } else if cp.watermark < previous.watermark {
-                selected = false;
-                selection_reason = "historical_checkpoint";
-            } else if cp.checkpoint_id == previous.checkpoint_id
-                && current.input.source == AssessmentSource::Human
-                && input.source == AssessmentSource::Agentic
+            locked_manifest(&tx, identity, &input.checkpoint_id, &locked_sessions).await?;
+            if let Some(existing) = revisions::Entity::find_by_id(&revision_id)
+                .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
+                .lock_exclusive()
+                .one(&tx)
+                .await?
             {
-                selected = false;
-                selection_reason = "human_revision_preserved";
+                let value: AssessmentRevision = serde_json::from_str(&existing.revision_json)?;
+                ensure!(
+                    value.input_digest == input_digest,
+                    "submission ID already used for different input"
+                );
+                return Ok(value);
             }
-        } else {
-            ensure!(
-                input.assessment.is_some(),
-                "no current assessment to retract"
-            );
-        }
-        let value = AssessmentRevision {
-            revision_id: revision_id.clone(),
-            input_digest,
-            input,
-            supersedes: if selected { current_id } else { None },
-            selected_on_submission: selected,
-            selection_reason: selection_reason.into(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        let inserted = revisions::Entity::insert(revisions::ActiveModel {
-            revision_id: Set(revision_id.clone()),
-            session_key: Set(key.clone()),
-            checkpoint_id: Set(cp.checkpoint_id),
-            created_at: Set(value.created_at.clone()),
-            revision_json: Set(serde_json::to_string(&value)?),
-        })
-        .exec_without_returning(&tx)
-        .await?;
-        ensure!(inserted == 1, "revisions row was not inserted");
-        if selected {
-            if current_head.is_some() {
-                let updated = heads::Entity::update_many()
-                    .filter(crate::storage::legacy::scope("acp_effective_assessments"))
-                    .filter(heads::Column::SessionKey.eq(&key))
-                    .col_expr(heads::Column::RevisionId, Expr::value(Some(revision_id)))
-                    .exec(&tx)
-                    .await?;
-                ensure!(updated.rows_affected == 1, "assessment head changed");
-            } else {
-                // The locked session serializes Legacy creators. A foreign occupied
-                // key is an error, never an upsert into that namespace.
-                let inserted = heads::Entity::insert(heads::ActiveModel {
-                    session_key: Set(key),
-                    revision_id: Set(Some(revision_id)),
-                })
-                .exec_without_returning(&tx)
+            // The session fence does not refresh an older MySQL read view. The
+            // selected head and its revision must both be read at that fence.
+            let current_head = heads::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_effective_assessments"))
+                .lock_exclusive()
+                .one(&tx)
                 .await?;
-                ensure!(inserted == 1, "heads row was not inserted");
+            let current_id = current_head
+                .as_ref()
+                .and_then(|head| head.revision_id.clone());
+            ensure!(
+                current_id == input.expected_revision,
+                "effective revision changed; refresh before submitting"
+            );
+            let current = match &current_id {
+                Some(id) => {
+                    let row = revisions::Entity::find_by_id(id)
+                        .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
+                        .lock_exclusive()
+                        .one(&tx)
+                        .await?
+                        .context("assessment revision missing")?;
+                    Some(serde_json::from_str::<AssessmentRevision>(
+                        &row.revision_json,
+                    )?)
+                }
+                None => None,
+            };
+            let mut selected = true;
+            let mut selection_reason = "selected";
+            if let Some(current) = &current {
+                let previous = locked_manifest(
+                    &tx,
+                    identity,
+                    &current.input.checkpoint_id,
+                    &locked_sessions,
+                )
+                .await?;
+                if input.assessment.is_none() {
+                    ensure!(
+                        current.input.assessment.is_some()
+                            && current.input.checkpoint_id == input.checkpoint_id,
+                        "retraction must target the current assessment"
+                    );
+                    selection_reason = "retracted";
+                } else if cp.watermark < previous.watermark {
+                    selected = false;
+                    selection_reason = "historical_checkpoint";
+                } else if cp.checkpoint_id == previous.checkpoint_id
+                    && current.input.source == AssessmentSource::Human
+                    && input.source == AssessmentSource::Agentic
+                {
+                    selected = false;
+                    selection_reason = "human_revision_preserved";
+                }
+            } else {
+                ensure!(
+                    input.assessment.is_some(),
+                    "no current assessment to retract"
+                );
             }
+            let value = AssessmentRevision {
+                revision_id: revision_id.clone(),
+                input_digest,
+                input,
+                supersedes: if selected { current_id } else { None },
+                selected_on_submission: selected,
+                selection_reason: selection_reason.into(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            write.account(&(&revision_id, &key, &cp.checkpoint_id, &value))?;
+            let inserted = revisions::Entity::insert(revisions::ActiveModel {
+                revision_id: Set(revision_id.clone()),
+                session_key: Set(key.clone()),
+                checkpoint_id: Set(cp.checkpoint_id),
+                created_at: Set(value.created_at.clone()),
+                revision_json: Set(serde_json::to_string(&value)?),
+            })
+            .exec_without_returning(&tx)
+            .await?;
+            ensure!(inserted == 1, "revisions row was not inserted");
+            if selected {
+                write.account(&(
+                    current_head
+                        .as_ref()
+                        .map(|row| (&row.session_key, &row.revision_id)),
+                    &key,
+                    &revision_id,
+                ))?;
+                if current_head.is_some() {
+                    let updated = heads::Entity::update_many()
+                        .filter(crate::storage::legacy::scope("acp_effective_assessments"))
+                        .filter(heads::Column::SessionKey.eq(&key))
+                        .col_expr(heads::Column::RevisionId, Expr::value(Some(revision_id)))
+                        .exec(&tx)
+                        .await?;
+                    ensure!(updated.rows_affected == 1, "assessment head changed");
+                } else {
+                    // The locked session serializes Legacy creators. A foreign occupied
+                    // key is an error, never an upsert into that namespace.
+                    let inserted = heads::Entity::insert(heads::ActiveModel {
+                        session_key: Set(key),
+                        revision_id: Set(Some(revision_id)),
+                    })
+                    .exec_without_returning(&tx)
+                    .await?;
+                    ensure!(inserted == 1, "heads row was not inserted");
+                }
+            }
+            Ok(value)
         }
-        tx.commit().await?;
-        Ok(value)
+        .await;
+        write.finish(tx, result).await
     }
 
     pub async fn assessment_history(

@@ -2,7 +2,12 @@ use super::*;
 use bitrouter_ai::tenancy::execution::{Outcome, Provenance, Usage};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 
-fn candidate(installation: &str, tenant: &str, id: &str, principal: &str) -> Result<Candidate> {
+pub(super) fn candidate(
+    installation: &str,
+    tenant: &str,
+    id: &str,
+    principal: &str,
+) -> Result<Candidate> {
     Candidate::new(
         ExecutionReceipt {
             installation_id: installation.try_into()?,
@@ -37,9 +42,27 @@ async fn open() -> Result<DatabaseConnection> {
     crate::db::run_migrations(&db).await?;
     Ok(db)
 }
-async fn commit(db: &DatabaseConnection, candidate: &Candidate) -> Result<bool> {
+pub(super) async fn commit(db: &DatabaseConnection, candidate: &Candidate) -> Result<bool> {
     let tx = db.begin().await?;
-    let result = insert(&tx, candidate).await;
+    let result = async {
+        let inserted = insert(&tx, candidate).await?;
+        super::super::auxiliary_store::insert(&tx, candidate).await?;
+        if db.get_database_backend() == DatabaseBackend::Sqlite {
+            let change = obligations::reconcile(
+                &tx,
+                &candidate.receipt.installation_id,
+                &obligations::Key {
+                    tenant: candidate.receipt.tenant_id.clone(),
+                    execution: candidate.receipt.execution_id.clone(),
+                },
+                &|_, _| Ok(()),
+            )
+            .await?;
+            drop(change);
+        }
+        Ok::<_, anyhow::Error>(inserted)
+    }
+    .await;
     match result {
         Ok(inserted) => {
             tx.commit().await?;
@@ -232,7 +255,7 @@ async fn rollback_is_not_a_receipt_and_restart_preserves_exact_committed_bytes()
     .context("reopened receipt")?;
     ensure!(serde_json::to_string(&saved)? == value.json);
     let inventory = inventory(&db, &value.receipt.installation_id).await?;
-    ensure!(inventory.bytes == value.bytes() && inventory.unknown.is_empty());
+    ensure!(inventory.bytes == value.bytes() && inventory.unknown_count == 0);
     db.close().await?;
     Ok(())
 }

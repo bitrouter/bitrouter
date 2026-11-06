@@ -510,6 +510,11 @@ mod tests {
             Arc::new(crate::telemetry::receipt_latency::capacity::Observation::default());
         let snapshot = crate::telemetry::receipt_latency::capacity::Snapshot {
             completion_reserved: 0,
+            physical_write_reserved: 0,
+            observed_free: None,
+            history_bytes: 32_000,
+            history_rows: 1,
+            oauth_reserved: 560_000,
             accounted: 0,
             ingress_reserved: 0,
             potential_unknown: 0,

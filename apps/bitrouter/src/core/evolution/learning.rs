@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, TransactionTrait,
+    QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 
@@ -172,60 +172,66 @@ impl BlockPolicyStore {
         precondition: impl FnOnce() -> Result<()>,
     ) -> Result<LearningReport> {
         let mut snapshot = self.learning_snapshot(block_id, experiment_id).await?;
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        ensure!(
-            digest(&state)? == snapshot.control_digest,
-            "control changed while reconstructing feedback; retry"
-        );
-        ensure!(state.mode != EvolutionMode::Off, "evolution is off");
-        snapshot.validate(&tx, &self.store).await?;
-        precondition()?;
-        if state
-            .experiment(block_id, Some(&snapshot.report.experiment_id))
-            .is_some_and(|block| block.status == BlockStatus::RolledBack)
-        {
-            // Statistics can still be inspected after withdrawal, but a later
-            // favorable posterior draw cannot restart a terminated experiment.
-            tx.commit().await?;
-            return Ok(snapshot.report);
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            ensure!(
+                digest(&state)? == snapshot.control_digest,
+                "control changed while reconstructing feedback; retry"
+            );
+            ensure!(state.mode != EvolutionMode::Off, "evolution is off");
+            snapshot.validate(&tx, &self.store, &mut write).await?;
+            precondition()?;
+            if state
+                .experiment(block_id, Some(&snapshot.report.experiment_id))
+                .is_some_and(|block| block.status == BlockStatus::RolledBack)
+            {
+                // Statistics can still be inspected after withdrawal, but a later
+                // favorable posterior draw cannot restart a terminated experiment.
+                return Ok(snapshot.report);
+            }
+            snapshot.report.published = if snapshot.report.block_status == BlockStatus::Adopted
+                && snapshot.report.monitoring.rollback
+            {
+                state.apply_experiment_monitoring(
+                    block_id,
+                    &snapshot.report.experiment_id,
+                    &snapshot.report.monitoring,
+                )?
+            } else {
+                state.apply_experiment_plan(
+                    block_id,
+                    &snapshot.report.experiment_id,
+                    snapshot.report.plan.clone(),
+                    snapshot.report.cohort_resolved,
+                )?
+            };
+            let current = state
+                .experiment(block_id, Some(&snapshot.report.experiment_id))
+                .context("block disappeared during publication")?;
+            snapshot.report.block_status = current.status;
+            snapshot.report.block_revision = current.revision.clone();
+            snapshot.report.publications = state
+                .publications
+                .iter()
+                .filter(|publication| {
+                    publication.block_id == block_id
+                        && publication.experiment_id.as_deref() == Some(&current.experiment_id)
+                })
+                .cloned()
+                .collect();
+            if snapshot.report.published {
+                self.store
+                    .save_charged(&mut write, &tx, row, &state)
+                    .await?;
+            }
+            Ok(snapshot.report)
         }
-        snapshot.report.published = if snapshot.report.block_status == BlockStatus::Adopted
-            && snapshot.report.monitoring.rollback
-        {
-            state.apply_experiment_monitoring(
-                block_id,
-                &snapshot.report.experiment_id,
-                &snapshot.report.monitoring,
-            )?
-        } else {
-            state.apply_experiment_plan(
-                block_id,
-                &snapshot.report.experiment_id,
-                snapshot.report.plan.clone(),
-                snapshot.report.cohort_resolved,
-            )?
-        };
-        let current = state
-            .experiment(block_id, Some(&snapshot.report.experiment_id))
-            .context("block disappeared during publication")?;
-        snapshot.report.block_status = current.status;
-        snapshot.report.block_revision = current.revision.clone();
-        snapshot.report.publications = state
-            .publications
-            .iter()
-            .filter(|publication| {
-                publication.block_id == block_id
-                    && publication.experiment_id.as_deref() == Some(&current.experiment_id)
-            })
-            .cloned()
-            .collect();
-        if snapshot.report.published {
-            self.store.save(&tx, row, &state).await?;
-        }
-        tx.commit().await?;
-        Ok(snapshot.report)
+        .await;
+        write.finish(tx, result).await
     }
 
     async fn learning_snapshot(
@@ -237,7 +243,8 @@ impl BlockPolicyStore {
         let block = state
             .experiment(block_id, experiment_id)
             .context("unknown experiment")?;
-        let canonical = CanonicalStore::new(self.store.db.clone());
+        let canonical = CanonicalStore::new(self.store.db.clone())
+            .with_storage_budget(self.store.storage_budget.clone());
         let enrollments = self.store.list::<SessionEnrollment>(SESSION_KIND).await?;
         let mut observations = EffectiveObservations::default();
         let mut monitoring_observations = EffectiveObservations::default();
@@ -511,10 +518,12 @@ impl Snapshot {
         &self,
         tx: &DatabaseTransaction,
         store: &crate::storage::evolution::EvolutionStore,
+        write: &mut crate::storage::write::Write,
     ) -> Result<()> {
         // Capture takes connection locks before session locks. Use the same
         // order so a concurrent append can never deadlock with publication.
         for (id, expected) in &self.connection_states {
+            write.connection(tx, id).await?;
             ensure!(
                 lock_connection(tx, id).await?.state == *expected,
                 "capture health changed before publication; retry"
@@ -532,6 +541,7 @@ impl Snapshot {
             .chain(self.ancestor_fences.keys())
             .collect();
         for key in keys {
+            write.session(tx, key).await?;
             sessions::Entity::update_many()
                 .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .col_expr(

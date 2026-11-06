@@ -45,11 +45,14 @@ async fn binding(
     role: TenantRole,
     expires_at: Timestamp,
 ) -> Result<()> {
-    let snapshot = fixture.service.current().map_err(failure)?;
-    let old = snapshot
-        .bindings
-        .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-        .context("current binding")?;
+    let old = crate::tenancy::store::directory::binding_in(
+        &fixture.db,
+        &fixture.tenant,
+        &fixture.binding,
+        64 * 1024,
+    )
+    .await?
+    .context("current binding")?;
     result(
         fixture
             .service
@@ -79,10 +82,11 @@ async fn binding(
     Ok(())
 }
 
-fn caller(fixture: &Fixture, credential: &CredentialIssued) -> Result<Caller> {
+async fn caller(fixture: &Fixture, credential: &CredentialIssued) -> Result<Caller> {
     fixture
         .service
         .authenticate(credential.secret.as_deref().context("issued secret")?)
+        .await
         .map_err(failure)
 }
 

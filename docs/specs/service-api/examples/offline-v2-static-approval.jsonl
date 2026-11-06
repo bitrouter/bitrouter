@@ -1,0 +1,2 @@
+{"format":"bitrouter.offline.static-approval.v2","installation_id":"example-target","resource_count":1}
+{"kind":"resource","reference":{"owner_kind":"tenant","owner_id":"example-tenant","resource_kind":"credential","resource_id":"example-api-key","revision_id":"revision-1"},"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"synthetic-not-a-real-key"}},"oauth_generation":0}}

@@ -51,7 +51,7 @@ impl Service {
         listener: &str,
         stop: tokio_util::sync::CancellationToken,
     ) -> Result<Prepared, Failure> {
-        let authority = self.host_authority(headers)?;
+        let authority = self.host_authority(headers).await?;
         if source.is_empty() || source.len() > 128 || source.chars().any(char::is_control) {
             return Err(ErrorCode::InvalidRequest.into());
         }
@@ -105,6 +105,7 @@ impl Service {
         if dependencies.is_empty() {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
+        authority.extend(&dependencies).await?;
         authority
             .with_authority(&dependencies, capture_permissions)
             .map_err(Failure::from)?;
@@ -132,6 +133,9 @@ impl Service {
             }
             _ => None,
         };
+        if let Some(profile) = &assessment {
+            authority.extend(&profile.dependencies).await?;
+        }
         // The listener is a trusted same-App embedding input, never a tenant URL.
         // Reject paths/credentials/query overrides and non-loopback destinations.
         let url =
@@ -273,20 +277,16 @@ impl Binding {
         self.block.as_ref()?.block_token_cost(selector, attempt)
     }
     pub(in crate::tenancy) fn begin_block_update(&self) -> Result<u64, Failure> {
-        let _guard = self
-            .service()
-            .snapshot
-            .write()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        Ok(self.block_generation.swap(0, Ordering::AcqRel))
+        self.service()
+            .authority
+            .with_write(|| Ok(self.block_generation.swap(0, Ordering::AcqRel)))
+            .map_err(Failure::from)
     }
     pub(in crate::tenancy) fn begin_observation(&self) -> Result<i64, Failure> {
-        let _guard = self
-            .service()
-            .snapshot
-            .write()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        Ok(self.capture_head.swap(-1, Ordering::AcqRel))
+        self.service()
+            .authority
+            .with_write(|| Ok(self.capture_head.swap(-1, Ordering::AcqRel)))
+            .map_err(Failure::from)
     }
     pub(crate) fn block_profile(&self) -> Option<&super::resources::block::Profile> {
         self.block.as_ref().and_then(|route| route.block_profile())
@@ -304,9 +304,9 @@ impl Binding {
                         .is_ok_and(|digest| digest == stored.commitment)
                 })
     }
-    pub(in crate::tenancy) fn block_in(
+    pub(in crate::tenancy) fn block_guard(
         &self,
-        state: &super::model::Snapshot,
+        guard: &mut super::authority::live::ReadGuard<'_>,
     ) -> Result<(), ErrorCode> {
         if self.block.is_none()
             || self.closing.load(Ordering::Acquire)
@@ -317,14 +317,14 @@ impl Binding {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         self.authority
-            .in_snapshot(state, &self.dependencies, capture_permissions)
+            .in_guard(guard, &self.dependencies, capture_permissions)
     }
     pub(in crate::tenancy) fn assessment(&self) -> Option<&super::learning::Profile> {
         self.assessment.as_ref()
     }
-    pub(in crate::tenancy) fn assessment_in(
+    pub(in crate::tenancy) fn assessment_guard(
         &self,
-        state: &super::model::Snapshot,
+        guard: &mut super::authority::live::ReadGuard<'_>,
     ) -> Result<(), ErrorCode> {
         if self.closing.load(Ordering::Acquire)
             || self.stop.is_cancelled()
@@ -337,21 +337,22 @@ impl Binding {
             .as_ref()
             .ok_or(ErrorCode::CapabilityMismatch)?;
         self.authority
-            .in_snapshot(state, &self.dependencies, capture_permissions)?;
+            .in_guard(guard, &self.dependencies, capture_permissions)?;
         self.authority
-            .in_snapshot(state, &profile.dependencies, capture_permissions)
+            .in_guard(guard, &profile.dependencies, capture_permissions)
     }
     pub(in crate::tenancy) fn assessment_check(&self) -> Result<(), ErrorCode> {
-        self.check().map_err(|error| error.0.code)?;
-        let profile = self
-            .assessment
-            .as_ref()
-            .ok_or(ErrorCode::CapabilityMismatch)?;
-        if profile.maximum == 0 || profile.concurrent == 0 {
-            return Err(ErrorCode::CapacityExceeded);
-        }
-        self.authority
-            .with_authority(&profile.dependencies, capture_permissions)
+        self.authority.with_guard(|guard| {
+            self.assessment_guard(guard)?;
+            let profile = self
+                .assessment
+                .as_ref()
+                .ok_or(ErrorCode::CapabilityMismatch)?;
+            if profile.maximum == 0 || profile.concurrent == 0 {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            Ok(())
+        })
     }
 
     pub(crate) fn authority(&self) -> &Authority {
@@ -387,21 +388,22 @@ impl Binding {
     #[cfg(unix)]
     pub(crate) fn reject_ingress(&self) {
         // Serialize rejection with new-effect gates and already-admitted
-        // delivery using the existing authority snapshot lock, not another registry.
-        let _guard = match self.service().snapshot.write() {
-            Ok(guard) => Some(guard),
-            Err(_) => {
-                self.service().host_cleanup_unknown();
-                None
-            }
-        };
-        self.ingress_rejected.store(true, Ordering::Release);
-        self.stop.cancel();
+        // delivery using the shared publication gate.
+        let rejected = self.service().authority.with_write(|| {
+            self.ingress_rejected.store(true, Ordering::Release);
+            self.stop.cancel();
+            Ok(())
+        });
+        if rejected.is_err() {
+            self.service().host_cleanup_unknown();
+            self.ingress_rejected.store(true, Ordering::Release);
+            self.stop.cancel();
+        }
     }
     pub(crate) fn deliver_observed<T>(&self, work: impl FnOnce() -> T) -> Result<T, ErrorCode> {
         let _guard = self
             .service()
-            .snapshot
+            .authority
             .read()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         if self.ingress_rejected() {
@@ -415,13 +417,13 @@ impl Binding {
         self.ingress_rejected.load(Ordering::Acquire)
     }
     pub(crate) fn close(&self) -> Result<(), Failure> {
-        let _guard = self
-            .service()
-            .snapshot
-            .write()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        self.closing.store(true, Ordering::Release);
-        Ok(())
+        self.service()
+            .authority
+            .with_write(|| {
+                self.closing.store(true, Ordering::Release);
+                Ok(())
+            })
+            .map_err(Failure::from)
     }
     pub(in crate::tenancy) fn origin(&self, proof: &Arc<super::transaction::Proof>) -> bool {
         self.authority.origin(proof)

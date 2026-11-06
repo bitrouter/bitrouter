@@ -9,6 +9,7 @@ use crate::tenancy::tests::execution::receipts::latency::{
 };
 use crate::tenancy::{BootstrapGate, StartupTest, transaction::Disposition};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+mod schema;
 
 #[tokio::test]
 #[ignore = "isolated actual owned startup and native repair SDK consumers; select this parent"]
@@ -180,7 +181,11 @@ async fn startup(root: &Path) -> Result<()> {
                 ensure!(points.get(&format!("{checkpoint}:{field}")) == Some(&0));
             }
         }
-        ensure!(points.len() == 22);
+        schema::check(&points)?;
+        ensure!(
+            points.get("initial:volume_available") == Some(&1)
+                && points.get("current:volume_available") == Some(&1)
+        );
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -437,7 +442,12 @@ async fn repair_held(
                 "missing exact repair field {field}"
             );
         }
-        ensure!(points.get("initial:completion_reserved") == Some(&0) && points.len() == 22);
+        ensure!(points.get("initial:completion_reserved") == Some(&0));
+        schema::check(&points)?;
+        ensure!(
+            points.get("initial:volume_available") == Some(&1)
+                && points.get("current:volume_available") == Some(&1)
+        );
         let trace = bound.fixture.service.cleanup.receipt_trace_for_test()?;
         ensure!(!trace.overflow);
         let fact = trace.facts[0]
@@ -482,10 +492,8 @@ async fn repair_held(
                 .is_some_and(|r| !r.ok && r.sqlite_code == Some(1811))
         );
         ensure!(fact.rollback.is_some_and(|r| r.ok) && fact.commit.is_none());
-        bound.fixture.service.cleanup.ensure_clean()?;
     } else {
         ensure!(fact.commit.is_some_and(|r| r.ok) && fact.rollback.is_none());
-        bound.fixture.service.cleanup.ensure_clean()?;
     }
     let reader = crate::db::connect(&format!(
         "sqlite://{}?mode=ro",

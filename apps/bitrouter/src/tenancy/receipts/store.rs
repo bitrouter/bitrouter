@@ -9,11 +9,17 @@ use bitrouter_ai::tenancy::{
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, QueryResult, SqlErr,
-    sea_query::{Alias, Asterisk, Expr, OnConflict, Order, Query, SelectStatement},
+    sea_query::{Alias, Expr, OnConflict, Order, Query, SelectStatement},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub(in crate::tenancy) mod archive;
+pub(super) mod inventory;
+mod load;
+pub(crate) mod obligations;
+#[cfg(test)]
+mod terminal_tests;
 #[cfg(test)]
 mod tests;
 
@@ -258,23 +264,27 @@ async fn row(db: &impl ConnectionTrait, query: SelectStatement) -> Result<Option
 async fn bounded_row(
     db: &impl ConnectionTrait,
     mut query: SelectStatement,
-    budget: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+    budget: Option<&archive::Charge<'_>>,
 ) -> Result<Option<QueryResult>> {
     let backend = db.get_database_backend();
-    // Bound stored TEXT before transferring it; a corrupt cell is never materialized.
-    let length = oversized(backend);
-    let oversized = query
-        .clone()
-        .expr(Expr::val(1))
-        .and_where(Expr::cust(length))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&oversized)).await?.is_none(),
-        "stored receipt byte bound"
-    );
+    // Callers supply an exact receipt key. Charged SQLite reads combine both
+    // scalar probes; other readers retain the original oversized-row probe.
+    let combined = backend == DatabaseBackend::Sqlite && budget.is_some();
+    if !combined {
+        let oversized = query
+            .clone()
+            .expr(Expr::val(1))
+            .and_where(Expr::cust(oversized(backend)))
+            .limit(1)
+            .to_owned();
+        ensure!(
+            db.query_one(backend.build(&oversized)).await?.is_none(),
+            "stored receipt byte bound"
+        );
+    }
+    let mut transfer_guard = String::new();
     if let Some(budget) = budget {
-        budget.check()?;
+        budget(0, 0)?;
         let lengths = [
             "receipt_json",
             "disposition_json",
@@ -295,34 +305,96 @@ async fn bounded_row(
         } else {
             "BIGINT"
         };
+        let measured = format!("CAST(({lengths} + 256) AS {cast})");
+        let measured = if combined {
+            // NULL marks an invalid present row; never filter it into absence.
+            // Reserve before transfer even when cancellation masks that error.
+            format!(
+                "CASE WHEN ({}) THEN NULL ELSE {measured} END",
+                oversized(backend)
+            )
+        } else {
+            measured
+        };
         let mut size = query.clone();
-        size.expr_as(
-            Expr::cust(format!("CAST(({lengths} + 256) AS {cast})")),
-            Alias::new("receipt_bytes"),
-        )
-        .limit(1);
-        budget.charge(1, 256)?;
+        size.expr_as(Expr::cust(measured), Alias::new("receipt_bytes"))
+            .limit(1);
+        budget(1, 256)?;
         let Some(metadata) = db.query_one(backend.build(&size)).await? else {
             return Ok(None);
         };
         let bytes = usize::try_from(metadata.try_get::<i64>("", "receipt_bytes")?)?;
-        budget.charge(1, bytes)?;
+        budget(
+            1,
+            bytes.checked_mul(3).context("receipt decode allocation")?,
+        )?;
+        transfer_guard = format!(" AND ({lengths} + 256)={bytes}");
     }
-    query.column(Asterisk).limit(1);
+    // Reapply guards in the transfer query; a changed/corrupt cell never crosses
+    // the driver boundary merely because a previous preflight was valid.
+    for (name, bound) in [
+        ("receipt_json", MAX_RECEIPT),
+        ("disposition_json", MAX_DISPOSITION),
+        ("installation_id", 128),
+        ("tenant_id", 128),
+        ("execution_id", 128),
+        ("principal_id", 128),
+        ("correlation_id", 128),
+        ("content_digest", 64),
+        ("recorded_at", 20),
+    ] {
+        let kind = if backend == DatabaseBackend::Sqlite {
+            format!("typeof({name})='text' AND ")
+        } else {
+            String::new()
+        };
+        query.expr_as(
+            Expr::cust(format!(
+                "CASE WHEN {kind}{} <= {bound}{transfer_guard} THEN {name} ELSE NULL END",
+                octets(backend, name)
+            )),
+            Alias::new(name),
+        );
+    }
+    for name in ["byte_count", "unknown_outcome"] {
+        let cell = if backend == DatabaseBackend::Sqlite {
+            let valid = if name == "unknown_outcome" {
+                " AND unknown_outcome IN (0,1)"
+            } else {
+                ""
+            };
+            format!("CASE WHEN typeof({name})='integer'{valid} THEN {name} ELSE NULL END")
+        } else {
+            name.to_owned()
+        };
+        query.expr_as(Expr::cust(cell), Alias::new(name));
+    }
+    query
+        .expr_as(
+            Expr::cust(match backend {
+                DatabaseBackend::Sqlite => {
+                    "CASE WHEN typeof(storage_kind)='integer' THEN storage_kind ELSE NULL END"
+                }
+                DatabaseBackend::Postgres => "CAST(0 AS BIGINT)",
+                DatabaseBackend::MySql => "CAST(0 AS SIGNED)",
+            }),
+            Alias::new("storage_kind"),
+        )
+        .limit(1);
     let value = db.query_one(backend.build(&query)).await?;
     if let Some(budget) = budget {
-        budget.check()?;
+        budget(0, 0)?;
     }
     Ok(value)
 }
 
 fn decode(
-    row: QueryResult,
+    row: &QueryResult,
+    json: String,
     installation: &InstallationId,
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<Candidate> {
-    let json: String = row.try_get("", "receipt_json")?;
     let private: String = row.try_get("", "disposition_json")?;
     ensure!(
         json.len() <= MAX_RECEIPT && private.len() <= MAX_DISPOSITION,
@@ -382,54 +454,56 @@ pub(in crate::tenancy) async fn lookup_candidate(
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<Option<Candidate>> {
-    let Some(row) = row(db, point(installation, tenant, id)).await? else {
-        return Ok(None);
-    };
-    let mut candidate = decode(row, installation, tenant, id)?;
-    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    super::auxiliary_store::validate(db, &mut candidate, disposition.auxiliary_digest.as_deref())
-        .await?;
-    super::usage_evidence::storage::validate(
-        db,
-        &mut candidate,
-        disposition.usage_evidence_digest.as_deref(),
-    )
-    .await?;
-    Ok(Some(candidate))
+    load::candidate(db, installation, tenant, id, None, false).await
 }
 
-/// The actor owns this transaction through confirmed commit/rollback. Reconciliation
-/// compares exact immutable bytes; it never replays inference or widens authority.
-pub(in crate::tenancy) async fn insert(
-    tx: &DatabaseTransaction,
-    candidate: &Candidate,
-) -> Result<bool> {
+/// Shared bounded read for maintenance and recovery, including archived bodies.
+/// The charge callback must belong to the caller's existing operation budget.
+pub(in crate::tenancy) async fn lookup_candidate_bounded(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+    charge: &archive::Charge<'_>,
+) -> Result<Option<Candidate>> {
+    load::candidate(db, installation, tenant, id, Some(charge), false).await
+}
+
+fn same_completion(saved: &Candidate, candidate: &Candidate) -> Result<()> {
+    ensure!(
+        saved.digest == candidate.digest
+            && saved.json == candidate.json
+            && saved.private_json == candidate.private_json
+            && saved.usage_evidence.as_ref().map(|e| (&e.json, &e.digest))
+                == candidate
+                    .usage_evidence
+                    .as_ref()
+                    .map(|e| (&e.json, &e.digest))
+            && saved.auxiliary.as_ref().map(|e| (&e.json, &e.digest))
+                == candidate.auxiliary.as_ref().map(|e| (&e.json, &e.digest)),
+        "immutable receipt conflict"
+    );
+    Ok(())
+}
+
+async fn insert_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Result<bool> {
     let receipt = &candidate.receipt;
-    let existing = row(
+    if let Some(saved) = lookup_candidate(
         tx,
-        point(
-            &receipt.installation_id,
-            &receipt.tenant_id,
-            &receipt.execution_id,
-        ),
+        &receipt.installation_id,
+        &receipt.tenant_id,
+        &receipt.execution_id,
     )
-    .await?;
-    if let Some(row) = existing {
-        let saved = decode(
-            row,
-            &receipt.installation_id,
-            &receipt.tenant_id,
-            &receipt.execution_id,
-        )?;
-        ensure!(
-            saved.digest == candidate.digest
-                && saved.json == candidate.json
-                && saved.private_json == candidate.private_json,
-            "immutable receipt conflict"
-        );
-        super::usage_evidence::storage::insert(tx, candidate, false).await?;
+    .await?
+    {
+        same_completion(&saved, candidate)?;
         return Ok(false);
     }
+    insert_new_row(tx, candidate).await
+}
+
+async fn insert_new_row(tx: &DatabaseTransaction, candidate: &Candidate) -> Result<bool> {
+    let receipt = &candidate.receipt;
     let fields: Vec<(&str, sea_orm::Value)> = vec![
         ("installation_id", receipt.installation_id.as_str().into()),
         ("tenant_id", receipt.tenant_id.as_str().into()),
@@ -465,17 +539,45 @@ pub(in crate::tenancy) async fn insert(
         }
         Err(error) => return Err(error.into()),
     };
-    let saved = decode(
-        row(
+    if !changed {
+        let saved = lookup_candidate(
             tx,
-            point(
-                &receipt.installation_id,
-                &receipt.tenant_id,
-                &receipt.execution_id,
-            ),
+            &receipt.installation_id,
+            &receipt.tenant_id,
+            &receipt.execution_id,
         )
         .await?
-        .context("receipt physical collision")?,
+        .context("receipt physical collision")?;
+        same_completion(&saved, candidate)?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// The actor owns this transaction through confirmed commit/rollback. Reconciliation
+/// compares exact immutable bytes; it never replays inference or widens authority.
+pub(in crate::tenancy) async fn insert(
+    tx: &DatabaseTransaction,
+    candidate: &Candidate,
+) -> Result<bool> {
+    let changed = insert_row(tx, candidate).await?;
+    if !changed {
+        return Ok(false);
+    }
+    let receipt = &candidate.receipt;
+    let row = row(
+        tx,
+        point(
+            &receipt.installation_id,
+            &receipt.tenant_id,
+            &receipt.execution_id,
+        ),
+    )
+    .await?
+    .context("receipt physical collision")?;
+    let saved = decode(
+        &row,
+        row.try_get("", "receipt_json")?,
         &receipt.installation_id,
         &receipt.tenant_id,
         &receipt.execution_id,
@@ -488,6 +590,71 @@ pub(in crate::tenancy) async fn insert(
     );
     super::usage_evidence::storage::insert(tx, candidate, changed).await?;
     Ok(changed)
+}
+
+/// Pending writes, not validated evidence or custody. Finalize after all side-writes.
+#[must_use = "terminal writes require final reconciliation before commit"]
+pub(in crate::tenancy) struct TerminalWrite<'a> {
+    tx: &'a DatabaseTransaction,
+    expected: &'a Candidate,
+    inserted: bool,
+}
+impl TerminalWrite<'_> {
+    pub(in crate::tenancy) fn inserted(&self) -> bool {
+        self.inserted
+    }
+    pub(in crate::tenancy) async fn reconcile(
+        self,
+        charge: &archive::Charge<'_>,
+    ) -> Result<obligations::Change> {
+        if self.inserted && self.tx.get_database_backend() == DatabaseBackend::Sqlite {
+            return obligations::reconcile_completion(self.tx, self.expected, charge).await;
+        }
+        let receipt = &self.expected.receipt;
+        obligations::reconcile(
+            self.tx,
+            &receipt.installation_id,
+            &obligations::Key {
+                tenant: receipt.tenant_id.clone(),
+                execution: receipt.execution_id.clone(),
+            },
+            charge,
+        )
+        .await
+    }
+}
+
+/// Only a fresh SQLite terminal defers readback to its final source proof.
+pub(in crate::tenancy) async fn stage_terminal<'a>(
+    tx: &'a DatabaseTransaction,
+    candidate: &'a Candidate,
+) -> Result<TerminalWrite<'a>> {
+    let inserted = if tx.get_database_backend() == DatabaseBackend::Sqlite {
+        let receipt = &candidate.receipt;
+        let missing = archive::missing_receipt(
+            tx,
+            &receipt.installation_id,
+            &receipt.tenant_id,
+            &receipt.execution_id,
+        )
+        .await?;
+        let inserted = if missing {
+            insert_new_row(tx, candidate).await?
+        } else {
+            insert_row(tx, candidate).await?
+        };
+        if inserted {
+            super::usage_evidence::storage::insert_fresh(tx, candidate).await?;
+        }
+        inserted
+    } else {
+        insert(tx, candidate).await?
+    };
+    Ok(TerminalWrite {
+        tx,
+        expected: candidate,
+        inserted,
+    })
 }
 
 /// Caller supplies one stable read transaction and rechecks current permission
@@ -556,149 +723,7 @@ pub(in crate::tenancy) async fn inventory(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
 ) -> Result<Inventory> {
-    let backend = db.get_database_backend();
-    let query = Query::select()
-        .from(Alias::new(TABLE))
-        .expr(Expr::val(1))
-        .and_where(Expr::col(Alias::new("installation_id")).ne(installation.as_str()))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&query)).await?.is_none(),
-        "foreign receipt installation"
-    );
-    // Do not trust a stored count that can understate the reserved payload. The
-    // persistent schema bounds identity/index bytes; measure actual TEXT octets
-    // before SUM. No payload is transferred during this check.
-    let exact = format!(
-        "byte_count != {} + {} OR byte_count < 1 OR {}",
-        octets(backend, "receipt_json"),
-        octets(backend, "disposition_json"),
-        oversized(backend)
-    );
-    let invalid = Query::select()
-        .from(Alias::new(TABLE))
-        .expr(Expr::val(1))
-        .and_where(Expr::cust(exact))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&invalid)).await?.is_none(),
-        "receipt inventory byte count"
-    );
-    let unknown_mismatch = match backend {
-        DatabaseBackend::Sqlite => {
-            "json_extract(receipt_json, '$.state') IS NULL OR json_extract(receipt_json, '$.state') NOT IN ('committed','incomplete','unknown') OR unknown_outcome != (json_extract(receipt_json, '$.state') = 'unknown')"
-        }
-        DatabaseBackend::Postgres => {
-            "receipt_json::jsonb->>'state' IS NULL OR receipt_json::jsonb->>'state' NOT IN ('committed','incomplete','unknown') OR unknown_outcome <> (receipt_json::jsonb->>'state' = 'unknown')"
-        }
-        DatabaseBackend::MySql => {
-            "JSON_EXTRACT(receipt_json, '$.state') IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(receipt_json, '$.state')) NOT IN ('committed','incomplete','unknown') OR unknown_outcome <> (JSON_UNQUOTE(JSON_EXTRACT(receipt_json, '$.state')) = 'unknown')"
-        }
-    };
-    let invalid = Query::select()
-        .from(Alias::new(TABLE))
-        .expr(Expr::val(1))
-        .and_where(Expr::cust(unknown_mismatch))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&invalid)).await?.is_none(),
-        "receipt unknown projection mismatch"
-    );
-    let query = Query::select()
-        .from(Alias::new(TABLE))
-        .expr_as(
-            Expr::cust(if backend == DatabaseBackend::MySql {
-                "CAST(SUM(byte_count) AS SIGNED)"
-            } else {
-                "CAST(SUM(byte_count) AS BIGINT)"
-            }),
-            Alias::new("bytes"),
-        )
-        .expr_as(
-            Expr::cust(if backend == DatabaseBackend::MySql {
-                "CAST(COUNT(*) AS SIGNED)"
-            } else {
-                "CAST(COUNT(*) AS BIGINT)"
-            }),
-            Alias::new("rows"),
-        )
-        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-        .to_owned();
-    let row = db
-        .query_one(backend.build(&query))
-        .await?
-        .context("receipt inventory")?;
-    let bytes = row.try_get::<Option<i64>>("", "bytes")?.unwrap_or(0);
-    let mut count = u64::try_from(row.try_get::<i64>("", "rows")?)?;
-    let query = Query::select()
-        .from(Alias::new(TABLE))
-        .columns(["tenant_id", "execution_id", "recorded_at"].map(Alias::new))
-        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-        .and_where(Expr::col(Alias::new("unknown_outcome")).eq(true))
-        .limit(1001)
-        .to_owned();
-    let rows = db.query_all(backend.build(&query)).await?;
-    ensure!(rows.len() <= 1000, "receipt unknown instance bound");
-    let mut unknown = Vec::with_capacity(rows.len());
-    let mut counts = std::collections::BTreeMap::new();
-    for row in rows {
-        let tenant: TenantId = row.try_get::<String>("", "tenant_id")?.try_into()?;
-        let id: ExecutionId = row.try_get::<String>("", "execution_id")?.try_into()?;
-        let recorded =
-            chrono::DateTime::parse_from_rfc3339(&row.try_get::<String>("", "recorded_at")?)?
-                .with_timezone(&chrono::Utc);
-        let count = counts.entry(tenant.clone()).or_insert(0_usize);
-        *count += 1;
-        ensure!(*count <= 100, "receipt unknown tenant bound");
-        unknown.push((tenant, id, recorded));
-    }
-    let (aux_bytes, aux_unknown) = super::auxiliary_store::inventory(db, installation).await?;
-    for (tenant, id, recorded) in aux_unknown {
-        if unknown.iter().any(|(t, e, _)| t == &tenant && e == &id) {
-            continue;
-        }
-        let count = counts.entry(tenant.clone()).or_default();
-        *count += 1;
-        ensure!(
-            *count <= 100 && unknown.len() < 1000,
-            "auxiliary unknown capacity"
-        );
-        unknown.push((tenant, id, recorded));
-    }
-    for (tenant, id, recorded) in
-        crate::tenancy::oauth::storage::pending_unknown(db, installation).await?
-    {
-        if unknown.iter().any(|(t, e, _)| t == &tenant && e == &id) {
-            continue;
-        }
-        let tenant_count = counts.entry(tenant.clone()).or_default();
-        *tenant_count += 1;
-        ensure!(
-            *tenant_count <= 100 && unknown.len() < 1000,
-            "pending OAuth unknown capacity"
-        );
-        // Private accounting rows include this persisted obligation, not a
-        // fabricated public receipt or model attempt. Slot bytes are separately
-        // charged at their worst-case envelope, so this overhead is conservative.
-        count = count
-            .checked_add(1)
-            .context("pending OAuth accounting overflow")?;
-        unknown.push((tenant, id, recorded));
-    }
-    let oauth_bytes = crate::tenancy::oauth::storage::inventory(db, installation).await?;
-    let evidence_bytes = super::usage_evidence::storage::inventory(db, installation).await?;
-    Ok(Inventory {
-        bytes: u64::try_from(bytes)?
-            .checked_add(aux_bytes)
-            .and_then(|bytes| bytes.checked_add(oauth_bytes))
-            .and_then(|bytes| bytes.checked_add(evidence_bytes))
-            .context("auxiliary receipt inventory overflow")?,
-        rows: count,
-        unknown,
-    })
+    inventory::load(db, installation).await
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -724,40 +749,6 @@ pub(in crate::tenancy) async fn recovery_lookup(
         "invalid receipt recovery SQL types"
     );
     budget.charge(0, 1024)?;
-    let mut metadata = point(installation, tenant, id);
-    metadata
-        .expr_as(
-            Expr::cust("CASE WHEN typeof(byte_count)='integer' THEN byte_count ELSE NULL END"),
-            Alias::new("byte_count"),
-        )
-        .expr_as(
-            Expr::cust(format!(
-                "CAST({} + {} AS BIGINT)",
-                octets(db.get_database_backend(), "receipt_json"),
-                octets(db.get_database_backend(), "disposition_json")
-            )),
-            Alias::new("actual"),
-        )
-        .limit(1);
-    let metadata_row = db
-        .query_one(db.get_database_backend().build(&metadata))
-        .await?;
-    if let Some(row) = metadata_row {
-        let bytes: i64 = row.try_get("", "byte_count")?;
-        let actual: i64 = row.try_get("", "actual")?;
-        ensure!(
-            bytes == actual && bytes >= 0 && bytes as u64 <= (MAX_RECEIPT + MAX_DISPOSITION) as u64,
-            "receipt recovery length"
-        );
-        budget.charge(
-            1,
-            usize::try_from(bytes)?
-                .checked_mul(3)
-                .context("receipt recovery allocation bound")?,
-        )?;
-    } else {
-        budget.charge(1, 0)?;
-    }
     // This first profile has no auxiliary recovery proof. Check presence without
     // materializing O1/C1 evidence outside the shared operation byte budget.
     let auxiliary = Query::select()
@@ -774,22 +765,18 @@ pub(in crate::tenancy) async fn recovery_lookup(
             .is_none(),
         "auxiliary receipt work has no stopped recovery proof"
     );
-    let Some(row) = row(db, point(installation, tenant, id)).await? else {
+    let Some(candidate) = lookup_candidate_bounded(db, installation, tenant, id, &|rows, bytes| {
+        budget.charge(rows, bytes)
+    })
+    .await?
+    else {
         return Ok(None);
     };
-    let mut candidate = decode(row, installation, tenant, id)?;
     let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     ensure!(
         disposition.auxiliary_digest.is_none(),
         "auxiliary receipt link has no recovery proof"
     );
-    super::usage_evidence::storage::validate_bounded(
-        db,
-        &mut candidate,
-        disposition.usage_evidence_digest.as_deref(),
-        &|rows, bytes| budget.charge(rows, bytes),
-    )
-    .await?;
     Ok(Some(candidate))
 }
 
@@ -805,7 +792,9 @@ pub(in crate::tenancy) fn reserve_experiment_write(
     let receipt = MAX_RECEIPT + MAX_DISPOSITION + 4096;
     let auxiliary = super::auxiliary::MAX_BYTES + 4096;
     let evidence = bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 4096;
-    budget.charge(24, 3 * receipt + 4 * auxiliary + 4 * evidence)?;
+    // An archived replay also transfers compressed bytes, decodes the envelope
+    // and retains canonical sidecar copies. Reserve that path before insertion.
+    budget.charge(32, 8 * receipt + 4 * auxiliary + 8 * evidence + 256 * 1024)?;
     Ok(())
 }
 
@@ -869,24 +858,8 @@ async fn native_namespace_candidate_in(
     id: &ExecutionId,
     budget: &crate::storage::operation_budget::OperationBudget<'_>,
 ) -> Result<Option<Candidate>> {
-    let Some(row) = bounded_row(tx, point(installation, tenant, id), Some(budget)).await? else {
-        return Ok(None);
-    };
-    let mut candidate = decode(row, installation, tenant, id)?;
-    // The auxiliary query preflights its fixed-size cells. Reserve its full
-    // allowance on this same budget before issuing it; static experiment routes
-    // are expected to have no auxiliary body, but corruption is still checked.
-    budget.charge(1, super::auxiliary::MAX_BYTES + 4096)?;
-    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
-    super::auxiliary_store::validate(tx, &mut candidate, disposition.auxiliary_digest.as_deref())
-        .await?;
-    super::usage_evidence::storage::validate_bounded(
-        tx,
-        &mut candidate,
-        disposition.usage_evidence_digest.as_deref(),
-        &|rows, bytes| Ok(budget.charge(rows, bytes)?),
-    )
-    .await?;
-    budget.check()?;
-    Ok(Some(candidate))
+    lookup_candidate_bounded(tx, installation, tenant, id, &|rows, bytes| {
+        Ok(budget.charge(rows, bytes)?)
+    })
+    .await
 }

@@ -264,18 +264,37 @@ impl Collector {
                             }
                             metric::Data::Gauge(gauge) => {
                                 let fields: &[&str] = match (m.name.as_str(), m.unit.as_str()) {
-                                    ("bitrouter.receipt.capacity.bytes", "By") => {
-                                        &["completion_reserved", "accounted", "ingress_reserved"]
-                                    }
+                                    ("bitrouter.receipt.capacity.bytes", "By") => &[
+                                        "completion_reserved",
+                                        "physical_write_reserved",
+                                        "accounted",
+                                        "history_bytes",
+                                        "oauth_reserved",
+                                        "ingress_reserved",
+                                        "observed_free",
+                                        "execution_cache_bytes",
+                                        "credential_cache_bytes",
+                                        "routing_bytes",
+                                    ],
                                     ("bitrouter.receipt.capacity.state", "1") => &[
                                         "potential_unknown",
                                         "live_unknown",
+                                        "history_rows",
                                         "active",
                                         "queued",
                                         "ingress",
                                         "closed",
                                         "fenced",
                                         "available",
+                                        "volume_available",
+                                        "execution_cache_entries",
+                                        "credential_cache_entries",
+                                        "routing_target_entries",
+                                        "routing_provider_entries",
+                                        "routing_active",
+                                        "execution_cache_available",
+                                        "credential_cache_available",
+                                        "routing_available",
                                     ],
                                     _ => anyhow::bail!("unexpected gauge"),
                                 };
@@ -305,6 +324,12 @@ impl Collector {
                                             && ["initial", "current", "final"]
                                                 .contains(&checkpoint.as_str())
                                     );
+                                    if field.starts_with("execution_cache_")
+                                        || field.starts_with("credential_cache_")
+                                        || field.starts_with("routing_")
+                                    {
+                                        ensure!(checkpoint == "current");
+                                    }
                                     let Some(number_data_point::Value::AsInt(n)) = point.value
                                     else {
                                         anyhow::bail!("integer gauge required")
@@ -327,16 +352,21 @@ impl Collector {
             let required = ["initial", "final"].into_iter().flat_map(|c| {
                 [
                     "completion_reserved",
+                    "physical_write_reserved",
+                    "history_bytes",
+                    "oauth_reserved",
                     "accounted",
                     "ingress_reserved",
                     "potential_unknown",
                     "live_unknown",
+                    "history_rows",
                     "active",
                     "queued",
                     "ingress",
                     "closed",
                     "fenced",
                     "available",
+                    "volume_available",
                 ]
                 .map(|f| format!("{c}:{f}"))
             });

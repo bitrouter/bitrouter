@@ -67,7 +67,7 @@ pub(crate) async fn dispatch(
     {
         return Failure::from(ErrorCode::InvalidRequest).into_response();
     }
-    let submission = match service.submission(&parts.headers) {
+    let submission = match service.submission(&parts.headers).await {
         Ok(submission) => submission,
         Err(error) => return error.into_response(),
     };
@@ -238,32 +238,33 @@ pub(super) fn operator(operators: &ControlAuth, token: &str) -> Result<Option<Ca
     Ok(None)
 }
 
-fn caller(state: &AuthState, headers: &HeaderMap) -> Result<Caller, Failure> {
+async fn caller(state: &AuthState, headers: &HeaderMap) -> Result<Caller, Failure> {
     let token = bearer(headers)?;
     if let Some(caller) = operator(&state.operators, token)? {
         return Ok(caller);
     }
-    state.service.authenticate(token)
+    state
+        .service
+        .authenticate_live(token)
+        .await
+        .map(|authenticated| authenticated.caller)
 }
 
-async fn authenticate(
-    State(state): State<AuthState>,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    let authorized = (|| {
-        one_header(request.headers(), "origin")?;
-        one_header(request.headers(), "host")?;
-        if !crate::remote_control::origin_matches_host(request.headers()) {
+async fn authenticate(State(state): State<AuthState>, request: Request, next: Next) -> Response {
+    let (parts, body) = request.into_parts();
+    let authorized = async {
+        one_header(&parts.headers, "origin")?;
+        one_header(&parts.headers, "host")?;
+        if !crate::remote_control::origin_matches_host(&parts.headers) {
             return Err(Failure::from(ErrorCode::Forbidden));
         }
-        if request.headers().contains_key(header::CONTENT_ENCODING) {
+        if parts.headers.contains_key(header::CONTENT_ENCODING) {
             return Err(Failure::from(ErrorCode::InvalidRequest));
         }
-        let caller = caller(&state, request.headers())?;
-        let installation = one_header(request.headers(), "bitrouter-installation-id")?;
-        if request.method() == Method::GET
-            && request.uri().path() != "/control/v1/tenancy/capabilities"
+        let caller = caller(&state, &parts.headers).await?;
+        let installation = one_header(&parts.headers, "bitrouter-installation-id")?;
+        if parts.method == Method::GET
+            && parts.uri.path() != "/control/v1/tenancy/capabilities"
             && installation.is_none()
         {
             return Err(Failure::from(ErrorCode::InvalidRequest));
@@ -275,7 +276,9 @@ async fn authenticate(
             state.service.check_installation(&installation)?;
         }
         Ok::<_, Failure>(caller)
-    })();
+    }
+    .await;
+    let mut request = Request::from_parts(parts, body);
     let mut response = match authorized {
         Ok(caller) => {
             request.extensions_mut().insert(caller);
@@ -323,14 +326,14 @@ async fn capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
-    Ok(Json(service.capabilities(&caller)?).into_response())
+    Ok(Json(service.capabilities(&caller).await?).into_response())
 }
 
 async fn resource_capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
-    Ok(Json(service.resource_capabilities(&caller)?).into_response())
+    Ok(Json(service.resource_capabilities(&caller).await?).into_response())
 }
 
 async fn put_resource(
@@ -529,7 +532,7 @@ async fn active_revision(
     Extension(caller): Extension<Caller>,
     tenant: Result<Path<TenantId>, PathRejection>,
 ) -> Result<Response, Failure> {
-    Ok(Json(service.active_revision(&caller, &path(tenant)?)?).into_response())
+    Ok(Json(service.active_revision(&caller, &path(tenant)?).await?).into_response())
 }
 
 async fn receipt(

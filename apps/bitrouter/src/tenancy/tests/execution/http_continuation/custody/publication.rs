@@ -39,22 +39,20 @@ fn revoke(ready: &Ready, credential: &CredentialIssued) -> Result<Command> {
     ))
 }
 
-fn lifecycle(ready: &Ready, state: TenantState) -> Result<Command> {
+async fn lifecycle(ready: &Ready, state: TenantState) -> Result<Command> {
     Ok(Command::Tenant(
         ready.fixture.tenant.clone(),
         TenantPut {
             operation_id: "publication-lifecycle".try_into()?,
             expected_revision: Some(
-                ready
-                    .fixture
-                    .service
-                    .current()
-                    .map_err(failure)?
-                    .tenants
-                    .get(&ready.fixture.tenant)
-                    .context("tenant")?
-                    .revision
-                    .clone(),
+                crate::tenancy::store::directory::tenant_in(
+                    &ready.fixture.db,
+                    &ready.fixture.tenant,
+                    4096,
+                )
+                .await?
+                .context("tenant")?
+                .revision,
             ),
             installation_id: ready.fixture.installation.clone(),
             state,
@@ -97,7 +95,7 @@ pub(super) async fn held_caller_change(rotate: bool) -> Result<()> {
         }).await;
         let changed: Result<CredentialIssued> = async {
             if rotate {
-                let mut input = ready.fixture.issuance("completion-rotation")?;
+                let mut input = ready.fixture.issuance("completion-rotation").await?;
                 input.rotate_credential_id = Some(credential.credential_id.clone());
                 issued(
                     ready
@@ -130,6 +128,7 @@ pub(super) async fn held_caller_change(rotate: bool) -> Result<()> {
                     .fixture
                     .service
                     .authenticate(credential.secret.as_deref().context("old key")?)
+                    .await
                     .is_err()
             );
             let (status, bytes) = tokio::time::timeout(WAIT, request).await??;
@@ -206,7 +205,7 @@ async fn queued_publication_separates_caller_revoke_from_tenant_inactivity() -> 
             }
         }).await;
         let command = match inactive {
-            Some(state) => lifecycle(&ready, state)?,
+            Some(state) => lifecycle(&ready, state).await?,
             None => revoke(&ready, &credential)?,
         };
         // Hold the real safety command before its commit. The provider terminal
@@ -372,7 +371,7 @@ async fn inactive_tenant_cannot_activate_delivering_mapping_and_usage_survives()
                 .service
                 .execute(
                     ready.fixture.operator.clone(),
-                    lifecycle(&ready, TenantState::Suspended)?,
+                    lifecycle(&ready, TenantState::Suspended).await?,
                 )
                 .await
                 .map_err(failure)?;

@@ -42,6 +42,19 @@ impl Worker {
                 }
             }
         };
+        let header = self.current()?.header();
+        let projection = self.admission.unknown_read(true)?;
+        let work = exchange.work().map_err(Failure::from)?;
+        let key = crate::tenancy::receipts::store::obligations::Key {
+            tenant: work.tenant.clone(),
+            execution: work.execution.clone(),
+        };
+        // Both encrypted rows and their metadata/index projections can coexist
+        // during replacement. Refresh cleanup remains possible at logical limits.
+        control.reserve_write(
+            2 * (crate::tenancy::oauth::profile::PAYLOAD_BYTES + 16 * 1024),
+            job.operation != Operation::Start,
+        )?;
         let transaction = control
             .begin(&self.db)
             .await
@@ -65,35 +78,43 @@ impl Worker {
                     .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?,
             )
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-            if row.same(&next) {
-                return Ok(false);
-            } // Same private immutable candidate only.
-            if !row.same(&expected) {
+            let wrote = !row.same(&next);
+            if wrote && !row.same(&expected) {
                 return Err(ErrorCode::CapacityExceeded.into());
             }
-            if job.operation == Operation::Start {
+            if wrote && job.operation == Operation::Start {
                 exchange.execution.revalidate().map_err(Failure::from)?;
                 if !matches!(row.metadata.state, State::Ready) {
                     return Err(ErrorCode::CapacityExceeded.into());
                 }
-            } else {
+            } else if wrote {
                 match &row.metadata.state {
                     State::RefreshStarted(work)
                         if work == exchange.work().map_err(Failure::from)? => {}
                     _ => return Err(ErrorCode::Forbidden.into()),
                 }
             }
-            storage::replace(&transaction, &row, &next)
-                .await
-                .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
+            if wrote {
+                storage::replace(&transaction, &row, &next)
+                    .await
+                    .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
+            }
+            let change = crate::tenancy::receipts::store::obligations::reconcile(
+                &transaction,
+                &expected.metadata.installation,
+                &key,
+                &|_, _| control.check_read(),
+            )
+            .await
+            .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
             control
                 .check_read()
                 .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
-            Ok::<_, Failure>(true)
+            Ok::<_, Failure>((wrote, change))
         }
         .await;
-        let wrote = match write {
-            Ok(wrote) => wrote,
+        let (wrote, change) = match write {
+            Ok(value) => value,
             Err(error) => {
                 control
                     .rollback(transaction)
@@ -102,24 +123,60 @@ impl Worker {
                 return Err(error);
             }
         };
+        let publication = if wrote {
+            match self
+                .authority
+                .prepare(header, &[], Some((&expected.metadata, &next.metadata)))
+            {
+                Ok(publication) => Some(publication),
+                Err(code) => {
+                    control
+                        .rollback(transaction)
+                        .await
+                        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                    return Err(code.into());
+                }
+            }
+        } else {
+            None
+        };
+        let due = change
+            .after
+            .as_ref()
+            .filter(|row| !row.escalated)
+            .map(|row| row.due);
+        let unknown = match self.admission.prepare_unknown(
+            &projection,
+            vec![change],
+            Vec::new(),
+            self.proof.clone(),
+        ) {
+            Ok(publication) => publication,
+            Err(code) => {
+                control
+                    .rollback(transaction)
+                    .await
+                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                return Err(code.into());
+            }
+        };
         control
             .commit(transaction)
             .await
             .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
-        {
-            // No management revision bump. Send gates take snapshot read then
-            // stamp read in this same order, making publication indivisible.
-            let _authority = self
-                .snapshot
-                .write()
-                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-            if wrote {
-                self.oauth
-                    .publish(&expected.metadata, next.metadata.clone())
-                    .map_err(Failure::from)?;
+        let published = (|| {
+            exchange.published(next.clone())?;
+            if let Some(publication) = publication {
+                publication.publish()?;
             }
-            exchange.published(next.clone()).map_err(Failure::from)?;
+            unknown.publish()?;
+            Ok::<_, ErrorCode>(())
+        })();
+        if published.is_err() {
+            self.proof.quarantine();
+            return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
         }
+        self.schedule_obligation(due)?;
         match job.operation {
             Operation::Start => {}
             Operation::Commit | Operation::Release => {

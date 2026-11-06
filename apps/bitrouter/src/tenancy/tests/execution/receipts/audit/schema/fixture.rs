@@ -70,7 +70,7 @@ pub(super) async fn source(
     let owner = crate::tenancy::ownership::acquire_path(&live, true)?;
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
-    let mut initial = Fixture::with_database(db.clone(), Default::default(), &mut |_| {}).await?;
+    let mut initial = Fixture::with_database(db.clone(), &mut |_| {}).await?;
     let calls = Arc::new(AtomicUsize::new(0));
     let (received, mut observations) = mpsc::channel(16);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -115,7 +115,7 @@ pub(super) async fn source(
             ]
         }))?).await?;
         initial.service = crate::tenancy::Service::start_prepared(
-            db.clone(), Some(owner.clone()), Default::default(),
+            db.clone(), Some(owner.clone()),
             crate::tenancy::store::load(&db, chrono::Utc::now()).await?, initial.service.resources.clone(),
         ).await?;
         let upper = second(&initial).await?;

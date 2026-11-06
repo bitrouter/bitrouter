@@ -10,7 +10,10 @@ async fn paid_prepare_expiring_behind_a_real_receipt_does_not_begin_or_leak_capa
     let summary = frozen(&binding).await?;
     let checked = async {
         let service = &ready.fixture.service;
-        let submission = service.submission(&ready.headers()?).map_err(failure)?;
+        let submission = service
+            .submission(&ready.headers()?)
+            .await
+            .map_err(failure)?;
         let parent = service
             .admit_execution(
                 submission,

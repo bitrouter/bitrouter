@@ -699,7 +699,7 @@ pub(super) async fn historical_assessments_lock_both_fork_ancestries_and_keep_du
     // idempotent before compare-and-set against that now obsolete expected head.
     let second_parent = identity("parent-b").key()?;
     let duplicate = store
-        .submit_assessment_checked(&child, historical_input, move |tx| {
+        .submit_assessment_checked(&child, historical_input, move |tx, _write| {
             Box::pin(async move {
                 sessions::Entity::update_many()
                     .col_expr(sessions::Column::Deleted, Expr::value(true))

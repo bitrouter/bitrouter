@@ -75,19 +75,19 @@ pub(super) async fn real_callbacks_contend_and_straddle_seal() -> Result<()> {
                 collector.accepted_http() == 1,
                 "actual OTLP HTTP 200 was required"
             );
-            let partial = capacity_points(&collector.packet(0)?)?;
+            let partial = receipt_checkpoints(capacity_points(&collector.packet(0)?)?)?;
             let initial: BTreeMap<_, _> = partial
                 .iter()
                 .filter(|(key, _)| key.starts_with("initial:"))
                 .map(|(key, value)| (key.clone(), *value))
                 .collect();
-            ensure!(initial.len() == 11);
+            ensure!(initial.len() == 16);
             let finals = partial
                 .keys()
                 .filter(|key| key.starts_with("final:"))
                 .count();
             ensure!(
-                matches!(finals, 3 | 8),
+                matches!(finals, 6 | 10),
                 "seal did not straddle the SDK callbacks"
             );
             if contend {
@@ -107,7 +107,7 @@ pub(super) async fn real_callbacks_contend_and_straddle_seal() -> Result<()> {
                     .keys()
                     .filter(|key| key.starts_with("current:"))
                     .count();
-                ensure!(current + finals == 11);
+                ensure!(current + finals == 16);
             }
             ensure!(
                 collector.view()?.frozen.is_none(),
@@ -117,9 +117,9 @@ pub(super) async fn real_callbacks_contend_and_straddle_seal() -> Result<()> {
             ensure!(sink.seal(true));
             collect_until(&exporter, deadline).await?;
             ensure!(calls.load(Ordering::SeqCst) == 4 && collector.accepted_http() == 2);
-            let complete = capacity_points(&collector.packet(1)?)?;
+            let complete = receipt_checkpoints(capacity_points(&collector.packet(1)?)?)?;
             ensure!(
-                complete.len() == 22 && complete.keys().all(|key| !key.starts_with("current:"))
+                complete.len() == 32 && complete.keys().all(|key| !key.starts_with("current:"))
             );
             for (key, value) in partial
                 .iter()
@@ -136,7 +136,7 @@ pub(super) async fn real_callbacks_contend_and_straddle_seal() -> Result<()> {
                     .all(|(key, value)| complete.get(key) == Some(value))
             );
             let view = collector.view()?;
-            // The receiver requires all 22 facts in ONE real packet. It must
+            // The receiver requires all 32 facts in ONE real packet. It must
             // recover from the valid partial, without combining current/final.
             capacity::assert_frozen(&view, 0, accounted, 0)?;
             ensure!(view.frozen.as_ref() == Some(&complete));
@@ -161,6 +161,37 @@ pub(super) async fn real_callbacks_contend_and_straddle_seal() -> Result<()> {
         closed?;
     }
     Ok(())
+}
+
+// Hot working-set observations remain current-only even after the receipt
+// ledger seals. Check them separately from the immutable checkpoint packet.
+fn receipt_checkpoints(mut points: BTreeMap<String, u64>) -> Result<BTreeMap<String, u64>> {
+    for field in [
+        "execution_cache_bytes",
+        "credential_cache_bytes",
+        "routing_bytes",
+        "execution_cache_entries",
+        "credential_cache_entries",
+        "routing_target_entries",
+        "routing_provider_entries",
+        "routing_active",
+        "execution_cache_available",
+        "credential_cache_available",
+        "routing_available",
+    ] {
+        ensure!(
+            !points.contains_key(&format!("initial:{field}"))
+                && !points.contains_key(&format!("final:{field}")),
+            "working-set observations must not become immutable checkpoints"
+        );
+        let value = points
+            .remove(&format!("current:{field}"))
+            .context("current working-set observation missing")?;
+        if field.ends_with("_available") {
+            ensure!(value == 1, "drained fixture working set must be readable");
+        }
+    }
+    Ok(points)
 }
 
 pub(in crate::tenancy::tests::execution) async fn collect_until(

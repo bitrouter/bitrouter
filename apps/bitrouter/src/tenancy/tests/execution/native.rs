@@ -51,7 +51,7 @@ use crate::{
             native_work::{NativeProviderWork, NativeProviderWorkKind, NativeProviderWorkReport},
         },
     },
-    tenancy::{Service, actor::OperationLimits, command::Command, resources::Resources, store},
+    tenancy::{Service, command::Command, resources::Resources, store},
 };
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -814,15 +814,10 @@ async fn change_authority(
             TenantPut {
                 operation_id: "native-stop".try_into()?,
                 expected_revision: Some(
-                    fixture
-                        .service
-                        .current()
-                        .map_err(failure)?
-                        .tenants
-                        .get(&fixture.tenant)
+                    crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                        .await?
                         .context("tenant")?
-                        .revision
-                        .clone(),
+                        .revision,
                 ),
                 state: TenantState::Suspended,
                 installation_id: fixture.installation.clone(),
@@ -1096,14 +1091,8 @@ async fn revised_route(
             "credentials":[{"provider":"mock","account":"default","credential":slot}]}}]
     }))?).await?;
     let snapshot = store::load(&fixture.db, chrono::Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     Ok(route)
 }
 
@@ -1241,8 +1230,12 @@ async fn native_app_remains_production_fenced_with_valid_credential_and_binding(
         let revision = draft(&fixture, &route, "native-production-draft", 25).await?;
         let credential = fixture.issue("native-production-execute").await?;
         let token = credential.secret.as_deref().context("secret")?;
-        let caller = fixture.service.authenticate(token).map_err(failure)?;
-        let capabilities = fixture.service.capabilities(&caller).map_err(failure)?;
+        let caller = fixture.service.authenticate(token).await.map_err(failure)?;
+        let capabilities = fixture
+            .service
+            .capabilities(&caller)
+            .await
+            .map_err(failure)?;
         ensure!(
             !capabilities.revision_bound_dispatch
                 && !capabilities.strict_receipts

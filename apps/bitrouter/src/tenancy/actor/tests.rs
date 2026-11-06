@@ -155,6 +155,12 @@ impl Fixture {
         };
         store::operation(&self.db, &self.installation, principal, id).await
     }
+
+    async fn retained_tenant(&self) -> Result<crate::tenancy::model::Tenant> {
+        store::directory::tenant_in(&self.db, &self.tenant, self.service.authority.load_budget())
+            .await?
+            .context("retained tenant missing")
+    }
 }
 
 #[tokio::test]
@@ -187,18 +193,38 @@ async fn read_only_deadline_cancels_draft_and_preserves_revoke_and_suspend() -> 
             },
         },
     );
-    // Occupy the only connection. The actor cannot finish its read-only
-    // operation lookup, so no preparation or commit can escape the deadline.
+    // Occupy the only connection. The read deadline stops further preparation,
+    // but the actor must retain its original BEGIN until it can roll it back.
     let held = fixture.db.begin().await?;
-    let response = tokio::time::timeout(Duration::from_secs(10), fixture.enqueue(command)?)
-        .await
-        .context("read-only deadline did not return")??;
-    ensure!(matches!(response, Err(error)
-        if error.0.code == ErrorCode::AuthorityUnavailable
-            && error.0.operation_id.as_ref() == Some(&operation)));
+    let (begins, rollbacks) = fixture.service.cleanup.sql_counts_for_test();
+    let mut response = fixture.enqueue(command)?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.service.cleanup.read_stopped.notified(),
+    )
+    .await
+    .context("read-only deadline did not stop preparation")?;
+    ensure!(matches!(
+        response.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    ensure!(
+        fixture.service.cleanup.disposition() == crate::tenancy::transaction::Disposition::Pending
+    );
     let after = fixture.service.current().map_err(failure)?;
     ensure!(after.revision == before.revision && after.operation_ids == before.operation_ids);
     held.rollback().await?;
+    let response = tokio::time::timeout(Duration::from_secs(3), response)
+        .await
+        .context("cancelled preparation did not finish rollback")??;
+    ensure!(matches!(response, Err(error)
+        if error.0.code == ErrorCode::AuthorityUnavailable
+            && error.0.operation_id.as_ref() == Some(&operation)));
+    ensure!(fixture.service.cleanup.sql_counts_for_test() == (begins + 1, rollbacks + 1));
+    ensure!(
+        fixture.service.cleanup.disposition()
+            == crate::tenancy::transaction::Disposition::RolledBack
+    );
 
     // Releasing storage must not resume the cancelled draft. Subsequent real
     // stop commands prove the same actor remains live and can durably mutate.
@@ -222,15 +248,10 @@ async fn read_only_deadline_cancels_draft_and_preserves_revoke_and_suspend() -> 
                     .as_deref()
                     .context("credential secret missing")?
             )
+            .await
             .is_err()
     );
-    let current = fixture.service.current().map_err(failure)?;
-    let revision = current
-        .tenants
-        .get(&fixture.tenant)
-        .context("tenant missing")?
-        .revision
-        .clone();
+    let revision = fixture.retained_tenant().await?.revision;
     applied(
         fixture
             .service
@@ -249,17 +270,7 @@ async fn read_only_deadline_cancels_draft_and_preserves_revoke_and_suspend() -> 
             .await
             .map_err(failure)?,
     )?;
-    ensure!(
-        fixture
-            .service
-            .current()
-            .map_err(failure)?
-            .tenants
-            .get(&fixture.tenant)
-            .context("tenant missing")?
-            .state
-            == TenantState::Suspended
-    );
+    ensure!(fixture.retained_tenant().await?.state == TenantState::Suspended);
     ensure!(fixture.operation(&operation).await?.is_none());
     let count = fixture
         .db
@@ -285,22 +296,12 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
     let owner = ownership::acquire(&url)?;
     let db = crate::db::connect_tenancy(&url, &owner).await?;
     let fixture = Fixture::open(db, Some(owner)).await?;
-    fixture
-        .db
-        .execute_unprepared("PRAGMA busy_timeout=20000")
-        .await?;
-
-    // A test-only second SQLite connection holds a real write lock. WAL reads
-    // still finish, but store::commit must wait on its first durable write.
-    let mut options = sea_orm::ConnectOptions::new(url);
-    options
-        .max_connections(1)
-        .min_connections(1)
-        .sqlx_logging(false);
-    let blocker = sea_orm::Database::connect(options).await?;
-    let held = blocker.begin().await?;
-    held.execute_unprepared("UPDATE tenancy_installation SET schema_version = schema_version")
-        .await?;
+    // Hold the actual write transaction immediately before consuming COMMIT.
+    // A preparation/read failure cannot substitute for a late durable write.
+    let gate = fixture
+        .service
+        .cleanup
+        .hold(crate::tenancy::transaction::Phase::Committing);
     let operation: OperationId = "commit-outlives-deadline".try_into()?;
     let command = Command::Principal(
         "late-durable-principal".try_into()?,
@@ -313,12 +314,16 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
         },
     );
     let mut receive = fixture.enqueue(command)?;
+    tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
+    tokio::time::pause();
+    tokio::time::advance(crate::tenancy::MANAGEMENT_TIMEOUT).await;
     tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(1),
         fixture.service.cleanup.wait_fenced(),
     )
     .await
     .context("uncertain commit did not fence authority")?;
+    tokio::time::resume();
     ensure!(
         matches!(receive.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
         "actor replied before the uncertain transaction settled"
@@ -339,7 +344,7 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
         ownership::acquire_path(&directory.path().join("deadline.db"), false).is_err(),
         "authority owner was released before commit settlement"
     );
-    held.rollback().await?;
+    fixture.service.cleanup.release_gate();
     let response = tokio::time::timeout(Duration::from_secs(10), receive).await??;
     ensure!(matches!(response, Err(error)
         if error.0.code == ErrorCode::AuthorityUnavailable
@@ -358,9 +363,9 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
         fixture.service.current().is_err(),
         "late success cleared the fence"
     );
-    blocker.close().await?;
     Ok(())
 }
 mod hardening;
 #[cfg(unix)]
 mod quarantine;
+mod scoped_commands;

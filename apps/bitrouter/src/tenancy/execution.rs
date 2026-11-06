@@ -63,6 +63,8 @@ mod tests;
 #[derive(Clone)]
 pub(crate) struct Submission {
     caller: Caller,
+    authority: super::authority::live::Lease,
+    preparation: super::authority::live::DependencyIntent,
     tenant: TenantId,
     principal: PrincipalId,
     credential: CredentialId,
@@ -158,17 +160,14 @@ impl Service {
         .map_err(|_| ErrorCode::AuthorityUnavailable)
     }
 
-    /// This lock spans eligibility and authorization. A snapshot obtained before
-    /// a revoke acknowledgement is never reused to authorize a later attempt.
-    fn with_dispatch_authority<T>(
+    /// The publication gate spans every sequential owner check and final send.
+    /// Individual view locks are released between checks, including aliases.
+    pub(in crate::tenancy) fn with_dispatch_guard<T>(
         &self,
         submission: &Submission,
-        check: impl FnOnce(&Snapshot) -> Result<T, ErrorCode>,
+        check: impl FnOnce(&mut super::authority::live::ReadGuard<'_>) -> Result<T, ErrorCode>,
     ) -> Result<T, ErrorCode> {
-        let guard = self
-            .snapshot
-            .read()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        let mut guard = self.authority.read()?;
         if !self.live.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable);
         }
@@ -180,32 +179,118 @@ impl Service {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        let state = guard.as_ref();
         if submission.deadline.expired() || submission.cancelled.is_cancelled() {
             return Err(ErrorCode::CapacityExceeded);
         }
-        if !self.dispatch_ready(state)
-            || submission.binding.installation_id != state.installation
-            || submission.binding.instance_id != self.instance
-            || submission.binding.capability_revision != self.capability_revision(state)?
-        {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
+        guard.check(&submission.authority, |view| {
+            let state = view.facts();
+            if !self.dispatch_ready(state)
+                || submission.binding.installation_id != state.installation
+                || submission.binding.instance_id != self.instance
+                || submission.binding.capability_revision != self.capability_revision(state)?
+            {
+                return Err(ErrorCode::CapabilityMismatch);
+            }
+            let effective = state.effective(&submission.caller, &submission.tenant, Utc::now())?;
+            if effective.credential.principal != submission.principal
+                || effective.credential.id != submission.credential
+                || !effective.permits(Permission::ExecutionSubmit)
+            {
+                return Err(ErrorCode::Forbidden);
+            }
+            Ok(())
+        })?;
         #[cfg(all(feature = "core", feature = "harness"))]
         if let Some(binding) = &submission.block {
-            binding.block_in(state)?;
+            binding.block_guard(&mut guard)?;
         }
-        let effective = state.effective(&submission.caller, &submission.tenant, Utc::now())?;
-        if effective.credential.principal != submission.principal
-            || effective.credential.id != submission.credential
-            || !effective.permits(Permission::ExecutionSubmit)
-        {
-            return Err(ErrorCode::Forbidden);
-        }
-        check(state)
+        check(&mut guard)
     }
 
-    pub(crate) fn submission(&self, headers: &HeaderMap) -> Result<Submission, Failure> {
+    fn with_dispatch_view<T>(
+        &self,
+        submission: &Submission,
+        check: impl FnOnce(&super::authority::live::View) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        self.with_dispatch_guard(submission, |guard| {
+            guard.check(&submission.authority, check)
+        })
+    }
+
+    fn with_dispatch_authority<T>(
+        &self,
+        submission: &Submission,
+        check: impl FnOnce(&Snapshot) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        self.with_dispatch_view(submission, |view| check(view.facts()))
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) async fn extend_submission(
+        &self,
+        submission: &Submission,
+        dependencies: &[ResourceRef],
+    ) -> Result<(), Failure> {
+        self.prepare_submission(
+            submission,
+            dependencies,
+            super::authority::live::DependencyIntent::Owner,
+        )
+        .await
+    }
+
+    async fn prepare_submission(
+        &self,
+        submission: &Submission,
+        dependencies: &[ResourceRef],
+        intent: super::authority::live::DependencyIntent,
+    ) -> Result<(), Failure> {
+        if self
+            .with_dispatch_view(submission, |view| view.covers(dependencies, intent))
+            .map_err(Failure::from)?
+        {
+            return Ok(());
+        }
+        self.admitted_authority_read(|| {
+            // All queued copies together fit one third of the working share.
+            // The read permit is acquired before reserving or cloning payloads.
+            let bytes = self.authority.load_budget()
+                / self.execution_settings.capacity.management.reads
+                / 3;
+            let required = dependencies
+                .len()
+                .checked_mul(512 + std::mem::size_of::<ResourceRef>())
+                .ok_or(ErrorCode::CapacityExceeded)?;
+            if required > bytes {
+                return Err(ErrorCode::CapacityExceeded.into());
+            }
+            let mut copied = Vec::new();
+            copied
+                .try_reserve_exact(dependencies.len())
+                .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+            copied.extend_from_slice(dependencies);
+            Ok(super::actor::AuthoritySubject::Extend {
+                caller: submission.caller.clone(),
+                lease: submission.authority.clone(),
+                dependencies: copied,
+                intent,
+            })
+        })
+        .await?;
+        self.with_dispatch_authority(submission, |_| Ok(()))
+            .map_err(Failure::from)
+    }
+
+    pub(crate) async fn submission(&self, headers: &HeaderMap) -> Result<Submission, Failure> {
+        self.submission_with_intent(headers, super::authority::live::DependencyIntent::Fresh)
+            .await
+    }
+
+    async fn submission_with_intent(
+        &self,
+        headers: &HeaderMap,
+        preparation: super::authority::live::DependencyIntent,
+    ) -> Result<Submission, Failure> {
         let binding = dispatch_binding(headers)?;
         if headers.contains_key("x-api-key")
             || headers.contains_key("bitrouter-tenant-id")
@@ -224,20 +309,36 @@ impl Service {
         {
             return Err(ErrorCode::Unauthorized.into());
         }
-        let caller = self.authenticate(token)?;
-        let state = self.current()?;
-        let credential = state
-            .credential(&caller, Utc::now())
+        let authenticated = self
+            .authenticate_with_reuse(
+                token,
+                preparation == super::authority::live::DependencyIntent::Fresh,
+            )
+            .await?;
+        let (tenant, principal, credential) = self
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&authenticated.lease, |view| {
+                let credential = view.facts().credential(&authenticated.caller, Utc::now())?;
+                Ok((
+                    credential.tenant.clone(),
+                    credential.principal.clone(),
+                    credential.id.clone(),
+                ))
+            })
             .map_err(Failure::from)?;
         #[cfg(not(all(feature = "core", feature = "harness")))]
         if headers.contains_key(BLOCK_LINK_HEADER) {
             return Err(ErrorCode::CapabilityMismatch.into());
         }
         let submission = Submission {
-            caller,
-            tenant: credential.tenant.clone(),
-            principal: credential.principal.clone(),
-            credential: credential.id.clone(),
+            caller: authenticated.caller,
+            authority: authenticated.lease,
+            preparation,
+            tenant,
+            principal,
+            credential,
             binding,
             deadline: self.submission_deadline(),
             cancelled: tokio_util::sync::CancellationToken::new(),
@@ -286,7 +387,7 @@ impl Service {
 
     async fn admit_selected_execution(
         &self,
-        submission: Submission,
+        mut submission: Submission,
         fail_fast: bool,
         select: impl FnOnce(
             &super::cache::Pin<RetainedExecutionRevision>,
@@ -296,6 +397,9 @@ impl Service {
             .map_err(Failure::from)?;
         let revision = self.retained_execution(&submission).await?;
         let route = select(&revision).map_err(Failure::from)?;
+        self.prepare_submission(&submission, route.dependencies(), submission.preparation)
+            .await?;
+        submission.preparation = super::authority::live::DependencyIntent::Owner;
         self.with_dispatch_authority(&submission, |state| {
             authorize_route(state, &submission, route.dependencies())
         })
@@ -317,9 +421,16 @@ impl Service {
         #[cfg(feature = "core")]
         let learning = revision.document().learning.clone();
         drop(revision);
-        let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
-            .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
-        self.admission.receipt_probe(free);
+        // Bound volumes are refreshed under accounting before count pins/grants.
+        // Preserve the existing refusal/test behavior for an unbound volume.
+        if self.receipt_volume.is_none() {
+            let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
+                .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
+            self.admission.receipt_probe(free);
+        }
+        let _count = self
+            .pin_unknown_count(&submission.tenant, submission.deadline())
+            .await?;
         let lease = self
             .admission
             .acquire_until(&submission.tenant, &limits, submission.deadline())
@@ -357,6 +468,7 @@ impl Service {
             .to_string()
             .try_into()
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        lease.bind_execution(&id).map_err(Failure::from)?;
         let continuation = self.native_continuation.clone().map(|crypto| {
             Arc::new(continuation::Policy::new(
                 crypto,
@@ -599,21 +711,33 @@ impl TenantExecution {
         if self.submission.deadline.expired() || self.submission.cancelled.is_cancelled() {
             return Err(ErrorCode::CapacityExceeded);
         }
-        let state = self.service.current().map_err(|failure| failure.0.code)?;
-        if self
-            .route
-            .dependencies()
-            .iter()
-            .any(|reference| state.resource_lifecycle.revoked(reference))
-        {
-            return Err(ErrorCode::Forbidden);
-        }
-        Ok(())
+        self.service
+            .authority
+            .read()?
+            .check(&self.submission.authority, |view| {
+                if self
+                    .route
+                    .dependencies()
+                    .iter()
+                    .any(|reference| view.facts().resource_lifecycle.revoked(reference))
+                {
+                    return Err(ErrorCode::Forbidden);
+                }
+                Ok(())
+            })
     }
 
-    pub(crate) fn revalidate(&self) -> Result<(), ErrorCode> {
-        self.service
-            .with_dispatch_authority(&self.submission, |state| {
+    /// All model, refresh and auxiliary sends share the same owner checks.
+    fn with_send_authority<T>(
+        &self,
+        check: impl FnOnce(&super::authority::live::View) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        self.service.with_dispatch_guard(&self.submission, |guard| {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            if let Some(binding) = self.assessment.get() {
+                binding.assessment_guard(guard)?;
+            }
+            guard.check(&self.submission.authority, |view| {
                 let rejection = self
                     .rejection
                     .lock()
@@ -621,16 +745,14 @@ impl TenantExecution {
                 if let Some(code) = *rejection {
                     return Err(code);
                 }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                if let Some(binding) = &self.submission.block {
-                    binding.block_in(state)?;
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                if let Some(binding) = self.assessment.get() {
-                    binding.assessment_in(state)?;
-                }
-                authorize_route(state, &self.submission, self.route.dependencies())
+                authorize_route(view.facts(), &self.submission, self.route.dependencies())?;
+                check(view)
             })
+        })
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), ErrorCode> {
+        self.with_send_authority(|_| Ok(()))
     }
 
     pub(crate) async fn credential(
@@ -696,32 +818,15 @@ impl TenantExecution {
         if !actual.matches(authenticated) {
             return Err(ErrorCode::Forbidden);
         }
-        self.service
-            .with_dispatch_authority(&self.submission, |state| {
-                let rejection = self
-                    .rejection
-                    .lock()
-                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-                if let Some(code) = *rejection {
-                    return Err(code);
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                if let Some(binding) = &self.submission.block {
-                    binding.block_in(state)?;
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                if let Some(binding) = self.assessment.get() {
-                    binding.assessment_in(state)?;
-                }
-                authorize_route(state, &self.submission, self.route.dependencies())?;
-                #[cfg(all(feature = "core", feature = "harness"))]
-                self.block_send(target)?;
-                self.validate_oauth_model(target, oauth)?;
-                self.verify_count_send(target, counted)?;
-                permit
-                    .arm(authenticated)
-                    .map_err(super::receipts::journal_error)
-            })
+        self.with_send_authority(|view| {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            self.block_send(target)?;
+            self.validate_oauth_model(view, target, oauth)?;
+            self.verify_count_send(target, counted)?;
+            permit
+                .arm(authenticated)
+                .map_err(super::receipts::journal_error)
+        })
     }
 
     #[cfg(test)]

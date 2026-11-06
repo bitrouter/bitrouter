@@ -14,6 +14,21 @@ fn disabled_has_no_timing_storage_or_clock_tokens() -> Result<()> {
     ensure!(timing.0.is_none());
     ensure!(timing.span(Phase::SqlCommit).0.is_none());
     ensure!(sink.seal(false));
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    {
+        let owner = Arc::new(());
+        let captured = owner.clone();
+        ensure!(!sink.bind_runtime_capacity(move || {
+            let _retained = &captured;
+            capacity::runtime::Snapshot {
+                executions: Err(capacity::ReadError::Unavailable),
+                credentials: Err(capacity::ReadError::Unavailable),
+                routing: Err(capacity::ReadError::Unavailable),
+            }
+        }));
+        ensure!(Arc::strong_count(&owner) == 1);
+        ensure!(sink.0.is_none());
+    }
     Ok(())
 }
 

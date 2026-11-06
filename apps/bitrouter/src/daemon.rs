@@ -1059,6 +1059,18 @@ where
         }
     };
     let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
+    // The private control socket authenticates the local owner. Handoff tokens
+    // are checked by dispatch before this gate; no SQL completion is implied.
+    let response = if is_stop && matches!(response, DaemonResponse::Ok) {
+        match app.stop_owned_dispatch() {
+            Ok(()) => response,
+            Err(error) => DaemonResponse::Error {
+                message: format!("tenant dispatch stop failed: {error}"),
+            },
+        }
+    } else {
+        response
+    };
     write_response(reader.get_mut(), &response).await?;
     drop(admission);
     Ok(is_stop && matches!(response, DaemonResponse::Ok))

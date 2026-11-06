@@ -48,6 +48,7 @@ impl Worker {
             let mut select =
                 matches!(&job.work, Work::Finish(_)) && binding.assessment_check().is_ok();
             for _ in 0..2 {
+                control.reserve_write(crate::storage::operation_budget::MAX_BYTES, cleanup)?;
                 let tx = control
                     .begin_repeatable_read(&self.db)
                     .await

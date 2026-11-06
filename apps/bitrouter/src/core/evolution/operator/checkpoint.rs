@@ -112,12 +112,13 @@ async fn review(
 
 pub(super) async fn operate(
     db: &DatabaseConnection,
+    budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
     owner: &str,
     source: String,
     session_id: String,
     action: CheckpointAction,
 ) -> Result<CheckpointReport> {
-    let store = CanonicalStore::new(db.clone());
+    let store = CanonicalStore::new(db.clone()).with_storage_budget(budget);
     let identity = SessionIdentity {
         owner: owner.to_owned(),
         source,

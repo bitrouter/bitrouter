@@ -51,6 +51,7 @@ async fn paid_child_fails_fast_when_the_parent_owns_the_last_slot_and_can_run_af
             .fixture
             .service
             .submission(&ready.headers()?)
+            .await
             .map_err(failure)?;
         let parent = ready
             .fixture
@@ -105,7 +106,6 @@ async fn bootstrap_refuses_a_durable_pending_job_instead_of_reconstructing_send_
         let attempt = Service::start_prepared(
             ready.fixture.db.clone(),
             None,
-            OperationLimits::default(),
             initial,
             Arc::new(Resources::with_key(
                 ready.fixture.installation.clone(),

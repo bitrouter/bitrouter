@@ -102,6 +102,7 @@ async fn resumed_json_and_sse_reject_post_auth_endpoint_changes_before_send() ->
                             .fixture
                             .service
                             .submission(&ready.headers)
+                            .await
                             .map_err(failure)?,
                         MODEL,
                         &ApiProtocol::Responses,

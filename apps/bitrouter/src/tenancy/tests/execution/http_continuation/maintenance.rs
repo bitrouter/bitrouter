@@ -64,7 +64,6 @@ async fn restart_removes_stale_and_purged_rows_and_keeps_authenticated_tombstone
     ready.fixture.service = Service::start_prepared(
         ready.fixture.db.clone(),
         None,
-        Default::default(),
         initial,
         Arc::new(Resources::with_key(
             ready.fixture.installation.clone(),

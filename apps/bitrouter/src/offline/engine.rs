@@ -7,13 +7,17 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+pub(crate) const CONNECTION_BYTES: usize = 2 * 1024 * 1024 + 64 * 1024;
+
 pub(crate) struct Connections {
     pub(crate) source: Option<SqliteConnection>,
     pub(crate) copy: Option<SqliteConnection>,
     pub(crate) uncertain: bool,
     pub(crate) owner: Option<crate::tenancy::ownership::Lease>,
     cancel: CancellationToken,
-    deadline: Instant,
+    deadline: Option<Instant>,
+    source_charge: Option<super::large::Charge>,
+    copy_charge: Option<super::large::Charge>,
 }
 impl Connections {
     pub(crate) fn new(
@@ -26,12 +30,17 @@ impl Connections {
             uncertain: false,
             owner,
             cancel,
-            deadline: Instant::now() + Duration::from_secs(120),
+            deadline: Some(Instant::now() + Duration::from_secs(120)),
+            source_charge: None,
+            copy_charge: None,
         }
     }
     pub(crate) fn check(&self) -> Result<()> {
         ensure!(
-            !self.cancel.is_cancelled() && Instant::now() < self.deadline,
+            !self.cancel.is_cancelled()
+                && self
+                    .deadline
+                    .is_none_or(|deadline| Instant::now() < deadline),
             "offline operation ended"
         );
         Ok(())
@@ -42,17 +51,72 @@ impl Connections {
         let options = options(path, immutable);
         #[cfg(all(test, unix))]
         let options = tests::initialization_options(path, options);
-        self.open_options(options, immutable).await
+        self.open_options(options, immutable, None).await
     }
-    #[cfg(feature = "core")]
+    pub(crate) async fn open_budgeted(
+        &mut self,
+        path: &Path,
+        immutable: bool,
+        workspace: &super::large::Workspace,
+    ) -> Result<()> {
+        self.check()?;
+        ensure!(path.to_str().is_some(), "SQLite path must be UTF-8");
+        let options = options(path, immutable);
+        #[cfg(all(test, unix))]
+        let options = tests::initialization_options(path, options);
+        self.open_options(options, immutable, Some(workspace)).await
+    }
+    /// Open a clean, externally fenced source without creating SQLite sidecars.
+    /// The caller retains its metadata witness and checks it after actual close.
+    #[cfg(all(test, unix))]
+    pub(crate) async fn open_immutable_source(&mut self, path: &Path) -> Result<()> {
+        self.immutable_source(path)?;
+        self.open_options(options(path, true), false, None).await
+    }
+    pub(crate) async fn open_immutable_source_budgeted(
+        &mut self,
+        path: &Path,
+        workspace: &super::large::Workspace,
+    ) -> Result<()> {
+        self.immutable_source(path)?;
+        self.open_options(options(path, true), false, Some(workspace))
+            .await
+    }
+    fn immutable_source(&self, path: &Path) -> Result<()> {
+        self.check()?;
+        ensure!(path.to_str().is_some(), "SQLite path must be UTF-8");
+        ensure!(
+            self.owner
+                .as_ref()
+                .is_some_and(|owner| owner.exclusive() && owner.path == path),
+            "immutable source requires its canonical exclusive owner"
+        );
+        super::large::Source::inspect(path)?;
+        // Immutable skips locking and change detection; external writers must
+        // remain fenced until publication. https://sqlite.org/uri.html#uriimmutable
+        Ok(())
+    }
     pub(super) async fn open_destination(&mut self, path: &Path) -> Result<()> {
         self.check()?;
         // One direct worker under the same file-first owner; no pool, migrations,
         // initialize-if-empty or cancellation-selected consuming SQL futures.
-        self.open_options(options(path, false).read_only(false), false)
+        self.open_options(options(path, false).read_only(false), false, None)
             .await
     }
     #[cfg(feature = "core")]
+    pub(crate) async fn open_destination_budgeted(
+        &mut self,
+        path: &Path,
+        workspace: &super::large::Workspace,
+    ) -> Result<()> {
+        self.check()?;
+        self.open_options(
+            options(path, false).read_only(false),
+            false,
+            Some(workspace),
+        )
+        .await
+    }
     pub(super) async fn destination_cleanup_budget(&mut self) -> Result<()> {
         self.source
             .as_mut()
@@ -62,7 +126,20 @@ impl Connections {
             .remove_progress_handler();
         Ok(())
     }
-    async fn open_options(&mut self, options: SqliteConnectOptions, copy: bool) -> Result<()> {
+    /// Complete validation is cancellable, but has no cumulative time/work cap.
+    pub(crate) async fn validation_budget(&mut self) -> Result<()> {
+        self.deadline = None;
+        for db in [&mut self.source, &mut self.copy].into_iter().flatten() {
+            policy(db, self.cancel.clone(), None).await?;
+        }
+        self.check()
+    }
+    async fn open_options(
+        &mut self,
+        options: SqliteConnectOptions,
+        copy: bool,
+        workspace: Option<&super::large::Workspace>,
+    ) -> Result<()> {
         ensure!(
             if copy {
                 self.copy.is_none()
@@ -71,6 +148,17 @@ impl Connections {
             },
             "connection already open"
         );
+        if workspace.is_some() || self.source_charge.is_some() || self.copy_charge.is_some() {
+            ensure!(!self.uncertain, "offline connection cleanup unconfirmed");
+        }
+        let charge = workspace
+            .map(|workspace| workspace.reserve(CONNECTION_BYTES))
+            .transpose()?;
+        if copy {
+            self.copy_charge = charge;
+        } else {
+            self.source_charge = charge;
+        }
         // Direct ConnectOptions has no pool acquire timeout. This future is
         // owned by the command task and is never selected away on cancellation.
         // https://docs.rs/sqlx-sqlite/0.8.6/src/sqlx_sqlite/options/connect.rs.html
@@ -98,7 +186,7 @@ impl Connections {
         remaining: Duration,
     ) -> Result<()> {
         self.cancel = cancel;
-        self.deadline = Instant::now() + remaining.min(Duration::from_secs(5));
+        self.deadline = Some(Instant::now() + remaining.min(Duration::from_secs(5)));
         let db = self
             .copy
             .as_mut()
@@ -135,20 +223,28 @@ impl Connections {
         }
         self.uncertain = unresolved || failed;
         ensure!(!self.uncertain, "offline connection cleanup unconfirmed");
+        drop(self.copy_charge.take());
+        drop(self.source_charge.take());
         Ok(())
     }
 }
 
 impl Drop for Connections {
     fn drop(&mut self) {
-        if (self.uncertain || self.source.is_some() || self.copy.is_some())
-            && let Some(owner) = self.owner.take()
-        {
+        if self.uncertain || self.source.is_some() || self.copy.is_some() {
             // No public SQLx API can confirm a dropped bootstrap/worker close.
             // Also covers runtime/task teardown before our continuation finishes.
             // Retain this one canonical file fence until process exit, rather
             // than allowing a later SQLite descriptor to race unknown cleanup.
-            std::mem::forget(owner);
+            if let Some(owner) = self.owner.take() {
+                std::mem::forget(owner);
+            }
+            for charge in [self.source_charge.take(), self.copy_charge.take()]
+                .into_iter()
+                .flatten()
+            {
+                std::mem::forget(charge);
+            }
             tracing::error!(
                 "offline SQLite cleanup unconfirmed; source ownership retained until process exit"
             );
@@ -174,7 +270,7 @@ fn options(path: &Path, immutable: bool) -> SqliteConnectOptions {
 async fn policy(
     db: &mut SqliteConnection,
     cancel: CancellationToken,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     {
         let mut handle = db.lock_handle().await?;
@@ -184,8 +280,9 @@ async fn policy(
         // https://www.sqlite.org/c3ref/progress_handler.html
         let mut batches = 0_u64;
         handle.set_progress_handler(10_000, move || {
-            batches += 1;
-            batches <= 200_000 && !cancel.is_cancelled() && Instant::now() < deadline
+            batches = batches.saturating_add(1);
+            !cancel.is_cancelled()
+                && deadline.is_none_or(|deadline| batches <= 200_000 && Instant::now() < deadline)
         });
     }
     // No memory-backed temp store, mmap, source writer, or host connection pool.

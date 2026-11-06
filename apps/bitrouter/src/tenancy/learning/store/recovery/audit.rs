@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     storage::scope::Scope,
-    tenancy::learning::recovery::{Member, RecoveryIdentity},
+    tenancy::{
+        learning::recovery::{Member, RecoveryIdentity},
+        store::directory,
+    },
 };
 use bitrouter_ai::tenancy::identity::PrincipalId;
 use sea_orm::{Condition, QueryOrder};
@@ -13,24 +16,60 @@ const MAX_PENDING: usize = 8;
 
 async fn inventory(
     tx: &DatabaseTransaction,
-    state: &Snapshot,
+    state: &AuthorityHeader,
     budget: &OperationBudget<'_>,
 ) -> Result<Vec<records::Model>> {
-    ensure!(state.tenants.len() <= 256, "paid tenant inventory bound");
-    let partitions = state
-        .tenants
-        .keys()
-        .map(|tenant| crate::storage::partition::learning_pending(&state.installation, tenant))
-        .collect::<Result<Vec<_>>>()?;
-    // Include namespace occupants even if their redundant partition or tenant
-    // metadata was damaged. Legacy ALL-NULL rows outside these keys are untouched.
-    let selected = Condition::any()
-        .add(records::Column::InstallationId.eq(state.installation.as_str()))
-        .add(records::Column::ScopeId.is_in(partitions));
+    // Namespace occupants with damaged installation metadata must still deny
+    // readiness. Walk all directory keys without retaining them in the plan or
+    // charging empty tenants against its cumulative repair-row allowance.
+    let page_budget = directory::PageBudget {
+        rows: 32,
+        bytes: 64 * 1024,
+    };
+    let mut after = None;
+    loop {
+        budget.check()?;
+        let page = directory::tenant_page_in(tx, after.as_ref(), page_budget).await?;
+        budget.check()?;
+        if page.is_empty() {
+            break;
+        }
+        let partitions = page
+            .iter()
+            .map(|tenant| {
+                crate::storage::partition::learning_pending(&state.installation, &tenant.id)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let query = sea_orm::sea_query::Query::select()
+            .expr(Expr::val(1))
+            .from(records::Entity)
+            .and_where(Expr::col(records::Column::Kind).is_in([JOB, ACTIVE, BUDGET, PENDING]))
+            .and_where(Expr::col(records::Column::ScopeId).is_in(partitions))
+            .cond_where(
+                Condition::any()
+                    .add(Expr::col(records::Column::InstallationId).is_null())
+                    .add(
+                        Expr::col(records::Column::InstallationId).ne(state.installation.as_str()),
+                    ),
+            )
+            .limit(1)
+            .to_owned();
+        ensure!(
+            tx.query_one(tx.get_database_backend().build(&query))
+                .await?
+                .is_none(),
+            "paid row namespace or metadata invalid"
+        );
+        budget.check()?;
+        after = page.last().map(|tenant| tenant.id.clone());
+    }
+    // Rows carrying this installation are checked even if their redundant
+    // partition or tenant metadata was damaged. ALL-NULL legacy rows outside
+    // the directory namespaces remain untouched.
     io::rows(
         tx,
         records::Entity::find()
-            .filter(selected)
+            .filter(records::Column::InstallationId.eq(state.installation.as_str()))
             .filter(records::Column::Kind.is_in([JOB, ACTIVE, BUDGET, PENDING]))
             .order_by_asc(records::Column::RecordId)
             .lock_exclusive(),
@@ -75,8 +114,12 @@ pub(super) async fn inspect(
             .try_into()?;
         ensure!(
             row.installation_id.as_deref() == Some(state.installation.as_str())
-                && state.tenants.contains_key(&tenant)
-                && state.principals.contains_key(&principal)
+                && directory::tenant_in(tx, &tenant, 16 * 1024)
+                    .await?
+                    .is_some()
+                && directory::principal_in(tx, &principal, 16 * 1024)
+                    .await?
+                    .is_some()
                 && row.scope_id
                     == crate::storage::partition::learning_pending(&state.installation, &tenant)?
                 && row.revision >= 0
@@ -389,12 +432,96 @@ pub(super) async fn inspect(
             }
         }
     }
+    let mut unknown_before = BTreeMap::new();
+    let charge = |rows, bytes| budget.charge(rows, bytes).map_err(Into::into);
+    for write in &writes {
+        let key = projection::key(write);
+        let before = obligations::lookup(tx, &state.installation, &key, &charge).await?;
+        ensure!(
+            unknown_before.insert(key, before).is_none(),
+            "duplicate paid repair projection key"
+        );
+    }
     budget.check()?;
     Ok(Plan {
         rows,
         configurations,
         writes,
         sources,
+        unknown_before,
         at: at.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{DatabaseBackend, Schema, Statement, TransactionTrait};
+
+    #[tokio::test]
+    async fn inventory_checks_late_namespace_damage_without_charging_empty_tenants() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let tx = db.begin().await?;
+        let schema = Schema::new(DatabaseBackend::Sqlite);
+        tx.execute(
+            DatabaseBackend::Sqlite.build(&schema.create_table_from_entity(records::Entity)),
+        )
+        .await?;
+        for sql in [
+            "CREATE TABLE tenancy_tenants (id TEXT PRIMARY KEY, revision TEXT, state TEXT, created_at TEXT)",
+            "CREATE INDEX pending_scope ON checkpoint_evolution(scope_id, kind)",
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1056) INSERT INTO tenancy_tenants SELECT printf('tenant-%04d',i),'r1','active','2026-01-01T00:00:00Z' FROM n",
+            "INSERT INTO checkpoint_evolution(record_id,scope_id,kind,revision,body) VALUES ('legacy','unrelated','owned_judge_job',0,'{}')",
+        ] {
+            tx.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+                .await?;
+        }
+        let header = AuthorityHeader {
+            installation: "paid-inventory".try_into()?,
+            revision: 1_u64.try_into()?,
+            operation_ids: 0,
+            safety_operation_ids: 0,
+            saturated: false,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let check = || Ok(());
+        let budget = OperationBudget::with_row_limit(&check, 0);
+        ensure!(inventory(&tx, &header, &budget).await?.is_empty());
+        let partition = crate::storage::partition::learning_pending(
+            &header.installation,
+            &"tenant-1056".try_into()?,
+        )?;
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO checkpoint_evolution(record_id,scope_id,kind,revision,body) VALUES ('damaged',?,'owned_judge_pending',0,'{}')",
+            [partition.into()],
+        ))
+        .await?;
+        for installation in [None, Some("foreign")] {
+            tx.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE checkpoint_evolution SET installation_id=? WHERE record_id='damaged'",
+                [installation.into()],
+            ))
+            .await?;
+            ensure!(
+                inventory(&tx, &header, &budget).await.is_err_and(
+                    |error| error.to_string() == "paid row namespace or metadata invalid"
+                ),
+                "late damaged namespace escaped inventory"
+            );
+        }
+        // A damaged redundant scope must also remain visible through the
+        // installation index. The unrelated legacy row is still excluded.
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE checkpoint_evolution SET installation_id=?, scope_id='damaged-scope' WHERE record_id='damaged'",
+            [header.installation.as_str().into()],
+        ))
+        .await?;
+        let rows = inventory(&tx, &header, &OperationBudget::with_row_limit(&check, 1)).await?;
+        ensure!(rows.len() == 1 && rows[0].record_id == "damaged");
+        tx.rollback().await?;
+        Ok(())
+    }
 }

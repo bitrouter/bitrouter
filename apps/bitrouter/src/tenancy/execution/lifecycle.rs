@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(in crate::tenancy) mod paid;
+#[cfg(test)]
 const MAX_ACTIVE: usize = 128;
 #[derive(Clone)]
 enum Completion {
@@ -57,6 +58,7 @@ struct State {
     entries: BTreeMap<ExecutionId, Arc<Entry>>,
 }
 pub(crate) struct Registry {
+    max_active: usize,
     state: Mutex<State>,
     draining: tokio::sync::Mutex<()>,
 }
@@ -81,8 +83,13 @@ impl Drop for AdmissionTicket {
     }
 }
 impl Registry {
+    #[cfg(test)]
     pub(crate) fn new() -> Arc<Self> {
+        Self::with_capacity(MAX_ACTIVE)
+    }
+    pub(crate) fn with_capacity(max_active: usize) -> Arc<Self> {
         Arc::new(Self {
+            max_active,
             state: Mutex::new(State::default()),
             draining: tokio::sync::Mutex::new(()),
         })
@@ -98,7 +105,7 @@ impl Registry {
             .map_err(|_| BitrouterError::internal("execution admission requires a runtime"))?;
         let mut state = self.state();
         if state.closed
-            || state.entries.len() >= MAX_ACTIVE
+            || state.entries.len() >= self.max_active
             || state.entries.contains_key(receipt.id())
         {
             return Err(BitrouterError::UpstreamUnavailable);
@@ -164,7 +171,7 @@ impl Registry {
         let entry = match existing {
             Some(entry) => entry,
             None => {
-                if state.entries.len() >= MAX_ACTIVE {
+                if state.entries.len() >= self.max_active {
                     return Err(BitrouterError::internal(
                         "tenant pipeline capacity exceeded",
                     ));
@@ -669,9 +676,11 @@ mod tests {
 
     #[tokio::test]
     async fn capacity_recycles_automatically_and_close_rejects_new_roots() -> anyhow::Result<()> {
-        let registry = Registry::new();
+        // Exercise a configured owner bound beyond the former fixed profile.
+        let max_active = MAX_ACTIVE + 1;
+        let registry = Registry::with_capacity(max_active);
         let mut tickets = vec![];
-        for index in 0..MAX_ACTIVE {
+        for index in 0..max_active {
             tickets.push(
                 registry.register(&format!("execution-{index}").try_into()?, pipeline(|_| {})?)?,
             );

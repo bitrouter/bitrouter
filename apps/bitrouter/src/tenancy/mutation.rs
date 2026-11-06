@@ -8,7 +8,7 @@ use bitrouter_ai::tenancy::{
     operation::ErrorCode,
 };
 use chrono::{DateTime, Utc};
-use sea_orm::DatabaseConnection;
+use sea_orm::ConnectionTrait;
 
 use super::{
     authority::{has_pools, scope_subset},
@@ -73,7 +73,7 @@ fn scoped_context(
 /// Authorization precedes CAS details and capacity consumption. Replay uses its
 /// saved read context instead; it cannot manufacture new authorization here.
 pub(super) async fn prepare(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     state: &Snapshot,
     resources: &super::resources::Resources,
     caller: &Caller,
@@ -185,7 +185,9 @@ pub(super) async fn prepare(
                 let old = state
                     .credentials
                     .get(id)
-                    .filter(|credential| &credential.tenant == tenant)
+                    .filter(|credential| {
+                        &credential.tenant == tenant && credential.state == CredentialState::Active
+                    })
                     .ok_or(ErrorCode::NotFound)?;
                 state.authorize(
                     caller,
@@ -275,47 +277,6 @@ fn apply_credential(state: &mut Snapshot, credential: &Credential, now: DateTime
     }
 }
 
-fn credential_capacity(
-    state: &Snapshot,
-    tenant: &TenantId,
-    principal: &PrincipalId,
-    rotating: bool,
-    now: DateTime<Utc>,
-) -> Result<()> {
-    let live = state
-        .credentials
-        .values()
-        .filter(|credential| credential.expires.instant > now)
-        .collect::<Vec<_>>();
-    let replacing = usize::from(rotating);
-    if live.len().saturating_sub(replacing) >= 256
-        || live
-            .iter()
-            .filter(|credential| &credential.tenant == tenant && &credential.principal == principal)
-            .count()
-            .saturating_sub(replacing)
-            >= 2
-    {
-        return Err(ErrorCode::CapacityExceeded);
-    }
-    let tenant_principals = live
-        .iter()
-        .filter(|credential| &credential.tenant == tenant)
-        .map(|credential| &credential.principal)
-        .chain(
-            state
-                .bindings
-                .values()
-                .filter(|binding| &binding.tenant == tenant)
-                .map(|binding| &binding.principal),
-        )
-        .collect::<std::collections::BTreeSet<_>>();
-    if !tenant_principals.contains(principal) && tenant_principals.len() >= 4 {
-        return Err(ErrorCode::CapacityExceeded);
-    }
-    Ok(())
-}
-
 /// Called on a private candidate snapshot; any error discards all candidate edits.
 pub(super) fn apply(
     state: &mut Snapshot,
@@ -344,9 +305,6 @@ pub(super) fn apply(
                 old.map(|tenant| &tenant.revision),
                 input.expected_revision.as_ref(),
             )?;
-            if old.is_none() && state.tenants.len() >= 32 {
-                return Err(ErrorCode::CapacityExceeded);
-            }
             let tenant = Tenant {
                 id: id.clone(),
                 revision: next_revision.clone(),
@@ -374,9 +332,6 @@ pub(super) fn apply(
                 })
             {
                 return Err(ErrorCode::RevisionConflict);
-            }
-            if old.is_none() && state.principals.len() >= 128 {
-                return Err(ErrorCode::CapacityExceeded);
             }
             let value = Principal {
                 id: id.clone(),
@@ -432,32 +387,11 @@ pub(super) fn apply(
                     _ => return Err(ErrorCode::Forbidden),
                 }
             } else {
-                if state.bindings.len() >= 256 {
-                    return Err(ErrorCode::CapacityExceeded);
-                }
                 Some(ManagedBy {
                     principal: principal.clone(),
                     class,
                 })
             };
-            let members = state
-                .bindings
-                .values()
-                .filter(|binding| &binding.tenant == tenant && binding.id != *id)
-                .map(|binding| &binding.principal)
-                .chain(
-                    state
-                        .credentials
-                        .values()
-                        .filter(|credential| {
-                            &credential.tenant == tenant && credential.expires.instant > now
-                        })
-                        .map(|credential| &credential.principal),
-                )
-                .collect::<std::collections::BTreeSet<_>>();
-            if !members.contains(&input.principal_id) && members.len() >= 4 {
-                return Err(ErrorCode::CapacityExceeded);
-            }
             let binding = Binding {
                 tenant: tenant.clone(),
                 id: id.clone(),
@@ -536,7 +470,10 @@ pub(super) fn apply(
                 let predecessor = state
                     .credentials
                     .get(id)
-                    .filter(|credential| credential.expires.instant > now)
+                    .filter(|credential| {
+                        credential.state == CredentialState::Active
+                            && credential.expires.instant > now
+                    })
                     .ok_or(ErrorCode::NotFound)?;
                 if predecessor.tenant != *tenant
                     || predecessor.principal != input.principal_id
@@ -555,7 +492,6 @@ pub(super) fn apply(
             } else {
                 None
             };
-            credential_capacity(state, tenant, &input.principal_id, old.is_some(), now)?;
             let (credential, response) = issue(
                 state,
                 command,
@@ -607,7 +543,6 @@ pub(super) fn apply(
             if expires.instant <= now {
                 return Err(ErrorCode::InvalidRequest);
             }
-            credential_capacity(state, tenant, &input.principal_id, false, now)?;
             let (credential, response) = issue(
                 state,
                 command,

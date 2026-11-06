@@ -17,7 +17,7 @@ async fn unread_durable_json_outlives_settlement_then_idle_or_shutdown_releases_
             json_response("chat_completions", full_usage("chat_completions"))?,
         )
         .await?;
-        let response = tokio::time::timeout(TIMEOUT, call(&harness)?).await?;
+        let response = tokio::time::timeout(TIMEOUT, call(&harness).await?).await?;
         ensure!(response.status() == StatusCode::OK);
         let page = harness.page().await?;
         ensure!(page.execution_ids.len() == 1);
@@ -79,7 +79,7 @@ async fn unread_durable_json_outlives_settlement_then_idle_or_shutdown_releases_
         );
         if !shutdown {
             // Prove both receipt admission and the registry slot remain usable.
-            let next = tokio::time::timeout(TIMEOUT, call(&harness)?).await?;
+            let next = tokio::time::timeout(TIMEOUT, call(&harness).await?).await?;
             ensure!(next.status() == StatusCode::OK);
             ensure!(
                 !axum::body::to_bytes(next.into_body(), 64 * 1024)
@@ -101,7 +101,7 @@ async fn genuine_cleanup_expiry_retains_custody_until_confirmed_late_join() -> R
         json_response("chat_completions", full_usage("chat_completions"))?,
     )
     .await?;
-    let response = tokio::time::timeout(TIMEOUT, call(&harness)?).await?;
+    let response = tokio::time::timeout(TIMEOUT, call(&harness).await?).await?;
     let page = harness.page().await?;
     ensure!(page.execution_ids.len() == 1);
     let (owner, tasks) = harness
@@ -165,20 +165,23 @@ async fn genuine_cleanup_expiry_retains_custody_until_confirmed_late_join() -> R
     Ok(())
 }
 
-fn call(harness: &Harness) -> Result<impl std::future::Future<Output = Response> + Send + 'static> {
+async fn call(
+    harness: &Harness,
+) -> Result<impl std::future::Future<Output = Response> + Send + 'static> {
     call_with(
         harness.fixture.service.clone(),
         harness.headers.clone(),
         harness.request.clone(),
     )
+    .await
 }
 
-fn call_with(
+async fn call_with(
     service: crate::tenancy::Service,
     headers: HeaderMap,
     request: Value,
 ) -> Result<impl std::future::Future<Output = Response> + Send + 'static> {
-    let submission = service.submission(&headers).map_err(failure)?;
+    let submission = service.submission(&headers).await.map_err(failure)?;
     let input = crate::gateway::http::parse_input(&ApiProtocol::ChatCompletions, request.clone())?;
     let ingress = service
         .admission
@@ -216,7 +219,7 @@ async fn gated() -> Result<(Harness, Arc<Semaphore>)> {
 #[tokio::test]
 async fn admitted_completion_delivers_after_caller_revoke_but_cannot_submit_again() -> Result<()> {
     let (mut harness, gate) = gated().await?;
-    let task = AbortOnDropHandle::new(tokio::spawn(call(&harness)?));
+    let task = AbortOnDropHandle::new(tokio::spawn(call(&harness).await?));
     tokio::time::timeout(TIMEOUT, harness.received.recv())
         .await?
         .context("provider accepted the admitted request")?;
@@ -266,6 +269,7 @@ async fn admitted_completion_delivers_after_caller_revoke_but_cannot_submit_agai
             .fixture
             .service
             .submission(&harness.headers)
+            .await
             .is_err_and(|failure| failure.0.code
                 == bitrouter_ai::tenancy::operation::ErrorCode::Unauthorized)
     );
@@ -319,13 +323,16 @@ async fn active_stream_progress_survives_multiple_submission_windows() -> Result
         &revision.revision_id,
     )?;
     send.send("data: {\"id\":\"chatcmpl-receipts\",\"object\":\"chat.completion.chunk\",\"model\":\"model-a\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n".into()).await?;
-    let task = tokio::spawn(call_with(
-        fixture.service.clone(),
-        headers,
-        json!({
-            "model": MODEL, "messages": [{"role": "user", "content": "hello"}], "stream": true
-        }),
-    )?);
+    let task = tokio::spawn(
+        call_with(
+            fixture.service.clone(),
+            headers,
+            json!({
+                "model": MODEL, "messages": [{"role": "user", "content": "hello"}], "stream": true
+            }),
+        )
+        .await?,
+    );
     let response = tokio::time::timeout(TIMEOUT, task).await??;
     ensure!(response.status() == StatusCode::OK);
     let mut body = response.into_body().into_data_stream();
@@ -376,6 +383,7 @@ async fn active_stream_progress_survives_multiple_submission_windows() -> Result
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret")?)
+        .await
         .map_err(failure)?;
     let bytes = fixture
         .service
@@ -415,7 +423,7 @@ async fn configured_and_default_execution_lifetimes_accept_provider_work_after_s
             .service
             .execution_settings
             .execution_timeout_secs = total;
-        let task = tokio::spawn(call(&harness)?);
+        let task = tokio::spawn(call(&harness).await?);
         tokio::time::timeout(TIMEOUT, harness.received.recv())
             .await?
             .context("provider request")?;
@@ -450,7 +458,7 @@ async fn total_expiry_cancels_an_armed_request_without_success_or_replay() -> Re
         .service
         .execution_settings
         .execution_timeout_secs = Some(2);
-    let task = tokio::spawn(call(&harness)?);
+    let task = tokio::spawn(call(&harness).await?);
     tokio::time::timeout(TIMEOUT, harness.received.recv())
         .await?
         .context("provider request")?;
@@ -476,7 +484,7 @@ async fn total_expiry_cancels_an_armed_request_without_success_or_replay() -> Re
 #[tokio::test]
 async fn disconnected_waiter_without_total_cancels_before_provider_headers() -> Result<()> {
     let (mut harness, gate) = gated().await?;
-    let task = tokio::spawn(call(&harness)?);
+    let task = tokio::spawn(call(&harness).await?);
     tokio::time::timeout(TIMEOUT, harness.received.recv())
         .await?
         .context("provider request")?;
@@ -510,7 +518,7 @@ async fn no_total_deadline_still_releases_an_unpolled_stream_on_output_idle() ->
         .service
         .execution_settings
         .stream_idle_timeout_secs = 2;
-    let response = tokio::time::timeout(TIMEOUT, call(&harness)?).await?;
+    let response = tokio::time::timeout(TIMEOUT, call(&harness).await?).await?;
     ensure!(response.status() == StatusCode::OK);
     tokio::time::timeout(TIMEOUT, harness.fixture.service.admission.wait_drained()).await?;
     ensure!(
@@ -531,7 +539,7 @@ async fn no_total_deadline_still_releases_an_unpolled_stream_on_output_idle() ->
 #[tokio::test]
 async fn shutdown_cancels_unlimited_execution_and_reopen_retains_unknown_receipt() -> Result<()> {
     let (mut harness, gate) = gated().await?;
-    let task = tokio::spawn(call(&harness)?);
+    let task = tokio::spawn(call(&harness).await?);
     tokio::time::timeout(TIMEOUT, harness.received.recv())
         .await?
         .context("provider request")?;
@@ -542,13 +550,13 @@ async fn shutdown_cancels_unlimited_execution_and_reopen_retains_unknown_receipt
     let reopened = crate::tenancy::Service::start_prepared(
         harness.fixture.db.clone(),
         None,
-        Default::default(),
         snapshot,
         harness.fixture.service.resources.clone(),
     )
     .await?;
     let caller = reopened
         .authenticate(harness.credential.secret.as_deref().context("credential")?)
+        .await
         .map_err(failure)?;
     let bytes = reopened
         .read_receipt(

@@ -101,8 +101,18 @@ pub(crate) struct CheckedRecovery {
     pub(in crate::tenancy) committed: std::sync::atomic::AtomicBool,
     pub(in crate::tenancy) retired: std::sync::atomic::AtomicBool,
     pub(in crate::tenancy) reservation: Mutex<Option<crate::tenancy::admission::Repair>>,
+    pub(in crate::tenancy) publication:
+        Mutex<Option<crate::tenancy::admission::unknown::Publication>>,
+    pub(in crate::tenancy) obligation_due:
+        std::sync::OnceLock<Option<chrono::DateTime<chrono::Utc>>>,
 }
 impl CheckedRecovery {
+    pub(in crate::tenancy) fn obligation_due(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.committed()
+            .then(|| self.obligation_due.get().copied().flatten())
+            .flatten()
+    }
+
     pub(crate) fn binds(
         &self,
         descriptor: &crate::tenancy::execution::session::Descriptor,

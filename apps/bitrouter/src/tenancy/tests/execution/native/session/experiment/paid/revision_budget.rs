@@ -135,7 +135,7 @@ async fn native_paid_revision_budget_survives_rotation_reactivation_and_two_revi
                         && first_budget[0]["configuration"] == first.as_str()
                         && first_budget[0]["accepted"] == 1
                 );
-                let mut rotation = fixture.issuance("budget-rotate-ingress")?;
+                let mut rotation = fixture.issuance("budget-rotate-ingress").await?;
                 rotation.rotate_credential_id = Some(original.credential_id);
                 let rotated = issued(
                     fixture
@@ -151,6 +151,7 @@ async fn native_paid_revision_budget_survives_rotation_reactivation_and_two_revi
                     fixture
                         .service
                         .authenticate(original.secret.as_deref().context("old key")?)
+                        .await
                         .is_err()
                 );
                 let rotated_headers = crate::tenancy::tests::execution::headers(

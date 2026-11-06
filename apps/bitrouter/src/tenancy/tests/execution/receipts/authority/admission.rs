@@ -62,15 +62,14 @@ async fn queued_http_rechecks_revoke_suspend_and_scope_without_a_second_receipt_
                     TenantPut {
                         operation_id: "receipt-queue-suspend".try_into()?,
                         expected_revision: Some(
-                            fixture
-                                .service
-                                .current()
-                                .map_err(failure)?
-                                .tenants
-                                .get(&fixture.tenant)
-                                .context("tenant")?
-                                .revision
-                                .clone(),
+                            crate::tenancy::store::directory::tenant_in(
+                                &fixture.db,
+                                &fixture.tenant,
+                                fixture.service.authority.load_budget(),
+                            )
+                            .await?
+                            .context("tenant")?
+                            .revision,
                         ),
                         state: TenantState::Suspended,
                         installation_id: fixture.installation.clone(),

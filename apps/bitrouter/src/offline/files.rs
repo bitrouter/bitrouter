@@ -25,6 +25,9 @@ impl Fingerprint {
         self.0.update(&(bytes.len() as u64).to_be_bytes());
         self.0.update(bytes);
     }
+    pub(super) fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
     pub fn finish(self) -> [u8; 32] {
         self.0.finalize().into_bytes().into()
     }

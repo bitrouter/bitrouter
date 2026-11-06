@@ -61,6 +61,9 @@ impl Worker {
             }
         };
         check().map_err(map)?;
+        if !matches!(job.request, Request::Load(_)) {
+            control.reserve_write(crate::storage::operation_budget::MAX_BYTES, cleanup)?;
+        }
         let tx = control
             .begin_repeatable_read(&self.db)
             .await
@@ -252,6 +255,7 @@ impl Worker {
             } = &job.request
             {
                 recovery.settled(true).map_err(map)?;
+                self.schedule_obligation(recovery.obligation_due())?;
             }
         } else {
             control

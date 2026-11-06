@@ -20,33 +20,39 @@ impl BlockPolicyStore {
             !request.routing_digest.is_empty(),
             "routing dependency digest is required"
         );
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        if state
-            .registration(
-                &request.definition,
-                &request.routing_digest,
-                Some(&request.predecessor),
-            )?
-            .is_some()
-        {
-            tx.commit().await?;
-            return Ok(state);
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            if state
+                .registration(
+                    &request.definition,
+                    &request.routing_digest,
+                    Some(&request.predecessor),
+                )?
+                .is_some()
+            {
+                return Ok(state);
+            }
+            ensure!(
+                (state.generation, state.mode_epoch) == request.expected_control,
+                "evolution settings changed; review the experiment revision again"
+            );
+            precondition()?;
+            state.revise(
+                request.definition,
+                request.routing_digest,
+                &request.predecessor,
+                request.reset_to_configured,
+            )?;
+            self.store
+                .save_charged(&mut write, &tx, row, &state)
+                .await?;
+            Ok(state)
         }
-        ensure!(
-            (state.generation, state.mode_epoch) == request.expected_control,
-            "evolution settings changed; review the experiment revision again"
-        );
-        precondition()?;
-        state.revise(
-            request.definition,
-            request.routing_digest,
-            &request.predecessor,
-            request.reset_to_configured,
-        )?;
-        self.store.save(&tx, row, &state).await?;
-        tx.commit().await?;
-        Ok(state)
+        .await;
+        write.finish(tx, result).await
     }
 }

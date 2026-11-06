@@ -5,6 +5,7 @@ use crate::{
     tenancy::{
         learner::source::{Acquired, Calculated},
         model::Snapshot,
+        store::directory,
     },
 };
 use anyhow::Context;
@@ -77,7 +78,7 @@ impl Resources {
     pub(in crate::tenancy) async fn publish_learner_in(
         &self,
         tx: &sea_orm::DatabaseTransaction,
-        state: &Snapshot,
+        state: &mut Snapshot,
         acquired: &Acquired,
         calculated: &Calculated,
         budget: &OperationBudget<'_>,
@@ -230,15 +231,6 @@ impl Resources {
                 envelope: Some(envelope),
             });
         }
-        super::super::configuration_store::reserve_learner_catalog(tx, budget).await?;
-        let retained = storage::references(tx).await?;
-        ensure!(
-            retained
-                .len()
-                .checked_add(artifacts.len())
-                .is_some_and(|count| count <= MAX_CLOSURE),
-            Error::Capacity
-        );
         for artifact in artifacts {
             manifest::Import {
                 reference: artifact.reference.clone(),
@@ -268,15 +260,28 @@ impl Resources {
         }
         // Reserve the immutable closure's reload before the ordinary compiler
         // allocates it. Its SQL reads remain inside this same RR transaction.
-        drop(
-            self.learner_closure(
+        let closure = self
+            .learner_closure(
                 tx,
                 &super::super::configuration::references(&document),
                 budget,
                 true,
             )
-            .await?,
-        );
+            .await?;
+        let references = closure
+            .iter()
+            .map(|artifact| artifact.reference.clone())
+            .collect::<Vec<_>>();
+        // Generated revisions are not facts in the source lease. Read their
+        // exact lifecycle status in this borrowed transaction before compiling.
+        directory::extend_dependencies_in(
+            tx,
+            state,
+            &references,
+            acquired.identity.load_budget() / 3,
+        )
+        .await?;
+        drop(closure);
         let retained = super::super::configuration::prepare(
             tx,
             self,
@@ -290,7 +295,7 @@ impl Resources {
         .map_err(Error::Rejected)?;
         acquired
             .identity
-            .check(&retained.dependencies)
+            .check_facts(state, &retained.dependencies)
             .map_err(Error::Rejected)?;
         budget.charge(
             retained.dependencies.len(),

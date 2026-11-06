@@ -237,7 +237,7 @@ async fn historical_absence_differs_from_empty_capture_and_corrupt_orphan_is_ref
     write(&db, &old).await?;
     ensure!(load(&db).await?.usage_evidence.is_none());
     ensure!(historical(&r).capture == Capture::NotCaptured);
-    sql(&db,"INSERT INTO tenancy_usage_evidence VALUES('installation','tenant','orphan',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',2)").await?;
+    sql(&db,"INSERT INTO tenancy_usage_evidence (installation_id,tenant_id,execution_id,schema_version,receipt_digest,evidence_digest,evidence_json,byte_count) VALUES('installation','tenant','orphan',1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',2)").await?;
     ensure!(storage::inventory(&db, &r.installation_id).await.is_err());
     db.close().await?;
     Ok(())

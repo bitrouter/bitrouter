@@ -46,6 +46,7 @@ impl Worker {
         let store = TrajectoryStore::for_execution(&job.execution);
         let shared = OperationBudget::new(&check);
         let mut budget = Budget::owned(&shared);
+        control.reserve_write(crate::storage::operation_budget::MAX_BYTES, false)?;
         let tx = control
             .begin_repeatable_read(store.database())
             .await
@@ -151,17 +152,17 @@ impl Worker {
         let store = TrajectoryStore::for_execution(&job.execution);
         let shared = OperationBudget::new(&check);
         let mut budget = Budget::owned(&shared);
+        control.reserve_write(crate::storage::operation_budget::MAX_BYTES, true)?;
         let tx = control
             .begin_repeatable_read(store.database())
             .await
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         let body = async {
-            check().map_err(Failure::from)?;
+            check().map_err(BudgetError::Rejected)?;
             let request = store
                 .request_in(&tx, job.start.request(), &mut budget)
-                .await
-                .map_err(|e| self.trajectory_error(e))?
-                .ok_or_else(|| self.unavailable(ErrorCode::AuthorityUnavailable))?;
+                .await?
+                .ok_or(BudgetError::Unavailable)?;
             let existing = request.status != RequestStatus::Started;
             let settlement = store
                 .settle_current_in(
@@ -172,14 +173,10 @@ impl Worker {
                     },
                     &mut budget,
                 )
-                .await
-                .map_err(|e| self.trajectory_error(e))?;
+                .await?;
             if let Some(outbox) = &settlement.outbox {
                 if existing {
-                    store
-                        .check_delivered_in(&tx, outbox, &mut budget)
-                        .await
-                        .map_err(|e| self.trajectory_error(e))?;
+                    store.check_delivered_in(&tx, outbox, &mut budget).await?;
                 }
                 let eval = job.execution.eval_store();
                 let publication = if existing {
@@ -190,18 +187,12 @@ impl Worker {
                         .await
                         .map(|_| ())
                 };
-                publication.map_err(|e| match e {
-                    crate::core::eval::store::OwnedError::Rejected(code) => Failure::from(code),
-                    _ => self.unavailable(ErrorCode::StorageUnavailable),
-                })?;
+                publication?;
                 if !existing {
-                    store
-                        .mark_delivered_in(&tx, outbox, &mut budget)
-                        .await
-                        .map_err(|e| self.trajectory_error(e))?;
+                    store.mark_delivered_in(&tx, outbox, &mut budget).await?;
                 }
             }
-            check().map_err(Failure::from)?;
+            check().map_err(BudgetError::Rejected)?;
             #[cfg(feature = "harness")]
             crate::tenancy::experiment::store::terminal::trajectory(
                 &tx,
@@ -210,20 +201,15 @@ impl Worker {
                 existing,
                 &shared,
             )
-            .await
-            .map_err(|error| self.trajectory_error(error))?;
-            Ok::<_, Failure>(!existing)
+            .await?;
+            Ok::<_, anyhow::Error>(!existing)
         }
         .await;
         match body {
             Ok(true) => control.commit(tx).await,
             Ok(false) => control.rollback(tx).await,
             Err(error) => {
-                control
-                    .rollback(tx)
-                    .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                return Err(error);
+                return Err(self.rollback_observation(control, tx, error).await);
             }
         }
         .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;

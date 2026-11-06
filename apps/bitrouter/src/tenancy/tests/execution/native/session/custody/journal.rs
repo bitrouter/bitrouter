@@ -108,18 +108,18 @@ pub(super) async fn exercise(root: &Path, mode: &str) -> Result<()> {
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             .try_into()?,
     )?;
-    {
-        let mut state = fixture
-            .service
-            .snapshot
-            .write()
-            .map_err(|_| anyhow::anyhow!("snapshot lock"))?;
-        Arc::make_mut(&mut state)
-            .credentials
-            .get_mut(&key.credential_id)
-            .context("credential")?
-            .expires = expired;
-    }
+    let mut changed = false;
+    fixture
+        .service
+        .authority
+        .mutate_views_for_test(|state| {
+            if let Some(credential) = state.credentials.get_mut(&key.credential_id) {
+                credential.expires = expired.clone();
+                changed = true;
+            }
+        })
+        .map_err(|code| anyhow::anyhow!("expiry fixture: {code:?}"))?;
+    ensure!(changed, "restoring opener had no live credential to expire");
     fixture.service.cleanup.release_gate();
     let error = tokio::time::timeout(TIMEOUT, opener)
         .await??

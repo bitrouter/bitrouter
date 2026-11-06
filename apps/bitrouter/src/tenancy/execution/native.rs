@@ -38,7 +38,7 @@ impl Service {
             ));
         }
         bounded_headers(&headers).map_err(native_failure)?;
-        let submission = self.submission(&headers).map_err(native_failure)?;
+        let submission = self.submission(&headers).await.map_err(native_failure)?;
         bounded_prompt(&prompt).map_err(native_failure)?;
         let execution = self
             .admit_native_execution(submission, &prompt.model)

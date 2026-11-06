@@ -18,7 +18,7 @@ async fn combined(
     let url = format!("sqlite://{}", root.join("owned.db").display());
     let lease = crate::tenancy::ownership::acquire(&url)?;
     let db = crate::db::connect_tenancy(&url, &lease).await?;
-    let mut fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     fixture.service.shutdown().await?;
     let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
     let reference = |kind, id: &str| -> Result<ResourceRef> {
@@ -83,7 +83,6 @@ async fn combined(
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         Some(lease),
-        OperationLimits::default(),
         snapshot,
         Arc::new(resources),
     )
@@ -128,6 +127,7 @@ async fn separate_proofs(bound: &Bound) -> Result<()> {
         .fixture
         .service
         .host_authority(&bound.headers)
+        .await
         .map_err(failure)?;
     let retained = authority.retained().await.map_err(failure)?;
     let checked = |error| anyhow::anyhow!("retained child proof: {error:?}");
@@ -223,14 +223,8 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
     let db = crate::db::connect_tenancy(&url, &lease).await?;
     let resources = Resources::with_key(installation.clone(), [29; 32])?;
     let snapshot = store::load(&db, Utc::now()).await?;
-    let service = Service::start_prepared(
-        db.clone(),
-        Some(lease),
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    let service =
+        Service::start_prepared(db.clone(), Some(lease), snapshot, Arc::new(resources)).await?;
     service.dispatch_test_ready.store(true, Ordering::Release);
     *owner = Some(Bound {
         fixture: Fixture {
@@ -250,7 +244,7 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
     });
     let bound = owner.as_mut().context("reopened combined owner")?;
     ensure!(
-        matches!(bound.fixture.service.host_authority(&bound.headers),
+        matches!(bound.fixture.service.host_authority(&bound.headers).await,
             Err(error) if error.0.code == ErrorCode::CapabilityMismatch),
         "a fresh Service must reject the previous instance binding"
     );

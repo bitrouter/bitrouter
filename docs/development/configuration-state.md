@@ -20,6 +20,11 @@ preparation failure cannot erase evidence of an earlier partial application.
 Disk corruption or a saved listener-path edit does not establish that an already
 running daemon stopped; discovery must retain the actual owner identity.
 
+The entire effective `tenancy` object, including `tenancy.capacity`, requires a
+restart. Reload rejects a changed value before publishing it. Omitted capacity
+fields resolve to their defaults before comparison, so an explicit default does
+not itself change the effective configuration.
+
 Configuration format and migration compatibility are maintained in the
 [configuration spec](../specs/configuration/README.md). Report fields and
 reload operations are maintained in the

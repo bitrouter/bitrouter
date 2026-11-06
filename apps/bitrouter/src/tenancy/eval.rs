@@ -6,6 +6,7 @@ mod wire;
 
 use super::{
     Service, actor,
+    authority::live,
     error::Failure,
     model::{Caller, Snapshot},
     transaction::Proof,
@@ -73,6 +74,9 @@ pub(super) struct Handoff {
 
 /// Sealed identity captures origin and namespace, never durable entitlement.
 pub(crate) struct EvalIdentity {
+    authority: Arc<live::Authority>,
+    lease: live::Lease,
+    live: Arc<AtomicBool>,
     credential: CredentialId,
     principal: PrincipalId,
     installation: InstallationId,
@@ -87,13 +91,19 @@ impl EvalIdentity {
     pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
         (&self.installation, &self.tenant, &self.principal)
     }
-    pub(super) fn check(
-        &self,
-        state: &Snapshot,
-        origin: &Arc<Proof>,
-        action: Action,
-    ) -> Result<(), ErrorCode> {
-        if !Arc::ptr_eq(origin, &self.origin) || state.installation != self.installation {
+    pub(super) fn check(&self, origin: &Arc<Proof>, action: Action) -> Result<(), ErrorCode> {
+        if !Arc::ptr_eq(origin, &self.origin) {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        self.authority.read()?.check(&self.lease, |view| {
+            if !self.live.load(Ordering::Acquire) {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            self.in_view(view.facts(), action)
+        })
+    }
+    fn in_view(&self, state: &Snapshot, action: Action) -> Result<(), ErrorCode> {
+        if state.installation != self.installation {
             return Err(ErrorCode::CapabilityMismatch);
         }
         let caller = Caller::Credential(self.credential.clone());
@@ -194,7 +204,7 @@ pub(super) struct Settlement {
 }
 
 impl Service {
-    pub(super) fn eval_identity(
+    pub(super) async fn eval_identity(
         &self,
         headers: &::http::HeaderMap,
         tenant: TenantId,
@@ -224,24 +234,32 @@ impl Service {
         {
             return Err(ErrorCode::Unauthorized.into());
         }
-        let caller = self.authenticate(token)?;
-        let state = self.current()?;
-        if state.installation != installation {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        }
-        let effective = state
-            .effective(&caller, &tenant, Utc::now())
+        let authenticated = self.authenticate_live(token).await?;
+        let identity = self
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&authenticated.lease, |view| {
+                let state = view.facts();
+                if state.installation != installation {
+                    return Err(ErrorCode::CapabilityMismatch);
+                }
+                let effective = state.effective(&authenticated.caller, &tenant, Utc::now())?;
+                Ok(Arc::new(EvalIdentity {
+                    authority: self.authority.clone(),
+                    lease: authenticated.lease.clone(),
+                    live: self.live.clone(),
+                    credential: effective.credential.id.clone(),
+                    principal: effective.credential.principal.clone(),
+                    installation,
+                    tenant,
+                    origin: self.cleanup.clone(),
+                    db: self.db.clone(),
+                }))
+            })
             .map_err(Failure::from)?;
-        let identity = Arc::new(EvalIdentity {
-            credential: effective.credential.id.clone(),
-            principal: effective.credential.principal.clone(),
-            installation,
-            tenant,
-            origin: self.cleanup.clone(),
-            db: self.db.clone(),
-        });
         identity
-            .check(&state, &self.cleanup, action)
+            .check(&self.cleanup, action)
             .map_err(Failure::from)?;
         Ok(identity)
     }
@@ -251,10 +269,7 @@ impl Service {
         identity: &EvalIdentity,
         action: Action,
     ) -> Result<(), Failure> {
-        let state = self.current()?;
-        identity
-            .check(&state, &self.cleanup, action)
-            .map_err(Failure::from)
+        identity.check(&self.cleanup, action).map_err(Failure::from)
     }
 
     pub(super) fn eval_lease(&self) -> Result<OwnedSemaphorePermit, Failure> {

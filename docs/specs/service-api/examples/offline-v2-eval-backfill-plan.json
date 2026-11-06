@@ -1,0 +1,18 @@
+{
+  "format": "bitrouter.offline.eval-backfill.v2",
+  "bundle": "/srv/bitrouter/evidence/source-bundle",
+  "database_evidence_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_kind": "local_user",
+  "ownership_evidence_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ownership_evidence": "/srv/bitrouter/evidence/source-ownership.json",
+  "manifest": "/srv/bitrouter/evidence/eval-mapping.json",
+  "manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "target": "/srv/bitrouter/target.sqlite",
+  "target_bundle": "/srv/bitrouter/evidence/fresh-target-bundle",
+  "target_evidence_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "target_installation": "example-target",
+  "provisioning": {
+    "path": "/srv/bitrouter/evidence/eval-provisioning.jsonl",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

@@ -20,9 +20,15 @@ impl Access {
     }
     pub(in crate::tenancy) fn validate(
         &self,
-        state: &Snapshot,
+        guard: &mut crate::tenancy::authority::live::ReadGuard<'_>,
         origin: &Arc<Proof>,
     ) -> Result<(), ErrorCode> {
+        guard.check(&self.submission.authority, |view| {
+            self.validate_in(view.facts(), origin)
+        })
+    }
+
+    fn validate_in(&self, state: &Snapshot, origin: &Arc<Proof>) -> Result<(), ErrorCode> {
         if !Weak::ptr_eq(&self.origin, &Arc::downgrade(origin))
             || state.installation != self.owner.installation
             || state.saturated

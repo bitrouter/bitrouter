@@ -2677,6 +2677,23 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    #[test]
+    fn capacity_reload_compares_effective_startup_budgets() -> anyhow::Result<()> {
+        let omitted = crate::config::parse_resolved("tenancy: {}")?;
+        let explicit = crate::config::parse_resolved(
+            "tenancy: {capacity: {execution: {instance_active: 128}}}",
+        )?;
+        assert!(restart_required_fields(&omitted, &explicit, None).is_empty());
+        let changed = crate::config::parse_resolved(
+            "tenancy: {capacity: {execution: {instance_active: 512}}}",
+        )?;
+        assert_eq!(
+            restart_required_fields(&omitted, &changed, None),
+            ["tenancy"]
+        );
+        Ok(())
+    }
+
     fn temp_config_path() -> (std::path::PathBuf, std::path::PathBuf) {
         let dir = tempfile::Builder::new()
             .prefix("bitrouter-reload-")

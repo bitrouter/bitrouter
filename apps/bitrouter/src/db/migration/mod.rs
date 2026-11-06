@@ -1,8 +1,8 @@
 //! Schema migrations, as `sea-orm-migration` Rust code.
 //!
 //! Each migration is a `MigrationTrait` impl that builds tables and
-//! indexes through sea-orm's portable schema API — no hand-written SQL —
-//! so the identical schema applies on SQLite, Postgres and MySQL alike.
+//! indexes through sea-orm's schema API. Backend-specific extensions explicitly
+//! select their backend; SQLite receipt archives leave server schemas inline.
 //!
 //! Migration ordering is the order of the [`Migrator::migrations`] vec;
 //! applied migrations are recorded in the `seaql_migrations` table so a
@@ -51,6 +51,9 @@ mod m20240101_000037_owned_oauth;
 mod m20240101_000038_eval_import_provenance;
 mod m20240101_000039_resource_lifecycle;
 pub(crate) mod m20240101_000040_usage_evidence;
+mod m20240101_000042_receipt_archive;
+mod m20240101_000043_unknown_obligations;
+pub(crate) mod m20240101_000044_capacity_upgrade;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -59,6 +62,20 @@ pub(crate) async fn validate_receipt_archive(
     db: &impl sea_orm::ConnectionTrait,
 ) -> Result<(), sea_orm::DbErr> {
     m20240101_000035_execution_receipts::validate_archive(db).await
+}
+
+/// Exact legacy or complete indexed SQLite OAuth/obligation storage profile.
+pub(crate) async fn validate_owned_oauth(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000037_owned_oauth::validate(db).await
+}
+
+/// Requires the complete SQLite obligation layout, without claiming backfill.
+pub(crate) async fn validate_unknown_obligations(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000043_unknown_obligations::validate(db).await
 }
 
 /// The bitrouter schema migrator — owns the ordered list of every
@@ -108,6 +125,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000038_eval_import_provenance::Migration),
             Box::new(m20240101_000039_resource_lifecycle::Migration),
             Box::new(m20240101_000040_usage_evidence::Migration),
+            Box::new(m20240101_000042_receipt_archive::Migration),
+            Box::new(m20240101_000043_unknown_obligations::Migration),
+            Box::new(m20240101_000044_capacity_upgrade::Migration),
         ]
     }
 }

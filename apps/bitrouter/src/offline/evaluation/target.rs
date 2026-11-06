@@ -93,7 +93,7 @@ pub(super) async fn validate(
     let row = &row[0];
     ensure!(
         row.try_get::<i64, _>("singleton")? == 1
-            && row.try_get::<i64, _>("schema_version")? == 1
+            && matches!(row.try_get::<i64, _>("schema_version")?, 1 | 2)
             && row.try_get::<i64, _>("operation_ids")? == operations.len() as i64
             && row.try_get::<i64, _>("safety_operation_ids")? == 0
             && !row.try_get::<bool, _>("saturated")?

@@ -123,63 +123,70 @@ impl CanonicalStore {
             gateway_coverage: Some(coverage.clone()),
         };
         let content_digest = observation_digest(&observation)?;
-        let tx = self.db.begin().await?;
-        for (id, expected) in &inventory.connections {
-            let actual = lock_connection(&tx, id).await?;
-            ensure!(
-                actual.state == expected.state,
-                "capture health changed during resource observation; retry"
-            );
-        }
-        let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
-        let keys: BTreeSet<_> = cp
-            .segments
-            .iter()
-            .map(|s| s.identity.key())
-            .collect::<Result<_>>()?;
-        let mut locked_sessions = BTreeMap::new();
-        for key in keys {
-            let row = lock_session(&tx, &key).await?;
-            locked_sessions.insert(key, row);
-        }
-        // Connection and session locks precede dependent record locks.
-        ensure!(
-            coverage_matches_locked(&store, &tx, &coverage.revisions).await?,
-            "gateway requests changed during resource observation; retry"
-        );
-        locked_manifest(&tx, identity, id, &locked_sessions).await?;
-        if let Some(existing) = resources::Entity::find()
-            .filter(crate::storage::legacy::scope("acp_resource_observations"))
-            .filter(resources::Column::CheckpointId.eq(id))
-            .order_by_desc(resources::Column::Revision)
-            .lock_exclusive()
-            .one(&tx)
-            .await?
-        {
-            let previous: ResourceObservation = serde_json::from_str(&existing.observation_json)?;
-            if observation_digest(&previous)? == content_digest {
-                tx.commit().await?;
-                return Ok(previous);
+        let (mut write, tx) =
+            crate::storage::write::Write::begin(&self.db, &self.storage_budget, false).await?;
+        let result = async {
+            for (id, expected) in &inventory.connections {
+                write.connection(&tx, id).await?;
+                let actual = lock_connection(&tx, id).await?;
+                ensure!(
+                    actual.state == expected.state,
+                    "capture health changed during resource observation; retry"
+                );
             }
-            observation.revision = previous
-                .revision
-                .checked_add(1)
-                .context("resource revision overflow")?;
-            observation.previous_observation_id = Some(previous.observation_id);
+            let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
+            let keys: BTreeSet<_> = cp
+                .segments
+                .iter()
+                .map(|s| s.identity.key())
+                .collect::<Result<_>>()?;
+            let mut locked_sessions = BTreeMap::new();
+            for key in keys {
+                write.session(&tx, &key).await?;
+                let row = lock_session(&tx, &key).await?;
+                locked_sessions.insert(key, row);
+            }
+            // Connection and session locks precede dependent record locks.
+            ensure!(
+                coverage_matches_locked(&store, &tx, &coverage.revisions).await?,
+                "gateway requests changed during resource observation; retry"
+            );
+            locked_manifest(&tx, identity, id, &locked_sessions).await?;
+            if let Some(existing) = resources::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_resource_observations"))
+                .filter(resources::Column::CheckpointId.eq(id))
+                .order_by_desc(resources::Column::Revision)
+                .lock_exclusive()
+                .one(&tx)
+                .await?
+            {
+                let previous: ResourceObservation =
+                    serde_json::from_str(&existing.observation_json)?;
+                if observation_digest(&previous)? == content_digest {
+                    return Ok(previous);
+                }
+                observation.revision = previous
+                    .revision
+                    .checked_add(1)
+                    .context("resource revision overflow")?;
+                observation.previous_observation_id = Some(previous.observation_id);
+            }
+            observation.observation_id = digest(&(id, observation.revision, &content_digest))?;
+            write.account(&(&observation.observation_id, id, &observation))?;
+            let inserted = resources::Entity::insert(resources::ActiveModel {
+                observation_id: Set(observation.observation_id.clone()),
+                checkpoint_id: Set(id.into()),
+                revision: Set(observation.revision),
+                observed_at: Set(observation.observed_at.clone()),
+                observation_json: Set(serde_json::to_string(&observation)?),
+            })
+            .exec_without_returning(&tx)
+            .await?;
+            ensure!(inserted == 1, "resources row was not inserted");
+            Ok(observation)
         }
-        observation.observation_id = digest(&(id, observation.revision, &content_digest))?;
-        let inserted = resources::Entity::insert(resources::ActiveModel {
-            observation_id: Set(observation.observation_id.clone()),
-            checkpoint_id: Set(id.into()),
-            revision: Set(observation.revision),
-            observed_at: Set(observation.observed_at.clone()),
-            observation_json: Set(serde_json::to_string(&observation)?),
-        })
-        .exec_without_returning(&tx)
-        .await?;
-        ensure!(inserted == 1, "resources row was not inserted");
-        tx.commit().await?;
-        Ok(observation)
+        .await;
+        write.finish(tx, result).await
     }
 
     pub async fn checkpoint_resource_history(

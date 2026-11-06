@@ -16,7 +16,7 @@ pub(in crate::tenancy) async fn capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
-    let installed = service.capabilities(&caller)?;
+    let installed = service.capabilities(&caller).await?;
     let mut capabilities = UsageEvidenceCapabilitiesV1::new(installed.installation_id);
     capabilities.child_linkage = cfg!(all(feature = "core", feature = "harness"));
     Ok(Json(capabilities).into_response())

@@ -119,7 +119,6 @@ pub(super) async fn provision_resources(
     fixture.service = crate::tenancy::Service::start_prepared(
         fixture.db.clone(),
         None,
-        crate::tenancy::actor::OperationLimits::default(),
         crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
         fixture.service.resources.clone(),
     )
@@ -197,6 +196,7 @@ async fn revoke_after_actual_send_preserves_terminal_usage_without_the_old_grant
             .fixture
             .service
             .authenticate(harness.credential.secret.as_deref().context("secret")?)
+            .await
             .map_err(failure)?;
         let client = Harness::client(false)?;
         let request = harness.send(&client);

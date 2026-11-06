@@ -554,7 +554,7 @@ pub(crate) fn validate(root: &Path) -> Result<()> {
         }
     }
     println!(
-        "validated {} shape fixtures ({} semantic rejections), {} operations, actual migration example and capacity inputs; runtime scenarios remain unimplemented",
+        "validated {} frozen v1 shape fixtures ({} semantic rejections), {} operations, actual migration example and capacity inputs; runtime scenarios were not executed by this checker",
         fixtures.len(),
         semantic_negatives,
         operation_names.len()

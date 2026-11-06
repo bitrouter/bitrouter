@@ -1,0 +1,2 @@
+{"format":"bitrouter.offline.fresh-provisioning.v2","installation_id":"example-target","operation_count":1,"configuration_count":0,"active_count":0,"resource_count":0}
+{"kind":"operation","principal_id":"operator.admin","result":{"operation_id":"example-operation-1","status":"applied","authority_revision":1,"resource_revision":"revision-1","resource_id":"example-tenant","error":null}}

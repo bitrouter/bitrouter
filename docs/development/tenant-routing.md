@@ -80,9 +80,12 @@ without claiming success and restarts cooldown. Older in-flight successes cannot
 heal a newer circuit generation. Client, authorization, conversion, and local
 admission failures do not poison shared provider health.
 
-The runtime bounds state to 2,048 combined provider/target entries and 4,096
-outstanding admissions, with at most 16 KiB of identity bytes per candidate.
-Capacity exhaustion fails closed. Cleanup never evicts an outstanding owner or
+`tenancy.capacity.routing` defaults to 2,048 combined provider/target entries
+and 64 MiB of accounted state. Outstanding admissions derive from
+`tenancy.capacity.execution.instance_active` (128 by default), with at most
+16 KiB of identity bytes per candidate. These operator budgets can be raised
+without a fixed directory-count ceiling; candidate wire constraints remain
+independent. Capacity exhaustion fails closed. Cleanup never evicts an outstanding owner or
 live RPM window; stale idle entries become reclaimable after five minutes.
 These are process-local controls, not distributed quotas or durable rate state.
 Ordinary sends expire only their two exact buckets. A full bounded cleanup runs

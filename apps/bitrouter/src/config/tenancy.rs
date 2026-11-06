@@ -1,5 +1,7 @@
 //! Explicit opt-in to local framework resource authority.
 
+pub mod capacity;
+
 use anyhow::{Result, ensure};
 use bitrouter_ai::control::ControlScope;
 use serde::Deserialize;
@@ -11,6 +13,8 @@ use std::path::PathBuf;
 pub struct TenancyConfig {
     /// Opt in to the tenant control service. Existing local startup stays unchanged.
     pub enabled: bool,
+    /// Startup-only runtime budgets, independent of the stored directory size.
+    pub capacity: capacity::CapacityConfig,
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
@@ -45,6 +49,7 @@ impl Default for TenancyConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            capacity: capacity::CapacityConfig::default(),
             resource_import: None,
             learning_registrations: None,
             wrapping_key_env: None,
@@ -63,6 +68,7 @@ impl TenancyConfig {
     /// Rejects anonymous ingress, missing operator authority, shared mode,
     /// non-file SQLite configurations and unsupported local ownership platforms.
     pub fn validate(&self, config: &super::Config) -> Result<()> {
+        self.capacity.validate()?;
         self.validate_lifetime()?;
         ensure!(
             self.resource_origins.len() <= 256,

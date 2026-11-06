@@ -177,11 +177,19 @@ impl App {
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
         let drain_pipeline = pipeline.clone();
+        let transport = self.owned_transport_limits();
         let server = async move {
-            serve(listener, router)
-                .with_graceful_shutdown(shutdown)
-                .await
-                .map_err(|error| BitrouterError::internal(format!("serve: {error}")))
+            match transport {
+                Some(limits) => {
+                    super::transport::serve_local(listener, router, limits, shutdown).await
+                }
+                None => {
+                    serve(listener, router)
+                        .with_graceful_shutdown(shutdown)
+                        .await
+                }
+            }
+            .map_err(|error| BitrouterError::internal(format!("serve: {error}")))
         };
         // Only after axum stops accepting connections and drains every handler
         // do we close detached execution and require success-critical
@@ -255,7 +263,7 @@ async fn shutdown_signal() {
 /// Inbound request body ceiling. LLM prompts can be large (long context, image
 /// data-URLs), so the limit is generous — but bounded, so a request body can
 /// never be an unbounded allocation.
-const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// A router-wrapper closure. The wrapper runs after the application has mounted
 /// every route and applied every built-in layer, so a host can wrap the

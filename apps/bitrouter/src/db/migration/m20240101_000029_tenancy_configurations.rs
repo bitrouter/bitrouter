@@ -36,7 +36,7 @@ fn authority_revision() -> ColumnDef {
         .to_owned()
 }
 
-fn statements(backend: DatabaseBackend) -> Vec<TableCreateStatement> {
+pub(super) fn statements(backend: DatabaseBackend) -> Vec<TableCreateStatement> {
     let id = |name| identity(backend, name, 128, false);
     let text = |name| payload(backend, name);
     vec![

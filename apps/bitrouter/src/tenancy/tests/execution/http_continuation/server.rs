@@ -24,10 +24,8 @@ async fn server_http034_consumer_exact_cas_absence_race_and_restart() -> Result<
 async fn campaign(database: &mut database::Fixture) -> Result<()> {
     let mut provider = Server::start().await?;
     let db = database.connect().await?;
-    let fixture = Fixture::with_database(db.clone(), Default::default(), &mut |service| {
-        database.retain(service)
-    })
-    .await?;
+    let fixture =
+        Fixture::with_database(db.clone(), &mut |service| database.retain(service)).await?;
     let (fixture, route, _) = super::super::provision_protocol_with_fixture(
         fixture,
         &provider.url,
@@ -61,7 +59,6 @@ async fn campaign(database: &mut database::Fixture) -> Result<()> {
         ready.fixture.service = crate::tenancy::Service::start_prepared(
             db.clone(),
             None,
-            Default::default(),
             initial,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 ready.fixture.installation.clone(),

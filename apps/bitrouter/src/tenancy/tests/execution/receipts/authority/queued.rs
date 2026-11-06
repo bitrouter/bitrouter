@@ -33,7 +33,7 @@ async fn queued_read(page: bool, expire: bool) -> Result<()> {
         drain(&harness.fixture).await?;
         let before = serde_json::to_vec(&harness.receipt(&client, &id).await?)?;
 
-        let mut input = harness.fixture.issuance("queued-reader")?;
+        let mut input = harness.fixture.issuance("queued-reader").await?;
         let expires = chrono::Utc::now() + chrono::Duration::seconds(3);
         if expire {
             // Preserve this exact real UTC instant; the wire contract requires Z.
@@ -58,6 +58,7 @@ async fn queued_read(page: bool, expire: bool) -> Result<()> {
             .fixture
             .service
             .authenticate(credential.secret.as_deref().context("reader token")?)
+            .await
             .map_err(failure)?;
         // A successful pre-read proves this exact caller was eligible before queueing.
         ensure!(

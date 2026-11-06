@@ -122,18 +122,18 @@ async fn actual_block_restart_child() -> Result<()> {
     let service = Service::start_resources_with_continuations(
         db.clone(),
         Some(owner),
-        OperationLimits::default(),
         snapshot,
         Arc::new(Resources::with_key(
             transfer.installation.clone(),
             [29; 32],
         )?),
-        (
-            None,
-            &crate::config::ContinuationConfig::default(),
-            Some(claim),
-            crate::telemetry::receipt_latency::Sink::default(),
-        ),
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: Some(claim),
+            receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await?;

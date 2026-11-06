@@ -42,7 +42,10 @@ The refresh uses one POST with redirects, automatic retries and proxy discovery
 disabled. Its budget is at most 30 seconds and never exceeds the execution's
 remaining deadline. The response is bounded at 256 KiB, including chunked bodies
 without Content-Length. Access and refresh tokens each have a 64 KiB bound;
-serialized token JSON is bounded at 256 KiB. At most 256 slots are retained.
+serialized token JSON is bounded at 256 KiB. Retained slot cardinality has no
+fixed ceiling; startup validates bounded metadata/payload pages and live views
+load exact slots. `tenancy.capacity` controls live memory and unknown-work
+admission independently of retained slot count.
 Invalid responses and ambiguous sends cannot trigger another refresh. SQL
 uncertainty retains the real owner and its database file lease.
 
@@ -86,8 +89,7 @@ request was never admitted.
 
 ## Qualification
 
-Qualification is recorded in the implementation tracker after executing the
-current source. Required coverage includes HTTP/1.1 and h2c JSON/SSE ingress,
+Qualification requires tests against the current source, including HTTP/1.1 and h2c JSON/SSE ingress,
 revocation and generation races, real consuming COMMIT/ROLLBACK failures, file
 lease custody, auxiliary accounting, reduced features and real database backends.
 Ingress HTTP/2 checks do not establish upstream HTTP/2 behavior. These functional

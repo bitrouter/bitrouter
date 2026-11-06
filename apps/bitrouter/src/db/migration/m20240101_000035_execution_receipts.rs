@@ -18,7 +18,7 @@ const IDS: [&str; 5] = [
     "correlation_id",
 ];
 
-fn definition(backend: DatabaseBackend) -> TableCreateStatement {
+pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
     let mut table = Table::create();
     table.table(Alias::new(TABLE));
     if backend == DatabaseBackend::MySql {
@@ -73,6 +73,10 @@ async fn validate_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
 async fn validate_table_on(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     let backend = db.get_database_backend();
     if backend == DatabaseBackend::Sqlite {
+        if db.query_one(Statement::from_string(backend,
+            "SELECT 1 FROM temp.sqlite_schema WHERE lower(name) IN ('tenancy_execution_receipts','idx_tenancy_receipts_correlation') LIMIT 1".to_owned())).await?.is_some() {
+            return Err(incompatible());
+        }
         let rows = db.query_all(Statement::from_string(backend,
             "SELECT type, CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql ELSE NULL END AS sql FROM sqlite_master WHERE name='tenancy_execution_receipts' LIMIT 2".to_owned())).await?;
         let row = rows.first().ok_or_else(incompatible)?;
@@ -191,7 +195,20 @@ pub(super) async fn validate_archive(db: &impl ConnectionTrait) -> Result<(), Db
     if db.get_database_backend() != DatabaseBackend::Sqlite {
         return Err(incompatible());
     }
+    if super::m20240101_000042_receipt_archive::catalog::present(db).await? {
+        return super::m20240101_000042_receipt_archive::validate(db).await;
+    }
+    validate_legacy(db).await
+}
+
+/// Migration042 must prove the unmodified legacy definition before adding a
+/// marker. Never retry a failed legacy check against a looser schema profile.
+pub(super) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     validate_table_on(db).await?;
+    validate_indexes(db).await
+}
+
+pub(super) async fn validate_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     catalog::indexes_on(db, true).await
 }
 

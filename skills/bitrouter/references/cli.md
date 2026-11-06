@@ -254,7 +254,8 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 5; formats 2/3/4 remain readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 7; formats 2–6 remain readable
+without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -803,7 +804,8 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
 restart, authorized continuation refreshes instructions only at a settled model
 boundary and records replacements/removals explicitly; known effects are never
 replayed. Completing an already settled outcome and cold browsing reread no
-instruction files. Runtime format 5 persists snapshots and private ACP bindings/close results; formats 2/3/4 remain readable.
+instruction files. Runtime format 7 persists snapshots and private ACP
+bindings/close results; formats 2–6 remain readable.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;
@@ -903,6 +905,49 @@ representation.
 
 ### Local DB-only offline evidence
 
+For a stopped legacy authority that reached its ordinary-operation count limit,
+use the explicit local transition:
+
+```sh
+bro tenancy offline upgrade-capacity \
+  --database /absolute/path/authority.sqlite \
+  --expected-installation-id INSTALLATION_ID \
+  --expected-authority-revision REVISION \
+  --operation-id STABLE_OPERATION_ID \
+  --acknowledge-legacy-count-saturation
+```
+
+The existing database must be a private regular file under exclusive stopped
+ownership, with prerequisite schema migrations applied. The command validates
+all retained authority/history and receipt/OAuth evidence before atomically
+recording format 2, clearing only the verified legacy count latch, and saving its
+result. Installation identity, keys, operation digests/results and unknown
+evidence are preserved. Reuse the same operation ID and exact arguments after a
+lost reply; the saved result is returned without clearing any later stop. A
+different request with that ID fails. Missing acknowledgment, a different stop
+cause or a format-2 store without the matching result cannot be resumed this way.
+Normal startup still validates current custody before serving. Healthy format-1
+stores migrate during validated normal startup without this command. Older
+strict readers refuse format 2; deleting capacity YAML fields does not downgrade
+the database. Operation records and history remain indexed without a lifetime
+count quota. The 30-day operation-result access window still applies, and an
+expired ID remains permanently reserved.
+
+`upgrade-capacity`, `audit` and `recover` accept `--validation-page-rows` (default
+32) and `--validation-bytes` (default 67108864). These bound temporary validation
+memory, not total retained rows. Immutable bodies are checked sequentially under
+the full working allowance. Increase working bytes after a capacity refusal;
+lowering a budget does not make retained data corrupt. Validation can be
+cancelled but never accepts an incomplete prefix. The existing DB-only bundle
+and declared fresh-provisioning profiles retain their separate artifact limits.
+
+Validation still needs enough workspace for one bounded object and the overlapping
+evidence buffers. The current full evidence validator requires a page allowance
+of at least 32 rows; this is a working-buffer minimum, not a total-row limit.
+Treat insufficient working capacity as an incomplete validation, not permission
+to discard records or clear a storage fence. These commands do not measure
+throughput or establish a supported directory maximum.
+
 Use `bro tenancy offline snapshot --database FILE --bundle NEW_DIRECTORY`,
 `bro tenancy offline inventory --bundle DIRECTORY`, and
 `bro tenancy offline verify --bundle DIRECTORY --evidence-digest SHA256`.
@@ -928,6 +973,48 @@ checking or copying; ordinary BitRouter CHECK constraints remain supported.
 Cancellation waits for driver cleanup under the canonical DB owner. If cleanup
 cannot be confirmed, that process retains the source fence until exit. This does
 not fence or include external OAuth/workspace state.
+
+### Complete database evidence with bounded working memory
+
+Snapshot defaults to the original v1 evidence profile. Select v2 explicitly for
+complete retained data beyond that profile:
+
+```sh
+bro tenancy offline snapshot --database /private/source.sqlite --bundle /private/new-bundle --format v2 --scratch-directory /private/scratch
+bro tenancy offline verify --bundle /private/new-bundle --evidence-digest SHA256 --scratch-directory /private/scratch
+bro tenancy offline inventory --bundle /private/new-bundle --scratch-directory /private/scratch
+bro tenancy offline restore --bundle /private/new-bundle --evidence-digest SHA256 --database /private/new.sqlite --expected-installation-id ID --wrapping-key-env TENANCY_KEY --scratch-directory /private/scratch
+```
+
+The scratch parent must already exist, be absolute and mode0700. Each command
+creates its own temporary child. `--working-bytes` defaults to 67108864;
+`--scratch-free-bytes` defaults to 268435456. These control working memory and
+free-space reserves, not stored row counts or total database size. Individual
+schema, SQL cell and typed-object bounds still apply. The existing
+`--validation-bytes` spelling is an alias for the same working allowance;
+supplying both spellings is rejected. `--validation-page-rows` defaults to 32
+for authority validation. Low working capacity refuses the operation without
+classifying valid retained data as corrupt.
+
+The v2 source must be cleanly closed, with no WAL, SHM or rollback journal, and
+all external writers fenced. The command does not delete journals to satisfy
+this condition. Readers with explicit scratch accept supported v1/v2 evidence;
+old v1-only readers refuse v2. Audit and recovery accept the same scratch flags;
+v2 recovery and Eval-backfill plans use separately anchored streamed evidence.
+The selected Eval graph remains one bounded import even when its destination
+authority directory is large. Offline mapping remains its original bounded
+review profile.
+
+Restore requires a new literal database path in a private directory and the
+original wrapping key through its named environment variable. It preserves
+the installation, operation/receipt history, identifiers and ciphertext. It
+does not initialize, migrate, merge, start the service or release ingress.
+Do not run the original and restored installation concurrently. A failed restore
+can leave an INCOMPLETE staging directory; retain it for reconciliation and do
+not retry onto an existing destination. Normal startup must still finish its
+feature-specific validation, and external OAuth/workspace recovery remains a
+separate obligation. Database evidence stays `complete=false` and
+`cutover_ready=false`.
 
 ### Read-only retired receipt audit
 

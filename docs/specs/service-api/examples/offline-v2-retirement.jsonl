@@ -1,0 +1,2 @@
+{"format":"bitrouter.offline.retirement-attestation.v2","source_installation_id":"example-source","database_evidence_digest":"0000000000000000000000000000000000000000000000000000000000000000","fence_maintained":true,"target_ingress_fenced":true,"selection_exhaustive":true,"unresolved_effects_remain_unknown":true,"writer_count":1,"selected_file_count":0}
+{"kind":"writer","id":"example-writer","process_identity":"example-process-stopped","restart_source":"example-service-disabled","retired":true}

@@ -16,6 +16,28 @@ use sea_orm::{
     sea_query::{Alias, Expr, Query},
 };
 
+async fn unknown_projection(
+    fixture: &Fixture,
+    receipt: &ExecutionReceipt,
+    expected: bool,
+) -> Result<()> {
+    ensure!(receipt.installation_id == fixture.installation && receipt.tenant_id == fixture.tenant);
+    let inventory = receipts::inventory(&fixture.db, &fixture.installation).await?;
+    ensure!(inventory.unknown_count == u64::from(expected));
+    let key = receipts::obligations::Key {
+        tenant: receipt.tenant_id.clone(),
+        execution: receipt.execution_id.clone(),
+    };
+    let obligation =
+        receipts::obligations::lookup(&fixture.db, &fixture.installation, &key, &|_, _| Ok(()))
+            .await?;
+    ensure!(obligation.is_some() == expected);
+    if let Some(obligation) = obligation {
+        ensure!(obligation.key == key);
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct CountControl {
     started: Mutex<Vec<String>>,
@@ -380,8 +402,7 @@ async fn count_rejection_and_unknown_never_rebuild_or_reach_model_even_with_perm
                         && receipt.usage.provenance == Provenance::Unknown
                         && receipt.usage.input_tokens.is_none()
                 );
-                let inventory = receipts::inventory(&fixture.db, &fixture.installation).await?;
-                ensure!(inventory.unknown.len() == usize::from(expected == Outcome::Unknown));
+                unknown_projection(&fixture, &receipt, expected == Outcome::Unknown).await?;
                 Ok(())
             }
             .await;
@@ -426,12 +447,7 @@ async fn known_count_survives_report_rejection_and_live_authority_changes_before
             let (receipt, evidence) = facts(&fixture, &observed).await?;
             ensure!(evidence.counts[0].input_tokens == Some(4) && receipt.attempts.is_empty());
             ensure!(provider.calls() == 1 && observed.attempts.lock().await.is_empty());
-            ensure!(
-                receipts::inventory(&fixture.db, &fixture.installation)
-                    .await?
-                    .unknown
-                    .is_empty()
-            );
+            unknown_projection(&fixture, &receipt, false).await?;
             Ok(())
         }
         .await;
@@ -556,7 +572,11 @@ where
     let checked = async {
         let execution = admit(
             fixture.service.clone(),
-            fixture.service.submission(&ingress).map_err(failure)?,
+            fixture
+                .service
+                .submission(&ingress)
+                .await
+                .map_err(failure)?,
             MODEL.to_owned(),
         )
         .await
@@ -737,13 +757,7 @@ async fn caller_loss_during_real_count_handshake_holds_admission_until_producer_
             );
             ensure!(receipt.attempts.is_empty() && provider.calls() == 1);
             ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
-            ensure!(
-                receipts::inventory(&fixture.db, &fixture.installation)
-                    .await?
-                    .unknown
-                    .len()
-                    == 1
-            );
+            unknown_projection(&fixture, &receipt, true).await?;
             ensure!(
                 !provider.state.release.is_cancelled(),
                 "test released withheld count headers"

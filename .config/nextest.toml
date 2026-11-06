@@ -45,6 +45,12 @@ slow-timeout = { period = "60s", terminate-after = 35 }
 filter = 'test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort)'
 threads-required = "num-test-threads"
 
+# Complete history checks each retain the ordinary five-minute deadline. Reserve
+# the runner while hashing/revalidating their real histories and archive cycles.
+[[profile.default.overrides]]
+filter = 'test(=tenancy::audit::upgrade::tests::reset_is_atomic_replay_bound_and_never_clears_a_later_fence) | test(=tenancy::tests::capacity_history::archive_cycles_preserve_unknowns_and_current_read_authority)'
+threads-required = "num-test-threads"
+
 # Each shared process campaign owns a PostgreSQL workload and multiple servers.
 # Keep separate campaigns from competing for host resources, including the
 # delayed-database C16 cases. Concurrency inside each campaign is unchanged.
@@ -91,3 +97,19 @@ slow-timeout = { period = "60s", terminate-after = 41 }
 [[profile.default.overrides]]
 filter = 'test(offline::recovery::tests::saturation::)'
 slow-timeout = { period = "60s", terminate-after = 35 }
+
+# Dedicated history qualifications use the existing optimized ci-capacity build.
+# These are test execution envelopes, not product history or operation deadlines.
+[[profile.default.overrides]]
+filter = 'test(=tenancy::tests::capacity_history::large_history_qualification)'
+slow-timeout = { period = "60s", terminate-after = 120 }
+
+# Separate opt-in offline proofs retain actual large inputs. Ordinary adapter
+# tests keep their existing deadline; these allowances apply only to these names.
+[[profile.default.overrides]]
+filter = 'test(=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match)'
+slow-timeout = { period = "60s", terminate-after = 60 }
+
+[[profile.default.overrides]]
+filter = 'test(=tenancy::audit::recovery::v2::tests::cli_scale::real_cli_dense_and_sparse_snapshot_verify_audit_restore)'
+slow-timeout = { period = "60s", terminate-after = 20 }

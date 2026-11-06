@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TransactionTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 
 use super::allocation::Arm;
@@ -111,6 +111,14 @@ pub struct BlockPolicyStore {
 }
 
 impl BlockPolicyStore {
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.store = self.store.with_storage_budget(budget);
+        self
+    }
+
     pub fn new(db: DatabaseConnection, owner: &str) -> Result<Self> {
         Ok(Self {
             store: EvolutionStore::new(db, owner)?,
@@ -205,190 +213,205 @@ impl BlockPolicyStore {
             return Ok(None);
         }
         let key = identity.key()?;
-        let tx = self.store.db.begin().await?;
-        let (control_row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        ensure!(
-            dependencies
-                .expected_control_generation
-                .is_none_or(|generation| generation == state.generation),
-            "control changed while resolving live routing dependencies; retry"
-        );
-        sessions::Entity::update_many()
-            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
-            .col_expr(
-                sessions::Column::Head,
-                Expr::col(sessions::Column::Head).into(),
-            )
-            .filter(sessions::Column::SessionKey.eq(&key))
-            .exec(&tx)
-            .await?;
-        let session = sessions::Entity::find_by_id(&key)
-            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
-            .one(&tx)
-            .await?
-            .context("native session is not recorded")?;
-        ensure!(
-            !session.deleted
-                && session.owner == identity.owner
-                && session.source == identity.source,
-            "canonical session is deleted or outside the routing scope"
-        );
-        // Serialized replay is safe even after a restart. Reusing an ID with
-        // another session or request context is an error, never another draw.
-        if let Some(row) = records::Entity::find_by_id(self.store.id(REQUEST_KIND, request_id)?)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-            .one(&tx)
-            .await?
-        {
-            let intent: RouteIntent = serde_json::from_str(&row.body)?;
-            ensure!(
-                intent.identity == *identity && intent.context == context,
-                "request ID was reused with different routing input"
-            );
-            ensure!(
-                intent.bypass.as_deref() == bypass,
-                "request bypass changed on replay"
-            );
-            ensure!(
-                intent.routing_dependencies == *current_dependencies
-                    && intent.archived_routing_dependencies == dependencies.archived
-                    && intent.trial_ready == dependencies.trial_ready,
-                "request intent belongs to obsolete routing dependencies"
-            );
-            ensure!(
-                intent.mode_epoch == state.mode_epoch
-                    && intent.control_generation == state.generation,
-                "request intent belongs to an obsolete control generation; use a new request ID"
-            );
-            tx.commit().await?;
-            return Ok(Some(intent));
-        }
-        let enrollment_row = records::Entity::find_by_id(self.store.id(SESSION_KIND, &key)?)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-            .one(&tx)
-            .await?;
-        let is_new = enrollment_row.is_none();
-        let enrollment: SessionEnrollment = if let Some(row) = &enrollment_row {
-            serde_json::from_str(&row.body)?
-        } else {
-            let captured = events::Entity::find()
-                .filter(crate::storage::legacy::scope("acp_capture_events"))
-                .filter(events::Column::SessionKey.eq(&key))
-                .filter(events::Column::Replay.eq(false))
-                .all(&tx)
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (control_row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
                 .await?;
-            let mut prompts = 0;
-            let mut started = session.history_origin != "new" && session.parent_key.is_none();
-            let epoch_start = state
-                .trial_started_at
-                .as_deref()
-                .map(chrono::DateTime::parse_from_rfc3339)
-                .transpose()?;
-            let mut created_in_epoch = false;
-            let mut creation_recorded = false;
-            for node in captured {
-                let event: crate::storage::capture::CaptureEvent =
-                    serde_json::from_str(&node.event_json)?;
-                use crate::storage::capture::CaptureKind;
-                if matches!(event.method.as_str(), "session/new" | "session/fork")
-                    && event.kind == CaptureKind::Response
-                {
-                    let created_at = chrono::DateTime::parse_from_rfc3339(&node.captured_at)?;
-                    creation_recorded = true;
-                    created_in_epoch |= epoch_start.is_some_and(|start| created_at >= start);
-                }
-                if event.method == "session/prompt" && event.kind == CaptureKind::Request {
-                    prompts += 1;
-                }
-                if (event.method == "session/prompt" && event.kind == CaptureKind::Response)
-                    || (event.method == "session/update"
-                        && !is_administrative_update(&event.payload))
-                    || event.method.starts_with("terminal/")
-                    || event.method.starts_with("fs/")
-                {
-                    started = true;
-                }
+            ensure!(
+                dependencies
+                    .expected_control_generation
+                    .is_none_or(|generation| generation == state.generation),
+                "control changed while resolving live routing dependencies; retry"
+            );
+            write.session(&tx, &key).await?;
+            sessions::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+                .col_expr(
+                    sessions::Column::Head,
+                    Expr::col(sessions::Column::Head).into(),
+                )
+                .filter(sessions::Column::SessionKey.eq(&key))
+                .exec(&tx)
+                .await?;
+            let session = sessions::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+                .one(&tx)
+                .await?
+                .context("native session is not recorded")?;
+            ensure!(
+                !session.deleted
+                    && session.owner == identity.owner
+                    && session.source == identity.source,
+                "canonical session is deleted or outside the routing scope"
+            );
+            // Serialized replay is safe even after a restart. Reusing an ID with
+            // another session or request context is an error, never another draw.
+            if let Some(row) = records::Entity::find_by_id(self.store.id(REQUEST_KIND, request_id)?)
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+                .one(&tx)
+                .await?
+            {
+                let intent: RouteIntent = serde_json::from_str(&row.body)?;
+                ensure!(
+                    intent.identity == *identity && intent.context == context,
+                    "request ID was reused with different routing input"
+                );
+                ensure!(
+                    intent.bypass.as_deref() == bypass,
+                    "request bypass changed on replay"
+                );
+                ensure!(
+                    intent.routing_dependencies == *current_dependencies
+                        && intent.archived_routing_dependencies == dependencies.archived
+                        && intent.trial_ready == dependencies.trial_ready,
+                    "request intent belongs to obsolete routing dependencies"
+                );
+                ensure!(
+                    intent.mode_epoch == state.mode_epoch
+                        && intent.control_generation == state.generation,
+                    "request intent belongs to an obsolete control generation; use a new request ID"
+                );
+                return Ok(Some(intent));
             }
-            SessionEnrollment {
-                identity: identity.clone(),
-                first_watermark: session.head,
-                first_request_id: request_id.into(),
-                context: context.clone(),
-                assignments: BTreeMap::new(),
-                block_experiments: Some(
-                    state
+            let enrollment_row = records::Entity::find_by_id(self.store.id(SESSION_KIND, &key)?)
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+                .one(&tx)
+                .await?;
+            let is_new = enrollment_row.is_none();
+            let enrollment: SessionEnrollment = if let Some(row) = &enrollment_row {
+                serde_json::from_str(&row.body)?
+            } else {
+                let captured = events::Entity::find()
+                    .filter(crate::storage::legacy::scope("acp_capture_events"))
+                    .filter(events::Column::SessionKey.eq(&key))
+                    .filter(events::Column::Replay.eq(false))
+                    .all(&tx)
+                    .await?;
+                let mut prompts = 0;
+                let mut started = session.history_origin != "new" && session.parent_key.is_none();
+                let epoch_start = state
+                    .trial_started_at
+                    .as_deref()
+                    .map(chrono::DateTime::parse_from_rfc3339)
+                    .transpose()?;
+                let mut created_in_epoch = false;
+                let mut creation_recorded = false;
+                for node in captured {
+                    let event: crate::storage::capture::CaptureEvent =
+                        serde_json::from_str(&node.event_json)?;
+                    use crate::storage::capture::CaptureKind;
+                    if matches!(event.method.as_str(), "session/new" | "session/fork")
+                        && event.kind == CaptureKind::Response
+                    {
+                        let created_at = chrono::DateTime::parse_from_rfc3339(&node.captured_at)?;
+                        creation_recorded = true;
+                        created_in_epoch |= epoch_start.is_some_and(|start| created_at >= start);
+                    }
+                    if event.method == "session/prompt" && event.kind == CaptureKind::Request {
+                        prompts += 1;
+                    }
+                    if (event.method == "session/prompt" && event.kind == CaptureKind::Response)
+                        || (event.method == "session/update"
+                            && !is_administrative_update(&event.payload))
+                        || event.method.starts_with("terminal/")
+                        || event.method.starts_with("fs/")
+                    {
+                        started = true;
+                    }
+                }
+                SessionEnrollment {
+                    identity: identity.clone(),
+                    first_watermark: session.head,
+                    first_request_id: request_id.into(),
+                    context: context.clone(),
+                    assignments: BTreeMap::new(),
+                    block_experiments: Some(
+                        state
+                            .blocks
+                            .iter()
+                            .map(|(id, block)| (id.clone(), block.experiment_id.clone()))
+                            .collect(),
+                    ),
+                    monitoring: BTreeMap::new(),
+                    adopted_blocks: state
                         .blocks
                         .iter()
+                        .filter(|(_, block)| {
+                            creation_recorded
+                                && !started
+                                && prompts <= 1
+                                && block.status == BlockStatus::Adopted
+                        })
                         .map(|(id, block)| (id.clone(), block.experiment_id.clone()))
                         .collect(),
-                ),
-                monitoring: BTreeMap::new(),
-                adopted_blocks: state
-                    .blocks
-                    .iter()
-                    .filter(|(_, block)| {
-                        creation_recorded
-                            && !started
-                            && prompts <= 1
-                            && block.status == BlockStatus::Adopted
-                    })
-                    .map(|(id, block)| (id.clone(), block.experiment_id.clone()))
-                    .collect(),
-                admission_reason: if started || prompts > 1 || !created_in_epoch {
-                    "session_already_started"
-                } else {
-                    "new_session"
+                    admission_reason: if started || prompts > 1 || !created_in_epoch {
+                        "session_already_started"
+                    } else {
+                        "new_session"
+                    }
+                    .into(),
                 }
-                .into(),
+            };
+            ensure!(
+                enrollment.identity == *identity,
+                "session enrollment scope mismatch"
+            );
+            let (enrollment, intent) = selection::select(
+                &mut state,
+                selection::Input {
+                    session_key: &key,
+                    identity,
+                    request_id,
+                    context,
+                    dependencies,
+                    bypass,
+                    watermark: session.head,
+                    enrollment,
+                    is_new,
+                },
+                rand::random,
+                || chrono::Utc::now().to_rfc3339(),
+            )?;
+            // One transaction makes a process crash between admission and dispatch
+            // a recorded, unresolved intent, rather than a missing success-only row.
+            if is_new {
+                write.account(&(&self.store.scope_id, SESSION_KIND, &key, &enrollment))?;
+                records::Entity::insert(records::ActiveModel {
+                    record_id: Set(self.store.id(SESSION_KIND, &key)?),
+                    scope_id: Set(self.store.scope_id.clone()),
+                    kind: Set(SESSION_KIND.into()),
+                    session_key: Set(Some(key.clone())),
+                    revision: Set(0),
+                    body: Set(serde_json::to_string(&enrollment)?),
+                })
+                .exec(&tx)
+                .await?;
             }
-        };
-        ensure!(
-            enrollment.identity == *identity,
-            "session enrollment scope mismatch"
-        );
-        let (enrollment, intent) = selection::select(
-            &mut state,
-            selection::Input {
-                session_key: &key,
-                identity,
+            write.account(&(
+                &self.store.scope_id,
+                REQUEST_KIND,
                 request_id,
-                context,
-                dependencies,
-                bypass,
-                watermark: session.head,
-                enrollment,
-                is_new,
-            },
-            rand::random,
-            || chrono::Utc::now().to_rfc3339(),
-        )?;
-        // One transaction makes a process crash between admission and dispatch
-        // a recorded, unresolved intent, rather than a missing success-only row.
-        if is_new {
+                &key,
+                &intent,
+            ))?;
             records::Entity::insert(records::ActiveModel {
-                record_id: Set(self.store.id(SESSION_KIND, &key)?),
+                record_id: Set(self.store.id(REQUEST_KIND, request_id)?),
                 scope_id: Set(self.store.scope_id.clone()),
-                kind: Set(SESSION_KIND.into()),
-                session_key: Set(Some(key.clone())),
+                kind: Set(REQUEST_KIND.into()),
+                session_key: Set(Some(key)),
                 revision: Set(0),
-                body: Set(serde_json::to_string(&enrollment)?),
+                body: Set(serde_json::to_string(&intent)?),
             })
             .exec(&tx)
             .await?;
+            self.store
+                .save_charged(&mut write, &tx, control_row, &state)
+                .await?;
+            Ok(Some(intent))
         }
-        records::Entity::insert(records::ActiveModel {
-            record_id: Set(self.store.id(REQUEST_KIND, request_id)?),
-            scope_id: Set(self.store.scope_id.clone()),
-            kind: Set(REQUEST_KIND.into()),
-            session_key: Set(Some(key)),
-            revision: Set(0),
-            body: Set(serde_json::to_string(&intent)?),
-        })
-        .exec(&tx)
-        .await?;
-        self.store.save(&tx, control_row, &state).await?;
-        tx.commit().await?;
-        Ok(Some(intent))
+        .await;
+        write.finish(tx, result).await
     }
 }

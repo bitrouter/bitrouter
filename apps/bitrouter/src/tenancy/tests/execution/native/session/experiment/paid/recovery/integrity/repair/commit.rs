@@ -2,11 +2,21 @@
 use super::*;
 
 async fn fault(db: &DatabaseConnection) -> Result<()> {
+    // Keep the receipt schema valid for inventory. Fail the consuming COMMIT
+    // after recovery inserts the receipt and updates its matching native job.
     for sql in [
         "PRAGMA foreign_keys=ON",
         "CREATE TABLE native_paid_repair_fk_parent(id INTEGER PRIMARY KEY)",
         "CREATE TABLE native_paid_repair_fk_child(id INTEGER REFERENCES native_paid_repair_fk_parent(id) DEFERRABLE INITIALLY DEFERRED)",
-        "CREATE TRIGGER native_paid_repair_commit_fault AFTER INSERT ON tenancy_execution_receipts WHEN EXISTS (SELECT 1 FROM checkpoint_evolution WHERE kind='owned_judge_active_v3' AND json_extract(body,'$.version')=4 AND json_extract(body,'$.execution')=NEW.execution_id) BEGIN INSERT INTO native_paid_repair_fk_child(id) VALUES(1); END",
+        "CREATE TRIGGER native_paid_repair_commit_fault AFTER UPDATE ON checkpoint_evolution
+         WHEN OLD.kind='owned_judge_active_v3' AND NEW.kind='owned_judge_job'
+         AND json_extract(OLD.body,'$.version')=4 AND json_extract(NEW.body,'$.version')=4
+         AND NEW.installation_id=OLD.installation_id AND NEW.tenant_id=OLD.tenant_id
+         AND json_extract(NEW.body,'$.execution')=json_extract(OLD.body,'$.execution')
+         AND EXISTS (SELECT 1 FROM tenancy_execution_receipts
+                     WHERE installation_id=OLD.installation_id AND tenant_id=OLD.tenant_id
+                     AND execution_id=json_extract(OLD.body,'$.execution'))
+         BEGIN INSERT INTO native_paid_repair_fk_child(id) VALUES(1); END",
     ] {
         db.execute_unprepared(sql).await?;
     }
@@ -68,17 +78,43 @@ async fn opener() -> Result<()> {
     let (proof, prepared) = tokio::time::timeout(TIMEOUT, receive).await??;
     let result = async {
         tokio::time::timeout(TIMEOUT, prepared.entered.notified()).await?;
-        // Successful continuation initialization commits. This first rollback
-        // is the paid prepare transaction, after the fixed proposal is installed.
-        // Apply still runs through the original H owner and full source audit.
+        // The first rollback precedes paid repair. Match the exact receipt,
+        // allowing earlier continuation bootstrap commits to settle normally.
         proof.observe_receipt_for_test(identity.clone())?;
         let commit = proof.hold(Phase::Committing);
         prepared.release.notify_one();
-        tokio::time::timeout(TIMEOUT, commit.entered.notified()).await?;
-        ensure!(proof.disposition() == Disposition::Pending);
-        let counts = proof.sql_counts_for_test();
-        let trace = proof.receipt_trace_for_test()?;
-        ensure!(trace.key == identity && !trace.overflow);
+        let selected = tokio::time::timeout(TIMEOUT, async {
+            let mut held = commit;
+            loop {
+                tokio::select! {
+                    () = held.entered.notified() => {},
+                    opened = opening.as_mut().context("native repair opening waiter")? => {
+                        let opened = opened.context("native repair opener task failed before COMMIT")?;
+                        match opened {
+                            Err(error) => return Err(error.context("native repair opener ended before matching COMMIT")),
+                            Ok(service) => {
+                                let cleanup = service.shutdown().await;
+                                anyhow::bail!("native repair opened without matching COMMIT: {cleanup:?}");
+                            }
+                        }
+                    }
+                }
+                ensure!(proof.disposition() == Disposition::Pending);
+                let trace = proof.receipt_trace_for_test()?;
+                ensure!(trace.key == identity && !trace.overflow);
+                if trace.facts[0].is_some() {
+                    break Ok::<_, anyhow::Error>((proof.sql_counts_for_test(), trace));
+                }
+                let next = proof.hold(Phase::Committing);
+                held.release.notify_one();
+                held = next;
+            }
+        }).await;
+        let (counts, trace) = selected.with_context(|| format!(
+            "native repair matching COMMIT gate timed out: disposition={:?}, SQL counts={:?}, opener_finished={}",
+            proof.disposition(), proof.sql_counts_for_test(),
+            opening.as_ref().is_some_and(|waiter| waiter.is_finished()),
+        ))??;
         let candidate = trace.facts[0]
             .as_ref()
             .context("native repair candidate never reached COMMIT")?;
@@ -90,10 +126,8 @@ async fn opener() -> Result<()> {
             waiter.abort();
             ensure!(matches!((&mut waiter).await, Err(error) if error.is_cancelled()));
         }
-        if mode != "commit-error" {
-            // Original production management deadline; no clock/limit override.
-            tokio::time::timeout(TIMEOUT, proof.wait_fenced()).await?;
-        }
+        // Startup has no total-directory deadline; cancellation removes only
+        // the waiter while the original actor retains the pending COMMIT.
         ensure!(proof.disposition() == Disposition::Pending);
         if let Some(waiter) = &opening {
             ensure!(!waiter.is_finished());
@@ -109,6 +143,9 @@ async fn opener() -> Result<()> {
             release_from_parent().await?;
             ensure!(proof.disposition() == Disposition::Pending);
             locked(&root)?;
+            if let Some(waiter) = &opening {
+                ensure!(!waiter.is_finished(), "startup completed before the held COMMIT was released");
+            }
             proof.release_gate();
             let trace = tokio::time::timeout(TIMEOUT, async {
                 loop {
@@ -137,12 +174,26 @@ async fn opener() -> Result<()> {
             );
             if let Some(waiter) = opening.take() {
                 let opened = tokio::time::timeout(TIMEOUT, waiter).await??;
-                if let Ok(service) = opened {
-                    let cleanup = service.shutdown().await;
-                    anyhow::bail!(
-                        "faulted/expired native bootstrap published authority: {cleanup:?}"
-                    );
+                match (mode.as_str(), opened) {
+                    ("commit-error", Err(_)) => {},
+                    ("late-live", Ok(service)) => {
+                        let ready = service.current();
+                        let cleanup = service.shutdown().await;
+                        drop(service);
+                        ensure!(ready.is_ok(), "acknowledged native repair did not publish readiness");
+                        cleanup?;
+                    }
+                    (_, Ok(service)) => {
+                        let cleanup = service.shutdown().await;
+                        drop(service);
+                        anyhow::bail!("faulted native bootstrap published authority: {cleanup:?}");
+                    }
+                    (_, Err(error)) => return Err(error.context("acknowledged native repair did not finish startup")),
                 }
+            }
+            if mode != "commit-error" {
+                released(&root).await?;
+                proof.ensure_clean()?;
             }
             let after = state::snapshot(&reader).await?;
             if mode == "commit-error" {
@@ -171,9 +222,8 @@ async fn opener() -> Result<()> {
                     fact.commit
                         .is_some_and(|outcome| outcome.ok && outcome.sqlite_code.is_none())
                 );
-                ensure!(proof.disposition() == Disposition::Committed);
-                proof.ensure_clean()?;
-                proof.wait_fenced().await;
+                // The exact fact records this COMMIT; later startup reads may
+                // change the shared disposition before clean retirement.
                 facts::interrupted(&clean_before, &after, &original)?;
                 let terminal = facts::terminal(&reader, &original).await?;
                 ensure!(
@@ -181,9 +231,8 @@ async fn opener() -> Result<()> {
                     "late native ACK changed the immutable receipt candidate"
                 );
                 state::write_json(&root.join("repair-after.json"), &after)?;
-                // Known ACK may retire while this child is alive, even though its
-                // opener disappeared. A read-only pool cannot own the sidecar.
-                released(&root).await?;
+                // Checked shutdown or cancelled-opener retirement released the
+                // original claim while this child remains alive.
                 signal("native-paid-repair-known-retired")?;
                 Ok(())
             }

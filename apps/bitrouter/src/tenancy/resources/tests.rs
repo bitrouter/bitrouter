@@ -524,26 +524,32 @@ async fn decisions_are_retained_and_custom_protocols_fail_explicitly() -> Result
 }
 
 #[tokio::test]
-async fn catalog_capacity_is_checked_before_committing_an_import() -> Result<()> {
+async fn catalog_growth_is_independent_of_a_single_configuration_closure() -> Result<()> {
     let (db, resources) = fixture().await?;
-    db.execute(Statement::from_string(DatabaseBackend::Sqlite, format!(
-        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<{MAX_CLOSURE}) \
-         INSERT INTO tenancy_resource_revisions (owner_kind,owner_id,resource_kind,resource_id,revision_id,compiler_version,payload_json,dependency_json,content_digest,created_at) \
-         SELECT 'tenant','other','credential','slot-'||x,'v1','fixture','{{}}','[]','{}','2026-01-01T00:00:00Z' FROM n", "0".repeat(64)))).await?;
-    assert!(
-        import(&resources, &db, vec![credential("tenant")?])
-            .await
-            .is_err()
-    );
+    let mut batch = Vec::new();
+    for index in 0..MAX_CLOSURE {
+        let mut item = credential("other")?;
+        item["reference"]["resource_id"] = json!(format!("slot-{index}"));
+        batch.push(item);
+        if batch.len() == MAX_RESOURCES {
+            import(&resources, &db, std::mem::take(&mut batch)).await?;
+        }
+    }
+    if !batch.is_empty() {
+        import(&resources, &db, batch).await?;
+    }
+    import(&resources, &db, vec![credential("tenant")?]).await?;
     assert!(
         super::super::configuration_store::resource(
             &db,
             &reference("tenant", ResourceKind::Credential, "slot")?
         )
         .await?
-        .is_none()
+        .is_some()
     );
-    assert_eq!(storage::references(&db).await?.len(), MAX_CLOSURE);
+    assert_eq!(storage::references(&db).await?.len(), MAX_CLOSURE + 1);
+    // The complete catalog remains authenticatable beyond the closure budget.
+    resources.authenticate_retained(&db).await?;
     Ok(())
 }
 

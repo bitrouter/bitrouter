@@ -11,6 +11,7 @@ async fn handler(
     let service = harness.fixture.service.clone();
     let submission = service
         .submission(&harness.headers)
+        .await
         .map_err(failure)?
         .narrow_deadline_for_test(deadline);
     let input =

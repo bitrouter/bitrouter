@@ -220,14 +220,9 @@ impl Ready {
                 {"reference":subject_slot,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}},
                 {"reference":judge_slot,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"explicit-judge-secret"}}}}]}))?).await?;
         let snapshot = store::load(&fixture.db, Utc::now()).await?;
-        fixture.service = Service::start_prepared(
-            fixture.db.clone(),
-            owner,
-            OperationLimits::default(),
-            snapshot,
-            Arc::new(resources),
-        )
-        .await?;
+        fixture.service =
+            Service::start_prepared(fixture.db.clone(), owner, snapshot, Arc::new(resources))
+                .await?;
         started(&fixture.service);
         let credential = fixture
             .issue(&format!("assessment-client-{}", fixture.tenant))
@@ -338,14 +333,9 @@ impl Ready {
         self.fixture.service.shutdown().await?;
         let resources = Resources::with_key(self.fixture.installation.clone(), [29; 32])?;
         let snapshot = store::load(&self.fixture.db, Utc::now()).await?;
-        self.fixture.service = Service::start_prepared(
-            self.fixture.db.clone(),
-            None,
-            OperationLimits::default(),
-            snapshot,
-            Arc::new(resources),
-        )
-        .await?;
+        self.fixture.service =
+            Service::start_prepared(self.fixture.db.clone(), None, snapshot, Arc::new(resources))
+                .await?;
         self.fixture
             .service
             .dispatch_test_ready

@@ -40,7 +40,7 @@ pub(super) fn interrupted(
         ensure!(old["definition"] == new["definition"] && old["columns"] == new["columns"]);
         if !matches!(
             name.as_str(),
-            "checkpoint_evolution" | "tenancy_execution_receipts"
+            "checkpoint_evolution" | "tenancy_execution_receipts" | "tenancy_unknown_obligations"
         ) {
             ensure!(
                 old == new,
@@ -127,6 +127,54 @@ pub(super) fn interrupted(
                     .as_str()
                     .context("original paid execution")?
     );
+    let receipt: bitrouter_ai::tenancy::execution::ExecutionReceipt =
+        serde_json::from_str(&text(&additions[0][column(old, "receipt_json")?])?)?;
+    repaired_obligation(
+        &tables["tenancy_unknown_obligations"],
+        &changed["tenancy_unknown_obligations"],
+        &receipt,
+    )?;
+    Ok(())
+}
+
+fn repaired_obligation(
+    before: &Value,
+    after: &Value,
+    receipt: &bitrouter_ai::tenancy::execution::ExecutionReceipt,
+) -> Result<()> {
+    let old = cells(before)?;
+    let new = cells(after)?;
+    ensure!(new.len() == old.len() + 1);
+    ensure!(
+        old.iter().all(|row| new.contains(row)),
+        "original obligation changed"
+    );
+    let additions: Vec<_> = new.iter().filter(|row| !old.contains(row)).collect();
+    ensure!(additions.len() == 1);
+    let added = additions[0];
+    for (name, expected) in [
+        ("installation_id", receipt.installation_id.as_str()),
+        ("tenant_id", receipt.tenant_id.as_str()),
+        ("execution_id", receipt.execution_id.as_str()),
+    ] {
+        ensure!(text(&added[column(before, name)?])? == expected);
+    }
+    // This repair adds one receipt-only Unknown source. Its original timestamp
+    // determines the derived obligation; unrelated obligations stay byte-exact.
+    let first = chrono::DateTime::parse_from_rfc3339(receipt.recorded_at.as_str())?;
+    let due = first
+        .checked_add_signed(chrono::Duration::minutes(15))
+        .context("repaired obligation due overflow")?;
+    for (name, expected) in [
+        ("source_mask", "1".to_owned()),
+        ("first_seconds", first.timestamp().to_string()),
+        ("first_nanos", first.timestamp_subsec_nanos().to_string()),
+        ("due_seconds", due.timestamp().to_string()),
+        ("due_nanos", due.timestamp_subsec_nanos().to_string()),
+        ("escalated", "0".to_owned()),
+    ] {
+        ensure!(added[column(before, name)?].as_str() == Some(expected.as_str()));
+    }
     Ok(())
 }
 

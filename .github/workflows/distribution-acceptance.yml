@@ -128,11 +128,13 @@ jobs:
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test http2_ingress --jobs 2 -- --test-threads=2
-    - name: verify shared transport bounds and connection ownership
+    - uses: taiki-e/install-action@nextest
+      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness' || matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
+    - name: verify transport bounds and connection ownership
       if: matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: 'cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --jobs 2 gateway::shared::transport:: -- --test-threads=2'
+      run: cargo nextest run --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib --build-jobs 2 --test-threads 2 --no-tests fail -E 'test(gateway::transport::)'
     - name: verify gateway behavior without learning services
       if: matrix.features == '' || matrix.features == 'harness'
       env:
@@ -154,8 +156,6 @@ jobs:
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test host_lifecycle --jobs 2 -- --test-threads=2
-    - uses: taiki-e/install-action@nextest
-      if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
     - name: verify base contracts without harness
       if: matrix.features == ''
       run: cargo nextest run -p bitrouter --no-default-features --lib --bin bro --build-jobs 2 --test-threads 2 -E 'test(client::agent_local::) | test(providers::cli_install::)
@@ -193,10 +193,17 @@ jobs:
           --lib --no-run --message-format=json > "$RUNNER_TEMP/tenancy-no-core.json"
         fixture_gateway_binary=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "bitrouter" and .profile.test and (.target.kind | index("lib")) and .executable != null) | .executable] | if length == 1 then .[0] else error("expected one gateway libtest") end' "$RUNNER_TEMP/tenancy-no-core.json")
         cp "$fixture_gateway_binary" "$RUNNER_TEMP/tenancy-no-core-test"
+        selector=tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition
+        # libtest accepts zero matches; require the outer parent as well as its child acknowledgement.
+        "$RUNNER_TEMP/tenancy-core-test" --exact "$selector" --ignored --list \
+          > "$RUNNER_TEMP/tenancy-core-selection.txt"
+        cat "$RUNNER_TEMP/tenancy-core-selection.txt"
+        awk -v expected="$selector: test" '
+          /: test$/ { total++; if ($0 == expected) matched++ }
+          END { exit !(total == 1 && matched == 1) }
+        ' "$RUNNER_TEMP/tenancy-core-selection.txt"
         BITROUTER_TEST_NO_CORE_LIBTEST="$RUNNER_TEMP/tenancy-no-core-test" \
-          "$RUNNER_TEMP/tenancy-core-test" --exact \
-          tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition \
-          --ignored --nocapture
+          "$RUNNER_TEMP/tenancy-core-test" --exact "$selector" --ignored --nocapture
     - name: verify execution SDK against the headless service
       if: matrix.features == 'core,harness'
       run: cargo test -p bitrouter --no-default-features --features core,harness --test harness_sdk --jobs 2
@@ -332,7 +339,7 @@ jobs:
       run: |
         cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
         cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
-        cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1
+        cargo test --release --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1 --nocapture
         cargo clippy --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets --jobs 2 -- -D warnings
   core-sdk:
     name: independent core SDK (${{ matrix.os }})

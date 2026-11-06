@@ -280,7 +280,7 @@ async fn native_paid_repair_actual_commit_error_retains_candidate_then_fresh_rep
 }
 #[tokio::test]
 #[ignore = "real native v4 producer and late original COMMIT; select this parent"]
-async fn native_paid_repair_late_known_commit_retires_without_publishing_authority() -> Result<()> {
+async fn native_paid_repair_known_commit_publishes_readiness_only_after_ack() -> Result<()> {
     parent("late-live").await
 }
 #[tokio::test]

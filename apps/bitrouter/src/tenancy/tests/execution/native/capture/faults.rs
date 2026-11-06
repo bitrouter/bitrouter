@@ -22,7 +22,7 @@ async fn file_fixture(provider: &Provider, root: &Path) -> Result<(Fixture, Reso
     let db = crate::db::connect_tenancy(&url, &owner).await?;
     // Provision directly on the leased file. VACUUM INTO from an in-memory
     // connection can inherit SQLITE_OPEN_MEMORY instead of producing a file.
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let (mut fixture, route, _) =
         crate::tenancy::tests::execution::provision_protocol_with_fixture(
             fixture,
@@ -63,7 +63,6 @@ async fn file_fixture(provider: &Provider, root: &Path) -> Result<(Fixture, Reso
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         Some(owner),
-        OperationLimits::default(),
         initial,
         Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
     )

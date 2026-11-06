@@ -328,7 +328,7 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
         ));
         let (first_headers, first) = server.receive().await?;
         ensure!(first.get("previous_response_id").is_none());
-        let mut rotation = fixture.issuance("rotate-native-caller")?;
+        let mut rotation = fixture.issuance("rotate-native-caller").await?;
         rotation.rotate_credential_id = Some(old.credential_id);
         let rotated = fixture
             .service
@@ -345,14 +345,8 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
         // Fresh resources and cache, same explicit key, no import path/environment.
         let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
         let initial = store::load(&fixture.db, chrono::Utc::now()).await?;
-        fixture.service = Service::start_prepared(
-            fixture.db.clone(),
-            None,
-            OperationLimits::default(),
-            initial,
-            resources,
-        )
-        .await?;
+        fixture.service =
+            Service::start_prepared(fixture.db.clone(), None, initial, resources).await?;
         fixture
             .service
             .dispatch_test_ready
@@ -438,7 +432,7 @@ async fn another_principal(
             .await
             .map_err(failure)?,
     )?;
-    let mut issuance = fixture.issuance("other-credential")?;
+    let mut issuance = fixture.issuance("other-credential").await?;
     issuance.principal_id = principal;
     issuance.binding_id = binding;
     let StoredResponse::Issued(credential) = fixture
@@ -607,7 +601,11 @@ async fn public_source_cannot_mint_a_tenant_continuation_without_executor_proof(
     let server = Server::start().await?;
     let (fixture, route, _) = provision_protocol(&server.url, "responses").await?;
     let (ingress, _) = ready(&fixture, &route).await?;
-    let submission = fixture.service.submission(&ingress).map_err(failure)?;
+    let submission = fixture
+        .service
+        .submission(&ingress)
+        .await
+        .map_err(failure)?;
     let execution = fixture
         .service
         .admit_execution(submission, MODEL, &ApiProtocol::Responses)
@@ -704,14 +702,7 @@ async fn chain(
         )
         .await?;
     let initial = store::load(&fixture.db, chrono::Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        initial,
-        resources,
-    )
-    .await?;
+    fixture.service = Service::start_prepared(fixture.db.clone(), None, initial, resources).await?;
     Ok(route)
 }
 

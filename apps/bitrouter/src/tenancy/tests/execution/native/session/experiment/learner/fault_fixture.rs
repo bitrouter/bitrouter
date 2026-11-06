@@ -29,7 +29,16 @@ pub(super) async fn with_case(
             })
             .await?;
             let state = store::load(&fixture.db, Utc::now()).await?;
-            ensure!(state.active_configurations.get(&fixture.tenant) == Some(&r1));
+            let facts = store::directory::load_tenant_in(
+                &fixture.db,
+                &state.header(),
+                &fixture.operator,
+                &fixture.tenant,
+                true,
+                fixture.service.authority.load_budget(),
+            )
+            .await?;
+            ensure!(facts.snapshot.active_configurations.get(&fixture.tenant) == Some(&r1));
             ensure!(
                 server.received_requests().await.context("requests")?.len() == 1,
                 "learner replayed provider work"
@@ -231,12 +240,13 @@ pub(super) async fn assert_committed(fixture: &Fixture, before: &Counts) -> Resu
     let stored = store::load(&fixture.db, Utc::now()).await?;
     let published = fixture
         .service
-        .snapshot
+        .authority
         .read()
-        .map_err(|_| anyhow::anyhow!("snapshot lock"))?;
+        .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?;
     ensure!(
-        published.revision == stored.revision && published.operation_ids == stored.operation_ids,
-        "known committed snapshot was not published before delivery refusal"
+        published.header().revision == stored.revision
+            && published.header().operation_ids == stored.operation_ids,
+        "known committed header was not published before delivery refusal"
     );
     Ok(())
 }

@@ -238,10 +238,15 @@ async fn metadata_revisions_keep_sampling_stable_and_invalidate_publication_snap
         after.report.plan.evidence_digest
     );
     assert_ne!(before.report.plan.plan_id, after.report.plan.plan_id);
-    let tx = service.store.db.begin().await?;
-    assert!(before.validate(&tx, &service.store).await.is_err());
-    after.validate(&tx, &service.store).await?;
-    tx.rollback().await?;
+    let (mut write, tx) = service.store.begin_write(false).await?;
+    assert!(
+        before
+            .validate(&tx, &service.store, &mut write)
+            .await
+            .is_err()
+    );
+    after.validate(&tx, &service.store, &mut write).await?;
+    write.rollback(tx).await?;
 
     assert_eq!(
         serde_json::to_value(&before.report.plan.baseline)?,
@@ -327,9 +332,14 @@ async fn revision_keeps_canonical_evidence_separate_and_reconciles_archived_with
     assert_eq!(total_families(&archived), 1);
     let before = service.learning_snapshot("a", Some(&root)).await?;
     score(&canonical, &identity, 100_000, "revised-score").await?;
-    let tx = service.store.db.begin().await?;
-    assert!(before.validate(&tx, &service.store).await.is_err());
-    tx.rollback().await?;
+    let (mut write, tx) = service.store.begin_write(false).await?;
+    assert!(
+        before
+            .validate(&tx, &service.store, &mut write)
+            .await
+            .is_err()
+    );
+    write.rollback(tx).await?;
     let reconciled = service
         .reconcile_checked("a", Some(&root), || Ok(()))
         .await?;
@@ -466,12 +476,15 @@ async fn adopted_sessions_use_separate_quality_evidence_and_a_fenced_rollback() 
     assert!(before.report.monitoring.rollback);
     let corrected = monitored.first().context("monitored session missing")?;
     score(&canonical, corrected, 950_000, "correction").await?;
-    let tx = service.store.db.begin().await?;
+    let (mut write, tx) = service.store.begin_write(false).await?;
     assert!(
-        before.validate(&tx, &service.store).await.is_err(),
+        before
+            .validate(&tx, &service.store, &mut write)
+            .await
+            .is_err(),
         "a prepared alarm must revalidate corrected evidence"
     );
-    tx.rollback().await?;
+    write.rollback(tx).await?;
     let outcome = service.reconcile("a").await?;
     assert!(outcome.published && outcome.monitoring.rollback);
     assert_eq!(outcome.block_status, BlockStatus::RolledBack);
@@ -615,13 +628,13 @@ async fn publication_rechecks_inventory_even_when_canonical_content_did_not_chan
         canonical.transcript(&identity).await?.session.head,
         cp.watermark
     );
-    let tx = service.store.db.begin().await?;
-    let rejected = snapshot.validate(&tx, &service.store).await;
+    let (mut write, tx) = service.store.begin_write(false).await?;
+    let rejected = snapshot.validate(&tx, &service.store, &mut write).await;
     assert!(
         rejected.is_err(),
         "an obsolete complete-cost snapshot must not publish"
     );
-    tx.rollback().await?;
+    write.rollback(tx).await?;
     let status = service.learning_status("a").await?;
     assert!(
         status
@@ -680,12 +693,15 @@ async fn corrections_replace_and_appends_withdraw_the_effective_contribution() -
     recorder.append("s", CaptureEvent { direction: CaptureDirection::Agent, kind: CaptureKind::Notification,
         call_id: None, method: "session/update".into(), payload: serde_json::json!({"sessionId":"s","update":{
             "sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"More work followed."}}}) }).await?;
-    let tx = service.store.db.begin().await?;
+    let (mut write, tx) = service.store.begin_write(false).await?;
     assert!(
-        snapshot.validate(&tx, &service.store).await.is_err(),
+        snapshot
+            .validate(&tx, &service.store, &mut write)
+            .await
+            .is_err(),
         "a stale prepared promotion must fail under its final locks"
     );
-    tx.rollback().await?;
+    write.rollback(tx).await?;
     let stale = service.learning_status("a").await?;
     assert_eq!(total_families(&stale), 0);
     assert_eq!(
@@ -765,7 +781,7 @@ fn active_time_merges_parallel_intervals_and_does_not_invent_missing_ends() -> R
 #[cfg(feature = "db-mysql")]
 mod mysql_tests {
     use super::*;
-    use sea_orm::IsolationLevel;
+    use sea_orm::{IsolationLevel, TransactionTrait};
     use std::time::Duration;
 
     #[tokio::test]
@@ -796,6 +812,8 @@ mod mysql_tests {
             // An existing read view must not hide a later human correction
             // when publication acquires the connection/session fences.
             // https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html
+            let mut write =
+                crate::storage::write::Write::start(&service.store.storage_budget, false)?;
             let reader = db
                 .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
                 .await?;
@@ -803,8 +821,8 @@ mod mysql_tests {
             score(&canonical, &identity, 100_000, "human-correction").await?;
             ensure!(assessment_head(&reader, &key).await? == expected);
             ensure!(assessment_head(&db, &key).await? != expected);
-            let validation = snapshot.validate(&reader, &service.store).await;
-            reader.rollback().await?;
+            let validation = snapshot.validate(&reader, &service.store, &mut write).await;
+            write.rollback(reader).await?;
             let error = validation
                 .err()
                 .context("publication accepted an obsolete human assessment")?;
@@ -813,9 +831,9 @@ mod mysql_tests {
                 "publication failed for an unrelated reason: {error:#}"
             );
             let current = service.learning_snapshot("a", None).await?;
-            let tx = db.begin().await?;
-            current.validate(&tx, &service.store).await?;
-            tx.rollback().await?;
+            let (mut write, tx) = service.store.begin_write(false).await?;
+            current.validate(&tx, &service.store, &mut write).await?;
+            write.rollback(tx).await?;
             Ok::<(), anyhow::Error>(())
         })
         .await

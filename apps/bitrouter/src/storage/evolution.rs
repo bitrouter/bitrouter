@@ -1,12 +1,14 @@
 //! Portable, compare-and-set persistence for jobs, assignments and block state.
 
+use crate::storage::write::Write;
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
-    QueryFilter, QuerySelect, QueryTrait, Set, TransactionTrait,
+    QueryFilter, QuerySelect, QueryTrait, Set,
 };
 use serde::{Serialize, de::DeserializeOwned};
+use std::sync::{Arc, OnceLock};
 
 use sha2::{Digest, Sha256};
 
@@ -37,6 +39,7 @@ pub struct EvolutionStore {
     pub(crate) db: DatabaseConnection,
     pub scope_id: String,
     pub(crate) owner: String,
+    pub(crate) storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 impl EvolutionStore {
@@ -46,7 +49,23 @@ impl EvolutionStore {
             db,
             scope_id: digest(&("checkpoint-evolution-v1", owner))?,
             owner: owner.into(),
+            storage_budget: None,
         })
+    }
+
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
+    pub(crate) async fn begin_write(
+        &self,
+        maintenance: bool,
+    ) -> Result<(Write, DatabaseTransaction)> {
+        Write::begin(&self.db, &self.storage_budget, maintenance).await
     }
 
     pub fn ensure_owner(&self, owner: &str) -> Result<()> {
@@ -63,7 +82,11 @@ impl EvolutionStore {
         kind: &str,
         key: &str,
     ) -> Result<Option<(i64, T)>> {
-        self.get_in(&self.db, kind, key).await
+        // Public preflight reads have no Write owner yet. Fence actual SQL
+        // failure here; missing records and decode/business errors stay ordinary.
+        self.get_in(&self.db, kind, key)
+            .await
+            .map_err(|error| crate::storage::write::read_error(&self.storage_budget, error))
     }
 
     pub(crate) async fn get_in<T: DeserializeOwned>(
@@ -119,7 +142,8 @@ impl EvolutionStore {
             .filter(records::Column::ScopeId.eq(&self.scope_id))
             .filter(records::Column::Kind.eq(kind))
             .all(&self.db)
-            .await?
+            .await
+            .map_err(|error| crate::storage::write::read_error(&self.storage_budget, error.into()))?
             .into_iter()
             .map(|row| {
                 Ok((
@@ -140,8 +164,39 @@ impl EvolutionStore {
         session_key: Option<String>,
         body: &T,
     ) -> Result<(i64, T)> {
+        if self.storage_budget.is_some() {
+            let (mut write, tx) = self.begin_write(false).await?;
+            let result = self
+                .initialize_charged(&mut write, &tx, kind, key, session_key, body)
+                .await;
+            return write.finish(tx, result).await;
+        }
         self.initialize_in(&self.db, kind, key, session_key, body)
             .await
+    }
+
+    pub(crate) async fn initialize_charged<T: Serialize + DeserializeOwned>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        kind: &str,
+        key: &str,
+        session_key: Option<String>,
+        body: &T,
+    ) -> Result<(i64, T)> {
+        write.account(&(&self.scope_id, kind, key, &session_key, body))?;
+        self.initialize_in(tx, kind, key, session_key, body).await
+    }
+
+    pub(crate) async fn save_charged<T: Serialize>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        row: records::Model,
+        body: &T,
+    ) -> Result<i64> {
+        write.replacement(&row, body)?;
+        self.save(tx, row, body).await
     }
 
     pub(crate) async fn initialize_in<T: Serialize + DeserializeOwned>(
@@ -189,20 +244,65 @@ impl EvolutionStore {
     where
         T: Serialize + DeserializeOwned,
     {
-        let tx = self.db.begin().await?;
-        let (row, mut body): (_, T) = self.lock(&tx, kind, key).await?;
-        ensure!(
-            row.revision == expected,
-            "evolution generation changed; refresh before retrying"
-        );
-        let result = change(&mut body)?;
-        let revision = self.save(&tx, row, &body).await?;
-        tx.commit().await?;
-        Ok((revision, result))
+        self.update_with_maintenance(kind, key, expected, false, change)
+            .await
+    }
+
+    pub(crate) async fn update_with_maintenance<T, R>(
+        &self,
+        kind: &str,
+        key: &str,
+        expected: i64,
+        maintenance: bool,
+        change: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<(i64, R)>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let (mut write, tx) = self.begin_write(maintenance).await?;
+        let result = async {
+            let (row, mut body): (_, T) = self.lock_charged(&mut write, &tx, kind, key).await?;
+            ensure!(
+                row.revision == expected,
+                "evolution generation changed; refresh before retrying"
+            );
+            let result = change(&mut body)?;
+            let revision = self.save_charged(&mut write, &tx, row, &body).await?;
+            Ok((revision, result))
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     /// Callers lock the control record before any assignment record. This is the
     /// shared serialization point for enrollment, mode changes and publication.
+    pub(crate) async fn lock_charged<T: DeserializeOwned>(
+        &self,
+        write: &mut Write,
+        tx: &DatabaseTransaction,
+        kind: &str,
+        key: &str,
+    ) -> Result<(records::Model, T)> {
+        if write.enabled() {
+            let row = records::Entity::find_by_id(self.id(kind, key)?)
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+                .lock_exclusive()
+                .one(tx)
+                .await?
+                .context("evolution record not found")?;
+            let previous = (
+                &row.record_id,
+                &row.scope_id,
+                &row.kind,
+                &row.session_key,
+                row.revision,
+                &row.body,
+            );
+            write.account(&(&previous, &previous))?;
+        }
+        self.lock(tx, kind, key).await
+    }
+
     pub(crate) async fn lock<T: DeserializeOwned>(
         &self,
         tx: &DatabaseTransaction,
@@ -270,10 +370,13 @@ impl EvolutionStore {
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(all(test, feature = "db-mysql"))]
 mod mysql_tests {
     use super::*;
-    use sea_orm::IsolationLevel;
+    use sea_orm::{IsolationLevel, TransactionTrait};
     use serde_json::{Value, json};
 
     async fn test_database() -> Result<DatabaseConnection> {

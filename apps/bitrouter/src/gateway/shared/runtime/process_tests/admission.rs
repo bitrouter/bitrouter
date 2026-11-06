@@ -282,7 +282,10 @@ impl World {
     async fn configure_limits(&self) -> Result<()> {
         // Ordinary authenticated operator writes, with cross-replica receipts
         // and reads, establish the limits used below. Bootstrap starts at eight.
-        let mut tenant = self.operators[0].tenant("limited").await?;
+        let mut tenant = self.operators[0]
+            .tenant("limited")
+            .await
+            .context("reading initial tenant policy")?;
         tenant.limits.concurrent_executions = 1;
         let mutations = [
             Mutation {
@@ -298,23 +301,31 @@ impl World {
                 command: MutationCommand::PutResource(ResourcePut {
                     resource_pool_id: ACCOUNT_POOL.into(),
                     expected_revision: Some(
-                        self.operators[0].resource(ACCOUNT_POOL).await?.revision,
+                        self.operators[0]
+                            .resource(ACCOUNT_POOL)
+                            .await
+                            .context("reading initial resource policy")?
+                            .revision,
                     ),
                     concurrent_attempts: 1,
                 }),
             },
         ];
         for mutation in mutations {
-            let receipt = self.operators[0].apply(&mutation).await?;
+            let receipt = self.operators[0]
+                .apply(&mutation)
+                .await
+                .with_context(|| format!("applying {}", mutation.operation_id))?;
             ensure!(
-                matches!(self.operators[1].operation(&mutation.operation_id).await?,
+                matches!(self.operators[1].operation(&mutation.operation_id).await.with_context(|| format!("reading {} receipt on peer", mutation.operation_id))?,
                 OperationLookup::Committed { receipt: other } if *other == receipt)
             );
         }
         ensure!(
             self.operators[1]
                 .tenant("limited")
-                .await?
+                .await
+                .context("reading updated tenant policy on peer")?
                 .limits
                 .concurrent_executions
                 == 1
@@ -322,7 +333,8 @@ impl World {
         ensure!(
             self.operators[1]
                 .resource(ACCOUNT_POOL)
-                .await?
+                .await
+                .context("reading updated resource policy on peer")?
                 .concurrent_attempts
                 == 1
         );

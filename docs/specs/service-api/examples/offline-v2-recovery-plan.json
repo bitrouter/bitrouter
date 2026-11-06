@@ -1,0 +1,42 @@
+{
+  "format": "bitrouter.offline.recovery-plan.v2",
+  "source": {
+    "bundle": "/srv/bitrouter/evidence/source-bundle",
+    "evidence_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "installation_id": "example-source",
+    "producer": {
+      "commit": "0000000000000000000000000000000000000000",
+      "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "evidence": {
+        "path": "/srv/bitrouter/evidence/producer.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "tables": [
+      {
+        "table": "tenancy_installation",
+        "rows": 1,
+        "value_bytes": 100,
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "disposition": "retained_archive"
+      }
+    ]
+  },
+  "target": {
+    "database": "/srv/bitrouter/target.sqlite",
+    "installation_id": "example-target",
+    "provisioning": {
+      "path": "/srv/bitrouter/evidence/fresh-provisioning.jsonl",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "wrapping_key_env": "EXAMPLE_WRAPPING_KEY",
+    "static_manifest": {
+      "path": "/srv/bitrouter/evidence/static-approval.jsonl",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "retirement": {
+    "path": "/srv/bitrouter/evidence/retirement.jsonl",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

@@ -2,14 +2,18 @@
 mod audit;
 mod closure;
 mod native;
+mod projection;
 mod write;
 
 use super::*;
 use crate::tenancy::{
     admission::Repair,
-    model::Snapshot,
+    model::AuthorityHeader,
     origin::StartupOwner,
-    receipts::store::Candidate,
+    receipts::{
+        capacity::Inventory,
+        store::{Candidate, obligations},
+    },
     resources::Resources,
     transaction::{Disposition, Proof},
 };
@@ -27,11 +31,12 @@ pub(in crate::tenancy) struct Plan {
     configurations: BTreeMap<(TenantId, RevisionId), Arc<closure::Configuration>>,
     writes: Vec<Write>,
     sources: Vec<String>,
+    unknown_before: BTreeMap<obligations::Key, Option<obligations::Record>>,
     at: Timestamp,
 }
 pub(in crate::tenancy) struct Access<'a> {
     pub(in crate::tenancy) database: &'a sea_orm::DatabaseConnection,
-    pub(in crate::tenancy) state: &'a Snapshot,
+    pub(in crate::tenancy) state: &'a AuthorityHeader,
     pub(in crate::tenancy) origin: &'a StartupOwner,
     pub(in crate::tenancy) proof: &'a Arc<Proof>,
     pub(in crate::tenancy) resources: &'a Resources,
@@ -50,77 +55,54 @@ struct Write {
 #[derive(Default)]
 pub(in crate::tenancy) struct Bootstrap {
     plan: OnceLock<Plan>,
-    inventory: OnceLock<crate::tenancy::receipts::capacity::Inventory>,
+    inventory: OnceLock<Inventory>,
+    expected: OnceLock<Inventory>,
     reservations: Mutex<Vec<Repair>>,
     committed: AtomicBool,
     settled: AtomicBool,
 }
 impl Bootstrap {
-    pub(in crate::tenancy) fn inventory(
-        &self,
-        value: &crate::tenancy::receipts::capacity::Inventory,
-    ) -> Result<()> {
-        ensure!(
-            value.unknown.len() <= 1000,
-            "paid startup receipt inventory bound"
-        );
+    pub(in crate::tenancy) fn inventory(&self, value: &Inventory) -> Result<()> {
         self.inventory
-            .set(crate::tenancy::receipts::capacity::Inventory {
-                rows: value.rows,
-                bytes: value.bytes,
-                unknown: value.unknown.clone(),
-            })
+            .set(value.clone())
             .map_err(|_| anyhow::anyhow!("paid receipt baseline already fixed"))
     }
-    pub(in crate::tenancy) fn verify_inventory(
+
+    /// Reconcile each fixed source key after all source writes, while streaming
+    /// the original projection past those keys. Retain only the expected scalars.
+    /// The returned bounded changes belong to pre-COMMIT admission publication.
+    pub(in crate::tenancy) async fn prepare_inventory(
         &self,
-        actual: &crate::tenancy::receipts::capacity::Inventory,
-    ) -> Result<()> {
+        tx: &DatabaseTransaction,
+        installation: &bitrouter_ai::tenancy::identity::InstallationId,
+        budget: &OperationBudget<'_>,
+    ) -> Result<Vec<obligations::Change>> {
         let original = self
             .inventory
             .get()
             .context("paid receipt baseline absent")?;
-        let mut bytes = original.bytes;
-        let mut rows = original.rows;
-        let mut unknown: BTreeMap<_, _> = original
-            .unknown
-            .iter()
-            .map(|(tenant, id, at)| ((tenant.clone(), id.clone()), *at))
-            .collect();
+        let (expected, changes) =
+            projection::prepare(tx, installation, self.plan()?, original, budget).await?;
+        self.expected
+            .set(expected)
+            .map_err(|_| anyhow::anyhow!("paid expected inventory already fixed"))?;
+        Ok(changes)
+    }
+
+    pub(in crate::tenancy) fn verify_inventory(&self, actual: &Inventory) -> Result<()> {
+        let expected = self
+            .expected
+            .get()
+            .context("paid expected inventory absent")?;
         ensure!(
-            unknown.len() == original.unknown.len(),
-            "paid duplicate receipt baseline"
-        );
-        for write in &self.plan()?.writes {
-            if write.missing_receipt {
-                rows = rows.checked_add(1).context("paid receipt row overflow")?;
-                bytes = bytes
-                    .checked_add(write.receipt.bytes())
-                    .context("paid receipt byte overflow")?;
-                let receipt = &write.receipt.receipt;
-                let at = chrono::DateTime::parse_from_rfc3339(receipt.recorded_at.as_str())?
-                    .with_timezone(&chrono::Utc);
-                ensure!(
-                    unknown
-                        .insert(
-                            (receipt.tenant_id.clone(), receipt.execution_id.clone()),
-                            at
-                        )
-                        .is_none(),
-                    "paid receipt identity collision"
-                );
-            }
-        }
-        let observed: BTreeMap<_, _> = actual
-            .unknown
-            .iter()
-            .map(|(tenant, id, at)| ((tenant.clone(), id.clone()), *at))
-            .collect();
-        ensure!(
-            actual.rows == rows
-                && actual.bytes == bytes
-                && actual.unknown.len() == observed.len()
-                && observed == unknown,
+            actual.rows == expected.rows
+                && actual.bytes == expected.bytes
+                && actual.live_bytes == expected.live_bytes
+                && actual.history_bytes == expected.history_bytes
+                && actual.history_rows == expected.history_rows
+                && actual.oauth_bytes == expected.oauth_bytes
+                && actual.unknown_count == expected.unknown_count
+                && actual.unknown_digest == expected.unknown_digest,
             "paid final receipt inventory differs from fixed repair"
         );
         Ok(())
@@ -136,6 +118,7 @@ impl Bootstrap {
     pub(in crate::tenancy) fn reserve(
         &self,
         admission: &Arc<crate::tenancy::admission::Admission>,
+        read: &crate::tenancy::admission::unknown::Read,
     ) -> Result<()> {
         let mut groups: BTreeMap<TenantId, (u64, Vec<_>)> = BTreeMap::new();
         for write in &self.plan()?.writes {
@@ -146,14 +129,17 @@ impl Bootstrap {
                 group.0 = group
                     .0
                     .checked_add(write.receipt.bytes())
+                    .and_then(|bytes| bytes.checked_add(write.receipt.auxiliary_bytes()))
                     .context("paid receipt byte overflow")?;
-                group.1.push((
-                    write.receipt.receipt.execution_id.clone(),
-                    chrono::DateTime::parse_from_rfc3339(
-                        write.receipt.receipt.recorded_at.as_str(),
-                    )?
-                    .with_timezone(&chrono::Utc),
-                ));
+                let key = projection::key(write);
+                let before = self
+                    .plan()?
+                    .unknown_before
+                    .get(&key)
+                    .context("paid repair projection input absent")?;
+                group
+                    .1
+                    .push((write.receipt.receipt.execution_id.clone(), before.is_some()));
             }
         }
         let mut reservations = self
@@ -165,7 +151,7 @@ impl Bootstrap {
             "paid reservation repeated"
         );
         for (tenant, (bytes, entries)) in groups {
-            match admission.reserve_repair(&tenant, bytes, entries) {
+            match admission.reserve_repair(read, &tenant, bytes, entries) {
                 Ok(reservation) => reservations.push(reservation),
                 Err(_) => {
                     // No write transaction has started. Do not strand earlier
@@ -265,6 +251,7 @@ pub(in crate::tenancy) async fn apply(
     ensure!(
         checked.rows == fixed.rows
             && checked.sources == fixed.sources
+            && checked.unknown_before == fixed.unknown_before
             && checked.writes.len() == fixed.writes.len(),
         "paid recovery source changed"
     );

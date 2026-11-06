@@ -186,8 +186,9 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
         }
         .await;
         drop(lookup);
-        // Expiry now also queues a durable no-send receipt. Count its one real
-        // BEGIN separately; a global phase gate would confuse it with lookup.
+        // The blocked mutation finishes its preparation read, then starts its
+        // write. Expiry also queues one durable no-send receipt transaction.
+        // Neither transaction belongs to the expired queued lookup.
         proof.release_gate();
         let settled: Result<()> = async {
             tokio::time::timeout(WAIT, blocked)
@@ -197,8 +198,9 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
             drop(execution);
             tokio::time::timeout(WAIT, ready.fixture.service.admission.wait_drained()).await?;
             ensure!(
-                proof.sql_counts_for_test() == (counts.0 + 1, counts.1),
-                "expired lookup added SQL beyond its one required no-send receipt"
+                proof.sql_counts_for_test() == (counts.0 + 2, counts.1 + 1),
+                "expired lookup added SQL beyond mutation and receipt: before={counts:?}, after={:?}",
+                proof.sql_counts_for_test(),
             );
             proof.ensure_clean()?;
             Ok(())

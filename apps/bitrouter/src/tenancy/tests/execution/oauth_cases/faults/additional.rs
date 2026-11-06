@@ -199,7 +199,7 @@ async fn simultaneous_same_slot_start_cas_posts_once_and_preserves_the_loser_rec
                 &harness.fixture.installation,
             )
             .await?;
-            ensure!(inventory.rows == 3 && inventory.unknown.is_empty());
+            ensure!(inventory.rows == 3 && inventory.unknown_count == 0);
             Ok(())
         })
         .await
@@ -461,7 +461,7 @@ async fn rejected_refresh_body_case(
         ensure!(work.execution == id && work.id == fact.work && slot.metadata.generation == 0);
         let before =
             receipts::inventory(&harness.fixture.db, &harness.fixture.installation).await?;
-        ensure!(before.rows == 1 && before.unknown.is_empty());
+        ensure!(before.rows == 1 && before.unknown_count == 0);
         ensure!(
             storage::pending_unknown(&harness.fixture.db, &harness.fixture.installation)
                 .await?
@@ -471,7 +471,7 @@ async fn rejected_refresh_body_case(
         harness.reopen().await?;
         let after = receipts::inventory(&harness.fixture.db, &harness.fixture.installation).await?;
         ensure!(
-            after.rows == before.rows && after.bytes == before.bytes && after.unknown.is_empty()
+            after.rows == before.rows && after.bytes == before.bytes && after.unknown_count == 0
         );
         ensure!(slot.same(&harness.row().await?));
         ensure!(serde_json::to_vec(&harness.receipt(&id).await?)? == receipt_bytes);
@@ -487,8 +487,8 @@ async fn rejected_refresh_body_case(
         ensure!(
             receipts::inventory(&harness.fixture.db, &harness.fixture.installation)
                 .await?
-                .unknown
-                .is_empty()
+                .unknown_count
+                == 0
         );
         Ok(())
     })

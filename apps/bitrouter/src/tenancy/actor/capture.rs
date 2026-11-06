@@ -52,6 +52,7 @@ impl Worker {
         } else {
             None
         };
+        control.reserve_write(crate::storage::operation_budget::MAX_BYTES, cleanup)?;
         let tx = control
             .begin_repeatable_read(&self.db)
             .await

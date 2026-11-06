@@ -1017,50 +1017,17 @@ fn decode_recovery_header(header: &[u8]) -> Result<Option<Metadata>> {
     Ok(Some(metadata))
 }
 
-/// A fresh file claim excludes the previous process, but it does not prove that
-/// any independently spawned native/capture effect was reaped. This first
-/// profile therefore requires every other native row released and no capture
-/// connection history in this installation.
+/// Validate released peer proofs for one directory page. The recovery
+/// participant checks capture history and unknown tenants once, then supplies
+/// every page under this same borrowed transaction.
 pub(crate) async fn recovery_exclusion(
     tx: &DatabaseTransaction,
     authority: &Authority,
     tenants: &[bitrouter_ai::tenancy::identity::TenantId],
-    budget: &Budget,
     check: &(dyn Fn() -> Result<()> + Sync),
 ) -> Result<()> {
     use sea_orm::Statement;
     let installation = authority.descriptor().installation.as_str();
-    ensure!(
-        !tenants.is_empty()
-            && tenants.len() <= 32
-            && tenants.contains(&authority.descriptor().tenant),
-        "native owner inventory unavailable"
-    );
-    check()?;
-    let capture = tx
-        .query_one(Statement::from_sql_and_values(
-            DatabaseBackend::Sqlite,
-            "SELECT 1 FROM acp_capture_connections WHERE installation_id=? LIMIT 1",
-            [installation.into()],
-        ))
-        .await?;
-    check()?;
-    if capture.is_some() {
-        return Err(crate::tenancy::session::Rejected(
-            bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
-        )
-        .into());
-    }
-    let placeholders = vec!["?"; tenants.len()].join(",");
-    let mut parameters: Vec<sea_orm::Value> = vec![installation.into()];
-    parameters.extend(tenants.iter().map(|tenant| tenant.as_str().into()));
-    let foreign=tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        format!("SELECT 1 FROM bro_managed_sessions WHERE installation_id=? AND (tenant_id IS NULL OR tenant_id NOT IN ({placeholders})) LIMIT 1"),parameters)).await?;
-    check()?;
-    ensure!(
-        foreign.is_none(),
-        "native owner has unknown tenant metadata"
-    );
     let (scope, _) = Scope::for_session(authority);
     let own = scope.physical_key(
         KeyDomain::NativeSession,
@@ -1083,92 +1050,112 @@ pub(crate) async fn recovery_exclusion(
         "CASE WHEN typeof({column})='text' AND length(CAST({column} AS BLOB))<=128 THEN {column} ELSE NULL END AS {column}"))
         .collect::<Vec<_>>().join(",");
     for tenant in tenants {
-        check()?;
-        let rows=tx.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            format!("SELECT {projection}, CASE WHEN typeof(revision)='integer' THEN revision ELSE NULL END AS revision, CASE WHEN typeof(payload_bytes)='integer' THEN payload_bytes ELSE NULL END AS payload_bytes, CASE WHEN typeof(payload)='text' THEN length(CAST(payload AS BLOB)) ELSE NULL END AS actual FROM bro_managed_sessions WHERE installation_id=? AND tenant_id=? AND id<>? ORDER BY id LIMIT 4097"),
-            [installation.into(),tenant.as_str().into(),own.clone().into()])).await?;
-        check()?;
-        budget.charge(
-            rows.len(),
-            rows.len()
-                .checked_mul(1024)
-                .context("native owner inventory bound")?,
-        )?;
-        for row in rows {
+        let mut after: Option<String> = None;
+        loop {
             check()?;
-            let id: String = row.try_get("", "id")?;
-            let declared: i64 = row.try_get("", "payload_bytes")?;
-            let actual: i64 = row.try_get("", "actual")?;
-            let revision: i64 = row.try_get("", "revision")?;
-            ensure!(
-                id.len() == 64
-                    && id.bytes().all(|b| b.is_ascii_hexdigit())
-                    && revision > 0
-                    && actual >= 0
-                    && declared == actual,
-                "native owner metadata invalid"
-            );
-            budget.charge(
-                0,
-                usize::try_from(actual)?
-                    .checked_mul(3)
-                    .context("native owner byte bound")?,
-            )?;
-            let payload=tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            let mut parameters: Vec<sea_orm::Value> = vec![
+                installation.into(),
+                tenant.as_str().into(),
+                own.clone().into(),
+            ];
+            let seek = if let Some(after) = &after {
+                parameters.push(after.as_str().into());
+                " AND bro_managed_sessions.id>?"
+            } else {
+                ""
+            };
+            let rows=tx.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT {projection}, CASE WHEN typeof(revision)='integer' THEN revision ELSE NULL END AS revision, CASE WHEN typeof(payload_bytes)='integer' THEN payload_bytes ELSE NULL END AS payload_bytes, CASE WHEN typeof(payload)='text' THEN length(CAST(payload AS BLOB)) ELSE NULL END AS actual FROM bro_managed_sessions WHERE installation_id=? AND tenant_id=? AND id<>?{seek} ORDER BY bro_managed_sessions.id LIMIT 32"),
+            parameters)).await?;
+            check()?;
+            if rows.is_empty() {
+                break;
+            }
+            let page_bytes = rows
+                .len()
+                .checked_mul(1024)
+                .context("native peer page bound")?;
+            for row in rows {
+                check()?;
+                let id: String = row.try_get("", "id")?;
+                let declared: i64 = row.try_get("", "payload_bytes")?;
+                let actual: i64 = row.try_get("", "actual")?;
+                let revision: i64 = row.try_get("", "revision")?;
+                ensure!(
+                    id.len() == 64
+                        && id.bytes().all(|b| b.is_ascii_hexdigit())
+                        && revision > 0
+                        && actual >= 0
+                        && declared == actual,
+                    "native owner metadata invalid"
+                );
+                // Peer bodies are validated and dropped individually. Their total
+                // historical count must not consume the retained repair budget.
+                let budget = Budget::default();
+                budget.charge(
+                    1,
+                    usize::try_from(actual)?
+                        .checked_mul(3)
+                        .and_then(|bytes| bytes.checked_add(page_bytes))
+                        .context("native owner byte bound")?,
+                )?;
+                after = Some(id.clone());
+                let payload=tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
                 "SELECT payload FROM bro_managed_sessions WHERE installation_id=? AND tenant_id=? AND id=? AND revision=? AND typeof(payload)='text' AND length(CAST(payload AS BLOB))=?",
                 [installation.into(),tenant.as_str().into(),id.into(),revision.into(),actual.into()])).await?.context("native owner inventory changed")?;
-            check()?;
-            let bytes: String = payload.try_get("", "payload")?;
-            ensure!(
-                bytes.len() == usize::try_from(actual)?,
-                "native owner payload length changed"
-            );
-            let envelope: Envelope = serde_json::from_str(&bytes)?;
-            ensure!(
-                envelope.descriptor.installation.as_str() == installation
-                    && envelope.descriptor.tenant == *tenant
-                    && ((envelope.format == 1 && envelope.recovery.is_none())
-                        || (envelope.format == 2 && envelope.recovery.is_some())),
-                "native peer ownership or format mismatch"
-            );
-            if let Some(metadata) = &envelope.recovery {
-                metadata.validate()?;
-            }
-            if envelope.journal.get("released").and_then(|v| v.as_bool()) != Some(true)
-                || envelope
-                    .recovery
-                    .as_ref()
-                    .is_some_and(|m| m.phase != Phase::Released)
-            {
-                return Err(crate::tenancy::session::Rejected(
-                    bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
-                )
-                .into());
-            }
-            for (column, expected) in [
-                (
-                    "creator_principal_id",
-                    envelope.descriptor.principal.as_str(),
-                ),
-                (
-                    "session_principal_id",
-                    envelope.descriptor.principal.as_str(),
-                ),
-                ("logical_name", envelope.descriptor.name.as_str()),
-                ("harness_id", envelope.descriptor.harness.as_str()),
-                ("session_id", envelope.descriptor.session.as_str()),
-                ("execution_revision", envelope.descriptor.revision.as_str()),
-            ] {
+                check()?;
+                let bytes: String = payload.try_get("", "payload")?;
                 ensure!(
-                    row.try_get::<String>("", column)? == expected,
-                    "native owner metadata differs from payload"
+                    bytes.len() == usize::try_from(actual)?,
+                    "native owner payload length changed"
                 );
+                let envelope: Envelope = serde_json::from_str(&bytes)?;
+                ensure!(
+                    envelope.descriptor.installation.as_str() == installation
+                        && envelope.descriptor.tenant == *tenant
+                        && ((envelope.format == 1 && envelope.recovery.is_none())
+                            || (envelope.format == 2 && envelope.recovery.is_some())),
+                    "native peer ownership or format mismatch"
+                );
+                if let Some(metadata) = &envelope.recovery {
+                    metadata.validate()?;
+                }
+                if envelope.journal.get("released").and_then(|v| v.as_bool()) != Some(true)
+                    || envelope
+                        .recovery
+                        .as_ref()
+                        .is_some_and(|m| m.phase != Phase::Released)
+                {
+                    return Err(crate::tenancy::session::Rejected(
+                        bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
+                    )
+                    .into());
+                }
+                for (column, expected) in [
+                    (
+                        "creator_principal_id",
+                        envelope.descriptor.principal.as_str(),
+                    ),
+                    (
+                        "session_principal_id",
+                        envelope.descriptor.principal.as_str(),
+                    ),
+                    ("logical_name", envelope.descriptor.name.as_str()),
+                    ("harness_id", envelope.descriptor.harness.as_str()),
+                    ("session_id", envelope.descriptor.session.as_str()),
+                    ("execution_revision", envelope.descriptor.revision.as_str()),
+                ] {
+                    ensure!(
+                        row.try_get::<String>("", column)? == expected,
+                        "native owner metadata differs from payload"
+                    );
+                }
+                let journal = encode(&envelope.journal)?;
+                crate::harness::resources::managed::store::recovery::validate_released_owner(
+                    &journal,
+                    &envelope.descriptor,
+                )?;
             }
-            let journal = encode(&envelope.journal)?;
-            crate::harness::resources::managed::store::recovery::validate_released_owner(
-                &journal,
-                &envelope.descriptor,
-            )?;
         }
     }
     Ok(())

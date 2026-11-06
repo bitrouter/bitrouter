@@ -736,9 +736,13 @@ async fn assemble_app(
                 None => crate::db::connect(&config.database.url).await,
             }
             .context("connecting to database")?;
-            crate::db::run_migrations(&database)
-                .await
-                .context("running database migrations")?;
+            match &tenancy_database {
+                Some(owned) => owned.migrate().await,
+                None => crate::db::run_migrations(&database)
+                    .await
+                    .map_err(anyhow::Error::from),
+            }
+            .context("running database migrations")?;
             database
         }
     };
@@ -896,7 +900,12 @@ async fn assemble_app(
 
     // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(&routing_table.snapshot_config()));
+    let metering_storage = tenancy_enabled.then(|| Arc::new(std::sync::OnceLock::new()));
     let metering_store = MeteringStore::new(db.clone());
+    let metering_store = match &metering_storage {
+        Some(storage) => metering_store.with_storage_budget(storage.clone()),
+        None => metering_store,
+    };
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
     let metering_for_native_costs = metering_store.clone();
@@ -1166,7 +1175,7 @@ async fn assemble_app(
     }
     let pending_eval_decisions = PendingEvalDecisionStore::default();
     #[cfg(feature = "core")]
-    let eval_store = EvalStore::new(db.clone());
+    let eval_store = EvalStore::new(db.clone()).with_storage_budget(metering_storage.clone());
     #[cfg(feature = "core")]
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "core")]
@@ -1290,26 +1299,39 @@ async fn assemble_app(
         db.clone(),
         routing_table.clone(),
         policy_runtime.clone(),
-    );
+    )
+    .with_storage_budget(metering_storage.clone());
     let block_policies = (!is_shared).then(|| {
         crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
             db.clone(),
             routing_table.clone(),
             policy_runtime.clone(),
         )
+        .with_storage_budget(metering_storage.clone())
     });
     let canonical_binding = (!is_shared).then(|| {
-        crate::gateway::observability::binding::CanonicalRequestBinding::new(
+        let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
             routing_table.clone(),
             policy_runtime.clone(),
-        )
+        );
+        match &metering_storage {
+            Some(storage) => binding.with_storage_budget(storage.clone()),
+            None => binding,
+        }
     });
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
+    // The host's local control inventory is cloned from this same tracker.
+    let gateway_requests = match &metering_storage {
+        Some(storage) => gateway_requests.with_storage_budget(storage.clone()),
+        None => gateway_requests,
+    };
     let gateway_requests_for_hooks = gateway_requests.clone();
-    let judge_costs =
-        (!is_shared).then(|| crate::gateway::metering::judge::JudgeCosts::new(db.clone()));
+    let judge_costs = (!is_shared).then(|| {
+        crate::gateway::metering::judge::JudgeCosts::new(db.clone())
+            .with_storage_budget(metering_storage.clone())
+    });
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
@@ -1584,6 +1606,11 @@ async fn assemble_app(
         ),
         None => None,
     };
+    if let (Some(storage), Some(service)) = (&metering_storage, &tenancy)
+        && storage.set(service.storage_budget()).is_err()
+    {
+        anyhow::bail!("owned storage budget already initialized");
+    }
     let app = match &tenancy {
         Some(service) => app.with_tenancy(service.clone()),
         None => app,

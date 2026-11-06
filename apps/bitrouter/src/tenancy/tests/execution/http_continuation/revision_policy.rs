@@ -65,7 +65,6 @@ async fn configured(provider: &Server) -> Result<(Ready, ResourceRef, ResourceRe
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         None,
-        Default::default(),
         crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
         Arc::new(resources),
     )

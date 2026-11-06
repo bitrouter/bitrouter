@@ -173,7 +173,11 @@ async fn invocation(fixture: &Fixture, route: &ResourceRef) -> Result<Invocation
         credential.secret.as_deref().context("execution secret")?,
         &revision.revision_id,
     )?;
-    let submission = fixture.service.submission(&headers).map_err(failure)?;
+    let submission = fixture
+        .service
+        .submission(&headers)
+        .await
+        .map_err(failure)?;
     let execution = fixture
         .service
         .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)

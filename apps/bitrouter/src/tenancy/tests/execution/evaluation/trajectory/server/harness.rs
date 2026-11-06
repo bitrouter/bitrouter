@@ -36,12 +36,7 @@ pub(super) struct Harness {
 impl Harness {
     pub(super) async fn begin(database: &mut database::Fixture) -> Result<Self> {
         let db = database.connect().await?;
-        let fixture = Fixture::with_database(
-            db,
-            crate::tenancy::actor::OperationLimits::default(),
-            &mut |service| database.retain(service),
-        )
-        .await?;
+        let fixture = Fixture::with_database(db, &mut |service| database.retain(service)).await?;
         let (fixture, revision) = policy_fixture_with_existing(
             fixture,
             "https://example.invalid/v1",

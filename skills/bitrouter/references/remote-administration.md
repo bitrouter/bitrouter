@@ -64,11 +64,64 @@ tenancy:
   resource_origins: []
 ```
 
+`tenancy.capacity` selects finite process budgets independently of stored tenant
+and key counts. Omission preserves the lightweight defaults. For example, a
+single-instance operator can select an active execution budget without changing
+cache or upload bytes:
+
+```yaml
+tenancy:
+  enabled: true
+  capacity:
+    execution:
+      instance_active: 512
+      tenant_active: 32
+      instance_queue: 1024
+      tenant_queue: 64
+```
+
+This requires the same authenticated control and exclusive SQLite profile as
+other tenancy settings. Increasing a budget does not override a request's
+permissions or public protocol limits. Queues may be zero to disable waiting;
+other counts and bytes must be positive. Capacity changes require restart.
+Choose budgets using the deployment's measured memory, disk and latency, and
+keep explicit room for maintenance. See the canonical configuration specification
+for all fields and the distinction between runtime and retained directory size.
+
+Authority-view memory is allocated lazily: one third of its byte budget holds
+leased and optionally retained facts and two thirds cover publication staging.
+Directory entries are not preallocated. Pressure releases optional retention
+before refusing allocation; active leases keep their ownership. Raising directory counts
+does not enlarge caches, queues or connection pools. Retained unknown obligations
+remain valid when admission budgets are lowered; new work must fit the new
+budgets. There is no fixed tenant/key-count ceiling. The
+[process-capacity contract](../../../docs/specs/configuration/README.md#process-capacity)
+lists defaults and machine/budget validation rules; public request limits still
+apply when host budgets are raised.
+
+`receipts.high_water_bytes` covers live receipt accounting and pending completion
+reservations, not all retained history or the SQLite file. Eligible terminal
+payloads move to the database's internal archive while IDs and authorized reads
+remain available. Unknown obligations and live owners cannot be archived away.
+History/OAuth byte estimates and actual volume free space are separate facts;
+archive compression does not prove space was returned to the filesystem.
+Monitor real disk/WAL growth and maintain headroom: other filesystem users and
+SQLite write amplification can still cause ENOSPC after an admission probe.
+
+The format-2 store has no lifetime directory/history count quota. Startup walks
+all retained pages before serving; an insufficient validation working budget
+never authorizes a partial scan. Healthy legacy stores upgrade during validated
+startup. A verified legacy count-saturation latch requires the explicit stopped
+`tenancy offline upgrade-capacity` procedure in
+[the CLI reference](cli.md#local-db-only-offline-evidence); it is not a general
+fence-clearing command. Do not delete history or choose new operation IDs to
+work around uncertain outcomes.
+
 Submission bounds upload and admission, not the lifetime of an admitted stream.
 The optional execution total starts at admission; `null` or omission permits
 ongoing active work. The idle setting bounds each provider read and blocked
 output handoff, preventing silent upstreams or unread response bodies from
-indefinitely retaining reservations. All durations are positive integer seconds
+indefinitely retaining reservations. These lifetime durations are positive integer seconds
 up to 31,536,000. Preparation callbacks follow the execution's optional total;
 per-part callbacks use the idle budget and storage keeps its shorter limits.
 A disconnected preparation waiter cancels its owned call. Receipt settlement

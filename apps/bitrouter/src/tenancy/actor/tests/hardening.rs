@@ -48,9 +48,16 @@ async fn dml_failure_explicitly_rolls_back_before_cancelled_shutdown_can_finish(
         "CREATE TRIGGER custody_dml_fault BEFORE INSERT ON tenancy_operations WHEN NEW.operation_id = 'failed-dml' BEGIN SELECT RAISE(ABORT, 'injected DML failure'); END"
     ).await?;
     let before = fixture.service.current().map_err(failure)?;
+    let (begins, rollbacks) = fixture.service.cleanup.sql_counts_for_test();
     let gate = fixture.service.cleanup.hold(Phase::RollingBack);
     let mut response = fixture.enqueue(principal(&fixture, "failed-dml")?)?;
     tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
+    // The first rollback closes indexed preparation. Keep the same gate for
+    // the second rollback, which owns the injected write failure.
+    ensure!(fixture.service.cleanup.sql_counts_for_test() == (begins + 1, rollbacks));
+    gate.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
+    ensure!(fixture.service.cleanup.sql_counts_for_test() == (begins + 2, rollbacks + 1));
     ensure!(fixture.service.cleanup.disposition() == Disposition::Pending);
     ensure!(matches!(
         response.try_recv(),
@@ -58,9 +65,10 @@ async fn dml_failure_explicitly_rolls_back_before_cancelled_shutdown_can_finish(
     ));
     let snapshot = fixture
         .service
-        .snapshot
+        .authority
         .read()
-        .map_err(|_| anyhow::anyhow!("snapshot poisoned"))?
+        .map_err(|_| anyhow::anyhow!("authority poisoned"))?
+        .header()
         .clone();
     ensure!(snapshot.revision == before.revision && snapshot.operation_ids == before.operation_ids);
     let service = fixture.service.clone();
@@ -75,6 +83,7 @@ async fn dml_failure_explicitly_rolls_back_before_cancelled_shutdown_can_finish(
     ensure!(matches!(result, Err(error) if error.0.code == ErrorCode::StorageUnavailable));
     tokio::time::timeout(Duration::from_secs(3), fixture.service.shutdown()).await??;
     ensure!(fixture.service.cleanup.disposition() == Disposition::RolledBack);
+    ensure!(fixture.service.cleanup.sql_counts_for_test() == (begins + 2, rollbacks + 2));
     ensure!(
         fixture
             .operation(&"failed-dml".try_into()?)
@@ -249,6 +258,13 @@ async fn timely_deadline_rollback_preserves_authority_and_read_capacity() -> Res
 async fn expired_queued_credential_read_never_enters_begin() -> Result<()> {
     use crate::tenancy::actor::{CredentialRead, Job};
     let fixture = Fixture::open(crate::db::connect("sqlite::memory:").await?, None).await?;
+    let identity = fixture
+        .service
+        .authority_read(crate::tenancy::actor::AuthoritySubject::Caller(
+            fixture.operator.clone(),
+        ))
+        .await
+        .map_err(failure)?;
     let gate = fixture.service.cleanup.hold(Phase::Beginning);
     let permit = fixture.service.reads.clone().try_acquire_owned()?;
     let (reply, response) = oneshot::channel();
@@ -257,6 +273,7 @@ async fn expired_queued_credential_read_never_enters_begin() -> Result<()> {
         .enqueue(
             Job::Credential(CredentialRead {
                 caller: fixture.operator.clone(),
+                authority: identity.lease,
                 id: fixture.credential.credential_id.clone(),
                 deadline: tokio::time::Instant::now(),
                 permit,

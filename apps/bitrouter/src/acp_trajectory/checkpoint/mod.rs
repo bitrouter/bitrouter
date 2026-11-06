@@ -20,7 +20,7 @@ use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    QuerySelect, Set,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -198,8 +198,10 @@ impl CanonicalStore {
         identity: &SessionIdentity,
         expected_watermark: i64,
     ) -> Result<Checkpoint> {
-        self.freeze_checkpoint_checked(identity, expected_watermark, |_| Box::pin(async { Ok(()) }))
-            .await
+        self.freeze_checkpoint_checked(identity, expected_watermark, |_, _| {
+            Box::pin(async { Ok(()) })
+        })
+        .await
     }
 
     /// Automated discovery fences its feedback epoch in the same transaction
@@ -211,7 +213,10 @@ impl CanonicalStore {
         precondition: F,
     ) -> Result<Checkpoint>
     where
-        F: for<'a> FnOnce(&'a DatabaseTransaction) -> futures::future::BoxFuture<'a, Result<()>>
+        F: for<'a> FnOnce(
+                &'a DatabaseTransaction,
+                &'a mut crate::storage::write::Write,
+            ) -> futures::future::BoxFuture<'a, Result<()>>
             + Send,
     {
         ensure!(expected_watermark >= 0, "watermark must be nonnegative");
@@ -295,75 +300,81 @@ impl CanonicalStore {
         let prefix_digest = content_digest(&segments)?;
         let checkpoint_id = digest(&(identity, expected_watermark, &prefix_digest))?;
         let family_id = self.family_id(identity).await?;
-        let tx = self.db.begin().await?;
-        precondition(&tx).await?;
-        // Stable lock ordering prevents two overlapping fork freezes from
-        // acquiring parent/child locks in opposite orders.
-        let mut locked_sessions = BTreeMap::new();
-        for (key, expected) in &dependencies {
-            let current = lock_session(&tx, key).await?;
-            ensure!(
-                current == *expected,
-                "session changed while freezing; retry with a fresh prefix"
-            );
-            locked_sessions.insert(key.clone(), current);
-        }
-        if checkpoints::Entity::find_by_id(&checkpoint_id)
-            .filter(crate::storage::legacy::scope("acp_checkpoints"))
-            .lock_exclusive()
-            .one(&tx)
-            .await?
-            .is_some()
-        {
-            let existing = locked_manifest(&tx, identity, &checkpoint_id, &locked_sessions).await?;
-            tx.commit().await?;
-            self.observe_checkpoint_resources(identity, &checkpoint_id)
+        let (mut write, tx) =
+            crate::storage::write::Write::begin(&self.db, &self.storage_budget, false).await?;
+        let result = async {
+            precondition(&tx, &mut write).await?;
+            // Stable lock ordering prevents two overlapping fork freezes from
+            // acquiring parent/child locks in opposite orders.
+            let mut locked_sessions = BTreeMap::new();
+            for (key, expected) in &dependencies {
+                write.session(&tx, key).await?;
+                let current = lock_session(&tx, key).await?;
+                ensure!(
+                    current == *expected,
+                    "session changed while freezing; retry with a fresh prefix"
+                );
+                locked_sessions.insert(key.clone(), current);
+            }
+            if checkpoints::Entity::find_by_id(&checkpoint_id)
+                .filter(crate::storage::legacy::scope("acp_checkpoints"))
+                .lock_exclusive()
+                .one(&tx)
+                .await?
+                .is_some()
+            {
+                let existing =
+                    locked_manifest(&tx, identity, &checkpoint_id, &locked_sessions).await?;
+                return Ok(existing);
+            }
+            let previous = checkpoints::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_checkpoints"))
+                .filter(checkpoints::Column::SessionKey.eq(identity.key()?))
+                .filter(checkpoints::Column::Deleted.eq(false))
+                .filter(checkpoints::Column::Watermark.lt(expected_watermark))
+                .order_by_desc(checkpoints::Column::Watermark)
+                .lock_exclusive()
+                .one(&tx)
                 .await?;
-            return Ok(existing);
-        }
-        let previous = checkpoints::Entity::find()
-            .filter(crate::storage::legacy::scope("acp_checkpoints"))
-            .filter(checkpoints::Column::SessionKey.eq(identity.key()?))
-            .filter(checkpoints::Column::Deleted.eq(false))
-            .filter(checkpoints::Column::Watermark.lt(expected_watermark))
-            .order_by_desc(checkpoints::Column::Watermark)
-            .lock_exclusive()
-            .one(&tx)
-            .await?;
-        let cp = Checkpoint {
-            schema_version: 1,
-            canonical_version: CANONICAL_VERSION,
-            checkpoint_id: checkpoint_id.clone(),
-            identity: identity.clone(),
-            watermark: expected_watermark,
-            prefix_digest,
-            previous_checkpoint_id: previous.map(|row| row.checkpoint_id),
-            family_id,
-            segments,
-            gaps: gaps.into_iter().collect(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        let inserted = checkpoints::Entity::insert(checkpoints::ActiveModel {
-            checkpoint_id: Set(checkpoint_id.clone()),
-            session_key: Set(identity.key()?),
-            watermark: Set(expected_watermark),
-            manifest_json: Set(serde_json::to_string(&cp)?),
-            deleted: Set(false),
-        })
-        .exec_without_returning(&tx)
-        .await?;
-        ensure!(inserted == 1, "checkpoints row was not inserted");
-        for key in dependencies.keys() {
-            let inserted = members::Entity::insert(members::ActiveModel {
+            let cp = Checkpoint {
+                schema_version: 1,
+                canonical_version: CANONICAL_VERSION,
+                checkpoint_id: checkpoint_id.clone(),
+                identity: identity.clone(),
+                watermark: expected_watermark,
+                prefix_digest,
+                previous_checkpoint_id: previous.map(|row| row.checkpoint_id),
+                family_id,
+                segments,
+                gaps: gaps.into_iter().collect(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            write.account(&(&checkpoint_id, identity.key()?, expected_watermark, &cp))?;
+            let inserted = checkpoints::Entity::insert(checkpoints::ActiveModel {
                 checkpoint_id: Set(checkpoint_id.clone()),
-                session_key: Set(key.clone()),
+                session_key: Set(identity.key()?),
+                watermark: Set(expected_watermark),
+                manifest_json: Set(serde_json::to_string(&cp)?),
+                deleted: Set(false),
             })
             .exec_without_returning(&tx)
             .await?;
-            ensure!(inserted == 1, "members row was not inserted");
+            ensure!(inserted == 1, "checkpoints row was not inserted");
+            for key in dependencies.keys() {
+                write.account(&(&checkpoint_id, key))?;
+                let inserted = members::Entity::insert(members::ActiveModel {
+                    checkpoint_id: Set(checkpoint_id.clone()),
+                    session_key: Set(key.clone()),
+                })
+                .exec_without_returning(&tx)
+                .await?;
+                ensure!(inserted == 1, "members row was not inserted");
+            }
+            Ok(cp)
         }
-        tx.commit().await?;
-        self.observe_checkpoint_resources(identity, &checkpoint_id)
+        .await;
+        let cp = write.finish(tx, result).await?;
+        self.observe_checkpoint_resources(identity, &cp.checkpoint_id)
             .await?;
         Ok(cp)
     }

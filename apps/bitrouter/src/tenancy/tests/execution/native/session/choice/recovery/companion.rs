@@ -368,7 +368,12 @@ async fn campaign(modes: &[&str]) -> Result<()> {
             .line_with_deadline("native-companion-checked", deadline)
             .await;
         let reaped = child.reap(observed.is_err()).await;
-        observed?;
+        observed.with_context(|| {
+            format!(
+                "native companion mode={mode}, expected=native-companion-checked, reap_ok={}",
+                reaped.is_ok()
+            )
+        })?;
         reaped?;
     }
     Ok(())

@@ -82,12 +82,7 @@ impl Host {
         let db_path = directory.path().join("block.sqlite");
         let database =
             crate::db::connect_owned_tenancy(&format!("sqlite://{}", db_path.display())).await?;
-        let mut fixture = Fixture::with_database(
-            database.database().clone(),
-            OperationLimits::default(),
-            &mut |_| {},
-        )
-        .await?;
+        let mut fixture = Fixture::with_database(database.database().clone(), &mut |_| {}).await?;
         let upstream = MockServer::start().await;
         let usage = options.usage.clone().unwrap_or_else(|| json!({"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,
             "prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}));
@@ -173,9 +168,8 @@ impl Host {
                 "installation_id":fixture.installation,"resources":imported}))?).await?;
             let (db, owner, claim) = database.claim()?;
             let snapshot = store::load(&db, chrono::Utc::now()).await?;
-            fixture.service = Service::start_resources_with_continuations(db, Some(owner), OperationLimits::default(), snapshot,
-                Arc::new(resources), (None, &crate::config::ContinuationConfig::default(), Some(claim),
-                    crate::telemetry::receipt_latency::Sink::default()), None).await?;
+            fixture.service = Service::start_resources_with_continuations(db, Some(owner), snapshot,
+                Arc::new(resources), crate::tenancy::Provisioning { import: None, continuations: &crate::config::ContinuationConfig::default(), claim: Some(claim), receipt_observer: crate::telemetry::receipt_latency::Sink::default(), config: &crate::config::tenancy::TenancyConfig::default() }, None).await?;
             fixture.service.dispatch_test_ready.store(true, Ordering::Release);
             let primary = configure(&fixture, options.assessment.is_some()).await?;
             let sibling = match sibling.take() {

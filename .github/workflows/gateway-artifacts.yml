@@ -222,7 +222,7 @@ jobs:
           cargo test --locked -p bitrouter-ai --all-features --test artifact_contracts
           cargo test --locked -p bitrouter --no-default-features --features multi-instance --test artifact_build_metadata
           cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance --lib --test-threads 2 \
-            -E 'test(update::tests::) | test(upgrade::tests::) | test(output::reports::artifact::tests::)'
+            -E 'test(update::tests::) | test(/^upgrade::tests::/) | test(output::reports::artifact::tests::)'
       - name: Run actual shared PostgreSQL process campaigns against the archive
         shell: bash
         run: |
@@ -239,3 +239,13 @@ jobs:
           cargo nextest run --locked -p bitrouter --all-features --lib \
             --run-ignored only --test-threads 2 --retries 0 \
             -E '(test(gateway::shared::) & not test(gateway::shared::runtime::process_tests::)) | test(continuation::shared::) | test(assemble::writers_tests::shared::)'
+      - name: Preserve failed shared gateway child logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: shared-postgres-child-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            /tmp/bitrouter-process-cleanup-failure-*.log
+            ${{ runner.temp }}/shared-gateway-package/build-info.json

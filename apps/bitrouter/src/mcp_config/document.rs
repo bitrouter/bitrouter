@@ -364,6 +364,7 @@ mod tests {
         format!("name: {name}\ntransport:\n  type: http\n  url: https://example.com/mcp\n")
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn preserves_other_nodes_comments_order_and_crlf() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -386,6 +387,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn header_braces_and_literal_comment_lines_are_not_reinterpreted() -> Result<()> {
         let snapshot = Snapshot { path: PathBuf::from("/unused/config.yaml"), raw: Some("inherit_defaults: false\nmcp_servers: # keep {} literally\n  old:\n    name: old\n    transport:\n      type: stdio\n      command: |\n        # literal command, not a YAML comment\n# next root comment\nchat: {}\n".into()) };
@@ -401,6 +403,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn rejects_stale_or_created_sources_and_preserves_bytes() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -417,6 +420,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn concurrent_writers_use_one_lock_and_only_one_snapshot_can_commit() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -448,7 +452,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "mcp"))]
     #[test]
     fn permissions_are_preserved_and_replaced_symlink_is_never_followed() -> Result<()> {
         use std::os::unix::fs::{PermissionsExt, symlink};

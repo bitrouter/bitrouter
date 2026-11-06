@@ -34,7 +34,7 @@ const RESOURCE_KEY: [&str; 5] = [
 pub(super) const MAX_ENVELOPE_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_DEPENDENCIES: usize = 4096;
-const MAX_ACTIVE: usize = 32;
+const ACTIVE_PAGE_ROWS: usize = 32;
 const MAX_JSON_DEPTH: usize = 64;
 
 /// A failed immutable insert or active-pointer compare-and-swap.
@@ -43,7 +43,7 @@ const MAX_JSON_DEPTH: usize = 64;
 pub(super) struct RevisionConflict;
 
 /// One explicitly provisioned, fully qualified encrypted artifact revision.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct StoredResource {
     pub reference: ResourceRef,
     pub compiler_version: String,
@@ -57,7 +57,7 @@ pub(super) struct StoredResource {
 }
 
 /// The public document and the private encrypted output of its compiler.
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct StoredConfiguration {
     pub revision: ConfigurationRevision,
     pub compiled: JsonValue,
@@ -684,20 +684,40 @@ pub(super) async fn set_active(
     Ok(())
 }
 
-/// Load at most 32 active pointers; an oversized store fails instead of truncating.
-/// The caller must compare each authority revision with its loaded authority snapshot.
+#[cfg(test)]
+pub(super) async fn active_revisions(
+    db: &impl ConnectionTrait,
+) -> Result<Vec<StoredActiveConfiguration>> {
+    let mut output = Vec::new();
+    let mut after = None;
+    loop {
+        let page = active_revision_page(db, after.as_ref()).await?;
+        if page.is_empty() {
+            return Ok(output);
+        }
+        after = page.last().map(|record| record.tenant.clone());
+        output.extend(page);
+    }
+}
+
+/// Read one keyset page of active pointers under the caller's fixed snapshot.
+/// The caller must visit every page and check each published authority revision.
 ///
 /// # Errors
 /// Rejects oversized stores, malformed metadata, missing targets or pointers that
 /// predate their target's creation. Read within the caller's startup transaction.
-pub(super) async fn active_revisions(
+pub(super) async fn active_revision_page(
     db: &impl ConnectionTrait,
+    after: Option<&TenantId>,
 ) -> Result<Vec<StoredActiveConfiguration>> {
     let mut query = Query::select();
     query
         .from(Alias::new(ACTIVE))
         .order_by(Alias::new("tenant_id"), sea_orm::sea_query::Order::Asc)
-        .limit(u64::try_from(MAX_ACTIVE + 1)?);
+        .limit(u64::try_from(ACTIVE_PAGE_ROWS)?);
+    if let Some(after) = after {
+        query.and_where(Expr::col(Alias::new("tenant_id")).gt(after.as_str()));
+    }
     integer_columns(
         &mut query,
         db.get_database_backend(),
@@ -711,10 +731,6 @@ pub(super) async fn active_revisions(
     let rows = db
         .query_all(db.get_database_backend().build(&query))
         .await?;
-    ensure!(
-        rows.len() <= MAX_ACTIVE,
-        "active configuration capacity exceeded"
-    );
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
         let record = StoredActiveConfiguration {
@@ -813,25 +829,4 @@ pub(super) async fn reserve_learner_configuration(
         3,
     )
     .await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(super) async fn reserve_learner_catalog(
-    db: &impl ConnectionTrait,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<()> {
-    use crate::storage::operation_budget::Error;
-    budget.check()?;
-    let query = Query::select()
-        .from(Alias::new(RESOURCES))
-        .expr_as(Expr::cust("COUNT(*)"), Alias::new("count"))
-        .to_owned();
-    let row = db
-        .query_one(db.get_database_backend().build(&query))
-        .await?
-        .context("resource count absent")?;
-    let count = usize::try_from(row.try_get::<i64>("", "count")?)?;
-    ensure!(count <= MAX_DEPENDENCIES, Error::Capacity);
-    budget.charge(count, count.checked_mul(2048).ok_or(Error::Capacity)?)?;
-    Ok(())
 }

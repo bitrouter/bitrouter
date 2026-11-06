@@ -333,7 +333,7 @@ async fn protected_ledger_rejects_unbound_duplicate_malformed_and_forged_profile
 async fn response_bodies_retain_ingress_capacity_and_read_only_grants_cannot_write() -> Result<()> {
     tokio::time::timeout(TIMEOUT, async {
         let fixture = Fixture::new().await?;
-        let mut input = fixture.issuance("eval-viewer")?;
+        let mut input = fixture.issuance("eval-viewer").await?;
         input.permissions = vec![Permission::ResourceRead];
         let issued = issued(
             fixture

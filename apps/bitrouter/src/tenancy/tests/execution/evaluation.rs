@@ -163,14 +163,8 @@ async fn policy_fixture_with_existing(
         )
         .await?;
     let snapshot = super::super::super::store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        super::super::super::actor::OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     started(&fixture.service);
     let mut input = fixture.configuration_input("observed-config")?;
     input.document.routes = vec![route];

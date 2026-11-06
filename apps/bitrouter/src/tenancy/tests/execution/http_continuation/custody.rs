@@ -307,6 +307,7 @@ async fn admitted(ready: &Ready) -> Result<Arc<crate::tenancy::execution::Tenant
         .fixture
         .service
         .submission(&ready.headers)
+        .await
         .map_err(failure)?;
     ready
         .fixture

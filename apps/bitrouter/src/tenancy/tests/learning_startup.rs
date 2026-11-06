@@ -1,7 +1,7 @@
 //! Separately built reduced binaries must fence an interrupted paid draft.
 //! The full producer uses leased physical SQLite from its first connection.
 use super::*;
-use crate::tenancy::{actor::OperationLimits, ownership, resources::Resources, store};
+use crate::tenancy::{ownership, resources::Resources, store};
 use bitrouter_ai::tenancy::identity::RevisionId;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,9 @@ async fn consume(path: &Path, pending: bool, native: bool) -> Result<()> {
         let state = store::load(&db, Utc::now()).await?;
         ensure!(state.installation == transfer.installation);
         ensure!(
-            state.active_configurations.is_empty(),
+            crate::tenancy::configuration_store::active_revision_page(&db, None)
+                .await?
+                .is_empty(),
             "an active profile could mask the pending fence"
         );
         let resources = Resources::with_key(transfer.installation.clone(), [29; 32])?;
@@ -88,14 +90,9 @@ async fn consume(path: &Path, pending: bool, native: bool) -> Result<()> {
             .validate_compiled(&draft)
             .map_err(|code| anyhow::anyhow!("draft integrity failed: {code:?}"))?;
         ensure!(resources.validate_executable(&draft) == Err(ErrorCode::CapabilityMismatch));
-        let started = Service::start_prepared(
-            db.clone(),
-            Some(owner.clone()),
-            OperationLimits::default(),
-            state,
-            Arc::new(resources),
-        )
-        .await;
+        let started =
+            Service::start_prepared(db.clone(), Some(owner.clone()), state, Arc::new(resources))
+                .await;
         match started {
             Ok(service) => {
                 let healthy = service.current().is_ok();

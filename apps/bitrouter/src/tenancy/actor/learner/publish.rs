@@ -23,19 +23,42 @@ impl Worker {
         budget
             .charge(acquired.charged.0, acquired.charged.1)
             .map_err(|error| self.learner_error(error.into()))?;
-        let old = self.current()?;
-        if old.revision != acquired.authority_revision {
+        let header = self
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .header()
+            .clone();
+        if header.revision != acquired.authority_revision {
             return Err(ErrorCode::RevisionConflict.into());
         }
-        if old.saturated || old.operation_ids >= self.limits.ordinary {
+        if header.saturated {
             return Err(ErrorCode::CapacityExceeded.into());
         }
         let input = &acquired.registration.input;
+        control.reserve_write(learner::MAX_BYTES, false)?;
         let tx = control
             .begin_repeatable_read(&self.db)
             .await
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         let result = async {
+            let bytes = self.authority.load_budget() / 3;
+            let mut old = directory::load_tenant_in(
+                &tx,
+                &header,
+                &acquired.registration.ceiling.caller(),
+                &input.tenant,
+                true,
+                bytes,
+            )
+            .await?
+            .snapshot;
+            old.resource_lifecycle.restrict();
+            directory::extend_dependencies_in(&tx, &mut old, &acquired.dependencies, bytes).await?;
+            acquired
+                .identity
+                .check_facts(&old, &acquired.dependencies)
+                .map_err(BudgetError::Rejected)?;
             let (row, mut schedule) =
                 learner::store::read(&tx, &input.installation, &input.tenant, &input.id, budget)
                     .await?
@@ -63,15 +86,16 @@ impl Worker {
                 .map_err(BudgetError::Rejected)?;
             let configured = self
                 .resources
-                .publish_learner_in(&tx, &old, acquired, calculated, budget)
+                .publish_learner_in(&tx, &mut old, acquired, calculated, budget)
                 .await?;
-            let mut next = (*old).clone();
+            let mut next = Snapshot::from_header(&header);
             next.revision = configured.authority_revision;
             next.operation_ids = next
                 .operation_ids
                 .checked_add(1)
+                .filter(|value| *value <= i64::MAX as u64)
                 .context("operation count overflow")?;
-            next.saturated |= next.operation_ids >= self.limits.ordinary;
+
             let result = OperationResult {
                 operation_id: acquired.operation.clone(),
                 status: OperationStatus::Applied,
@@ -108,7 +132,7 @@ impl Worker {
             learner::store::put(&tx, &schedule, Some(&row), budget).await?;
             acquired
                 .identity
-                .check(&configured.dependencies)
+                .check_facts(&old, &configured.dependencies)
                 .map_err(BudgetError::Rejected)?;
             budget.check()?;
             let changes = [store::Change::Configuration(configured)];
@@ -121,10 +145,14 @@ impl Worker {
                 .check(&acquired.dependencies)
                 .map_err(BudgetError::Rejected)?;
             budget.check()?;
-            Ok::<_, anyhow::Error>((Arc::new(next), result))
+            let publication = self
+                .authority
+                .prepare(next.header(), &changes, None)
+                .map_err(BudgetError::Rejected)?;
+            Ok::<_, anyhow::Error>((result, publication))
         }
         .await;
-        let (next, result) = match result {
+        let (result, publication) = match result {
             Ok(value) => value,
             Err(error) => {
                 control
@@ -142,10 +170,10 @@ impl Worker {
             self.proof.quarantine();
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
-        *self
-            .snapshot
-            .write()
-            .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))? = next;
+        if publication.publish().is_err() {
+            self.proof.quarantine();
+            return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
+        }
         #[cfg(all(test, unix))]
         job.test
             .cross_final_deadline(job.deadline, Some(acquired.deadline))?;

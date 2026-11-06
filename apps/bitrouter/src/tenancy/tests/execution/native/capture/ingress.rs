@@ -26,7 +26,7 @@ async fn attack(mode: &str, expected: Limit) -> Result<()> {
     let mut authority = None;
     let checked: Result<()> = async {
         let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
-        authority = Some(fixture.service.host_authority(&headers).map_err(failure)?);
+        authority = Some(fixture.service.host_authority(&headers).await.map_err(failure)?);
         let mut proposed = launch(&program, &marker, &listener.origin, None);
         let AcpTransport::Stdio { env, .. } = &mut proposed.agent.transport;
         env.insert("CAPTURE_FIXTURE_INGRESS_ATTACK".into(), mode.into());

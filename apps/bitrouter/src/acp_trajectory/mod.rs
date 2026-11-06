@@ -32,6 +32,7 @@ use crate::storage::session_identity::SessionIdentity;
 #[derive(Clone)]
 pub struct CanonicalStore {
     db: DatabaseConnection,
+    storage_budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 /// An immutable observed event with a stable connection reference.
@@ -85,8 +86,20 @@ pub struct SessionTranscript {
 }
 
 impl CanonicalStore {
+    #[cfg(feature = "core")]
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            storage_budget: None,
+        }
     }
 
     /// Seed persisted history in reader tests without granting a production writer.

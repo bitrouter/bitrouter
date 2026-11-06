@@ -11,8 +11,8 @@ async fn paid_repair_consuming_commit_error_keeps_owner_until_death_then_repairs
 }
 
 #[tokio::test]
-#[ignore = "real paid repair held beyond the original startup deadline; select this parent"]
-async fn paid_repair_late_known_commit_retires_without_publishing_authority_or_resending()
+#[ignore = "real paid startup waits for its acknowledged repair; select this parent"]
+async fn paid_repair_known_commit_publishes_readiness_only_after_ack_without_resending()
 -> Result<()> {
     restart::commit_campaign("late-live").await
 }
@@ -27,11 +27,20 @@ async fn commit_fault(db: &sea_orm::DatabaseConnection) -> Result<()> {
     // The owned SQLite profile has one physical writer. This is a real deferred
     // FK violation, whose INSERT succeeds and whose consuming COMMIT fails.
     // No error string, disposition, terminal or Seed is supplied by the fixture.
+    // Fault the subsequent job update, keeping the receipt schema valid for
+    // startup inventory. The corresponding receipt must already be in this tx.
     for sql in [
         "PRAGMA foreign_keys=ON",
         "CREATE TABLE paid_repair_fk_parent(id INTEGER PRIMARY KEY)",
         "CREATE TABLE paid_repair_fk_child(id INTEGER REFERENCES paid_repair_fk_parent(id) DEFERRABLE INITIALLY DEFERRED)",
-        "CREATE TRIGGER paid_repair_commit_fault AFTER INSERT ON tenancy_execution_receipts WHEN EXISTS (SELECT 1 FROM checkpoint_evolution WHERE kind='owned_judge_active_v3' AND json_extract(body,'$.execution')=NEW.execution_id) BEGIN INSERT INTO paid_repair_fk_child(id) VALUES(1); END",
+        "CREATE TRIGGER paid_repair_commit_fault AFTER UPDATE ON checkpoint_evolution
+         WHEN OLD.kind='owned_judge_active_v3' AND NEW.kind='owned_judge_job'
+         AND NEW.installation_id=OLD.installation_id AND NEW.tenant_id=OLD.tenant_id
+         AND json_extract(NEW.body,'$.execution')=json_extract(OLD.body,'$.execution')
+         AND EXISTS (SELECT 1 FROM tenancy_execution_receipts
+                     WHERE installation_id=OLD.installation_id AND tenant_id=OLD.tenant_id
+                     AND execution_id=json_extract(OLD.body,'$.execution'))
+         BEGIN INSERT INTO paid_repair_fk_child(id) VALUES(1); END",
     ] {
         db.execute_unprepared(sql).await?;
     }
@@ -180,19 +189,51 @@ async fn opener() -> Result<()> {
         )
         .await
     })));
-    let (proof, epoch) = tokio::time::timeout(TIMEOUT, receive).await??;
+    let (proof, epoch) = tokio::time::timeout(TIMEOUT, receive)
+        .await
+        .context("paid repair bootstrap attachment timed out")??;
     let result = async {
-        tokio::time::timeout(TIMEOUT, epoch.entered.notified()).await?;
-        // Existing 031 read-only pin validation precedes paid prepare/apply. Its
-        // held rollback lets us install the exact-key observer before either.
+        tokio::time::timeout(TIMEOUT, epoch.entered.notified())
+            .await
+            .context("paid repair initial rollback gate timed out")?;
+        // Hold the startup read rollback to install the exact-key observer
+        // before paid repair. Earlier bootstrap commits may precede its COMMIT.
         proof.observe_receipt_for_test(identity.clone())?;
         let commit = proof.hold(Phase::Committing);
         epoch.release.notify_one();
-        tokio::time::timeout(TIMEOUT, commit.entered.notified()).await?;
-        ensure!(proof.disposition() == Disposition::Pending);
-        let counts = proof.sql_counts_for_test();
-        let trace = proof.receipt_trace_for_test()?;
-        ensure!(trace.key == identity && !trace.overflow);
+        let selected = tokio::time::timeout(TIMEOUT, async {
+            let mut held = commit;
+            loop {
+                tokio::select! {
+                    () = held.entered.notified() => {},
+                    opened = opening.as_mut().context("paid repair opening waiter")? => {
+                        let opened = opened.context("paid repair opener task failed before COMMIT")?;
+                        match opened {
+                            Err(error) => return Err(error.context("paid repair opener ended before matching COMMIT")),
+                            Ok(service) => {
+                                let cleanup = service.shutdown().await;
+                                anyhow::bail!("paid repair opened without matching COMMIT: {cleanup:?}");
+                            }
+                        }
+                    }
+                }
+                ensure!(proof.disposition() == Disposition::Pending);
+                let trace = proof.receipt_trace_for_test()?;
+                ensure!(trace.key == identity && !trace.overflow);
+                if trace.facts[0].is_some() {
+                    break Ok::<_, anyhow::Error>((proof.sql_counts_for_test(), trace));
+                }
+                // Install before release so the next COMMIT cannot pass its gate.
+                let next = proof.hold(Phase::Committing);
+                held.release.notify_one();
+                held = next;
+            }
+        }).await;
+        let (counts, trace) = selected.with_context(|| format!(
+            "paid repair matching COMMIT gate timed out: disposition={:?}, SQL counts={:?}, opener_finished={}",
+            proof.disposition(), proof.sql_counts_for_test(),
+            opening.as_ref().is_some_and(|waiter| waiter.is_finished()),
+        ))??;
         let candidate = trace.facts[0].as_ref().context("paid repair candidate never reached COMMIT")?;
         ensure!(candidate.commit.is_none() && candidate.fingerprint.attempt_count == 0);
         let fingerprint = candidate.fingerprint.clone();
@@ -204,11 +245,8 @@ async fn opener() -> Result<()> {
             waiter.abort();
             ensure!(matches!((&mut waiter).await, Err(error) if error.is_cancelled()));
         }
-        if mode != "commit-error" {
-            // Real unmodified management deadline; no paused clock, short limit,
-            // synthesized timeout or release from an alternative owner.
-            tokio::time::timeout(TIMEOUT, proof.wait_fenced()).await?;
-        }
+        // Complete startup has no total-directory deadline. A pending COMMIT
+        // retains its owner even when the opener's receiver has gone away.
         ensure!(proof.disposition() == Disposition::Pending);
         if let Some(waiter) = &opening { ensure!(!waiter.is_finished()); }
         locked(&root)?;
@@ -219,6 +257,9 @@ async fn opener() -> Result<()> {
             release_from_parent().await?;
             ensure!(proof.disposition() == Disposition::Pending);
             locked(&root)?;
+            if let Some(waiter) = &opening {
+                ensure!(!waiter.is_finished(), "startup completed before the held COMMIT was released");
+            }
             proof.release_gate();
             let trace = tokio::time::timeout(TIMEOUT, async {
                 loop {
@@ -238,10 +279,26 @@ async fn opener() -> Result<()> {
             ensure!(fact.begin.is_none() && fact.store.is_none() && fact.rollback.is_none());
             if let Some(waiter) = opening.take() {
                 let opened = tokio::time::timeout(TIMEOUT, waiter).await??;
-                if let Ok(service) = opened {
-                    let cleanup = service.shutdown().await;
-                    anyhow::bail!("faulted/expired bootstrap published authority: {cleanup:?}");
+                match (mode.as_str(), opened) {
+                    ("commit-error", Err(_)) => {},
+                    ("late-live", Ok(service)) => {
+                        let ready = service.current();
+                        let cleanup = service.shutdown().await;
+                        drop(service);
+                        ensure!(ready.is_ok(), "acknowledged paid repair did not publish readiness");
+                        cleanup?;
+                    }
+                    (_, Ok(service)) => {
+                        let cleanup = service.shutdown().await;
+                        drop(service);
+                        anyhow::bail!("faulted bootstrap published authority: {cleanup:?}");
+                    }
+                    (_, Err(error)) => return Err(error.context("acknowledged paid repair did not finish startup")),
                 }
+            }
+            if mode != "commit-error" {
+                wait_file(&root).await?;
+                proof.ensure_clean()?;
             }
             let after = exact(&reader).await?;
             if mode == "commit-error" {
@@ -257,9 +314,8 @@ async fn opener() -> Result<()> {
                 blocked().await
             } else {
                 ensure!(fact.commit.is_some_and(|outcome| outcome.ok && outcome.sqlite_code.is_none()));
-                ensure!(proof.disposition() == Disposition::Committed);
-                proof.ensure_clean()?;
-                proof.wait_fenced().await;
+                // The exact fact above records this COMMIT. Later startup read
+                // transactions may have changed the shared disposition.
                 interrupted(&before, &after)?;
                 let terminal = crate::tenancy::receipts::store::lookup_candidate(
                     &reader, &identity.installation, &identity.tenant, &identity.execution,
@@ -267,9 +323,8 @@ async fn opener() -> Result<()> {
                 ensure!(terminal.fingerprint_for_test() == fingerprint,
                     "late ACK published a different immutable receipt candidate");
                 std::fs::write(root.join("after.json"), serde_json::to_vec(&after)?)?;
-                // A known ACK permits clean retirement, even after its waiter
-                // vanished. This checks release while the child is still alive.
-                wait_file(&root).await?;
+                // Checked shutdown or cancelled-opener retirement released the
+                // real claim while this child is still alive.
                 signal("paid-repair-late-commit-retired")?;
                 Ok(())
             }

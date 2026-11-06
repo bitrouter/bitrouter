@@ -34,7 +34,14 @@ async fn judge_cost_reservations_are_atomic_scoped_and_not_zero_when_unobserved(
     let mut local = job("local", "one");
     let foreign = job("another-owner", "two");
     let tx = db.begin().await?;
-    costs.reserve(&tx, &local, "brjudge_rolled-back").await?;
+    costs
+        .reserve(
+            &tx,
+            &mut crate::storage::write::Write::start(&None, false)?,
+            &local,
+            "brjudge_rolled-back",
+        )
+        .await?;
     tx.rollback().await?;
     assert!(
         costs
@@ -44,7 +51,14 @@ async fn judge_cost_reservations_are_atomic_scoped_and_not_zero_when_unobserved(
             .is_none()
     );
     let tx = db.begin().await?;
-    costs.reserve(&tx, &local, "brjudge_reserved").await?;
+    costs
+        .reserve(
+            &tx,
+            &mut crate::storage::write::Write::start(&None, false)?,
+            &local,
+            "brjudge_reserved",
+        )
+        .await?;
     tx.commit().await?;
     local.request_ids = vec![
         "brjudge_reserved".into(),
@@ -100,5 +114,44 @@ async fn judge_cost_reservations_are_atomic_scoped_and_not_zero_when_unobserved(
             .total_cost_micro_usd,
         Some(0)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_judge_reservation_failure_rolls_back_under_its_owner_charge() -> Result<()> {
+    use sea_orm::ConnectionTrait;
+    use std::sync::{Arc, OnceLock};
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let tenancy = crate::tenancy::Service::open(db.clone(), None).await?;
+    let cell = Arc::new(OnceLock::new());
+    cell.set(tenancy.storage_budget())
+        .map_err(|_| anyhow::anyhow!("cell already set"))?;
+    let costs = JudgeCosts::new(db.clone()).with_storage_budget(Some(cell));
+    db.execute_unprepared("CREATE TRIGGER reject_judge_lookup BEFORE INSERT ON checkpoint_evolution WHEN NEW.kind = 'judge_request_owner' BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END").await?;
+    let owner = costs.store("local")?;
+    let (mut write, tx) = owner.begin_write(false).await?;
+    let result = costs
+        .reserve(&tx, &mut write, &job("local", "one"), "brjudge_failure")
+        .await;
+    assert!(write.finish(tx, result).await.is_err());
+    assert!(
+        owner
+            .get::<JudgeAttempt>(KIND, "brjudge_failure")
+            .await?
+            .is_none()
+    );
+    assert!(
+        costs
+            .lookup()?
+            .get::<RequestOwner>(LOOKUP_KIND, "brjudge_failure")
+            .await?
+            .is_none()
+    );
+    assert!(matches!(
+        tenancy.storage_budget().reserve(0, false),
+        Err(bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable)
+    ));
+    tenancy.shutdown().await?;
     Ok(())
 }

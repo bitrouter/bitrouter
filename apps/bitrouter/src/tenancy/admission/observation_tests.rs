@@ -33,23 +33,20 @@ fn observation_never_recovers_poison_or_mutates_locked_admission() -> Result<()>
     Ok(())
 }
 #[test]
-fn real_inventory_unknown_survives_escalation_and_policy_bytes_are_not_reserve() -> Result<()> {
+fn real_inventory_unknown_is_scalar_and_policy_bytes_are_not_reserve() -> Result<()> {
     let admission = Admission::new();
     admission
         .initialize_receipts(
             super::super::receipts::capacity::Inventory {
                 bytes: 123,
+                live_bytes: 123 + 16 * 1024,
                 rows: 1,
-                unknown: vec![(
-                    "tenant".try_into()?,
-                    "execution".try_into()?,
-                    chrono::Utc::now() - chrono::Duration::minutes(16),
-                )],
+                unknown_count: 1,
+                ..Default::default()
             },
             1024 * 1024 * 1024,
         )
         .map_err(|_| anyhow::anyhow!("inventory"))?;
-    admission.escalate_receipts();
     let value = admission
         .observed_capacity()
         .map_err(|_| anyhow::anyhow!("observation"))?;
@@ -70,7 +67,7 @@ fn independent_callback_schedules_use_the_real_admission_mutex() -> Result<()> {
                 super::super::receipts::capacity::Inventory {
                     bytes: 0,
                     rows: 0,
-                    unknown: vec![],
+                    ..Default::default()
                 },
                 1024 * 1024 * 1024,
             )
@@ -108,5 +105,57 @@ fn independent_callback_schedules_use_the_real_admission_mutex() -> Result<()> {
         drop(admission);
         ensure!(observation.collect() == after_seal);
     }
+    Ok(())
+}
+
+#[test]
+fn storage_classes_and_physical_custody_publish_under_one_snapshot_lock() -> Result<()> {
+    let admission = Admission::new();
+    admission
+        .initialize_receipts(
+            super::super::receipts::capacity::Inventory {
+                live_bytes: 40_000,
+                history_bytes: 30_000,
+                history_rows: 2,
+                oauth_bytes: 560_000,
+                ..Default::default()
+            },
+            u64::MAX,
+        )
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    admission
+        .reserve_physical_write(123, true)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    admission
+        .archive_receipt(17_000, 9_000)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let value = admission
+        .observed_capacity()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(value.accounted == 23_000 && value.history_bytes == 39_000 && value.history_rows == 3);
+    ensure!(value.oauth_reserved == 560_000 && value.physical_write_reserved == 123);
+    ensure!(value.completion_reserved == 0 && value.potential_unknown == 0);
+    admission
+        .finish_physical_write(123)
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(
+        admission
+            .observed_capacity()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .physical_write_reserved
+            == 0
+    );
+    Ok(())
+}
+
+#[test]
+fn no_volume_snapshot_does_not_publish_a_free_space_sentinel() -> Result<()> {
+    let admission = Admission::new();
+    admission.receipt_probe(u64::MAX);
+    let value = admission
+        .observed_capacity()
+        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(value.observed_free.is_none());
+    ensure!(value.state().contains(&("volume_available", 0)));
     Ok(())
 }

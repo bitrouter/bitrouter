@@ -24,9 +24,7 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
 use super::{Fixture, MODEL, draft, failure, headers, issued};
-use crate::tenancy::{
-    Service, actor::OperationLimits, command::Command, resources::Resources, store,
-};
+use crate::tenancy::{Service, command::Command, resources::Resources, store};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const PRIVATE_HEADER: &str = "retained-private-\"quoted\"-value";
@@ -98,14 +96,8 @@ async fn provision_private_headers(
         ]
     }))?).await?;
     let snapshot = store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     Ok((fixture, route))
 }
 
@@ -138,7 +130,7 @@ async fn assert_private_header_echo_is_redacted(protocol: ApiProtocol, stream: b
 
     let (fixture, route) = provision_private_headers(&url, &protocol).await?;
     let revision = draft(&fixture, &route, "draft-private-headers", 25).await?;
-    let mut issuance = fixture.issuance("execute-private-headers")?;
+    let mut issuance = fixture.issuance("execute-private-headers").await?;
     issuance.permissions = vec![Permission::ExecutionSubmit, Permission::CredentialUse];
     let credential = issued(
         fixture
@@ -151,7 +143,7 @@ async fn assert_private_header_echo_is_redacted(protocol: ApiProtocol, stream: b
             .map_err(failure)?,
     )?;
     let token = credential.secret.as_deref().context("credential secret")?;
-    let caller = fixture.service.authenticate(token).map_err(failure)?;
+    let caller = fixture.service.authenticate(token).await.map_err(failure)?;
     ensure!(
         fixture
             .service

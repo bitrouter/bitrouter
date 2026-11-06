@@ -74,7 +74,7 @@ async fn exercise(path: &Path, fault: Fault) -> Result<()> {
     let owner = crate::tenancy::ownership::acquire_path(path, true)?;
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
-    let initial = Fixture::with_database(db, Default::default(), &mut |_| {}).await?;
+    let initial = Fixture::with_database(db, &mut |_| {}).await?;
     let (mut fixture, route, slot) = super::super::super::provision_protocol_with_fixture(
         initial,
         &provider.url,
@@ -96,7 +96,6 @@ async fn exercise(path: &Path, fault: Fault) -> Result<()> {
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         Some(owner),
-        Default::default(),
         snapshot,
         Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
     )

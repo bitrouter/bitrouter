@@ -232,12 +232,12 @@ async fn held_ack(completed_provider: bool) -> Result<()> {
         );
         drop(release);
         tokio::time::timeout(TIMEOUT, session.close()).await??;
-        fixture.service.cleanup.ensure_clean()?;
         ensure!(fixture.service.host_slots_for_test() == 1);
         Ok(())
     }
     .await;
     finish(&fixture, provider, checked).await?;
+    fixture.service.cleanup.ensure_clean()?;
     fixture.db.clone().close().await?;
     drop(fixture);
     // Join shutdown and drop all ordinary handles before proving the same file

@@ -135,6 +135,7 @@ mod tests {
             db: db.clone(),
             scope,
             provenance,
+            storage_budget: None,
         };
         store
             .insert_subject(&super::super::tests::subject()?)
@@ -172,6 +173,7 @@ mod tests {
             db: db.clone(),
             scope,
             provenance,
+            storage_budget: None,
         };
         let check = || Ok(());
         let shared = OperationBudget::new(&check);

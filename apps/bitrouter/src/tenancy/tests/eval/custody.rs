@@ -1,5 +1,5 @@
 use super::*;
-use crate::tenancy::transaction::{Disposition, Phase};
+use crate::tenancy::transaction::{Disposition, JobTarget, Phase};
 use std::sync::Arc;
 
 #[tokio::test]
@@ -9,7 +9,10 @@ async fn cancelled_eval_http_read_retains_actor_capacity_until_explicit_rollback
         let issued = fixture.issue("eval-cancel").await?;
         let secret = issued.secret.as_deref().context("secret")?;
         let router = router(&fixture)?;
-        let gate = fixture.service.cleanup.hold(Phase::Active);
+        let gate = fixture
+            .service
+            .cleanup
+            .hold_for(Phase::Active, JobTarget::Eval);
         let handler = tokio::spawn(router.clone().oneshot(request(
             &fixture,
             secret,
@@ -51,6 +54,7 @@ async fn expired_owned_job_never_polls_begin_and_keeps_authority_live() -> Resul
                 fixture.tenant.clone(),
                 crate::tenancy::eval::Action::Read,
             )
+            .await
             .map_err(failure)?;
         let gate = fixture.service.cleanup.hold(Phase::Beginning);
         let (reply, receive) = tokio::sync::oneshot::channel();
@@ -157,7 +161,10 @@ async fn http_waiter_deadline_is_unavailable_and_timely_rollback_preserves_autho
     let issued = fixture.issue("eval-timely").await?;
     let secret = issued.secret.as_deref().context("secret")?;
     let router = router(&fixture)?;
-    let gate = fixture.service.cleanup.hold(Phase::Active);
+    let gate = fixture
+        .service
+        .cleanup
+        .hold_for(Phase::Active, JobTarget::Eval);
     let handler = tokio::spawn(router.clone().oneshot(request(
         &fixture,
         secret,
@@ -198,7 +205,10 @@ async fn held_eval_begin_fences_after_cleanup_deadline_and_retains_capacity() ->
     let fixture = Fixture::new().await?;
     let issued = fixture.issue("eval-overdue").await?;
     let secret = issued.secret.as_deref().context("secret")?;
-    let gate = fixture.service.cleanup.hold(Phase::Beginning);
+    let gate = fixture
+        .service
+        .cleanup
+        .hold_for(Phase::Beginning, JobTarget::Eval);
     let handler = tokio::spawn(router(&fixture)?.oneshot(request(
         &fixture,
         secret,

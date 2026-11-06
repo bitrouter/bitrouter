@@ -15,6 +15,7 @@ fn scoped(db: &DatabaseConnection) -> Result<EvalStore> {
         db: db.clone(),
         scope,
         provenance,
+        storage_budget: None,
     })
 }
 

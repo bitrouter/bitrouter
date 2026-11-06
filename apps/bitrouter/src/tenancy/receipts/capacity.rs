@@ -1,386 +1,305 @@
-//! Accounting carried under the existing admission mutex, never a second semaphore.
+//! Scalar accounting under the admission mutex. Durable identities stay in SQLite.
+use bitrouter_ai::tenancy::operation::ErrorCode;
 
-use bitrouter_ai::tenancy::{
-    identity::{ExecutionId, TenantId},
-    operation::ErrorCode,
-};
-use std::collections::BTreeMap;
-
-const ROW_OVERHEAD: u64 = 16 * 1024;
-
-type DurableReceipt = (u64, Option<(ExecutionId, chrono::DateTime<chrono::Utc>)>);
-
+pub(in crate::tenancy) const ROW_OVERHEAD: u64 = 16 * 1024;
 pub(in crate::tenancy) const RESERVATION: u64 = 4 * 1024 * 1024;
+#[cfg(test)]
 pub(in crate::tenancy) const ADMISSION_FLOOR: u64 = 768 * 1024 * 1024;
+#[cfg(test)]
 pub(in crate::tenancy) const MAINTENANCE_FLOOR: u64 = 256 * 1024 * 1024;
-pub(in crate::tenancy) const HIGH_WATER: u64 = 8 * 1024 * 1024 * 1024;
-const UNKNOWN_TENANT: usize = 100;
-const UNKNOWN_INSTANCE: usize = 1000;
 
+#[derive(Clone, Default)]
 pub(in crate::tenancy) struct Inventory {
+    /// Canonical receipt and auxiliary bytes for repair verification.
     pub bytes: u64,
+    /// Total canonical receipt rows, including archived history, for verification.
     pub rows: u64,
-    pub unknown: Vec<(TenantId, ExecutionId, chrono::DateTime<chrono::Utc>)>,
+    /// Inline receipt/auxiliary bytes plus row overhead; the live high-water basis.
+    pub live_bytes: u64,
+    pub history_bytes: u64,
+    pub history_rows: u64,
+    pub oauth_bytes: u64,
+    pub unknown_count: u64,
+    /// Complete validated stream digest, retained by the startup/repair caller.
+    pub unknown_digest: [u8; 32],
 }
 
-struct Unknown {
-    due: chrono::DateTime<chrono::Utc>,
-    escalated: bool,
+/// A copy contains only scalars; publication recomputes it from current state.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(in crate::tenancy) struct Totals {
+    pub reserved: u64,
+    pub bytes: u64,
+    pub history_bytes: u64,
+    pub history_rows: u64,
+    pub oauth_bytes: u64,
+    pub unknown: u64,
+    pub uncovered: u64,
+    pub live: u64,
+    pub repair_reserved: u64,
+    pub repair_live: u64,
 }
 
 pub(in crate::tenancy) struct Accounting {
+    limits: crate::config::tenancy::capacity::Receipts,
+    volume: Option<std::path::PathBuf>,
     pub fenced: bool,
     pub free: u64,
-    pub bytes: u64,
-    reserved: u64,
-    // Decompose the shared reservation without allocating execution slots for
-    // stopped-native repair. These charges remain subject to the same limits.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    repair_reserved: u64,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    repair_potential: usize,
-    unknown: BTreeMap<(TenantId, ExecutionId), Unknown>,
-    potential_unknown: BTreeMap<TenantId, usize>,
+    pub totals: Totals,
+    physical_write_reserved: u64,
+    #[cfg(all(test, unix))]
+    volume_probes: (u64, u64),
 }
-
 impl Default for Accounting {
     fn default() -> Self {
-        Self {
-            fenced: false,
-            free: u64::MAX,
-            bytes: 0,
-            reserved: 0,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            repair_reserved: 0,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            repair_potential: 0,
-            unknown: BTreeMap::new(),
-            potential_unknown: BTreeMap::new(),
-        }
+        Self::configured(&crate::config::tenancy::capacity::Receipts::default())
     }
 }
-
 impl Accounting {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn reserve_repair(
-        &mut self,
-        tenant: &TenantId,
-        bytes: u64,
-        rows: usize,
-    ) -> Result<u64, ErrorCode> {
-        let charged = u64::try_from(rows)
-            .ok()
-            .and_then(|n| n.checked_mul(ROW_OVERHEAD))
-            .and_then(|n| n.checked_add(bytes))
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        let potential = self
-            .potential_unknown
-            .values()
-            .try_fold(0usize, |a, n| a.checked_add(*n))
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        let instance = self
-            .unknown
-            .len()
-            .checked_add(potential)
-            .and_then(|n| n.checked_add(rows));
-        let tenant_count = self
-            .unknown
-            .keys()
-            .filter(|(key, _)| key == tenant)
-            .count()
-            .checked_add(self.potential_unknown.get(tenant).copied().unwrap_or(0))
-            .and_then(|n| n.checked_add(rows));
-        if self.fenced
-            || self.free < ADMISSION_FLOOR
-            || self
-                .reserved
-                .checked_add(charged)
-                .and_then(|n| n.checked_add(MAINTENANCE_FLOOR))
-                .is_none_or(|n| n > self.free)
-            || self
-                .bytes
-                .checked_add(self.reserved)
-                .and_then(|n| n.checked_add(charged))
-                .is_none_or(|n| n > HIGH_WATER)
-            || instance.is_none_or(|n| n > UNKNOWN_INSTANCE)
-            || tenant_count.is_none_or(|n| n > UNKNOWN_TENANT)
-        {
-            return Err(ErrorCode::CapacityExceeded);
-        }
-        let repair_reserved = self
-            .repair_reserved
-            .checked_add(charged)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        let repair_potential = self
-            .repair_potential
-            .checked_add(rows)
-            .ok_or(ErrorCode::CapacityExceeded)?;
-        self.reserved += charged;
-        self.repair_reserved = repair_reserved;
-        self.repair_potential = repair_potential;
-        *self.potential_unknown.entry(tenant.clone()).or_default() += rows;
-        Ok(charged)
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn finish_repair(
-        &mut self,
-        tenant: &TenantId,
-        charged: u64,
-        rows: usize,
-        committed: Option<&[(ExecutionId, chrono::DateTime<chrono::Utc>)]>,
-    ) -> Result<(), ErrorCode> {
-        let reserved = self
-            .reserved
-            .checked_sub(charged)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        let repair_reserved = self
-            .repair_reserved
-            .checked_sub(charged)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        let repair_potential = self
-            .repair_potential
-            .checked_sub(rows)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        let pending = self
-            .potential_unknown
-            .get(tenant)
-            .copied()
-            .unwrap_or(0)
-            .checked_sub(rows)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        let bytes = if let Some(entries) = committed {
-            if entries.len() != rows
-                || entries
-                    .iter()
-                    .any(|(id, _)| self.unknown.contains_key(&(tenant.clone(), id.clone())))
-            {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
-            self.bytes
-                .checked_add(charged)
-                .ok_or(ErrorCode::AuthorityUnavailable)?
-        } else {
-            self.bytes
-        };
-        self.reserved = reserved;
-        self.repair_reserved = repair_reserved;
-        self.repair_potential = repair_potential;
-        self.bytes = bytes;
-        if pending == 0 {
-            self.potential_unknown.remove(tenant);
-        } else {
-            self.potential_unknown.insert(tenant.clone(), pending);
-        }
-        if let Some(entries) = committed {
-            for (id, at) in entries {
-                self.unknown.insert(
-                    (tenant.clone(), id.clone()),
-                    Unknown {
-                        due: *at + chrono::Duration::minutes(15),
-                        escalated: false,
-                    },
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Fixed aggregate under the caller's existing admission guard; no clock or mutation.
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub(in crate::tenancy) fn observed(&self, active: u64) -> Option<(u64, u64, u64, u64)> {
-        if self.potential_unknown.len() > 128 {
-            return None;
-        }
-        let potential = self
-            .potential_unknown
-            .values()
-            .try_fold(0u64, |total, n| total.checked_add(u64::try_from(*n).ok()?))?;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let (repair_reserved, repair_potential) = (
-            self.repair_reserved,
-            u64::try_from(self.repair_potential).ok()?,
-        );
-        #[cfg(not(all(feature = "core", feature = "harness")))]
-        let (repair_reserved, repair_potential) = (0u64, 0u64);
-        let executions = potential.checked_sub(repair_potential)?;
-        // Ordinary leases reserve 4 MiB each. Repair reserves exact candidate
-        // bytes + row overhead and consumes no active execution lease.
-        if executions > active
-            || executions
-                .checked_mul(RESERVATION)?
-                .checked_add(repair_reserved)?
-                != self.reserved
-            || repair_potential.checked_mul(ROW_OVERHEAD)? > repair_reserved
-            || (repair_potential == 0 && repair_reserved != 0)
-        {
-            return None;
-        }
-        Some((
-            self.reserved,
-            self.bytes,
-            potential,
-            u64::try_from(self.unknown.len()).ok()?,
-        ))
+    pub fn observed_volume_free(&self) -> Option<u64> {
+        self.volume.as_ref().map(|_| self.free)
     }
 
-    #[cfg(all(test, unix))]
-    pub(in crate::tenancy) fn snapshot_for_test(&self) -> (u64, u64, bool) {
-        (self.reserved, self.free, self.fenced)
+    pub fn configured(limits: &crate::config::tenancy::capacity::Receipts) -> Self {
+        Self {
+            limits: limits.clone(),
+            volume: None,
+            fenced: false,
+            free: u64::MAX,
+            totals: Totals::default(),
+            physical_write_reserved: 0,
+            #[cfg(all(test, unix))]
+            volume_probes: (0, 0),
+        }
     }
-
-    /// Initialization precedes publication of the Service and any execution.
-    pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
-        if self.reserved != 0 || !self.potential_unknown.is_empty() {
+    pub fn bind_volume(&mut self, volume: Option<std::path::PathBuf>) -> Result<(), ErrorCode> {
+        if self.volume.is_some() || self.totals.reserved != 0 || self.physical_write_reserved != 0 {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if self.repair_reserved != 0 || self.repair_potential != 0 {
-            return Err(ErrorCode::AuthorityUnavailable);
+        self.volume = volume;
+        self.refresh_free();
+        if self.fenced {
+            Err(ErrorCode::StorageUnavailable)
+        } else {
+            Ok(())
         }
-        self.bytes = inventory
-            .rows
-            .checked_mul(ROW_OVERHEAD)
-            .and_then(|overhead| inventory.bytes.checked_add(overhead))
-            .ok_or(ErrorCode::StorageUnavailable)?;
-        let unknown_count = inventory.unknown.len();
-        if unknown_count > UNKNOWN_INSTANCE || inventory.rows < unknown_count as u64 {
-            return Err(ErrorCode::StorageUnavailable);
-        }
-        self.unknown = inventory
-            .unknown
-            .into_iter()
-            .map(|(tenant, id, recorded)| {
-                (
-                    (tenant, id),
-                    Unknown {
-                        due: recorded + chrono::Duration::minutes(15),
-                        escalated: false,
-                    },
-                )
-            })
-            .collect();
-        if self.unknown.len() != unknown_count
-            || self.unknown.keys().any(|(tenant, _)| {
-                self.unknown.keys().filter(|(key, _)| key == tenant).count() > UNKNOWN_TENANT
-            })
-        {
-            return Err(ErrorCode::StorageUnavailable);
-        }
-        self.free = free;
-        Ok(())
     }
-
-    pub fn next_escalation(&self) -> Option<tokio::time::Instant> {
-        let due = self
-            .unknown
-            .values()
-            .filter(|entry| !entry.escalated)
-            .map(|entry| entry.due)
-            .min()?;
-        let remaining = due
-            .signed_duration_since(chrono::Utc::now())
-            .to_std()
-            .unwrap_or_default()
-            .min(std::time::Duration::from_secs(900));
-        Some(tokio::time::Instant::now() + remaining)
-    }
-    pub fn escalate(&mut self, now: chrono::DateTime<chrono::Utc>) -> usize {
-        let mut count = 0;
-        for ((tenant, execution), entry) in &mut self.unknown {
-            if !entry.escalated && entry.due <= now {
-                entry.escalated = true;
-                count += 1;
-                tracing::warn!(
-                    tenant_id = tenant.as_str(),
-                    execution_id = execution.as_str(),
-                    "unknown execution requires operator investigation; evidence retained without redispatch"
-                );
+    /// Fresh observation under the shared mutex, including all writer custody.
+    pub fn refresh_free(&mut self) {
+        if let Some(volume) = &self.volume {
+            #[cfg(all(test, unix))]
+            {
+                self.volume_probes.0 += 1;
+            }
+            match free_space(Some(volume)) {
+                Ok(free) => self.free = free,
+                Err(error) => {
+                    #[cfg(all(test, unix))]
+                    {
+                        self.volume_probes.1 += 1;
+                    }
+                    self.fenced = true;
+                    tracing::error!(%error, "receipt volume observation failed");
+                }
             }
         }
-        count
     }
-    pub fn ready(&self, tenant: &TenantId) -> bool {
-        !self.fenced
-            && self.free >= ADMISSION_FLOOR
-            && self
-                .reserved
-                .checked_add(RESERVATION)
-                .and_then(|n| n.checked_add(MAINTENANCE_FLOOR))
-                .is_some_and(|n| n <= self.free)
-            && self
-                .bytes
-                .checked_add(self.reserved)
-                .and_then(|n| n.checked_add(RESERVATION))
-                .is_some_and(|n| n <= HIGH_WATER)
-            && self.unknown.len() + self.potential_unknown.values().sum::<usize>()
-                < UNKNOWN_INSTANCE
-            && self.unknown.keys().filter(|(key, _)| key == tenant).count()
-                + self.potential_unknown.get(tenant).copied().unwrap_or(0)
-                < UNKNOWN_TENANT
+    pub fn observed_free(&mut self, free: u64) {
+        if self.volume.is_none() {
+            self.free = free;
+        }
     }
-
-    pub fn reserve(&mut self, tenant: &TenantId) -> Result<(), ErrorCode> {
-        if !self.ready(tenant) {
+    fn physical_fit(&self, bytes: u64, floor: u64) -> bool {
+        self.totals
+            .reserved
+            .checked_add(self.physical_write_reserved)
+            .and_then(|n| n.checked_add(bytes))
+            .and_then(|n| n.checked_add(floor))
+            .is_some_and(|n| n <= self.free)
+    }
+    /// Ordinary writers require admission free space and preserve maintenance space.
+    /// Maintenance uses physical fit only.
+    pub fn reserve_physical_write(
+        &mut self,
+        bytes: u64,
+        maintenance: bool,
+    ) -> Result<(), ErrorCode> {
+        if self.fenced {
+            return Err(ErrorCode::StorageUnavailable);
+        }
+        if !maintenance && self.free < self.limits.admission_free_bytes {
             return Err(ErrorCode::CapacityExceeded);
         }
-        self.reserved = self
+        let floor = if maintenance {
+            0
+        } else {
+            self.limits.maintenance_free_bytes
+        };
+        if !self.physical_fit(bytes, floor) {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        self.physical_write_reserved = self
+            .physical_write_reserved
+            .checked_add(bytes)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        Ok(())
+    }
+    pub fn finish_physical_write(&mut self, bytes: u64) -> Result<(), ErrorCode> {
+        let Some(remaining) = self.physical_write_reserved.checked_sub(bytes) else {
+            self.fenced = true;
+            return Err(ErrorCode::AuthorityUnavailable);
+        };
+        self.physical_write_reserved = remaining;
+        Ok(())
+    }
+    /// Complete startup validation is allowed above current operator budgets.
+    pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
+        if self.totals.live != 0 || self.totals.reserved != 0 || self.physical_write_reserved != 0 {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        // Pending OAuth obligations need not have receipt rows. No rows>=unknown check.
+        self.totals.bytes = inventory.live_bytes;
+        self.totals.history_bytes = inventory.history_bytes;
+        self.totals.history_rows = inventory.history_rows;
+        self.totals.oauth_bytes = inventory.oauth_bytes;
+        self.totals.unknown = inventory.unknown_count;
+        self.observed_free(free);
+        Ok(())
+    }
+    /// Begin before full: archive while inline bytes and completion custody are
+    /// at/above 75% of high-water, or the next completion would not fit. The
+    /// subtraction computes ceil(3*high_water/4) without multiplying/overflowing.
+    /// Zero inline bytes means there is no retained class to relocate.
+    pub fn archive_needed(&self) -> bool {
+        let watermark = self.limits.high_water_bytes - self.limits.high_water_bytes / 4;
+        self.totals.bytes != 0
+            && self
+                .totals
+                .bytes
+                .checked_add(self.totals.reserved)
+                .is_none_or(|used| {
+                    used >= watermark
+                        || used
+                            .checked_add(RESERVATION)
+                            .is_none_or(|next| next > self.limits.high_water_bytes)
+                })
+    }
+
+    /// Run before a cold tenant count and again at grant time.
+    pub fn globally_ready(&self) -> bool {
+        !self.fenced
+            && self.free >= self.limits.admission_free_bytes
+            && self.physical_fit(RESERVATION, self.limits.maintenance_free_bytes)
+            && self
+                .totals
+                .bytes
+                .checked_add(self.totals.reserved)
+                .and_then(|n| n.checked_add(RESERVATION))
+                .is_some_and(|n| n <= self.limits.high_water_bytes)
+            && self
+                .totals
+                .unknown
+                .checked_add(self.totals.uncovered)
+                .is_some_and(|n| n < self.limits.unknown_instance as u64)
+    }
+    pub fn ready(&self, tenant_unknown: u64, tenant_uncovered: u64) -> bool {
+        self.globally_ready()
+            && tenant_unknown
+                .checked_add(tenant_uncovered)
+                .is_some_and(|n| n < self.limits.unknown_tenant as u64)
+    }
+    pub fn reserve(&mut self, tenant_unknown: u64, tenant_uncovered: u64) -> Result<(), ErrorCode> {
+        if !self.ready(tenant_unknown, tenant_uncovered) {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        let mut next = self.totals;
+        next.reserved = next
             .reserved
             .checked_add(RESERVATION)
             .ok_or(ErrorCode::CapacityExceeded)?;
-        *self.potential_unknown.entry(tenant.clone()).or_default() += 1;
+        next.live = next
+            .live
+            .checked_add(1)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        next.uncovered = next
+            .uncovered
+            .checked_add(1)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        self.totals = next;
         Ok(())
     }
-
-    pub fn release(
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub fn reserve_repair(
         &mut self,
-        tenant: &TenantId,
-        durable: Option<DurableReceipt>,
-    ) -> Result<(), ErrorCode> {
-        let count = self
-            .potential_unknown
-            .get_mut(tenant)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        *count = count
-            .checked_sub(1)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        if *count == 0 {
-            self.potential_unknown.remove(tenant);
+        bytes: u64,
+        rows: u64,
+        uncovered: u64,
+    ) -> Result<u64, ErrorCode> {
+        let charged = rows
+            .checked_mul(ROW_OVERHEAD)
+            .and_then(|n| n.checked_add(bytes))
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        if self.fenced {
+            return Err(ErrorCode::StorageUnavailable);
         }
-        self.reserved = self
+        if uncovered > rows || !self.physical_fit(charged, 0) {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        let mut next = self.totals;
+        next.reserved = next
             .reserved
-            .checked_sub(RESERVATION)
-            .ok_or(ErrorCode::AuthorityUnavailable)?;
-        if let Some((bytes, unknown)) = durable {
-            self.bytes = self
-                .bytes
-                .checked_add(bytes)
-                .and_then(|n| {
-                    if bytes == 0 {
-                        Some(n)
-                    } else {
-                        n.checked_add(ROW_OVERHEAD)
-                    }
-                })
-                .ok_or(ErrorCode::CapacityExceeded)?;
-            if let Some((id, recorded)) = unknown
-                && self
-                    .unknown
-                    .insert(
-                        (tenant.clone(), id),
-                        Unknown {
-                            due: recorded + chrono::Duration::minutes(15),
-                            escalated: false,
-                        },
-                    )
-                    .is_some()
-            {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
+            .checked_add(charged)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        next.repair_reserved = next
+            .repair_reserved
+            .checked_add(charged)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        next.live = next
+            .live
+            .checked_add(rows)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        next.repair_live = next
+            .repair_live
+            .checked_add(rows)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        next.uncovered = next
+            .uncovered
+            .checked_add(uncovered)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        self.totals = next;
+        Ok(charged)
+    }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub fn physical_write_reserved(&self) -> u64 {
+        self.physical_write_reserved
+    }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub fn observed(&self, active: u64) -> Option<(u64, u64, u64, u64)> {
+        let total = self.totals;
+        let executions = total.live.checked_sub(total.repair_live)?;
+        if total.uncovered > total.live
+            || executions > active
+            || executions
+                .checked_mul(RESERVATION)?
+                .checked_add(total.repair_reserved)?
+                != total.reserved
+            || total.repair_live.checked_mul(ROW_OVERHEAD)? > total.repair_reserved
+        {
+            return None;
         }
-        Ok(())
+        // Existing metric means all live potentials, including covered owners;
+        // admission uses uncovered alone. Physical writes are separate custody.
+        Some((total.reserved, total.bytes, total.live, total.unknown))
+    }
+    #[cfg(all(test, unix))]
+    pub fn volume_probes_for_test(&self) -> (u64, u64) {
+        self.volume_probes
+    }
+    #[cfg(all(test, unix))]
+    pub fn snapshot_for_test(&self) -> (u64, u64, bool) {
+        (self.totals.reserved, self.free, self.fenced)
     }
 }
-
 /// Probe the pinned database volume, never the database inode (closing that
 /// inode could release SQLite POSIX locks). Production profile is Unix-only.
 pub(in crate::tenancy) fn free_space(volume: Option<&std::path::Path>) -> anyhow::Result<u64> {

@@ -31,7 +31,6 @@ async fn restart(ready: &Ready) -> Result<Service> {
     Service::start_prepared(
         ready.fixture.db.clone(),
         None,
-        Default::default(),
         crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?,
         Arc::new(Resources::with_key(
             ready.fixture.installation.clone(),
@@ -247,12 +246,19 @@ async fn sealed_active_reserved_defaults_refuse_startup_without_rewriting_rows()
             .await?
             .context("unchanged active revision")?;
             ensure!(actual.compiled == changed);
+            let active = Query::select()
+                .column(Alias::new("revision_id"))
+                .from(Alias::new("tenancy_active_configurations"))
+                .and_where(Expr::col(Alias::new("tenant_id")).eq(ready.fixture.tenant.as_str()))
+                .to_owned();
+            let active = ready
+                .fixture
+                .db
+                .query_one(ready.fixture.db.get_database_backend().build(&active))
+                .await?
+                .context("unchanged active pointer")?;
             ensure!(
-                crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now())
-                    .await?
-                    .active_configurations
-                    .get(&ready.fixture.tenant)
-                    == Some(&ready.revision.revision_id)
+                active.try_get::<String>("", "revision_id")? == ready.revision.revision_id.as_str()
             );
             ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
             // Known startup rejection released custody; restoration can retry.

@@ -136,6 +136,16 @@ fn byte_cap_counts_reserved_key_heap_value_heap_metadata_and_alignment() -> Resu
     ensure!(aligned.insert(1, Aligned([9; 128]), 0, 0)?.0[0] == 9);
     let small = Cache::<u8, Aligned>::new(1, cap - 1)?;
     ensure!(small.insert(1, Aligned([9; 128]), 0, 0).err() == Some(CacheError::Capacity));
+    let larger = Cache::<u8, Aligned>::new(1, cap + 1)?;
+    ensure!(larger.insert(1, Aligned([9; 128]), 0, 0)?.0[0] == 9);
+    ensure!(
+        larger
+            .state
+            .lock()
+            .map_err(|_| CacheError::Unavailable)?
+            .bytes
+            == cap
+    );
     Ok(())
 }
 
@@ -276,5 +286,38 @@ fn poisoned_cache_fails_closed_even_for_misses_and_duplicates() -> Result<()> {
         *pin == 1,
         "poisoning changed an already held immutable value"
     );
+    Ok(())
+}
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn observation_preserves_pins_lru_and_reports_lock_contention() -> Result<()> {
+    use crate::telemetry::receipt_latency::capacity::ReadError;
+    let cache = Cache::<u8, u8>::new(2, budget::<u8, u8>(2, 0))?;
+    let empty = cache.observed().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(empty.entries == 0 && empty.bytes > 0);
+    let pinned = cache.insert(1, 11, 0, 0)?;
+    drop(cache.insert(2, 22, 0, 0)?);
+    let full = cache.observed().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(full.entries == 2 && full.bytes > empty.bytes);
+    let held = cache
+        .state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("cache lock"))?;
+    ensure!(cache.observed() == Err(ReadError::Unavailable));
+    drop(held);
+    // Observation did not promote the older entry; the real pin protects it.
+    drop(cache.insert(3, 33, 0, 0)?);
+    ensure!(cache.get(&2)?.is_none() && *pinned == 11);
+    ensure!(
+        cache
+            .observed()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .bytes
+            == full.bytes
+    );
+    drop(pinned);
+    drop(cache.insert(4, 44, 0, 0)?);
+    ensure!(cache.get(&1)?.is_none());
     Ok(())
 }

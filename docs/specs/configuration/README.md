@@ -1,6 +1,6 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.2**. This is the single
+Status: **beta, specification revision 1.0.0-beta.3**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
 referenced `policy-lock.yaml`. These are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
@@ -67,6 +67,7 @@ or guarantee a runnable inference route.
 
 ## Tenancy and routing compatibility
 
+Revision beta.3 adds startup runtime budgets independent of directory size.
 Revision beta.2 records the startup tenancy and per-model routing-weight
 semantics below. The `TenancyConfig` and `ProviderModel` definitions in the
 [generated schema](../../../dist/schema/bitrouter.config.schema.json) remain
@@ -91,6 +92,74 @@ hot-reload protocol. Restart retains durable resources, revocations and executio
 records; it does not erase them merely because a startup option is omitted.
 The [tenant service guide](../../development/tenant-service.md) describes
 assembly, lifetime and storage ownership.
+
+### Process capacity
+
+`tenancy.capacity` contains startup-only operator resource budgets. Omission
+preserves finite defaults; an empty nested mapping preserves that group's
+defaults. Unknown fields, null numeric values, fractions, negative values,
+arithmetic overflow and values outside the consumer's representable range are
+rejected. These settings do not impose limits on the number of persisted tenants,
+principals, bindings, credentials, resource revisions or retained history rows.
+
+| Group | Default fields and units |
+| --- | --- |
+| `execution` | `instance_active: 128`, `tenant_active: 16`, `instance_queue: 256`, `tenant_queue: 32`, `queue_wait_ms: 5000` |
+| `ingress` | `requests: 128`, `bytes: 67108864` |
+| `management` | `queue: 16`, `safety_queue: 8`, `reads: 8` |
+| `caches` | `execution_entries: 64`, `execution_bytes: 134217728`, `credential_entries: 256`, `credential_bytes: 8388608` |
+| `authority_views` | `entries: 512`, `bytes: 67108864`, including publication staging headroom |
+| `routing` | `entries: 2048`, `bytes: 67108864` |
+| `receipts` | `high_water_bytes: 8589934592`, `admission_free_bytes: 805306368`, `maintenance_free_bytes: 268435456`, `unknown_instance: 1000`, `unknown_tenant: 100` |
+| `transport` | `connections: 256`, `header_timeout_ms: 30000` |
+
+Only execution queue counts accept zero, meaning no waiting. Other resource
+counts, byte budgets and durations are positive. Tenant execution and unknown
+budgets MUST NOT exceed their corresponding instance budgets. Admission free
+space MUST exceed the maintenance reserve. Count/byte products and sums MUST be
+checked before allocation or permit construction. Runtime implementation limits,
+such as the semaphore's representable permit count, are checked explicitly;
+there is no additional product ceiling on operator counts.
+
+Runtime budgets and public per-object limits are independent. A request can only
+narrow its host budget, and increasing host capacity cannot bypass the tenancy
+API's configuration, body, attempt or evidence constraints. Increasing directory
+size does not increase queues, active slots, connection pools or caches. Cache
+and authority-view budgets retain live ownership until its actual consumers
+finish; reducing a startup budget does not delete durable authority or evidence.
+CPU, allocator overhead and transient codec storage are not interchangeable with
+cache payload bytes; the implementation guide describes allocation ownership.
+
+`authority_views.bytes` includes publication headroom: one third is available
+for leased and optionally retained facts and two thirds for staged replacements
+and construction overlap. The storage is allocated lazily; directory entries are
+not preallocated. `authority_views.entries` bounds simultaneously retained views,
+not stored identities. Pressure releases optional retention before refusing new
+allocation; active leases keep their ownership. Routing send ownership derives from
+`execution.instance_active`; there is no separate routing-in-flight setting.
+
+With tenancy enabled, the local inference listener uses
+`transport.connections` and `transport.header_timeout_ms`, with an aggregate
+request/HTTP/2-stream budget of `ingress.requests` across connections. HTTP/1
+keep-alive remains available. The per-request wire limits remain unchanged.
+
+Receipt unknown budgets govern new admission. Retained obligations above a
+lowered budget remain valid evidence and MUST NOT be deleted or treated as
+corruption merely to meet that budget. Storage probes and maintenance reserves
+remain independent admission conditions.
+
+`receipts.high_water_bytes` bounds accounted live receipt bytes plus outstanding
+completion reservations. It is not a database-file, retained-history or total
+filesystem size cap. Archived history and retained OAuth storage have separate
+accounting estimates. Relocation MUST NOT be credited as physical free space.
+Free-space floors are checked against the actual database volume together with
+outstanding write estimates; they cannot guarantee successful allocation on a
+shared filesystem. The [storage guide](../../development/tenant-service.md#receipt-archive-and-physical-storage)
+describes ownership, maintenance and failure boundaries.
+
+Changing effective capacity requires a restart under the same rules as the
+rest of `tenancy`. Older strict readers reject the new keys. Operators MUST use
+a compatible binary; removing a configuration key is not a database downgrade.
 
 ### Absence, nullability and admission limits
 
@@ -240,6 +309,12 @@ implementation ownership are documented in the
 - Enabled tenancy rejects anonymous ingress, absent operator authority, shared
   mode, in-memory/non-SQLite databases, non-Unix ownership and the host task API.
   Changed effective tenancy settings reject reload before publishing a candidate.
+- Omitted capacity groups and partial nested mappings preserve the defaults of
+  omitted fields. Reject null, negative and fractional numeric budgets, overflow,
+  invalid tenant/instance relationships and nonrepresentable runtime permits.
+  Zero execution queue counts disable waiting; zero active/byte budgets fail.
+  Counts above the defaults are accepted when representation and relationships
+  permit them. A lowered unknown budget preserves retained obligations.
 - Empty origins deny tenant route provisioning. Normalized duplicates, paths
   and userinfo fail validation; origin comparison never expands wildcards or
   matches URL prefixes. Removing an approved origin leaves retained revisions

@@ -3,7 +3,6 @@
 //! also crosses the separately built Rust child and public checked facade.
 #![cfg(feature = "core")]
 use super::*;
-use crate::tenancy::actor::OperationLimits;
 use crate::{
     harness::acp::capture::CapturePort,
     storage::capture::{CaptureDirection as Direction, CaptureEvent, CaptureKind as Kind},

@@ -4,17 +4,31 @@ use axum::{
     http::{Method, Request, StatusCode},
 };
 use bitrouter_ai::{control::ControlScope, tenancy::operation::OperationStatus};
+use sea_orm::{ConnectionTrait, Statement};
 use tower::ServiceExt;
+
+async fn credential_count(fixture: &Fixture) -> Result<i64> {
+    Ok(fixture
+        .db
+        .query_one(Statement::from_string(
+            fixture.db.get_database_backend(),
+            "SELECT COUNT(*) AS count FROM tenancy_credentials",
+        ))
+        .await?
+        .context("credential count")?
+        .try_get("", "count")?)
+}
 
 #[tokio::test]
 async fn credential_create_expiry_respects_binding_and_issuer_ceilings() -> Result<()> {
     let fixture = Fixture::new().await?;
     let checked = async {
-        let mut excessive = fixture.issuance("beyond-recipient")?;
+        let mut excessive = fixture.issuance("beyond-recipient").await?;
         excessive.expires_at = (Utc::now() + chrono::Duration::days(2))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             .try_into()?;
         let before = fixture.service.current().map_err(failure)?;
+        let credentials_before = credential_count(&fixture).await?;
         denied(
             &fixture,
             fixture.operator.clone(),
@@ -25,10 +39,10 @@ async fn credential_create_expiry_respects_binding_and_issuer_ceilings() -> Resu
         let after = fixture.service.current().map_err(failure)?;
         ensure!(
             after.revision == before.revision
-                && after.credentials.len() == before.credentials.len()
+                && credential_count(&fixture).await? == credentials_before
         );
 
-        let mut short = fixture.issuance("short-issuer")?;
+        let mut short = fixture.issuance("short-issuer").await?;
         short.expires_at = (Utc::now() + chrono::Duration::hours(1))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             .try_into()?;
@@ -42,9 +56,10 @@ async fn credential_create_expiry_respects_binding_and_issuer_ceilings() -> Resu
                 .await
                 .map_err(failure)?,
         )?;
-        let identity = caller(&fixture, &issuer)?;
+        let identity = caller(&fixture, &issuer).await?;
         let before = fixture.service.current().map_err(failure)?;
-        let excessive = fixture.issuance("beyond-issuer")?;
+        let credentials_before = credential_count(&fixture).await?;
+        let excessive = fixture.issuance("beyond-issuer").await?;
         denied(
             &fixture,
             identity.clone(),
@@ -55,9 +70,9 @@ async fn credential_create_expiry_respects_binding_and_issuer_ceilings() -> Resu
         let after = fixture.service.current().map_err(failure)?;
         ensure!(
             after.revision == before.revision
-                && after.credentials.len() == before.credentials.len()
+                && credential_count(&fixture).await? == credentials_before
         );
-        let mut bounded = fixture.issuance("at-issuer-ceiling")?;
+        let mut bounded = fixture.issuance("at-issuer-ceiling").await?;
         bounded.expires_at = issuer.expires_at.clone();
         let child = issued(
             fixture
@@ -66,7 +81,7 @@ async fn credential_create_expiry_respects_binding_and_issuer_ceilings() -> Resu
                 .await
                 .map_err(failure)?,
         )?;
-        ensure!(child.expires_at == issuer.expires_at && caller(&fixture, &child).is_ok());
+        ensure!(child.expires_at == issuer.expires_at && caller(&fixture, &child).await.is_ok());
         Ok(())
     }
     .await;
@@ -106,7 +121,13 @@ async fn tenant_payload_replay_cannot_change_state() -> Result<()> {
             .await
             .map_err(failure)?;
         ensure!(after.revision == before.revision && after.operation_ids == before.operation_ids);
-        ensure!(after.tenants.get(&fixture.tenant).context("tenant")?.state == TenantState::Active);
+        ensure!(
+            crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                .await?
+                .context("tenant")?
+                .state
+                == TenantState::Active
+        );
         ensure!(serde_json::to_value(observed)? == serde_json::to_value(original)?);
         Ok(())
     }
@@ -126,7 +147,7 @@ async fn tenant_operator_cannot_mutate_lifecycle_or_principal() -> Result<()> {
             expiry()?,
         )
         .await?;
-        let mut grant = fixture.issuance("tenant-operator")?;
+        let mut grant = fixture.issuance("tenant-operator").await?;
         grant.permissions = TenantRole::TenantOperator.permissions().to_vec();
         let credential = issued(
             fixture
@@ -138,14 +159,13 @@ async fn tenant_operator_cannot_mutate_lifecycle_or_principal() -> Result<()> {
                 .await
                 .map_err(failure)?,
         )?;
-        let identity = caller(&fixture, &credential)?;
+        let identity = caller(&fixture, &credential).await?;
         let before = fixture.service.current().map_err(failure)?;
-        let revision = before
-            .tenants
-            .get(&fixture.tenant)
-            .context("tenant")?
-            .revision
-            .clone();
+        let revision =
+            crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                .await?
+                .context("tenant")?
+                .revision;
         for command in [
             Command::Tenant(
                 fixture.tenant.clone(),
@@ -171,11 +191,21 @@ async fn tenant_operator_cannot_mutate_lifecycle_or_principal() -> Result<()> {
         }
         let after = fixture.service.current().map_err(failure)?;
         ensure!(after.revision == before.revision && after.operation_ids == before.operation_ids);
-        ensure!(after.tenants.get(&fixture.tenant).context("tenant")?.state == TenantState::Active);
         ensure!(
-            !after
-                .principals
-                .contains_key(&"not-an-installation-principal".try_into()?)
+            crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                .await?
+                .context("tenant")?
+                .state
+                == TenantState::Active
+        );
+        ensure!(
+            crate::tenancy::store::directory::principal_in(
+                &fixture.db,
+                &"not-an-installation-principal".try_into()?,
+                4096,
+            )
+            .await?
+            .is_none()
         );
         Ok(())
     }

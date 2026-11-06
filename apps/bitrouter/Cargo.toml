@@ -30,7 +30,7 @@ server-tools = ["mcp"]
 guardrails = ["dep:bitrouter-guardrails"]
 db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
-multi-instance = ["db-postgres", "dep:bytes", "dep:hyper", "dep:hyper-util"]
+multi-instance = ["db-postgres", "dep:bytes"]
 
 otel = ["otel-http"]
 otel-http = [
@@ -131,9 +131,9 @@ thiserror.workspace = true
 http.workspace = true
 axum = { workspace = true, features = ["ws"] }
 http-body.workspace = true
-hyper = { workspace = true, optional = true, features = ["http1", "server"] }
+hyper = { workspace = true, features = ["http1", "server"] }
 h2 = { version = "0.4.15", optional = true }
-hyper-util = { workspace = true, optional = true, features = ["tokio"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 futures.workspace = true
 agent-client-protocol = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["compat", "rt"] }

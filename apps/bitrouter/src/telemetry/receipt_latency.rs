@@ -241,6 +241,15 @@ impl Sink {
     pub(crate) fn capacity_for_test(&self) -> Option<Arc<capacity::Observation>> {
         self.0.as_ref().map(|state| state.capacity.clone())
     }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(crate) fn bind_runtime_capacity(
+        &self,
+        read: impl Fn() -> capacity::runtime::Snapshot + Send + Sync + 'static,
+    ) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|s| s.capacity.bind_runtime(read))
+    }
     pub(crate) fn enabled(&self) -> bool {
         self.0.is_some()
     }

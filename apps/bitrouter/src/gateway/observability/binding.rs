@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::requests::{GatewayRequestObserved, internal};
 use crate::config::routing_table::ConfigRoutingTable;
@@ -51,6 +51,7 @@ pub(crate) struct CanonicalRequestBinding {
     db: DatabaseConnection,
     routing: Arc<ConfigRoutingTable>,
     policies: Arc<PolicyRuntime>,
+    storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 impl CanonicalRequestBinding {
@@ -63,7 +64,17 @@ impl CanonicalRequestBinding {
             db,
             routing,
             policies,
+            storage_budget: None,
         }
+    }
+
+    /// Attach the shared tenant budget before runtime hook clones are published.
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Arc<OnceLock<crate::tenancy::storage::Budget>>,
+    ) -> Self {
+        self.storage_budget = Some(budget);
+        self
     }
 
     async fn bind(&self, ctx: &mut PipelineContext) -> Result<()> {
@@ -98,14 +109,40 @@ impl CanonicalRequestBinding {
             settlement: None,
         };
         let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
-        let (_, persisted): (_, ExecutionRecord) = store
-            .initialize(
-                EXECUTION_KIND,
-                ctx.request_id(),
-                Some(identity.key()?),
-                &request,
-            )
-            .await?;
+        let session_key = identity.key()?;
+        let (_, persisted): (_, ExecutionRecord) = if self.storage_budget.is_some() {
+            let (mut write, tx) =
+                crate::storage::write::Write::begin(&self.db, &self.storage_budget, false).await?;
+            let result = async {
+                write.account(&(
+                    &store.scope_id,
+                    EXECUTION_KIND,
+                    ctx.request_id(),
+                    &session_key,
+                    &request,
+                ))?;
+                store
+                    .initialize_in(
+                        &tx,
+                        EXECUTION_KIND,
+                        ctx.request_id(),
+                        Some(session_key),
+                        &request,
+                    )
+                    .await
+            }
+            .await;
+            write.finish(tx, result).await?
+        } else {
+            store
+                .initialize(
+                    EXECUTION_KIND,
+                    ctx.request_id(),
+                    Some(session_key),
+                    &request,
+                )
+                .await?
+        };
         if persisted.attempt_id != request.attempt_id {
             ctx.emit(CanonicalRequestReplayRejected);
         }
@@ -145,7 +182,10 @@ impl CanonicalRequestBinding {
             let session = sessions::Entity::find_by_id(fence.identity.key()?)
                 .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&self.db)
-                .await?
+                .await
+                .map_err(|error| {
+                    crate::storage::write::read_error(&self.storage_budget, error.into())
+                })?
                 .context("canonical session disappeared")?;
             ensure!(
                 !session.deleted,

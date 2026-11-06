@@ -418,7 +418,7 @@ impl Generations {
     /// Source-zero alone is not proof that external transport producers joined.
     pub fn force_pipelines(
         &self,
-        transport: Option<&super::transport::owned::Transport>,
+        transport: Option<&crate::gateway::transport::owned::Transport>,
     ) -> Result<()> {
         ensure!(
             self.lock().forcing,

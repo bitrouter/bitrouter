@@ -134,12 +134,7 @@ pub(super) async fn ready(
         directory.join("native-paid.db").display()
     ))
     .await?;
-    let mut fixture = Fixture::with_database(
-        database.database().clone(),
-        OperationLimits::default(),
-        &mut |_| {},
-    )
-    .await?;
+    let mut fixture = Fixture::with_database(database.database().clone(), &mut |_| {}).await?;
     let result = async {
         fixture.service.shutdown().await?;
         let reference = |kind, name: &str| -> Result<ResourceRef> {
@@ -170,8 +165,8 @@ pub(super) async fn ready(
         resources.provision_bytes(&fixture.db, &serde_json::to_vec(&manifest)?).await?;
         let (db, owner, claim) = database.claim()?;
         let snapshot = store::load(&db, Utc::now()).await?;
-        fixture.service = Service::start_resources_with_continuations(db, Some(owner), OperationLimits::default(), snapshot,
-            Arc::new(resources), (None, &crate::config::ContinuationConfig::default(), Some(claim), crate::telemetry::receipt_latency::Sink::default()), None).await?;
+        fixture.service = Service::start_resources_with_continuations(db, Some(owner), snapshot,
+            Arc::new(resources), crate::tenancy::Provisioning { import: None, continuations: &crate::config::ContinuationConfig::default(), claim: Some(claim), receipt_observer: crate::telemetry::receipt_latency::Sink::default(), config: &crate::config::tenancy::TenancyConfig::default() }, None).await?;
         let mut configured = fixture.configuration_input("native-paid-config")?;
         configured.document.routes = vec![route, evaluator]; configured.document.policy = Some(policy);
         configured.document.learning.mode = LearningMode::Explore;
@@ -220,15 +215,15 @@ pub(super) async fn restart(fixture: Fixture, directory: &std::path::Path) -> Re
     let service = Service::start_resources_with_continuations(
         db.clone(),
         Some(owner),
-        OperationLimits::default(),
         state,
         Arc::new(Resources::with_key(installation.clone(), [29; 32])?),
-        (
-            None,
-            &crate::config::ContinuationConfig::default(),
-            Some(claim),
-            crate::telemetry::receipt_latency::Sink::default(),
-        ),
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: Some(claim),
+            receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await?;

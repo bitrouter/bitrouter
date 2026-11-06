@@ -1,7 +1,7 @@
 //! Gateway-owned canonical request admission, observation and settlement.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -57,6 +57,15 @@ impl GatewayRequestTracker {
         }
     }
 
+    /// The inventory returned to local control retains this same budget cell.
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Arc<OnceLock<crate::tenancy::storage::Budget>>,
+    ) -> Self {
+        self.inventory = self.inventory.with_storage_budget(budget);
+        self
+    }
+
     /// The control listener must share this exact runtime epoch with serving.
     pub fn inventory(&self) -> GatewayInventory {
         self.inventory.clone()
@@ -84,7 +93,8 @@ impl GatewayRequestTracker {
             .filter(connections::Column::RouteScopeId.eq(principal))
             .filter(connections::Column::State.eq("recording"))
             .all(&self.db)
-            .await?;
+            .await
+            .map_err(|error| self.inventory.read_error(error))?;
         // An explicit ACP identity is authoritative within the authenticated
         // recorder scope. Otherwise prefer the exact recorded thread to a root.
         let claims = if let Some(acp) = &session.acp_session_id {
@@ -109,7 +119,8 @@ impl GatewayRequestTracker {
                 let Some(row) = sessions::Entity::find_by_id(&key)
                     .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .one(&self.db)
-                    .await?
+                    .await
+                    .map_err(|error| self.inventory.read_error(error))?
                 else {
                     continue;
                 };
@@ -121,7 +132,8 @@ impl GatewayRequestTracker {
                     .filter(events::Column::SessionKey.eq(&key))
                     .filter(events::Column::ConnectionId.eq(&connection.connection_id))
                     .one(&self.db)
-                    .await?
+                    .await
+                    .map_err(|error| self.inventory.read_error(error))?
                     .is_some();
                 if observed {
                     matches.insert(key, (identity, connection.connection_id.clone(), row.head));
@@ -163,7 +175,8 @@ impl GatewayRequestTracker {
             let store = EvolutionStore::new(self.db.clone(), &binding.identity.owner)?;
             if store
                 .get::<ExecutionRecord>(EXECUTION_KIND, ctx.request_id())
-                .await?
+                .await
+                .map_err(|error| self.inventory.read_error(error))?
                 .is_some()
             {
                 ctx.emit(CanonicalRequestReplayRejected);
@@ -193,6 +206,9 @@ impl GatewayRequestTracker {
 }
 
 pub(super) fn internal(error: anyhow::Error) -> BitrouterError {
+    if let Some(error) = error.downcast_ref::<BitrouterError>() {
+        return error.clone();
+    }
     tracing::warn!(%error, "canonical evolution operation failed");
     BitrouterError::internal("canonical evolution state could not be verified")
 }

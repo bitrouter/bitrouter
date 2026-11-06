@@ -325,7 +325,7 @@ impl Owner {
     }
 
     pub(crate) fn fail(&self, code: ErrorCode) {
-        self.admission.fence_receipts();
+        self.admission.stop_receipt_admission();
         if let Ok(mut state) = self.phase.lock()
             && !matches!(*state, Phase::Durable(_))
         {
@@ -346,10 +346,24 @@ impl Owner {
         self.changed.notify_waiters();
     }
     pub(in crate::tenancy) fn storage_failed(&self, retryable: bool) {
-        self.admission.fence_receipts();
+        if retryable {
+            self.admission.stop_receipt_admission();
+        } else {
+            self.admission.fence_receipts();
+        }
         if let Ok(mut state) = self.phase.lock()
             && !matches!(*state, Phase::Durable(_))
         {
+            // A timeout or failed producer already denied further preparation.
+            // A later NoTransaction result cannot manufacture retry authority.
+            let retryable = retryable
+                && !matches!(
+                    *state,
+                    Phase::Failed {
+                        retryable: false,
+                        ..
+                    }
+                );
             let candidate = match &*state {
                 Phase::Prepared(value)
                 | Phase::Failed {
@@ -468,7 +482,7 @@ impl Owner {
                 Phase::Failed { code, .. } => return Err(code),
                 _ => {
                     if !join && self.proposal.get() != Some(&outcome) {
-                        self.admission.fence_receipts();
+                        self.admission.stop_receipt_admission();
                         return Err(ErrorCode::StorageUnavailable);
                     }
                     false

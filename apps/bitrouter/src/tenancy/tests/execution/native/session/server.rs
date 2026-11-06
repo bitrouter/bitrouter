@@ -91,7 +91,7 @@ async fn campaign(
     workspace: &std::path::Path,
 ) -> Result<()> {
     let mut retain = |service: &Service| services.push(service.clone());
-    let fixture = Fixture::with_database(db.clone(), OperationLimits::default(), &mut retain)
+    let fixture = Fixture::with_database(db.clone(), &mut retain)
         .await
         .context("native backend: provision authority fixture")?;
     let (mut fixture, route, _) =
@@ -215,7 +215,6 @@ async fn campaign(
     fixture.service = Service::start_prepared(
         db.clone(),
         None,
-        OperationLimits::default(),
         store::load(db, Utc::now()).await?,
         Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
     )

@@ -13,6 +13,9 @@ use crate::metering::shared::evidence::{Attribution, ObservedTerminal, TerminalF
 
 use crate::metering::shared::MAX_ATTEMPTS;
 
+#[cfg(test)]
+mod contention_tests;
+
 pub(super) enum TenantLock {
     Shared,
     Exclusive,
@@ -259,8 +262,12 @@ impl Engine {
                     .ok_or(Rejection::NotFound)?;
                 let resource: Stored<Resource> = self
                     .store()
-                    .lock(&tx, Kind::Resource, &selected.resource_pool_id)
+                    // Dispatch only checks the reserved policy revision. Keep
+                    // writers fenced while allowing other dispatches to read it.
+                    .lock_shared(&tx, Kind::Resource, &selected.resource_pool_id)
                     .await?;
+                #[cfg(test)]
+                contention_tests::after_resource().await?;
                 let prior: Stored<Attempt> = self
                     .store()
                     .read(&tx, Kind::Attempt, attempt_id)

@@ -1,8 +1,9 @@
 //! Actual live parent ownership. Persisted source data cannot construct this enum.
 use crate::tenancy::{
-    Service, capture,
+    Service,
+    authority::live::ReadGuard,
+    capture,
     execution::{host, session},
-    model::Snapshot,
     transaction::Proof,
 };
 use bitrouter_ai::tenancy::operation::ErrorCode;
@@ -35,10 +36,13 @@ impl Binding {
             Self::Native(binding) => binding.assessment_check(),
         }
     }
-    pub(in crate::tenancy) fn assessment_in(&self, state: &Snapshot) -> Result<(), ErrorCode> {
+    pub(in crate::tenancy) fn assessment_guard(
+        &self,
+        guard: &mut ReadGuard<'_>,
+    ) -> Result<(), ErrorCode> {
         match self {
-            Self::Capture(binding) => binding.assessment_in(state),
-            Self::Native(binding) => binding.assessment_in(state),
+            Self::Capture(binding) => binding.assessment_guard(guard),
+            Self::Native(binding) => binding.assessment_guard(guard),
         }
     }
 }

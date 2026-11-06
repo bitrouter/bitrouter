@@ -7,6 +7,11 @@ use std::sync::{
 fn value() -> Snapshot {
     Snapshot {
         completion_reserved: 0,
+        physical_write_reserved: 0,
+        observed_free: None,
+        history_bytes: 32_000,
+        history_rows: 1,
+        oauth_reserved: 560_000,
         accounted: 37_000,
         ingress_reserved: 0,
         potential_unknown: 0,
@@ -104,5 +109,36 @@ fn unbound_unclean_active_and_out_of_range_cannot_freeze_success() -> Result<()>
     bad.potential_unknown = 1;
     bad.active = 1;
     ensure!(bad.validate() == Err(ReadError::Invalid));
+    Ok(())
+}
+
+#[test]
+fn final_keeps_durable_classes_but_requires_physical_writer_release() -> Result<()> {
+    let mut held = value();
+    held.closed = true;
+    held.physical_write_reserved = 1;
+    let pending = Observation::default();
+    ensure!(pending.bind(value(), move || Ok(held)));
+    ensure!(!pending.seal(true));
+    ensure!(pending.collect()[1] == Some(("final", Err(ReadError::Invalid))));
+    let released = Snapshot {
+        physical_write_reserved: 0,
+        observed_free: None,
+        ..held
+    };
+    let complete = Observation::default();
+    ensure!(complete.bind(value(), move || Ok(released)) && complete.seal(true));
+    ensure!(complete.collect()[1] == Some(("final", Ok(released))));
+    ensure!(released.history_bytes > 0 && released.history_rows > 0 && released.oauth_reserved > 0);
+    for field in 0..4 {
+        let mut too_large = value();
+        match field {
+            0 => too_large.history_bytes = i64::MAX as u64 + 1,
+            1 => too_large.history_rows = i64::MAX as u64 + 1,
+            2 => too_large.oauth_reserved = i64::MAX as u64 + 1,
+            _ => too_large.physical_write_reserved = i64::MAX as u64 + 1,
+        }
+        ensure!(too_large.validate() == Err(ReadError::Invalid));
+    }
     Ok(())
 }

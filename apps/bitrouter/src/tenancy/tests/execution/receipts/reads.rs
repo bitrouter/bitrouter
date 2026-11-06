@@ -61,7 +61,7 @@ async fn protected_reads_bind_installation_and_namespace_and_require_receipt_per
         .send()
         .await?;
     ensure!(foreign.status() == StatusCode::FORBIDDEN);
-    let mut input = harness.fixture.issuance("submit-only")?;
+    let mut input = harness.fixture.issuance("submit-only").await?;
     input.permissions = vec![Permission::ExecutionSubmit, Permission::CredentialUse];
     let submit = match harness
         .fixture
@@ -155,22 +155,22 @@ async fn suspend_denies_ordinary_receipts_but_audit_reader_remains_tenant_bound_
         .fixture
         .service
         .authenticate(harness.credential.secret.as_deref().context("ordinary")?)
+        .await
         .map_err(failure)?;
     let auditor = harness
         .fixture
         .service
         .authenticate(audit.secret.as_deref().context("audit")?)
+        .await
         .map_err(failure)?;
-    let revision = harness
-        .fixture
-        .service
-        .current()
-        .map_err(failure)?
-        .tenants
-        .get(&harness.fixture.tenant)
-        .context("tenant")?
-        .revision
-        .clone();
+    let revision = crate::tenancy::store::directory::tenant_in(
+        &harness.fixture.db,
+        &harness.fixture.tenant,
+        64 * 1024,
+    )
+    .await?
+    .context("tenant")?
+    .revision;
     harness
         .fixture
         .service

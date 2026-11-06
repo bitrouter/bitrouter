@@ -68,7 +68,7 @@ async fn exercise(root: &Path, mode: &str, upstream: &str) -> Result<()> {
             consuming_error(&host).await?;
         }
         let reads = host.fixture.service.reads.available_permits();
-        ensure!(reads > 0 && host.fixture.service.current().is_ok());
+        ensure!(reads >= 3 && host.fixture.service.current().is_ok());
         let mut prompt = Box::pin(host.current()?.prompt(&native, "one real Block fault turn"));
         let (mut peer, _) = tokio::time::timeout(TIMEOUT, async {
             tokio::select! {
@@ -109,10 +109,32 @@ async fn exercise(root: &Path, mode: &str, upstream: &str) -> Result<()> {
                 .0
                 > 0
         );
-        // These use real public facades and the configured endpoint. Neither
-        // can turn the held selection into another owner or provider attempt.
-        refuse_opener(&host).await?;
-        refuse_http(&host, headers.clone(), false).await?;
+        // Scoped authentication uses the same actor as the held COMMIT. Drive
+        // both public contenders until their reads are queued, without waiting
+        // for an authentication deadline to fence the commit-error campaign.
+        let opener = refuse_opener(&host);
+        let duplicate = refuse_http(&host, headers.clone());
+        tokio::pin!(opener, duplicate);
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                if host.fixture.service.reads.available_permits() == reads - 3 {
+                    ensure!(host.fixture.service.current().is_ok());
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::select! {
+                    result = &mut opener => {
+                        result?;
+                        anyhow::bail!("contending opener ended before the held COMMIT");
+                    }
+                    result = &mut duplicate => {
+                        result?;
+                        anyhow::bail!("contending HTTP request ended before the held COMMIT");
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
+            }
+        })
+        .await??;
         ensure!(host.fixture.service.cleanup.disposition() == Disposition::Pending);
         if mode == "late-commit" {
             // Advance beyond the ORIGINAL five-second selection/H deadline,
@@ -123,12 +145,18 @@ async fn exercise(root: &Path, mode: &str, upstream: &str) -> Result<()> {
             tokio::time::timeout(TIMEOUT, host.fixture.service.cleanup.wait_fenced()).await?;
             ensure!(host.fixture.service.current().is_err());
             ensure!(host.fixture.service.cleanup.disposition() == Disposition::Pending);
-            ensure!(host.fixture.service.reads.available_permits() == reads - 1);
+            ensure!(host.fixture.service.reads.available_permits() == reads - 3);
         }
         // Dropping this public waiter cannot cancel the real registered owner.
         drop(prompt);
         host.fixture.service.cleanup.release_gate();
         tokio::time::timeout(TIMEOUT, host.fixture.service.cleanup.wait_fenced()).await?;
+        tokio::time::timeout(TIMEOUT, async {
+            opener.await?;
+            duplicate.await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
         // A real pool read waits behind the same consuming COMMIT/driver
         // rollback. It does not manufacture a transaction acknowledgement.
         let intents =
@@ -161,7 +189,7 @@ async fn exercise(root: &Path, mode: &str, upstream: &str) -> Result<()> {
             acknowledged_no_send_receipt(&host, &intents[0]).await?;
         }
         refuse_opener(&host).await?;
-        refuse_http(&host, headers, true).await?;
+        refuse_http(&host, headers).await?;
         ensure!(host.records("owned_block_intent_v1").await? == intents);
         ensure!(host.records("owned_block_enrollment_v1").await? == enrollments);
         ensure!(host.records("owned_block_control_v1").await? == control);
@@ -342,7 +370,7 @@ async fn refuse_opener(host: &Host) -> Result<()> {
     Ok(())
 }
 
-async fn refuse_http(host: &Host, headers: HeaderMap, fenced: bool) -> Result<()> {
+async fn refuse_http(host: &Host, headers: HeaderMap) -> Result<()> {
     let response = reqwest::Client::builder().timeout(TIMEOUT).build()?
         .post(format!("{}/v1/chat/completions", host.listener.as_ref().context("actual listener")?.origin))
         .headers(headers).json(&json!({"model":"literal:subject","messages":[{"role":"user","content":"must not redraw"}]})).send().await?;
@@ -350,15 +378,10 @@ async fn refuse_http(host: &Host, headers: HeaderMap, fenced: bool) -> Result<()
     let bytes = response.bytes().await?;
     ensure!(bytes.len() <= 8192);
     let error: bitrouter_ai::tenancy::operation::Error = serde_json::from_slice(&bytes)?;
-    if fenced {
-        ensure!(
-            status == StatusCode::SERVICE_UNAVAILABLE
-                && error.code == ErrorCode::AuthorityUnavailable
-        );
-    } else {
-        ensure!(
-            status == StatusCode::TOO_MANY_REQUESTS && error.code == ErrorCode::CapacityExceeded
-        );
-    }
+    ensure!(
+        status == StatusCode::SERVICE_UNAVAILABLE && error.code == ErrorCode::AuthorityUnavailable,
+        "expected fenced rejection, got status={status} code={:?}",
+        error.code
+    );
     Ok(())
 }

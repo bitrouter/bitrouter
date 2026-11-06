@@ -34,6 +34,7 @@ pub(crate) mod resources;
 pub(crate) mod routing;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
+pub(crate) mod storage;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -43,7 +44,7 @@ pub(super) mod trajectory_profile;
 mod transaction;
 
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
@@ -72,6 +73,14 @@ use self::{
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
+struct Provisioning<'a> {
+    import: Option<Vec<u8>>,
+    continuations: &'a crate::config::ContinuationConfig,
+    claim: Option<ownership::Claim>,
+    receipt_observer: crate::telemetry::receipt_latency::Sink,
+    config: &'a crate::config::tenancy::TenancyConfig,
+}
+
 // The startup test installs H's existing fault gate before the actor can run.
 // No global hook or alternate transaction implementation is involved.
 #[cfg(test)]
@@ -96,9 +105,8 @@ type CapacityBindTest =
 pub(crate) struct Service {
     #[cfg(all(feature = "core", feature = "harness"))]
     startup: Option<Arc<origin::StartupOwner>>,
-    oauth: Arc<oauth::State>,
     db: DatabaseConnection,
-    snapshot: Arc<RwLock<Arc<Snapshot>>>,
+    authority: Arc<authority::live::Authority>,
     live: Arc<AtomicBool>,
     instance: InstanceId,
     commands: mpsc::Sender<Job>,
@@ -124,6 +132,8 @@ pub(crate) struct Service {
     http_registry: crate::continuation::ContinuationRegistry,
     caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
+    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+    obligation_due: Arc<std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     execution_settings: crate::config::tenancy::TenancyConfig,
     routing: Arc<routing::state::Runtime>,
@@ -141,6 +151,14 @@ pub(crate) struct Service {
 }
 
 impl Service {
+    pub(crate) fn storage_budget(&self) -> storage::Budget {
+        storage::Budget::new(self.admission.clone(), self.cleanup.clone())
+    }
+
+    pub(crate) fn execution_settings(&self) -> &crate::config::tenancy::TenancyConfig {
+        &self.execution_settings
+    }
+
     pub(crate) async fn open_owned_profile(
         database: crate::db::OwnedDatabase,
         config: &crate::config::tenancy::TenancyConfig,
@@ -183,7 +201,6 @@ impl Service {
         Self::open_configured_origin(
             db,
             Some(owner),
-            actor::OperationLimits::default(),
             config,
             continuations,
             (Some(claim), observer),
@@ -198,7 +215,14 @@ impl Service {
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
     ) -> anyhow::Result<Self> {
-        Self::open_with_limits(db, owner, actor::OperationLimits::default()).await
+        Self::open_configured(
+            db,
+            owner,
+            &crate::config::tenancy::TenancyConfig::default(),
+            &crate::config::ContinuationConfig::default(),
+            crate::telemetry::receipt_latency::Sink::default(),
+        )
+        .await
     }
 
     #[cfg(all(test, unix))]
@@ -211,7 +235,6 @@ impl Service {
         Self::open_configured(
             db,
             owner,
-            actor::OperationLimits::default(),
             config,
             continuations,
             crate::telemetry::receipt_latency::Sink::default(),
@@ -224,27 +247,9 @@ impl Service {
     }
 
     #[cfg(test)]
-    async fn open_with_limits(
-        db: DatabaseConnection,
-        owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
-    ) -> anyhow::Result<Self> {
-        Self::open_configured(
-            db,
-            owner,
-            limits,
-            &crate::config::tenancy::TenancyConfig::default(),
-            &crate::config::ContinuationConfig::default(),
-            crate::telemetry::receipt_latency::Sink::default(),
-        )
-        .await
-    }
-
-    #[cfg(test)]
     async fn open_configured(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
         config: &crate::config::tenancy::TenancyConfig,
         continuations: &crate::config::ContinuationConfig,
         receipt_observer: crate::telemetry::receipt_latency::Sink,
@@ -252,7 +257,6 @@ impl Service {
         Self::open_configured_origin(
             db,
             owner,
-            limits,
             config,
             continuations,
             (None, receipt_observer),
@@ -264,7 +268,6 @@ impl Service {
     async fn open_configured_origin(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
         config: &crate::config::tenancy::TenancyConfig,
         continuations: &crate::config::ContinuationConfig,
         origin: (
@@ -275,31 +278,37 @@ impl Service {
     ) -> anyhow::Result<Self> {
         let (claim, receipt_observer) = origin;
         config.validate_lifetime()?;
-        let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::new(
-            crate::gateway::model::client::HttpTimeouts {
-                read: Duration::from_secs(config.stream_idle_timeout_secs),
-                ..Default::default()
-            },
-        )?);
-        let initial = store::load(&db, Utc::now()).await?;
+        config.capacity.validate()?;
+        let initial = store::initial_header_with(&db, Utc::now(), || {
+            if let Some(owner) = &owner {
+                return storage::exclusive_write(owner, 16 * 1024);
+            }
+            // In-memory test services have no file volume or exclusive lease.
+            anyhow::ensure!(cfg!(test), "startup database owner missing");
+            Ok(())
+        })
+        .await?;
         let resources = Arc::new(resources::Resources::load_key(
             &initial.installation,
             config,
         )?);
         let import = resources::Resources::read_import(config.resource_import.as_deref()).await?;
-        let mut service = Self::start_resources_with_continuations(
+        let service = Self::start_resources_with_continuations(
             db,
             owner,
-            limits,
             initial,
             resources,
-            (import, continuations, claim, receipt_observer),
+            Provisioning {
+                import,
+                continuations,
+                claim,
+                receipt_observer,
+                config,
+            },
             #[cfg(test)]
             startup_test,
         )
         .await?;
-        service.execution_settings = config.clone();
-        service.executor = executor;
         #[cfg(all(feature = "core", feature = "harness"))]
         if let Err(error) =
             learner::registration::initialize(&service, config.learning_registrations.as_deref())
@@ -321,18 +330,16 @@ impl Service {
     async fn start_prepared(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
         initial: Snapshot,
         resources: Arc<resources::Resources>,
     ) -> anyhow::Result<Self> {
-        Self::start_resources(db, owner, limits, initial, resources, None, None).await
+        Self::start_resources(db, owner, initial, resources, None, None).await
     }
 
     #[cfg(test)]
     async fn start_resources(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
         initial: Snapshot,
         resources: Arc<resources::Resources>,
         import: Option<Vec<u8>>,
@@ -344,15 +351,15 @@ impl Service {
         Self::start_resources_with_continuations(
             db,
             owner,
-            limits,
             initial,
             resources,
-            (
+            Provisioning {
                 import,
-                &crate::config::ContinuationConfig::default(),
-                None,
-                crate::telemetry::receipt_latency::Sink::default(),
-            ),
+                continuations: &crate::config::ContinuationConfig::default(),
+                claim: None,
+                receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+                config: &crate::config::tenancy::TenancyConfig::default(),
+            },
             bootstrap_gate.map(|bootstrap| StartupTest {
                 bootstrap: Some(bootstrap),
                 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
@@ -365,25 +372,41 @@ impl Service {
     async fn start_resources_with_continuations(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
-        limits: actor::OperationLimits,
         initial: Snapshot,
         resources: Arc<resources::Resources>,
-        provisioning: (
-            Option<Vec<u8>>,
-            &crate::config::ContinuationConfig,
-            Option<ownership::Claim>,
-            crate::telemetry::receipt_latency::Sink,
-        ),
+        provisioning: Provisioning<'_>,
         #[cfg(test)] mut startup_test: Option<StartupTest>,
     ) -> anyhow::Result<Self> {
-        let (import, continuations, claim, receipt_observer) = provisioning;
+        let Provisioning {
+            import,
+            continuations,
+            claim,
+            receipt_observer,
+            config,
+        } = provisioning;
+        config.capacity.validate()?;
+        let capacity = &config.capacity;
+        tracing::info!(?capacity, "tenant runtime budgets selected");
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
-        let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
-        let caches = Arc::new(execution::cached::Caches::new()?);
-        let oauth = Arc::new(oauth::State::default());
-        let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
+        let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::new(
+            crate::gateway::model::client::HttpTimeouts {
+                read: Duration::from_secs(config.stream_idle_timeout_secs),
+                ..Default::default()
+            },
+        )?);
+        let caches = Arc::new(execution::cached::Caches::new(&capacity.caches)?);
+        let routing = Arc::new(routing::state::Runtime::configured(
+            &capacity.routing,
+            capacity.execution.instance_active,
+        )?);
         let live = Arc::new(AtomicBool::new(true));
+        let authority = authority::live::Authority::new(
+            initial.header(),
+            &capacity.authority_views,
+            live.clone(),
+        )
+        .map_err(|code| anyhow::anyhow!("authority view budget unavailable: {code:?}"))?;
         let cleanup = transaction::Proof::new(live.clone());
         #[cfg(test)]
         if let Some(bootstrap_gate) = startup_test.as_mut().and_then(|test| test.bootstrap.take()) {
@@ -398,30 +421,16 @@ impl Service {
             claim.map(|claim| origin::StartupOwner::new(claim, instance.clone(), cleanup.clone()));
         // Ordinary traffic cannot occupy the queue reserved for installation
         // revokes and stop transitions. Neither queue waits for free capacity.
-        let (commands, receiver) = mpsc::channel(16);
-        let (safety, safety_receiver) = mpsc::channel(8);
-        let (completions, completion_receiver) = mpsc::channel(128);
+        let (commands, receiver) = mpsc::channel(capacity.management.queue);
+        let (safety, safety_receiver) = mpsc::channel(capacity.management.safety_queue);
+        let (completions, completion_receiver) = mpsc::channel(capacity.execution.instance_active);
         let receipt_volume = owner
             .as_ref()
             .and_then(|owner| owner.path.parent().map(std::path::Path::to_path_buf));
-        let receipt_installation = snapshot
-            .read()
-            .map_err(|_| anyhow::anyhow!("receipt startup authority unavailable"))?
-            .installation
-            .clone();
-        let receipt_inventory = tokio::time::timeout(
-            MANAGEMENT_TIMEOUT,
-            receipts::store::inventory(&db, &receipt_installation),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("receipt inventory deadline elapsed"))??;
-        let admission = admission::Admission::new();
+        let admission = admission::Admission::configured(capacity);
         admission
-            .initialize_receipts(
-                receipt_inventory,
-                receipts::capacity::free_space(receipt_volume.as_deref())?,
-            )
-            .map_err(|_| anyhow::anyhow!("receipt capacity initialization failed"))?;
+            .bind_receipt_volume(receipt_volume.clone())
+            .map_err(|_| anyhow::anyhow!("receipt volume observation failed"))?;
         let accepting = Arc::new(std::sync::Mutex::new(true));
         #[cfg(feature = "core")]
         let eval = eval::State::new(live.clone());
@@ -429,7 +438,7 @@ impl Service {
             continuations,
             instance.as_str().to_owned(),
         )?;
-        let reads = Arc::new(Semaphore::new(8));
+        let reads = Arc::new(Semaphore::new(capacity.management.reads));
         let http_continuation = continuation::http::Port::new(
             commands.clone(),
             &cleanup,
@@ -438,14 +447,14 @@ impl Service {
         );
         let http_registry =
             crate::continuation::ContinuationRegistry::for_tenant(http_continuation.clone())?;
+        let obligation_due = Arc::new(std::sync::Mutex::new(None));
         let worker = Worker {
+            obligation_due: obligation_due.clone(),
             startup: startup.clone(),
-            oauth: oauth.clone(),
             db: db.clone(),
-            snapshot: snapshot.clone(),
+            authority: authority.clone(),
             live: Liveness(live.clone()),
             owner,
-            limits,
             resources: resources.clone(),
             proof: cleanup.clone(),
             admission: admission.clone(),
@@ -471,11 +480,12 @@ impl Service {
             .boxed()
             .shared();
         let mut service = Self {
+            #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+            obligation_due,
             #[cfg(all(feature = "core", feature = "harness"))]
             startup,
-            oauth,
             db,
-            snapshot,
+            authority,
             live,
             instance,
             commands,
@@ -502,9 +512,11 @@ impl Service {
             caches,
             admission,
             executor,
-            execution_settings: crate::config::tenancy::TenancyConfig::default(),
-            routing: Arc::new(routing::state::Runtime::default()),
-            pipelines: execution::lifecycle::Registry::new(),
+            execution_settings: config.clone(),
+            routing,
+            pipelines: execution::lifecycle::Registry::with_capacity(
+                capacity.execution.instance_active,
+            ),
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
             #[cfg(all(test, unix, feature = "core", feature = "harness"))]
@@ -567,6 +579,26 @@ impl Service {
                 }),
                 "receipt capacity observation already bound or sealed"
             );
+            let caches = Arc::downgrade(&self.caches);
+            let routing = Arc::downgrade(&self.routing);
+            anyhow::ensure!(
+                self.receipt_observer.bind_runtime_capacity(move || {
+                    let [executions, credentials] = caches
+                        .upgrade()
+                        .map(|caches| caches.observed())
+                        .unwrap_or([Err(ReadError::Unavailable); 2]);
+                    let routing = routing
+                        .upgrade()
+                        .ok_or(ReadError::Unavailable)
+                        .and_then(|routing| routing.observed());
+                    crate::telemetry::receipt_latency::capacity::runtime::Snapshot {
+                        executions,
+                        credentials,
+                        routing,
+                    }
+                }),
+                "runtime capacity observation already bound"
+            );
         }
         Ok(())
     }
@@ -575,21 +607,27 @@ impl Service {
         &self.http_registry
     }
 
-    /// Stop accepting mutations and drain both admitted command queues. Timeout
-    /// never aborts the writer or releases its file lease; the host must report
-    /// unsuccessful shutdown instead of claiming all transactions settled.
-    pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+    /// Fence new dispatch before acknowledging process stop. This does not wait
+    /// for SQL, disk probes, receipt accounting or a producer to finish.
+    pub(crate) fn stop_dispatch(&self) -> anyhow::Result<()> {
         *self
             .accepting
             .lock()
             .map_err(|_| anyhow::anyhow!("tenant ingress lock unavailable"))? = false;
-        {
-            let _authority = self
-                .snapshot
-                .write()
-                .map_err(|_| anyhow::anyhow!("tenant authority lock unavailable at shutdown"))?;
-            self.caches.close();
-        }
+        self.authority
+            .with_write(|| {
+                self.caches.close();
+                Ok(())
+            })
+            .map_err(|_| anyhow::anyhow!("tenant publication gate unavailable at shutdown"))?;
+        Ok(())
+    }
+
+    /// Stop accepting mutations and drain both admitted command queues. Timeout
+    /// never aborts the writer or releases its file lease; the host must report
+    /// unsuccessful shutdown instead of claiming all transactions settled.
+    pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        self.stop_dispatch()?;
         self.admission.close();
         self.pipelines.close();
         #[cfg(all(feature = "core", feature = "harness"))]
@@ -672,10 +710,10 @@ impl Service {
         if !self.live.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
-        self.snapshot
+        self.authority
             .read()
-            .map(|snapshot| snapshot.clone())
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))
+            .map(|guard| Arc::new(Snapshot::from_header(guard.header())))
+            .map_err(Failure::from)
     }
 
     fn unavailable(&self) -> Failure {
@@ -691,21 +729,79 @@ impl Service {
             .map_err(|_| ErrorCode::CapacityExceeded.into())
     }
 
-    fn authenticate(&self, token: &str) -> Result<Caller, Failure> {
+    #[cfg(test)]
+    async fn caller_facts_for_test(&self, caller: &Caller) -> Result<Snapshot, Failure> {
+        let identity = self
+            .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| Ok(view.facts().clone()))
+            .map_err(Failure::from)
+    }
+
+    #[cfg(test)]
+    async fn authenticate(&self, token: &str) -> Result<Caller, Failure> {
+        self.authenticate_live(token)
+            .await
+            .map(|identity| identity.caller)
+    }
+
+    async fn authenticate_live(
+        &self,
+        token: &str,
+    ) -> Result<authority::live::Authenticated, Failure> {
+        self.authenticate_with_reuse(token, false).await
+    }
+
+    async fn authenticate_with_reuse(
+        &self,
+        token: &str,
+        reuse: bool,
+    ) -> Result<authority::live::Authenticated, Failure> {
         if !token.starts_with("brtk_") || token.len() > 512 {
             return Err(ErrorCode::Unauthorized.into());
         }
-        let state = self.current()?;
-        let hash = crate::auth::keys::hash_key(token);
-        let id = state
-            .credential_hashes
-            .get(&hash)
-            .ok_or_else(|| Failure::from(ErrorCode::Unauthorized))?;
-        let caller = Caller::Credential(id.clone());
-        state
-            .credential(&caller, Utc::now())
-            .map_err(Failure::from)?;
-        Ok(caller)
+        self.authority_read(actor::AuthoritySubject::Token {
+            hash: crate::auth::keys::hash_key(token),
+            reuse,
+        })
+        .await
+    }
+
+    async fn authority_read(
+        &self,
+        subject: actor::AuthoritySubject,
+    ) -> Result<authority::live::Authenticated, Failure> {
+        self.admitted_authority_read(|| Ok(subject)).await
+    }
+
+    async fn admitted_authority_read(
+        &self,
+        prepare: impl FnOnce() -> Result<actor::AuthoritySubject, Failure>,
+    ) -> Result<authority::live::Authenticated, Failure> {
+        let permit = self
+            .reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+        let subject = prepare()?;
+        let deadline = tokio::time::Instant::now() + MANAGEMENT_TIMEOUT;
+        let (reply, receive) = oneshot::channel();
+        self.enqueue(
+            Job::AuthorityRead(actor::AuthorityRead {
+                subject,
+                deadline,
+                permit,
+                reply,
+            }),
+            false,
+        )?;
+        tokio::time::timeout_at(deadline, receive)
+            .await
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
     }
 
     fn check_installation(&self, expected: &InstallationId) -> Result<(), Failure> {
@@ -716,17 +812,29 @@ impl Service {
         }
     }
 
-    fn capabilities(&self, caller: &Caller) -> Result<TenantCapabilities, Failure> {
-        let state = self.current()?;
-        state.principal(caller, Utc::now()).map_err(Failure::from)?;
+    async fn capabilities(&self, caller: &Caller) -> Result<TenantCapabilities, Failure> {
+        let identity = self
+            .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                view.facts().principal(caller, Utc::now())?;
+                self.capability_document(view.facts())
+            })
+            .map_err(Failure::from)
+    }
+
+    fn capability_document(&self, state: &Snapshot) -> Result<TenantCapabilities, ErrorCode> {
         // All three guarantees derive from the same current eligibility fences;
         // discovery does not grant authority over any selected retained route.
-        let dispatch_ready = self.dispatch_ready(&state);
+        let dispatch_ready = self.dispatch_ready(state);
         Ok(TenantCapabilities {
             contract_version: 1,
             installation_id: state.installation.clone(),
             instance_id: self.instance.clone(),
-            capability_revision: self.capability_revision(&state).map_err(Failure::from)?,
+            capability_revision: self.capability_revision(state)?,
             revision_bound_dispatch: dispatch_ready,
             strict_receipts: dispatch_ready,
             dispatch_enabled: dispatch_ready,
@@ -771,9 +879,13 @@ impl Service {
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::OAuth(_)
             | Job::Credential(_)
+            | Job::AuthorityRead(_)
+            | Job::UnknownCount(_)
             | Job::Continuation(_)
             | Job::Receipt(_)
             | Job::ReceiptRead(_) => None,
+            #[cfg(test)]
+            Job::Escalate { .. } | Job::Archive { .. } => None,
             #[cfg(feature = "core")]
             Job::Eval(_)
             | Job::Settlement(_)
@@ -804,34 +916,47 @@ impl Service {
         caller: &Caller,
         id: &OperationId,
     ) -> Result<OperationResult, Failure> {
-        let _read = self.read_permit()?;
-        let state = self.current()?;
-        let principal = state
-            .principal(caller, Utc::now())
+        let identity = self
+            .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
+        let (installation, principal) = self
+            .authority
+            .read()
             .map_err(Failure::from)?
-            .clone();
+            .check(&identity.lease, |view| {
+                Ok((
+                    view.facts().installation.clone(),
+                    view.facts().principal(caller, Utc::now())?.clone(),
+                ))
+            })
+            .map_err(Failure::from)?;
+        let _read = self.read_permit()?;
         let operation = tokio::time::timeout(
             MANAGEMENT_TIMEOUT,
-            store::operation(&self.db, &state.installation, &principal, id),
+            store::operation(&self.db, &installation, &principal, id),
         )
         .await
         .map_err(|_| self.unavailable())?
         .map_err(|_| self.unavailable())?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-        // Do not carry the pre-I/O snapshot across this authorization point.
-        let current = self.current()?;
-        current
-            .authorize_read(caller, &operation.context, Utc::now())
-            .map_err(|_| Failure::from(ErrorCode::Forbidden))?;
-        if operation
-            .result
-            .authority_revision
-            .is_some_and(|revision| revision > current.revision)
-        {
-            // A durable commit may be visible to another pool connection before
-            // the writer publishes its snapshot. Do not acknowledge it early.
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                let current = view.facts();
+                current
+                    .authorize_read(caller, &operation.context, Utc::now())
+                    .map_err(|_| ErrorCode::Forbidden)?;
+                if operation
+                    .result
+                    .authority_revision
+                    .is_some_and(|revision| revision > current.revision)
+                {
+                    return Err(ErrorCode::AuthorityUnavailable);
+                }
+                Ok(())
+            })
+            .map_err(Failure::from)?;
         if operation.created_at + chrono::Duration::days(30) <= Utc::now() {
             return Err(Failure::new(ErrorCode::OperationExpired, Some(id.clone())));
         }
@@ -844,9 +969,9 @@ impl Service {
         tenant: &TenantId,
         id: &CredentialId,
     ) -> Result<CredentialStatus, Failure> {
-        self.current()?
-            .principal(caller, Utc::now())
-            .map_err(Failure::from)?;
+        let identity = self
+            .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
         let deadline = tokio::time::Instant::now() + MANAGEMENT_TIMEOUT;
         let permit = self
             .reads
@@ -857,6 +982,7 @@ impl Service {
         self.enqueue(
             Job::Credential(CredentialRead {
                 caller: caller.clone(),
+                authority: identity.lease.clone(),
                 id: id.clone(),
                 deadline,
                 permit,
@@ -872,21 +998,27 @@ impl Service {
         let target = target
             .filter(|credential| &credential.tenant == tenant)
             .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-        let state = self.current()?;
-        if state.revision != observed_revision {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        if target.audit_reader && !matches!(caller, Caller::Installation(_)) {
-            return Err(ErrorCode::Forbidden.into());
-        }
-        state
-            .authorize(
-                caller,
-                tenant,
-                Permission::CredentialManage,
-                &target.scope,
-                Utc::now(),
-            )
+        let revision = self
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                let state = view.facts();
+                if state.revision != observed_revision {
+                    return Err(ErrorCode::AuthorityUnavailable);
+                }
+                if target.audit_reader && !matches!(caller, Caller::Installation(_)) {
+                    return Err(ErrorCode::Forbidden);
+                }
+                state.authorize(
+                    caller,
+                    tenant,
+                    Permission::CredentialManage,
+                    &target.scope,
+                    Utc::now(),
+                )?;
+                Ok(state.revision)
+            })
             .map_err(Failure::from)?;
         let lifecycle =
             if target.state == CredentialState::Active && target.expires.instant <= Utc::now() {
@@ -898,7 +1030,7 @@ impl Service {
             tenant_id: tenant.clone(),
             credential_id: id.clone(),
             credential_revision: target.revision,
-            authority_revision: state.revision,
+            authority_revision: revision,
             state: lifecycle,
         })
     }

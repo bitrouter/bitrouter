@@ -31,10 +31,7 @@ async fn campaign(
     judge: &Judge,
 ) -> Result<()> {
     let db = database.connect().await?;
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |service| {
-        database.retain(service)
-    })
-    .await?;
+    let fixture = Fixture::with_database(db, &mut |service| database.retain(service)).await?;
     let mut ready = Ready::from_fixture_tracked(
         fixture,
         None,
@@ -80,14 +77,8 @@ async fn campaign(
     let reopened = database.connect().await?;
     let snapshot = store::load(&reopened, Utc::now()).await?;
     let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
-    let service = Service::start_prepared(
-        reopened.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    let service =
+        Service::start_prepared(reopened.clone(), None, snapshot, Arc::new(resources)).await?;
     database.retain(&service);
     ready.fixture.db = reopened;
     ready.fixture.service = service;
