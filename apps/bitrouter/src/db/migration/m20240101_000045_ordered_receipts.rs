@@ -104,6 +104,15 @@ impl MigrationTrait for Migration {
         {
             return Err(incompatible());
         }
+        let invalid = Query::select()
+            .from(Alias::new("tenancy_installation"))
+            .expr(Expr::val(1))
+            .and_where(Expr::col(Alias::new("schema_version")).is_not_in([1, 2]))
+            .limit(1)
+            .to_owned();
+        if db.query_one(backend.build(&invalid)).await?.is_some() {
+            return Err(incompatible());
+        }
         manager
             .alter_table(
                 Table::alter()

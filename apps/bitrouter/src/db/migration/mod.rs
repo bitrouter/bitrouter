@@ -66,6 +66,14 @@ pub(crate) async fn validate_receipt_archive(
     m20240101_000035_execution_receipts::validate_archive(db).await
 }
 
+/// Compare the receipt table with the capacity-only predecessor's exact DDL.
+#[cfg(test)]
+pub(crate) async fn validate_capacity_receipt_shape(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000042_receipt_archive::catalog::validate_capacity_receipt_shape(db).await
+}
+
 /// Exact legacy or complete indexed SQLite OAuth/obligation storage profile.
 pub(crate) async fn validate_owned_oauth(
     db: &impl sea_orm::ConnectionTrait,

@@ -21,7 +21,10 @@ async fn owned_connection(path: &std::path::Path) -> Result<DatabaseConnection> 
 }
 async fn legacy_database(path: &std::path::Path) -> Result<DatabaseConnection> {
     let db = owned_connection(path).await?;
-    let count = crate::db::migration::Migrator::migrations().len() - 1;
+    let count = crate::db::migration::Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name() == "m20240101_000045_ordered_receipts")
+        .context("ordered migration")?;
     crate::db::migration::Migrator::up(&db, Some(u32::try_from(count)?)).await?;
     db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',2,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
     Ok(db)
@@ -62,10 +65,11 @@ async fn management_mutation(db: &DatabaseConnection) -> Result<()> {
     )
     .await?;
     let loaded = authority::load(db, chrono::Utc::now()).await?;
+    ensure!(loaded.revision.get() == 1 && loaded.operation_ids == 1);
     ensure!(
-        loaded.revision.get() == 1
-            && loaded.operation_ids == 1
-            && loaded.tenants.contains_key(&"tenant".try_into()?)
+        authority::directory::tenant_in(db, &"tenant".try_into()?, 4096)
+            .await?
+            .is_some()
     );
     Ok(())
 }
@@ -78,6 +82,101 @@ async fn version(db: &DatabaseConnection) -> Result<i32> {
         .await?
         .context("authority version")?
         .try_get("", "schema_version")?)
+}
+
+#[tokio::test]
+async fn ordered_migration_preserves_format_two_and_fences_capacity_readers() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("capacity.sqlite");
+    let db = legacy_database(&path).await?;
+    crate::db::migration::validate_capacity_receipt_shape(&db).await?;
+    let before = crate::db::migration::Migrator::get_migration_models(&db).await?;
+    crate::db::migration::Migrator::up(&db, Some(1)).await?;
+    management_mutation(&db).await?;
+    ensure!(version(&db).await? == 2);
+    let after = crate::db::migration::Migrator::get_migration_models(&db).await?;
+    let new: Vec<_> = after
+        .iter()
+        .filter(|entry| !before.contains(entry))
+        .collect();
+    ensure!(new.len() == 1 && new[0].version == "m20240101_000045_ordered_receipts");
+    crate::db::migration::validate_receipt_archive(&db).await?;
+    ensure!(
+        crate::db::migration::validate_capacity_receipt_shape(&db)
+            .await
+            .is_err()
+    );
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn migration_preserves_legacy_format_until_capacity_validation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("legacy-latch.sqlite");
+    let db = legacy_database(&path).await?;
+    db.execute_unprepared("UPDATE tenancy_installation SET schema_version=1, saturated=1")
+        .await?;
+    crate::db::run_migrations(&db).await?;
+    ensure!(version(&db).await? == 1);
+    let saved = authority::load_existing(&db, chrono::Utc::now()).await?;
+    ensure!(saved.saturated && saved.operation_ids == 0);
+    db.close().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires BITROUTER_CAPACITY_PREDECESSOR_BRO built from Core main at 4c3a6da"]
+async fn actual_capacity_predecessor_refuses_mutated_format_two_ordered_store() -> Result<()> {
+    let predecessor = std::env::var_os("BITROUTER_CAPACITY_PREDECESSOR_BRO")
+        .context("capacity predecessor executable required")?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("ordered.sqlite");
+    let db = legacy_database(&path).await?;
+    crate::db::migration::Migrator::up(&db, Some(1)).await?;
+    management_mutation(&db).await?;
+    ensure!(version(&db).await? == 2);
+    db.close().await?;
+    let before = std::fs::read(&path)?;
+    let config = dir.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "server:\n  listen: '127.0.0.1:0'\n  control_socket: '{}'\ndatabase:\n  url: 'sqlite://{}?mode=rw'\ntenancy:\n  enabled: true\ncontrol:\n  enabled: true\n  credentials:\n    - id: operator\n      token_env: ORDERED_TEST_OPERATOR\n      scopes: ['control:tenancy']\n",
+            dir.path().join("control.sock").display(),
+            path.display()
+        ),
+    )?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        tokio::process::Command::new(predecessor)
+            .args(["serve", "--config"])
+            .arg(config)
+            .env("HOME", dir.path())
+            .env(
+                "ORDERED_TEST_OPERATOR",
+                "synthetic-ordered-operator-token-32-bytes",
+            )
+            .current_dir(dir.path())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await??;
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ensure!(
+        !output.status.success() && diagnostics.contains("unknown or duplicate migration identity"),
+        "capacity predecessor did not refuse the ordered ledger: {diagnostics}"
+    );
+    ensure!(
+        std::fs::read(&path)? == before,
+        "capacity predecessor rewrote the ordered store"
+    );
+    Ok(())
 }
 
 #[tokio::test]

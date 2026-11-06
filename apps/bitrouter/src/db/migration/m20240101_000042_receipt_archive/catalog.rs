@@ -112,6 +112,13 @@ async fn receipt_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) async fn validate_capacity_receipt_shape(
+    db: &impl ConnectionTrait,
+) -> Result<(), DbErr> {
+    table(db, RECEIPTS, receipt_definition()).await
+}
+
 pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     no_shadows(db).await?;
     let mut receipts = receipt_definition();

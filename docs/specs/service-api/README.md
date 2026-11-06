@@ -35,8 +35,9 @@ migration and rollback rules below, even when an older client uses only receipts
 
 Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
-formats retain their existing meanings and eight-attempt bound. The new store
-format prevents an older binary from opening upgraded authority data.
+formats retain their existing meanings and eight-attempt bound. The ordered receipt migration follows capacity migrations 042–044. The
+capacity-only binary rejects its SQLite migration ledger entry, and its
+immutable audit readers require the earlier exact catalog.
 
 ### Offline recovery evidence v2
 

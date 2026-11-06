@@ -16,6 +16,7 @@ const TABLE: &str = "tenancy_usage_evidence";
 pub(in crate::tenancy::receipts) struct Evidence {
     pub json: String,
     pub digest: String,
+    #[cfg(test)]
     pub document: ExecutionUsageEvidenceV1,
 }
 impl Evidence {
@@ -48,6 +49,7 @@ impl Evidence {
         Ok(Self {
             json,
             digest: hex::encode(hash.finalize()),
+            #[cfg(test)]
             document,
         })
     }

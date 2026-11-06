@@ -817,6 +817,15 @@ impl Service {
     }
 
     async fn capabilities(&self, caller: &Caller) -> Result<TenantCapabilities, Failure> {
+        self.with_capability_authority(caller, |state| self.capability_document(state))
+            .await
+    }
+
+    async fn with_capability_authority<T>(
+        &self,
+        caller: &Caller,
+        document: impl FnOnce(&Snapshot) -> Result<T, ErrorCode>,
+    ) -> Result<T, Failure> {
         let identity = self
             .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
             .await?;
@@ -825,7 +834,7 @@ impl Service {
             .map_err(Failure::from)?
             .check(&identity.lease, |view| {
                 view.facts().principal(caller, Utc::now())?;
-                self.capability_document(view.facts())
+                document(view.facts())
             })
             .map_err(Failure::from)
     }

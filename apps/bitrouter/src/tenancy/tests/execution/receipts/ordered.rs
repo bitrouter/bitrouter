@@ -126,7 +126,7 @@ impl OrderedHarness {
         ))
         .await?
         .claim()?;
-        let mut fixture = Fixture::with_database(db, Default::default()).await?;
+        let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
         fixture.service.shutdown().await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}/v1", listener.local_addr()?);

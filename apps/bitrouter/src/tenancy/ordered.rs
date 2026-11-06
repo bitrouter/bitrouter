@@ -21,22 +21,22 @@ pub(super) async fn capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
 ) -> Result<Json<OrderedCapabilitiesV2>, Failure> {
-    let state = service.current()?;
-    state
-        .principal(&caller, chrono::Utc::now())
-        .map_err(Failure::from)?;
-    let enabled = service.ordered_dispatch_ready(&state);
-    Ok(Json(OrderedCapabilitiesV2 {
-        contract_version: 2,
-        installation_id: state.installation.clone(),
-        instance_id: service.instance.clone(),
-        capability_revision: service.capability_revision(&state).map_err(Failure::from)?,
-        authority_revision: state.revision,
-        attempt_limit: service.execution_settings.ordered_attempt_limit,
-        revision_bound_dispatch: enabled,
-        strict_receipts: enabled,
-        dispatch_enabled: enabled,
-    }))
+    service
+        .with_capability_authority(&caller, |state| {
+            let enabled = service.ordered_dispatch_ready(state);
+            Ok(Json(OrderedCapabilitiesV2 {
+                contract_version: 2,
+                installation_id: state.installation.clone(),
+                instance_id: service.instance.clone(),
+                capability_revision: service.capability_revision(state)?,
+                authority_revision: state.revision,
+                attempt_limit: service.execution_settings.ordered_attempt_limit,
+                revision_bound_dispatch: enabled,
+                strict_receipts: enabled,
+                dispatch_enabled: enabled,
+            }))
+        })
+        .await
 }
 
 pub(super) async fn receipt(
