@@ -295,7 +295,7 @@ pub(super) async fn load_command_in(
             .len()
             .checked_add(usize::from(input.document.policy.is_some())),
         Command::Resource(_, input) => match &input.definition {
-            Definition::Credential { .. } => Some(1),
+            Definition::Credential { .. } | Definition::AdmissionProfile { .. } => Some(1),
             Definition::Route {
                 policy,
                 credentials,
@@ -304,6 +304,15 @@ pub(super) async fn load_command_in(
                 .len()
                 .checked_add(usize::from(policy.is_some()))
                 .and_then(|n| n.checked_add(1)),
+            Definition::ProfiledRoute {
+                policy,
+                credentials,
+                attachments,
+                ..
+            } => credentials
+                .len()
+                .checked_add(attachments.len())
+                .and_then(|n| n.checked_add(usize::from(policy.is_some()) + 1)),
             Definition::Policy { dependencies, .. } => dependencies.len().checked_add(1),
         },
         Command::RevokeResource(..) => Some(1),
@@ -385,7 +394,7 @@ pub(super) async fn load_command_in(
                 facts.snapshot.resource_lifecycle.insert(record);
             }
             match &input.definition {
-                Definition::Credential { .. } => {}
+                Definition::Credential { .. } | Definition::AdmissionProfile { .. } => {}
                 Definition::Route {
                     policy,
                     credentials,
@@ -396,6 +405,22 @@ pub(super) async fn load_command_in(
                     }
                     for binding in credentials {
                         resource_in(db, &mut facts, &binding.credential).await?;
+                    }
+                }
+                Definition::ProfiledRoute {
+                    policy,
+                    credentials,
+                    attachments,
+                    ..
+                } => {
+                    if let Some(policy) = policy {
+                        resource_in(db, &mut facts, policy).await?;
+                    }
+                    for binding in credentials {
+                        resource_in(db, &mut facts, &binding.credential).await?;
+                    }
+                    for attachment in attachments {
+                        resource_in(db, &mut facts, &attachment.profile).await?;
                     }
                 }
                 Definition::Policy { dependencies, .. } => {

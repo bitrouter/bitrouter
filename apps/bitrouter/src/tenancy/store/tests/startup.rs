@@ -113,7 +113,7 @@ async fn format_upgrade_is_explicit_transactional_and_preserves_stop() -> Result
             .await?
             .context("missing header")?
             .format,
-        Format::V2
+        Format::V3
     );
     tx.rollback().await?;
     assert_eq!(
@@ -132,7 +132,7 @@ async fn format_upgrade_is_explicit_transactional_and_preserves_stop() -> Result
     let mut loaded = loader::load_header_in(&db, budget(3))
         .await?
         .context("missing header")?;
-    assert_eq!(loaded.format, Format::V2);
+    assert_eq!(loaded.format, Format::V3);
     assert!(loaded.header.saturated);
     // The new reader accepts v2 without rebuilding the retained directory.
     assert!(load_existing(&db, Utc::now()).await?.credentials.is_empty());
@@ -143,7 +143,7 @@ async fn format_upgrade_is_explicit_transactional_and_preserves_stop() -> Result
     loaded.header.saturated = true;
     loaded.format = Format::V1;
     assert!(loader::write_header_in(&tx, &loaded).await.is_err());
-    loaded.format = Format::V2;
+    loaded.format = Format::V3;
     loaded.header.operation_ids = u64::from(u32::MAX) + 1;
     loader::write_header_in(&tx, &loaded).await?;
     assert_eq!(
@@ -196,7 +196,7 @@ async fn operation_history_crosses_100000_and_validates_the_last_row() -> Result
         .context("missing header")?;
     assert_eq!(loaded.header.operation_ids, 100001);
     assert!(!loaded.header.saturated);
-    assert_eq!(loaded.format, Format::V2);
+    assert_eq!(loaded.format, Format::V3);
     let retained = operation(
         &db,
         &loaded.header.installation,
@@ -242,7 +242,7 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
     assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
     sql(
         &db,
-        "UPDATE tenancy_installation SET operation_ids=1,safety_operation_ids=0,schema_version=3",
+        "UPDATE tenancy_installation SET operation_ids=1,safety_operation_ids=0,schema_version=4",
     )
     .await?;
     assert!(loader::load_header_in(&db, budget(3)).await.is_err());

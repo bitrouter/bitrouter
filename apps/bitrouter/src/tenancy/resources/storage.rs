@@ -26,6 +26,33 @@ pub(super) async fn has_resources(db: &impl ConnectionTrait) -> Result<bool> {
         .is_some())
 }
 
+pub(super) async fn resource_key_exists(
+    db: &impl ConnectionTrait,
+    key: &bitrouter_ai::tenancy::authority::ResourceKey,
+) -> Result<bool> {
+    let owner = serde_json::to_value(key.owner_kind)?;
+    let kind = serde_json::to_value(key.resource_kind)?;
+    let query = Query::select()
+        .expr(Expr::val(1))
+        .from(Alias::new("tenancy_resource_revisions"))
+        .and_where(
+            Expr::col(Alias::new("owner_kind"))
+                .eq(owner.as_str().context("resource owner enum")?),
+        )
+        .and_where(Expr::col(Alias::new("owner_id")).eq(key.owner_id.as_str()))
+        .and_where(
+            Expr::col(Alias::new("resource_kind"))
+                .eq(kind.as_str().context("resource kind enum")?),
+        )
+        .and_where(Expr::col(Alias::new("resource_id")).eq(key.resource_id.as_str()))
+        .limit(1)
+        .to_owned();
+    Ok(db
+        .query_one(db.get_database_backend().build(&query))
+        .await?
+        .is_some())
+}
+
 /// One stable keyset page; the page size is not a catalog cardinality ceiling.
 pub(super) async fn reference_page(
     db: &impl ConnectionTrait,

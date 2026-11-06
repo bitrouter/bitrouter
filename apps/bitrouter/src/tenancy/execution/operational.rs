@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Instant};
 
 use bitrouter_ai::tenancy::{admission::AdmissionMode, operation::ErrorCode};
 
-use super::{TenantExecution, authorize_effect, authorize_route};
+use super::{TenantExecution, authorize_effect};
 use crate::{
     gateway::{error::BitrouterError, pipeline::types::RoutingTarget},
     tenancy::operational::{Hop, state::Denial},
@@ -59,16 +59,9 @@ impl TenantExecution {
                 .with_dispatch_authority(&self.submission, |state| {
                     authorize_effect(state, &self.submission, &self.route)?;
                     let (ordinal, pinned) = self.route.reached_profile(rank, target)?;
-                    let mut current = pinned.clone();
-                    current.revision_id = state
-                        .resource_lifecycle
-                        .head(&pinned.key())
-                        .ok_or(ErrorCode::Forbidden)?
-                        .clone();
-                    authorize_route(state, &self.submission, std::slice::from_ref(&current))?;
-                    let rules = state
+                    let (current, rules) = state
                         .resource_admission
-                        .profile(&current)
+                        .current_profile(pinned)
                         .ok_or(ErrorCode::Forbidden)?;
                     let mut active = self
                         .hop

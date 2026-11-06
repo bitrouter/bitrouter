@@ -20,6 +20,8 @@ use bitrouter_ai::tenancy::{
 use crate::gateway::error::BitrouterError;
 use state::{HealthOutcome, Ticket};
 
+pub(in crate::tenancy) const MAX_RUNTIME_KEYS: usize = 4096;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Completed,

@@ -298,7 +298,10 @@ async fn reset_is_atomic_replay_bound_and_never_clears_a_later_fence() -> Result
     )
     .fetch_one(&mut db)
     .await?;
-    assert_eq!(row.try_get::<i64, _>("schema_version")?, 2);
+    assert_eq!(
+        row.try_get::<i64, _>("schema_version")?,
+        i64::from(crate::tenancy::AUTHORITY_SCHEMA_VERSION)
+    );
     assert_eq!(row.try_get::<i64, _>("saturated")?, 1);
     assert_eq!(row.try_get::<i64, _>("authority_revision")?, 3);
     request.revision = 2_u64.try_into()?;
