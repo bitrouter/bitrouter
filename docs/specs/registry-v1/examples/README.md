@@ -29,6 +29,12 @@ its response fixture is synthetic and establishes no live OpenRouter validity.
   for every mapping/response path and an explicit header credential env binding.
   [`page-1.json`](page-1.json) and [`page-2.json`](page-2.json) are its responses.
   It is not the entire source of the public registry example.
+- [`models-dev-feed.json`](models-dev-feed.json) selects the synthetic provider
+  in [`models-dev-response.json`](models-dev-response.json). The real public API
+  URL is the adapter contract; the fictional provider is never fetched here.
+  Decision/future model types retain exact native IDs with staging status and
+  empty interfaces. The deprecated row is excluded without removing old offers;
+  the directory's canonical/pricing hints do not grant bindings or tariffs.
 - [`reconciliation.json`](reconciliation.json) illustrates absence observations
   A(10), B(11), stale replay A(10), return C(12), and explicit status D(13).
   With two missing runs and a 24-hour minimum, B withdraws the offer; replay A

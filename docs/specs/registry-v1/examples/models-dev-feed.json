@@ -1,0 +1,17 @@
+{
+  "id": "directory",
+  "kind": "models_dev",
+  "provider_id": "example",
+  "writes": ["models", "metadata"],
+  "request": {
+    "url": "https://models.dev/api.json?type=all",
+    "auth": {"kind": "none"}
+  },
+  "pagination": {"kind": "none"},
+  "inventory": {
+    "mode": "merge",
+    "scope": "public",
+    "complete": false,
+    "allow_empty": false
+  }
+}

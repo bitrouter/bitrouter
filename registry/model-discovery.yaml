@@ -80,6 +80,54 @@
       "reason": "Retired from reviewed recommendations by the upstream catalog update; provider inventories remain independent",
       "source_url": "https://github.com/bitrouter/bitrouter/commit/a1dc3a5beaf73c0fd90dbd5d47aa339c5aa524c3",
       "recorded_at": "2026-10-23T20:45:10Z"
+    },
+    {
+      "id": "openai/gpt-5.6-luna-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-5.6-luna-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-5.6-sol-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-5.6-sol-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-5.6-terra-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-5.6-terra-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-6-astra-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-6-astra-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-6-luna-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-6-luna-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-6-sol-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-6-sol-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-6.1-sol-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-6.1-sol-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
+    },
+    {
+      "id": "openai/gpt-6.1-terra-pro",
+      "reason": "Pro execution-mode alias of the base model; exclude from recommendations immediately while preserving the provider offer and explicit invocation",
+      "source_url": "https://openrouter.ai/openai/gpt-6.1-terra-pro",
+      "recorded_at": "2026-11-02T12:03:24.303Z"
     }
   ],
   "source_url": "https://openrouter.ai/api/v1/models"

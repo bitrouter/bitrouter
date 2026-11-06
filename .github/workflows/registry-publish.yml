@@ -46,7 +46,6 @@ jobs:
 
       - name: Audit the exact final candidate afresh
         env:
-          OPENROUTER_REGISTRY_API_KEY: ${{ secrets.OPENROUTER_REGISTRY_API_KEY }}
           HAS_PREVIOUS: ${{ steps.prior.outputs.available }}
           HAS_PREVIOUS_DEFAULT: ${{ steps.prior.outputs.default_available }}
         run: |

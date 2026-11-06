@@ -1,11 +1,43 @@
 {
   "api_base": "https://bedrock-mantle.us-east-1.api.aws/v1",
-  "billing": "usage",
   "auth": {
     "env": "AWS_BEARER_TOKEN_BEDROCK",
     "kind": "bearer"
   },
-  "submitted_at": "2026-07-06T00:00:00Z",
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "amazon-bedrock",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "checkpoint": {
+          "sequence": 1,
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:43.763453Z"
+        }
+      }
+    ]
+  },
+  "billing": "usage",
   "display_name": "Amazon Bedrock",
   "doc_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html",
   "kind": "first_party",
@@ -19,854 +51,3926 @@
   },
   "models": [
     {
+      "provider_model_id": "amazon.nova-2-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+      "name": "Nova 2 Lite",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "amazon.nova-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Lite",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "amazon.nova-micro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Micro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "amazon.nova-pro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+      "name": "Nova Pro",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-fable-5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 50
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 50
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "anthropic.claude-fable-5",
       "status": "active",
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Fable 5"
+    },
+    {
+      "canonical_id": "anthropic/claude-fable-5.1",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 1,
+              "cache_read": 0.25,
               "cache_write": 12.5,
               "no_cache": 10
             },
+            "kind": "token",
             "output_tokens": {
               "text": 50
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "responses",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 1,
+              "cache_read": 0.25,
               "cache_write": 12.5,
               "no_cache": 10
             },
+            "kind": "token",
             "output_tokens": {
               "text": 50
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-fable-5"
-    },
-    {
-      "provider_model_id": "anthropic.claude-opus-4-8",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
+            }
           },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 25
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
           "protocol": "responses",
-          "operation": "generation",
           "rate_limits": {
             "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 25
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         }
       ],
-      "canonical_id": "anthropic/claude-opus-4.8"
-    },
-    {
-      "provider_model_id": "anthropic.claude-sonnet-4-6",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3
-            },
-            "output_tokens": {
-              "text": 15
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3
-            },
-            "output_tokens": {
-              "text": 15
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-sonnet-4.6"
-    },
-    {
-      "provider_model_id": "openai.gpt-oss-120b",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 0.15
-            },
-            "output_tokens": {
-              "text": 0.6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-oss-120b"
-    },
-    {
-      "provider_model_id": "xai.grok-4.3",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.3"
-    },
-    {
-      "provider_model_id": "anthropic.claude-sonnet-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-sonnet-5"
-    },
-    {
-      "provider_model_id": "openai.gpt-5.6-luna",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.022,
-              "cache_write": 0.275,
-              "no_cache": 0.22
-            },
-            "output_tokens": {
-              "text": 1.32
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.022,
-              "cache_write": 0.275,
-              "no_cache": 0.22
-            },
-            "output_tokens": {
-              "text": 1.32
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-luna"
-    },
-    {
-      "provider_model_id": "openai.gpt-5.6-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.55,
-              "cache_write": 6.88,
-              "no_cache": 5.5
-            },
-            "output_tokens": {
-              "text": 33
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.55,
-              "cache_write": 6.88,
-              "no_cache": 5.5
-            },
-            "output_tokens": {
-              "text": 33
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-sol"
-    },
-    {
-      "provider_model_id": "openai.gpt-5.6-terra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.22,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 13.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.22,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 13.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-terra"
-    },
-    {
-      "provider_model_id": "anthropic.claude-opus-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 25
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 25
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-opus-5"
-    },
-    {
-      "provider_model_id": "xai.grok-4.6",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.55,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 6.6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.55,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 6.6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.6"
-    },
-    {
       "provider_model_id": "anthropic.claude-fable-5-1",
       "status": "active",
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Fable 5.1"
+    },
+    {
+      "provider_model_id": "anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-haiku-5.5",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 12.5,
-              "no_cache": 10
-            },
-            "output_tokens": {
-              "text": 50
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "responses",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.25,
-              "cache_write": 12.5,
-              "no_cache": 10
-            },
-            "output_tokens": {
-              "text": 50
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "anthropic/claude-fable-5.1"
-    },
-    {
-      "provider_model_id": "openai.gpt-6-astra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 1.1,
-              "cache_write": 13.75,
-              "no_cache": 11
-            },
-            "output_tokens": {
-              "text": 55
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 1.1,
-              "cache_write": 13.75,
-              "no_cache": 11
-            },
-            "output_tokens": {
-              "text": 55
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6-astra"
-    },
-    {
-      "provider_model_id": "anthropic.claude-opus-5-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 5,
-              "no_cache": 4
-            },
-            "output_tokens": {
-              "text": 20
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 5,
-              "no_cache": 4
-            },
-            "output_tokens": {
-              "text": 20
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-opus-5.5"
-    },
-    {
-      "provider_model_id": "openai.gpt-6-luna",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.011,
-              "cache_write": 0.1375,
-              "no_cache": 0.11
-            },
-            "output_tokens": {
-              "text": 0.55
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.011,
-              "cache_write": 0.1375,
-              "no_cache": 0.11
-            },
-            "output_tokens": {
-              "text": 0.55
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6-luna"
-    },
-    {
-      "provider_model_id": "openai.gpt-6-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.22,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 11
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.22,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 11
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6-sol"
-    },
-    {
-      "provider_model_id": "anthropic.claude-sonnet-5-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "cache_write": 2.5,
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "anthropic/claude-sonnet-5.5"
-    },
-    {
-      "provider_model_id": "openai.gpt-6.1-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.11,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 11
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.11,
-              "cache_write": 2.75,
-              "no_cache": 2.2
-            },
-            "output_tokens": {
-              "text": 11
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "openai/gpt-6.1-sol"
-    },
-    {
       "provider_model_id": "anthropic.claude-haiku-5-5",
       "status": "active",
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Haiku 5.5"
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-4-5-20251101-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-4-6-v1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+      "name": "Claude Opus 4.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-4.8",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.01,
-              "cache_write": 0.125,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.5
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 25
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "responses",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.01,
-              "cache_write": 0.125,
-              "no_cache": 0.1
-            },
-            "output_tokens": {
-              "text": 0.5
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 25
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "anthropic/claude-haiku-5.5"
+      "provider_model_id": "anthropic.claude-opus-4-8",
+      "status": "active",
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Opus 4.8"
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 25
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 25
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "anthropic.claude-opus-5",
+      "status": "active",
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Opus 5"
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-5.5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5,
+              "no_cache": 4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 20
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5,
+              "no_cache": 4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 20
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "anthropic.claude-opus-5-5",
+      "status": "active",
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Opus 5.5"
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-4.6",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 15
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 15
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "anthropic.claude-sonnet-4-6",
+      "status": "active",
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Sonnet 4.6"
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "anthropic.claude-sonnet-5",
+      "status": "active",
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Sonnet 5"
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-5.5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "anthropic.claude-sonnet-5-5",
+      "status": "active",
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Claude Sonnet 5.5"
+    },
+    {
+      "provider_model_id": "apac.amazon.nova-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Lite (APAC)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "apac.amazon.nova-micro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Micro (APAC)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "apac.amazon.nova-pro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+      "name": "Nova Pro (APAC)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-haiku-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 5.5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-opus-4-6-v1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+      "name": "AU Anthropic Claude Opus 4.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-opus-4-8",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.8 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-opus-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "name": "Claude Opus 5.5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-sonnet-4-6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "name": "AU Anthropic Claude Sonnet 4.6",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "au.anthropic.claude-sonnet-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "name": "Claude Sonnet 5.5 (AU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "ca.amazon.nova-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Lite (CA)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "deepseek.v3.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Hybrid-reasoning DeepSeek model with thinking and non-thinking modes, sparse attention, and tool-use",
+      "name": "DeepSeek V3.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.amazon.nova-2-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+      "name": "Nova 2 Lite (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.amazon.nova-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Lite (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.amazon.nova-micro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Micro (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.amazon.nova-pro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+      "name": "Nova Pro (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-fable-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+      "name": "Claude Fable 5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-haiku-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 5.5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-4-5-20251101-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-4-6-v1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+      "name": "Claude Opus 4.6 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-4-8",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.8 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-opus-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "name": "Claude Opus 5.5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-sonnet-4-6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "name": "Claude Sonnet 4.6 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.anthropic.claude-sonnet-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "name": "Claude Sonnet 5.5 (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "eu.mistral.pixtral-large-2502-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Mistral vision-language model for image understanding and multimodal chat",
+      "name": "Pixtral Large (25.02) (EU)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.amazon.nova-2-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+      "name": "Nova 2 Lite (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-fable-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+      "name": "Claude Fable 5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-fable-5-1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "name": "Claude Fable 5.1 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-haiku-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 5.5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-4-6-v1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+      "name": "Claude Opus 4.6 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-4-8",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.8 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-opus-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "name": "Claude Opus 5.5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-sonnet-4-6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "name": "Claude Sonnet 4.6 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.anthropic.claude-sonnet-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "name": "Claude Sonnet 5.5 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.moonshotai.kimi-k3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "name": "Kimi K3 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-5.6-luna",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+      "name": "GPT-5.6 Luna (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-5.6-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "name": "GPT-5.6 Sol (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-5.6-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "name": "GPT-5.6 Terra (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-6-astra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+      "name": "GPT-6 Astra (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-6-luna",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
+      "name": "GPT-6 Luna (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-6-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "OpenAI model for complex coding and agentic workflows",
+      "name": "GPT-6 Sol (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-6.1-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+      "name": "GPT-6.1 Sol (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.openai.gpt-6.1-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+      "name": "GPT-6.1 Terra (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.xai.grok-4.6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "name": "Grok 4.6 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.xai.grok-4.7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "name": "Grok 4.7 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "global.zai.glm-5.3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "name": "GLM-5.3 (Global)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google.gemma-4-26b-a4b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open Gemma instruction model for efficient chat and self-hosted deployments",
+      "name": "Gemma 4 26B A4B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google.gemma-4-31b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Largest Gemma 4 instruction model for open, self-hosted chat and reasoning",
+      "name": "Gemma 4 31B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "google.gemma-4-e2b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open Gemma instruction model for efficient chat and self-hosted deployments",
+      "name": "Gemma 4 E2B IT",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "in.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (India)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "in.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (India)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "in.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (India)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "in.openai.gpt-5.6-luna",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+      "name": "GPT-5.6 Luna (India)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "in.openai.gpt-5.6-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "name": "GPT-5.6 Terra (India)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.amazon.nova-2-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+      "name": "Nova 2 Lite (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-haiku-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 5.5 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-opus-4-8",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.8 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-opus-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "name": "Claude Opus 5.5 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-sonnet-4-6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "name": "Claude Sonnet 4.6 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "jp.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (JP)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "minimax.minimax-m2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Prior MiniMax coding model for agent workflows, office edits, and automation",
+      "name": "MiniMax-M2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.magistral-small-2509",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open multimodal reasoning model for transparent analysis of text and images",
+      "name": "Magistral Small 1.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.ministral-3-14b-instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open vision-language model for efficient local deployment, instruction following, and tool use",
+      "name": "Ministral 14B 3.0",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.ministral-3-3b-instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Compact open vision-language model for edge deployment, instruction following, and tool use",
+      "name": "Ministral 3 3B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.ministral-3-8b-instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Compact open vision-language model for edge deployment, instruction following, and tool use",
+      "name": "Ministral 3 8B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.mistral-large-3-675b-instruct",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Mistral's largest general model for enterprise agents, coding, and multilingual reasoning",
+      "name": "Mistral Large 3",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "mistral.pixtral-large-2502-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Mistral vision-language model for image understanding and multimodal chat",
+      "name": "Pixtral Large (25.02)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "moonshotai.kimi-k2.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Earlier Kimi frontier model for long-context agents, coding, and multimodal work",
+      "name": "Kimi K2.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "nvidia.nemotron-nano-3-30b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Small Nemotron 3 MoE for efficient coding, math, and long-context agents",
+      "name": "NVIDIA Nemotron Nano 3 30B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "nvidia.nemotron-super-3-120b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Nemotron middle tier for collaborative agents and high-volume reasoning workloads",
+      "name": "NVIDIA Nemotron 3 Super 120B A12B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-5.4",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Agent-ready GPT for coding and computer-use workflows at a lower cost",
+      "name": "GPT-5.4",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-5.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Default frontier GPT for coding, computer use, research, and knowledge work",
+      "name": "GPT-5.5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-luna",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.32
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.32
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-5.6-luna",
+      "status": "active",
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-5.6 Luna"
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-sol",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 33
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 33
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-5.6-sol",
+      "status": "active",
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-5.6 Sol"
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-terra",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 13.2
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 13.2
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-5.6-terra",
+      "status": "active",
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-5.6 Terra"
+    },
+    {
+      "canonical_id": "openai/gpt-6-astra",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1.1,
+              "cache_write": 13.75,
+              "no_cache": 11
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 55
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 1.1,
+              "cache_write": 13.75,
+              "no_cache": 11
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 55
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-6-astra",
+      "status": "active",
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6 Astra"
+    },
+    {
+      "canonical_id": "openai/gpt-6-luna",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.011,
+              "cache_write": 0.1375,
+              "no_cache": 0.11
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.55
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.011,
+              "cache_write": 0.1375,
+              "no_cache": 0.11
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.55
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-6-luna",
+      "status": "active",
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6 Luna"
+    },
+    {
+      "canonical_id": "openai/gpt-6-sol",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 11
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 11
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-6-sol",
+      "status": "active",
+      "description": "OpenAI model for complex coding and agentic workflows",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6 Sol"
+    },
+    {
+      "canonical_id": "openai/gpt-6.1-sol",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 11
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 11
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-6.1-sol",
+      "status": "active",
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "GPT-6.1 Sol"
+    },
+    {
+      "provider_model_id": "openai.gpt-6.1-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+      "name": "GPT-6.1 Terra",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-oss-120b",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "no_cache": 0.15
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "no_cache": 0.15
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "openai.gpt-oss-120b",
+      "status": "active",
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-120b-1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "name": "gpt-oss-120b",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-20b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "name": "gpt-oss-20b",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-20b-1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "name": "gpt-oss-20b",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-safeguard-120b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Safety model for policy screening, moderation, and risk-aware routing workflows",
+      "name": "GPT OSS Safeguard 120B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-safeguard-20b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Safety model for policy screening, moderation, and risk-aware routing workflows",
+      "name": "GPT OSS Safeguard 20B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen.qwen3-235b-a22b-2507-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Updated large open Qwen3 MoE instruct model for multilingual chat, coding, and tool use",
+      "name": "Qwen3 235B-A22B Instruct 2507",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen.qwen3-32b-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Dense open Qwen model for self-hosted chat, reasoning, and coding",
+      "name": "Qwen3 32B",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen.qwen3-coder-next",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open-weight Qwen coding model for agents, repository edits, and multi-turn tool use",
+      "name": "Qwen3 Coder Next",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen.qwen3-next-80b-a3b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+      "name": "Qwen3-Next 80B-A3B Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "qwen.qwen3-vl-235b-a22b",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Qwen vision-language instruct model for visual reasoning, documents, and agent tasks",
+      "name": "Qwen3 VL 235B A22B Instruct",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us-gov.openai.gpt-oss-120b-1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "name": "gpt-oss-120b (GovCloud)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us-gov.openai.gpt-oss-20b-1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+      "name": "gpt-oss-20b (GovCloud)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.amazon.nova-2-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+      "name": "Nova 2 Lite (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.amazon.nova-lite-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Lite (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.amazon.nova-micro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+      "name": "Nova Micro (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.amazon.nova-pro-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+      "name": "Nova Pro (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-fable-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+      "name": "Claude Fable 5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-fable-5-1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "name": "Claude Fable 5.1 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 4.5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-haiku-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+      "name": "Claude Haiku 5.5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-4-6-v1",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+      "name": "Claude Opus 4.6 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-4-7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "name": "Claude Opus 4.7 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-4-8",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "name": "Claude Opus 4.8 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "name": "Claude Opus 5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-opus-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "name": "Claude Opus 5.5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-sonnet-4-6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "name": "Claude Sonnet 4.6 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-sonnet-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "name": "Claude Sonnet 5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.anthropic.claude-sonnet-5-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "name": "Claude Sonnet 5.5 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.mistral.pixtral-large-2502-v1:0",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Mistral vision-language model for image understanding and multimodal chat",
+      "name": "Pixtral Large (25.02) (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.moonshotai.kimi-k3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "name": "Kimi K3 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-5.6-luna",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+      "name": "GPT-5.6 Luna (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-5.6-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "name": "GPT-5.6 Sol (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-5.6-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "name": "GPT-5.6 Terra (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-6-astra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+      "name": "GPT-6 Astra (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-6-luna",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
+      "name": "GPT-6 Luna (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-6-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "OpenAI model for complex coding and agentic workflows",
+      "name": "GPT-6 Sol (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-6.1-sol",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+      "name": "GPT-6.1 Sol (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.openai.gpt-6.1-terra",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+      "name": "GPT-6.1 Terra (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.xai.grok-4.6",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "name": "Grok 4.6 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.xai.grok-4.7",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "name": "Grok 4.7 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "us.zai.glm-5.3",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
+      "name": "GLM-5.3 (US)",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
+    },
+    {
+      "canonical_id": "x-ai/grok-4.3",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 2.5
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "xai.grok-4.3",
+      "status": "active",
+      "description": "xAI's default Grok for chat, coding, agentic tools, and lower hallucination risk",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Grok 4.3"
+    },
+    {
+      "canonical_id": "x-ai/grok-4.6",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 6.6
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 6.6
+            }
+          },
+          "protocol": "responses",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "xai.grok-4.6",
+      "status": "active",
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      },
+      "name": "Grok 4.6"
+    },
+    {
+      "provider_model_id": "zai.glm-5",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-02T11:26:43.763453Z"
+      },
+      "description": "General GLM flagship for coding, analysis, and tool-heavy engineering workflows",
+      "name": "GLM-5",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-02T11:26:43.763453Z",
+        "scope": "public"
+      }
     }
   ],
   "name": "aws-bedrock",
-  "weight": 1,
-  "status": "active"
+  "status": "active",
+  "submitted_at": "2026-07-06T00:00:00Z",
+  "weight": 1
 }

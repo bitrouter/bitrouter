@@ -1,7 +1,54 @@
 {
   "api_base": "https://api.redpill.ai/v1",
+  "auth": {
+    "env": "REDPILL_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:12.088798Z",
+          "sequence": 6
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://api.redpill.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/description": "/description",
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "weight": 1,
   "display_name": "RedPill (Phala Network)",
   "doc_url": "https://docs.redpill.ai/get-started/introduction",
   "kind": "aggregator",
@@ -14,65 +61,1422 @@
   },
   "models": [
     {
-      "provider_model_id": "moonshotai/kimi-k3",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Claude Haiku 4.5 is Anthropic’s fastest and most efficient model, delivering near-frontier intelligence at a fraction of the cost and latency of larger Claude models. Matching Claude Sonnet 4’s performance across reasoning, coding, and computer-use tasks, Haiku 4.5 brings frontier-level capability to real-time and high-volume applications. It introduces extended thinking to the Haiku line; enabling controllable reasoning depth, summarized or interleaved thought output, and tool-assisted workflows with full support for coding, bash, web search, and computer-use tools. Scoring >73% on SWE-bench Verified, Haiku 4.5 ranks among the world’s best coding models while maintaining exceptional responsiveness for sub-agents, parallelized execution, and scaled deployment.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Haiku 4.5",
+      "provider_model_id": "anthropic/claude-haiku-4.5",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Claude Opus 4.5 is Anthropic’s frontier reasoning model optimized for complex software engineering, agentic workflows, and long-horizon computer use. It offers strong multimodal capabilities, competitive performance across real-world coding and reasoning benchmarks, and improved robustness to prompt injection. The model is designed to operate efficiently across varied effort levels, enabling developers to trade off speed, depth, and token usage depending on task requirements. It comes with a new parameter to control token efficiency, which can be accessed using the OpenRouter Verbosity parameter with low, medium, or high. Opus 4.5 supports advanced tool use, extended context management, and coordinated multi-agent setups, making it well-suited for autonomous research, debugging, multi-step planning, and spreadsheet/browser manipulation. It delivers substantial gains in structured reasoning, execution reliability, and alignment compared to prior Opus generations, while reducing token overhead and improving performance on long-running tasks.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Opus 4.5",
+      "provider_model_id": "anthropic/claude-opus-4.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Opus 4.6 is Anthropic's strongest model for coding and long-running professional tasks. It is built for agents that operate across entire workflows rather than single prompts, making it especially effective for large codebases, complex refactors, and multi-step debugging that unfolds over time.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Opus 4.6",
+      "provider_model_id": "anthropic/claude-opus-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Opus 4.7 is the next generation of Anthropic's Opus family, built for long-running, asynchronous agents. Building on the coding and agentic strengths of Opus 4.6, it delivers stronger performance on...",
+      "interfaces": [],
+      "name": "Anthropic: Claude Opus 4.7",
+      "provider_model_id": "anthropic/claude-opus-4.7",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Claude Opus 4.8 is Anthropic's most capable generally available model in the Opus family. It supports text, image, and file inputs with text output, includes reasoning support, and has a 1M-token context window.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Opus 4.8",
+      "provider_model_id": "anthropic/claude-opus-4.8",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Claude Opus 5 is Anthropic's flagship model for demanding reasoning, coding, and long-horizon agentic work. It is particularly strong at end-to-end software tasks, code review and bug finding, visual analysis.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Opus 5",
+      "provider_model_id": "anthropic/claude-opus-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.5 is Anthropic’s most advanced Sonnet model to date, optimized for real-world agents and coding workflows. It delivers state-of-the-art performance on coding benchmarks such as SWE-bench Verified, with improvements across system design, code security, and specification adherence. The model is designed for extended autonomous operation, maintaining task continuity across sessions and providing fact-based progress tracking. Sonnet 4.5 also introduces stronger agentic capabilities, including improved tool orchestration, speculative parallel execution, and more efficient context and memory management. With enhanced context tracking and awareness of token usage across tool calls, it is particularly well-suited for multi-context and long-running workflows. Use cases span software engineering, cybersecurity, financial analysis, research agents, and other domains requiring sustained reasoning and tool use.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Sonnet 4.5",
+      "provider_model_id": "anthropic/claude-sonnet-4.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Sonnet 4.6 is Anthropic's most capable Sonnet-class model yet, with frontier performance across coding, agents, and professional work. It excels at iterative development, complex codebase navigation, end-to-end project management with memory, polished document creation, and confident computer use for web QA and workflow automation.",
+      "interfaces": [],
+      "name": "Anthropic: Claude Sonnet 4.6",
+      "provider_model_id": "anthropic/claude-sonnet-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Sonnet 5 is Anthropic's most capable Sonnet-class model, with frontier performance across coding, agents, and professional work. It supports adaptive thinking with selectable reasoning effort levels (low, medium, high, max).",
+      "interfaces": [],
+      "name": "Anthropic: Claude Sonnet 5",
+      "provider_model_id": "anthropic/claude-sonnet-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "DeepSeek-V3.2 is a large language model designed to harmonize high computational efficiency with strong reasoning and agentic tool-use performance. It introduces DeepSeek Sparse Attention (DSA), a fine-grained sparse attention mechanism that reduces training and inference cost while preserving quality in long-context scenarios. A scalable reinforcement learning post-training framework further improves reasoning, with reported performance in the GPT-5 class, and the model has demonstrated gold-medal results on the 2025 IMO and IOI. V3.2 also uses a large-scale agentic task synthesis pipeline to better integrate reasoning into tool-use settings, boosting compliance and generalization in interactive environments.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V3.2",
+      "provider_model_id": "deepseek/deepseek-v3.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Flash 0731 is a sparse mixture-of-experts model from DeepSeek, with 13B active parameters out of 284B total. This re-post-trained revision is suited for coding, reasoning, and agent workflows.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4 Flash 0731",
+      "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Pro 0813 is a large-scale mixture-of-experts model from DeepSeek. This is the GA release of DeepSeek V4 Pro.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4 Pro 0813",
+      "provider_model_id": "deepseek/deepseek-v4-pro-0813",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash is a sparse mixture-of-experts model from DeepSeek, and the first built on the company's Causal Encoder-Decoder (CED) architecture. It activates 8B parameters on input and 16B on...",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "provider_model_id": "deepseek/deepseek-v4.1-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash 1017 is the October 17, 2026 snapshot of DeepSeek V4.1 Flash. It supports text and image input, text output, reasoning, tool calling, JSON object output, and a 1,048,576-token context.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Flash is Google's state-of-the-art workhorse model, specifically designed for advanced reasoning, coding, mathematics, and scientific tasks. It includes built-in \"thinking\" capabilities, enabling it to provide responses with greater accuracy and nuanced context handling. Additionally, Gemini 2.5 Flash is configurable through the \"max tokens for reasoning\" parameter, as described in the documentation (",
+      "interfaces": [],
+      "name": "Google: Gemini 2.5 Flash",
+      "provider_model_id": "google/gemini-2.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Flash-Lite is a lightweight reasoning model in the Gemini 2.5 family, optimized for ultra-low latency and cost efficiency. It offers improved throughput, faster token generation, and better performance across common benchmarks compared to earlier Flash models. By default, \"thinking\" (i.e. multi-pass reasoning) is disabled to prioritize speed, but developers can enable it via the Reasoning API parameter to selectively trade off cost for intelligence.",
+      "interfaces": [],
+      "name": "Google: Gemini 2.5 Flash Lite",
+      "provider_model_id": "google/gemini-2.5-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Pro is Google’s state-of-the-art AI model designed for advanced reasoning, coding, mathematics, and scientific tasks. It employs “thinking” capabilities, enabling it to reason through responses with enhanced accuracy and nuanced context handling. Gemini 2.5 Pro achieves top-tier performance on multiple benchmarks, including first-place positioning on the LMArena leaderboard, reflecting superior human-preference alignment and complex problem-solving abilities.",
+      "interfaces": [],
+      "name": "Google: Gemini 2.5 Pro",
+      "provider_model_id": "google/gemini-2.5-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 3.1 Pro Preview is Google's frontier reasoning model, delivering enhanced software engineering performance, improved agentic reliability, and more efficient token usage across complex workflows. Building on the multimodal foundation.",
+      "interfaces": [],
+      "name": "Google: Gemini 3.1 Pro Preview",
+      "provider_model_id": "google/gemini-3.1-pro-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 3.5 Flash Lite is a high-efficiency model from Google with upgraded agentic capabilities. It is suited for subagents that execute focused tasks within complex, multi-agent workflows.",
+      "interfaces": [],
+      "name": "Google: Gemini 3.5 Flash Lite",
+      "provider_model_id": "google/gemini-3.5-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemini 3.6 Flash is a high-efficiency model from Google for coding, agentic workflows, and web and app development. It is designed to produce polished outputs with fewer unnecessary edits.",
+      "interfaces": [],
+      "name": "Google: Gemini 3.6 Flash",
+      "provider_model_id": "google/gemini-3.6-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Gemma 4 31B Instruct is Google DeepMind's 30.7B dense model. Features a 256K token context window, configurable thinking/reasoning mode, native function calling, and strong multilingual performance. Served as a text-only TEE deployment via NEAR AI.",
+      "interfaces": [],
+      "name": "Google: Gemma 4 31B",
+      "provider_model_id": "google/gemma-4-31b-it",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Kev 4B is an open-weight System One model from Jared Palmer, fine-tuned from Qwen3.5 4B Base. It makes fast, structured decisions for software: given a state and typed questions, it returns calibrated answers instead of text, as a yes/no probability (noul), a pick among options (choice), or a level on a scale (score). Call it through POST /v1/systemone, compatible with the TypeSafe SDK; it does not serve chat. Served on Phala in a TDX-attested enclave with an 8,192-token context.",
+      "interfaces": [],
+      "name": "Jared Palmer: Kev 4B",
+      "provider_model_id": "jaredpalmer/kev-4b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "The Meta Llama 3.3 multilingual large language model (LLM) is a pretrained and instruction tuned generative model in 70B (text in/text out). The Llama 3.3 instruction tuned text only model is optimized for multilingual dialogue use cases and outperforms many of the available open source and closed chat models on common industry benchmarks.",
+      "interfaces": [],
+      "name": "Meta: Llama 3.3 70B Instruct",
+      "provider_model_id": "meta-llama/llama-3.3-70b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Kimi K2.6 is Moonshot AI's next-generation multimodal model, designed for long-horizon coding, coding-driven UI/UX generation, and multi-agent orchestration. It handles complex end-to-end coding tasks across Python, Rust, and Go, and demonstrates strong performance in agentic workflows.",
+      "interfaces": [],
+      "name": "MoonshotAI: Kimi K2.6",
+      "provider_model_id": "moonshotai/kimi-k2.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
+      "description": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "structured_outputs",
             "tools",
             "image_input"
           ],
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 1.5,
               "no_cache": 3
             },
+            "kind": "token",
             "output_tokens": {
               "text": 15
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3"
+      "name": "MoonshotAI: Kimi K3",
+      "provider_model_id": "moonshotai/kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "z-ai/glm-5.2",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Hermes 3 is a generalist language model with many improvements over Hermes 2, including advanced agentic capabilities, much better roleplaying, reasoning, multi-turn conversation, long context coherence, and improvements across the board. Hermes 3 405B is a frontier-level, full-parameter finetune of the Llama-3.1 405B foundation model, focused on aligning LLMs to the user, with powerful steering capabilities and control given to the end user. The Hermes 3 series builds and expands on the Hermes 2 set of capabilities, including more powerful and reliable function calling and structured output capabilities, generalist assistant capabilities, and improved code generation skills. Hermes 3 is competitive, if not superior, to Llama-3.1 Instruct models at general capabilities, with varying strengths and weaknesses attributable between the two.",
+      "interfaces": [],
+      "name": "Nous: Hermes 3 405B Instruct",
+      "provider_model_id": "nousresearch/hermes-3-llama-3.1-405b",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-4.1 is a flagship large language model optimized for advanced instruction following, real-world software engineering, and long-context reasoning. It supports a 1 million token context window and outperforms GPT-4o and GPT-4.5 across coding (54.6% SWE-bench Verified), instruction compliance (87.4% IFEval), and multimodal understanding benchmarks. It is tuned for precise code diffs, agent reliability, and high recall in large document contexts, making it ideal for agents, IDE tooling, and enterprise knowledge retrieval.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-4.1",
+      "provider_model_id": "openai/gpt-4.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-4.1 Mini is a mid-sized model delivering performance competitive with GPT-4o at substantially lower latency and cost. It retains a 1 million token context window and scores 45.1% on hard instruction evals, 35.8% on MultiChallenge, and 84.1% on IFEval. Mini also shows strong coding ability (e.g., 31.6% on Aider’s polyglot diff benchmark) and vision understanding, making it suitable for interactive applications with tight performance constraints.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-4.1 Mini",
+      "provider_model_id": "openai/gpt-4.1-mini",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-4o (\"o\" for \"omni\") is OpenAI's latest AI model, supporting both text and image inputs with text outputs. It maintains the intelligence level of GPT-4 Turbo while being twice as fast and 50% more cost-effective. GPT-4o also offers improved performance in processing non-English languages and enhanced visual capabilities. For benchmarking against other models, it was briefly called \"im-also-a-good-gpt2-chatbot\" #multimodal",
+      "interfaces": [],
+      "name": "OpenAI: GPT-4o",
+      "provider_model_id": "openai/gpt-4o",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-4o mini is OpenAI's newest model after GPT-4 Omni, supporting both text and image inputs with text outputs. As their most advanced small model, it is many multiples more affordable than other recent frontier models, and more than 60% cheaper than GPT-3.5 Turbo. It maintains SOTA intelligence, while being significantly more cost-effective. GPT-4o mini achieves an 82% score on MMLU and presently ranks higher than GPT-4 on chat preferences common leaderboards. Check out the launch announcement to learn more. #multimodal",
+      "interfaces": [],
+      "name": "OpenAI: GPT-4o-mini",
+      "provider_model_id": "openai/gpt-4o-mini",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5 is OpenAI’s most advanced model, offering major improvements in reasoning, code quality, and user experience. It is optimized for complex tasks that require step-by-step reasoning, instruction following, and accuracy in high-stakes use cases. It supports test-time routing features and advanced prompt understanding, including user-specified intent like \"think hard about this.\" Improvements include reductions in hallucination, sycophancy, and better performance in coding, writing, and health-related tasks.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5",
+      "provider_model_id": "openai/gpt-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5 Mini is a compact version of GPT-5, designed to handle lighter-weight reasoning tasks. It provides the same instruction-following and safety-tuning benefits as GPT-5, but with reduced latency and cost. GPT-5 Mini is the successor to OpenAI's o4-mini model.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5 Mini",
+      "provider_model_id": "openai/gpt-5-mini",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5-Nano is the smallest and fastest variant in the GPT-5 system, optimized for developer tools, rapid interactions, and ultra-low latency environments. While limited in reasoning depth compared to its larger counterparts, it retains key instruction-following and safety features. It is the successor to GPT-4.1-nano and offers a lightweight option for cost-sensitive or real-time applications.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5 Nano",
+      "provider_model_id": "openai/gpt-5-nano",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.1 is the latest frontier-grade model in the GPT-5 series, offering stronger general-purpose reasoning, improved instruction adherence, and a more natural conversational style compared to GPT-5. It uses adaptive reasoning to allocate computation dynamically, responding quickly to simple queries while spending more depth on complex tasks. The model produces clearer, more grounded explanations with reduced jargon, making it easier to follow even on technical or multi-step problems. Built for broad task coverage, GPT-5.1 delivers consistent gains across math, coding, and structured analysis workloads, with more coherent long-form answers and improved tool-use reliability. It also features refined conversational alignment, enabling warmer, more intuitive responses without compromising precision. GPT-5.1 serves as the primary full-capability successor to GPT-5",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.1",
+      "provider_model_id": "openai/gpt-5.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.2 is the latest frontier-grade model in the GPT-5 series, offering stronger agentic and long context perfomance compared to GPT-5.1. It uses adaptive reasoning to allocate computation dynamically, responding quickly to simple queries while spending more depth on complex tasks. Built for broad task coverage, GPT-5.2 delivers consistent gains across math, coding, sciende, and tool calling workloads, with more coherent long-form answers and improved tool-use reliability.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.2",
+      "provider_model_id": "openai/gpt-5.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.4 is OpenAI's latest frontier model, unifying the Codex and GPT lines into a single system. It features a 1M+ token context window (922K input, 128K output) with support for...",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.4",
+      "provider_model_id": "openai/gpt-5.4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.4 mini brings the core capabilities of GPT-5.4 to a faster, more efficient model optimized for high-throughput workloads. It supports text and image inputs with strong performance across reasoning, coding,...",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.4 Mini",
+      "provider_model_id": "openai/gpt-5.4-mini",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.5 is OpenAI's frontier model designed for complex professional workloads, building on GPT-5.4 with stronger reasoning, higher reliability, and improved token efficiency on hard tasks. It features a 1M+ token...",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.5",
+      "provider_model_id": "openai/gpt-5.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.6 Luna is a fast, cost-efficient model in OpenAI's GPT-5.6 series. It is suited for high-volume, latency-sensitive tasks such as chat, classification, and lightweight agentic workflows, providing capable reasoning.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.6 Luna",
+      "provider_model_id": "openai/gpt-5.6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.6 Sol is the flagship model in OpenAI's GPT-5.6 series. It is suited for complex reasoning, coding, and agentic workflows, and is particularly strong at command-line and multi-step coding tasks.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.6 Sol",
+      "provider_model_id": "openai/gpt-5.6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-5.6 Terra is a balanced model in OpenAI's GPT-5.6 series, positioned between the flagship Sol tier and the cost-efficient Luna tier. It is suited for everyday coding, reasoning, and agentic work.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-5.6 Terra",
+      "provider_model_id": "openai/gpt-5.6-terra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-6 Astra is OpenAI's most capable model for the most demanding work, including complex reasoning, coding, computer use, research, and document creation.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-6 Astra",
+      "provider_model_id": "openai/gpt-6-astra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-6 Luna is OpenAI's most efficient GPT-6 model for focused, high-volume tasks.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-6 Luna",
+      "provider_model_id": "openai/gpt-6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-6 Sol is built for complex coding and agentic workflows. GPT-6.1 Sol is the newer Sol model.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-6 Sol",
+      "provider_model_id": "openai/gpt-6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-6.1 Sol delivers near-Astra performance at a lower cost for complex coding, computer use, and professional work.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-6.1 Sol",
+      "provider_model_id": "openai/gpt-6.1-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GPT-6.1 Terra is OpenAI's lower-cost GPT-6.1 model with reasoning, tool calling, structured outputs and image input.",
+      "interfaces": [],
+      "name": "OpenAI: GPT-6.1 Terra",
+      "provider_model_id": "openai/gpt-6.1-terra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "gpt-oss-120b is an open-weight, 117B-parameter Mixture-of-Experts (MoE) language model from OpenAI designed for high-reasoning, agentic, and general-purpose production use cases. It activates 5.1B parameters per forward pass and is optimized to run on a single H100 GPU with native MXFP4 quantization. The model supports configurable reasoning depth, full chain-of-thought access, and native tool use, including function calling, browsing, and structured output generation.",
+      "interfaces": [],
+      "name": "OpenAI: GPT OSS 120B",
+      "provider_model_id": "openai/gpt-oss-120b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "o3 is a well-rounded and powerful model across domains. It sets a new standard for math, science, coding, and visual reasoning tasks. It also excels at technical writing and instruction-following. Use it to think through multi-step problems that involve analysis across text, code, and images.",
+      "interfaces": [],
+      "name": "OpenAI: o3",
+      "provider_model_id": "openai/o3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Uncensored \"Heretic\" variant of google/gemma-4-26B-A4B-it created using Heretic v1.2.0 with the Arbitrary-Rank Ablation (ARA) method and row-norm preservation. Refusals drop from 100/100 to 11/100 with KL divergence 0.0499 vs the base model. The base Gemma 4 26B A4B is a Mixture-of-Experts model with 25.2B total / 3.8B active parameters (8 active / 128 total experts), 30-layer transformer with hybrid local sliding (1024) + global attention, supporting a 256K context window. Natively multimodal (text + images, variable aspect ratios). Strong on coding, reasoning, function calling, with native system prompt support across 35+ languages. Served on Phala in TDX-attested H200 enclave with end-to-end ECDSA response signing; vLLM-compatible FP8-Static quantization by cloud19 (router excluded from quantization).",
+      "interfaces": [],
+      "name": "Phala: Gemma-4 26B-A4B Uncensored (Heretic)",
+      "provider_model_id": "phala/gemma-4-26b-a4b-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "HauhauCS Qwen3.8-27B Uncensored Aggressive, using the pinned Q8_K_P GGUF and BF16 vision projector. Served with SGLang on a Phala TDX-attested H200, with text and image input and a 262144-token context.",
+      "interfaces": [],
+      "name": "Phala: Qwen3.8 27B Uncensored (Aggressive)",
+      "provider_model_id": "phala/qwen3.8-27b-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Qwen2.5 7B is the latest series of Qwen large language models. Qwen2.5 brings the following improvements upon Qwen2:\n\n- Significantly more knowledge and has greatly improved capabilities in coding and mathematics, thanks to our specialized expert models in these domains.\n\n- Significant improvements in instruction following, generating long texts (over 8K tokens), understanding structured data (e.g, tables), and generating structured outputs especially JSON. More resilient to the diversity of system prompts, enhancing role-play implementation and condition-setting for chatbots.\n\n- Long-context Support up to 128K tokens and can generate up to 8K tokens.\n\n- Multilingual support for over 29 languages, including Chinese, English, French, Spanish, Portuguese, German, Italian, Russian, Japanese, Korean, Vietnamese, Thai, Arabic, and more.\n\nUsage of this model is subject to [Tongyi Qianwen LICENSE AGREEMENT](https://huggingface.co/Qwen/Qwen1.5-110B-Chat/blob/main/LICENSE).",
+      "interfaces": [],
+      "name": "Qwen2.5 7B Instruct",
+      "provider_model_id": "qwen/qwen-2.5-7b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Qwen3-VL-30B-A3B-Instruct is a multimodal model that unifies strong text generation with visual understanding for images and videos. Its Instruct variant optimizes instruction-following for general multimodal tasks. It excels in perception of real-world/synthetic categories, 2D/3D spatial grounding, and long-form visual comprehension, achieving competitive multimodal benchmark results. For agentic use, it handles multi-image multi-turn instructions, video timeline alignments, GUI automation, and visual coding from sketches to debugged UI. Text performance matches flagship Qwen3 models, suiting document AI, OCR, UI assistance, spatial tasks, and agent research.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+      "provider_model_id": "qwen/qwen3-vl-30b-a3b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "The Qwen3.5 27B native vision-language Dense model incorporates a linear attention mechanism, delivering fast response times while balancing inference speed and performance. Its overall capabilities are comparable to those of the Qwen3.5-122B-A10B.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.5-27B",
+      "provider_model_id": "qwen/qwen3.5-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "The Qwen3.5 series 397B-A17B native vision-language model is built on a hybrid architecture that integrates a linear attention mechanism with a sparse mixture-of-experts model, achieving higher inference efficiency. It delivers state-of-the-art performance comparable to leading-edge models across a wide range of tasks, including language understanding, logical reasoning, code generation, agent-based tasks, image understanding, video understanding, and graphical user interface (GUI) interactions. With its robust code-generation and agent capabilities, the model exhibits strong generalization across diverse agent.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.5 397B A17B",
+      "provider_model_id": "qwen/qwen3.5-397b-a17b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Qwen3.6 27B is a dense 27-billion-parameter language model from the Qwen Team at Alibaba, released in April 2026. It features hybrid multimodal capabilities accepting text and image inputs, a configurable thinking/reasoning mode, and a native 262K context window. Served as a TEE deployment via Chutes.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.6 27B",
+      "provider_model_id": "qwen/qwen3.6-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Qwen3.6-35B-A3B is an open-weight model from Alibaba Cloud with 35 billion total parameters and 3 billion active parameters per token. It uses a hybrid sparse mixture-of-experts architecture combining Gated attention. Served as a text-only TEE deployment via NEAR AI.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.6 35B A3B",
+      "provider_model_id": "qwen/qwen3.6-35b-a3b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Qwen3.8 27B is an open-weight dense vision-language model from Qwen. It is suited for coding, professional workflows, research, multimodal interaction, and long-running agent tasks, with flexible thinking that can be enabled or disabled. Served on Phala in a TDX-attested enclave.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.8 27B",
+      "provider_model_id": "qwen/qwen3.8-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Hy3 is a 295B-parameter Mixture-of-Experts model from Tencent (21B active, 192 experts with top-8 routing) built for reasoning, agentic workflows, and real-world production use. It supports a configurable reasoning effort.",
+      "interfaces": [],
+      "name": "Tencent: Hy3",
+      "provider_model_id": "tencent/hy3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Grok 4 is xAI's latest reasoning model with a 256k context window. It supports parallel tool calling, structured outputs, and both image and text inputs. Note that reasoning is not exposed, reasoning cannot be disabled, and the reasoning effort cannot be specified. Pricing increases once the total tokens in a given request is greater than 128k tokens. See more details on the [xAI docs](https://docs.x.ai/docs/models/grok-4-0709)",
+      "interfaces": [],
+      "name": "xAI: Grok 4",
+      "provider_model_id": "x-ai/grok-4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Grok 4.1 Fast is xAI's best agentic tool calling model that shines in real-world use cases like customer support and deep research. 2M context window.",
+      "interfaces": [],
+      "name": "xAI: Grok 4.1 Fast",
+      "provider_model_id": "x-ai/grok-4.1-fast",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Grok Code Fast 1 is a speedy and economical reasoning model that excels at agentic coding. With reasoning traces visible in the response, developers can steer Grok Code for high-quality work flows.",
+      "interfaces": [],
+      "name": "xAI: Grok Code Fast 1",
+      "provider_model_id": "x-ai/grok-code-fast-1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "Xing4.0-29B-A4B is a next-generation large language model in the Xing series (formerly [TeleChat](https://github.com/Tele-AI/TeleChat3)), developed by China Telecom Artificial Intelligence Technology Co., Ltd. With 29B total parameters and only 4B activated per token, it natively supports a 256K context length, extensible to 512K. It is the first model of this scale trained entirely on the Ascend NPU platform with the MindSpore framework, and deeply optimized for complex engineering tasks.",
+      "interfaces": [],
+      "name": "Xing4.0-29B-A4B",
+      "provider_model_id": "xingchen-agi/xing4.0-29b-a4b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GLM-5.1 delivers a major leap in coding capability, with particularly significant gains in handling long-horizon tasks. Unlike previous models built around minute-level interactions, GLM-5.1 can work independently and continuously on...",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.1",
+      "provider_model_id": "z-ai/glm-5.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
+      "description": "GLM-5.2 is Z.ai's flagship model for the era of long-horizon tasks. With a truly usable 1M-token context window, it can handle project-level engineering context and execute long-running tasks more reliably. Served as a text-only TEE deployment via Phala.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.26,
               "no_cache": 1.4
             },
+            "kind": "token",
             "output_tokens": {
               "text": 4.4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
+      "name": "Z.ai: GLM 5.2",
+      "provider_model_id": "z-ai/glm-5.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GLM-5.3 is a large-scale reasoning model from Z.ai, built for complex software engineering and long-horizon agent tasks. It supports text input and output with a 1M-token context window. Served as a text-only TEE deployment via Phala.",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.3",
+      "provider_model_id": "z-ai/glm-5.3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:12.088798Z",
+        "scope": "public",
+        "source_url": "https://api.redpill.ai/v1/models"
+      },
+      "description": "GLM-5.3-Flash is Z.ai's natively multimodal 320B MoE model with 18B active parameters, designed for efficient coding, long-horizon agent tasks, visual understanding, and long-context inference. Served as a TEE deployment via Phala.",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.3 Flash",
+      "provider_model_id": "z-ai/glm-5.3-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:12.088798Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "redpill",
   "status": "active",
   "submitted_at": "2026-07-08T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "REDPILL_API_KEY"
-  }
+  "weight": 1
 }

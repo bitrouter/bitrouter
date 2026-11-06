@@ -1,8 +1,52 @@
 {
   "api_base": "https://llm.chutes.ai/v1",
+  "auth": {
+    "env": "CHUTES_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:50.161423Z",
+          "sequence": 6
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://llm.chutes.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "status": "active",
-  "weight": 1,
   "community": true,
   "metadata": {
     "headquarters": "US",
@@ -14,37 +58,324 @@
   },
   "models": [
     {
-      "provider_model_id": "XiaomiMiMo/MiMo-V2-Flash-TEE",
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.5-397B-A17B-TEE",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.6-27B-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.8-27B-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "Qwen/Qwen3.8-Max-0902",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 30
-          },
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.045,
               "no_cache": 0.09
             },
+            "kind": "token",
             "output_tokens": {
               "text": 0.29
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 30
           }
         }
-      ]
+      ],
+      "provider_model_id": "XiaomiMiMo/MiMo-V2-Flash-TEE",
+      "status": "active"
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.2-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Flash-0731-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "google/gemma-4-31B-turbo-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "moonshotai/Kimi-K2.6-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "moonshotai/Kimi-K2.7-Code",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "moonshotai/Kimi-K3-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "zai-org/GLM-5.1-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "zai-org/GLM-5.2-Fast",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "zai-org/GLM-5.2-TEE",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "scope": "public",
+        "source_url": "https://llm.chutes.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "zai-org/GLM-5.3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "chutes",
-  "auth": {
-    "kind": "bearer",
-    "env": "CHUTES_API_KEY"
-  }
+  "status": "active",
+  "weight": 1
 }

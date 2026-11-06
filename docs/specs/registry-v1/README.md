@@ -404,6 +404,10 @@ Each provider model contains:
 | `availability` | Optional provenance: `source_url`, `checked_at`, and `scope` (`public` or `account`) |
 | `sync` | Source-only ownership/observation data, defined in section 9 |
 
+A feed may explicitly unwrap a documented resource-name prefix under section
+8.3 to obtain the upstream generation model ID. This does not permit case
+changes, alias guesses, or rewriting an already stored native offer.
+
 The storage identity is **(provider name, provider_model_id)**. `canonical_id`
 is not the inventory primary key. Multiple upstream IDs may map to one canonical model;
 each remains a separate offer and selection must be deterministic. A native ID
@@ -779,6 +783,10 @@ and curation policy, never arbitrary provider promotion.
 
 ## 8. Provider sync feeds
 
+The JSON importer requests the JSON representation with `Accept: application/json`
+by default. A declared constant `Accept` header may select another documented
+JSON media type; it does not authorize a different response codec.
+
 ### 8.1 Feed declaration and authority
 
 `auto_sync` is source-only and contains `feeds`, an array of feed objects. Each
@@ -789,7 +797,8 @@ MUST NOT own the same domain on the same offer. `writes: [pricing]` cannot add,
 remove, rename, or reactivate inventory entries.
 
 The generic core defines `kind: v1_models`, requiring `request`, `response`, and
-`pagination` below. The registered `openrouter_models` adapter is defined below.
+`pagination` below. Registered `openrouter_models` and `models_dev` adapters are
+defined below.
 Other adapters need their own named extension contract;
 unknown kinds are retained but not executed and cannot reconcile absence.
 Manual or assisted enrichment may propose ordinary source edits outside the
@@ -838,6 +847,32 @@ Every configured feed is required: failure, missing credentials, or unsupported
 semantics makes the final sync run unsuccessful. Valid independent feed changes
 may still be proposed when the global identity audit passes. Optional feeds are
 not defined in this revision; an unknown `optional` field cannot relax this rule.
+
+`models_dev` is a reviewed fallback when a provider's native machine listing is
+unavailable to the synchronizer, including missing usable listing credentials,
+subscription-only or resource-specific discovery. Selecting it requires an
+explicit reviewed source change; a failed native feed never silently falls back.
+It requires an explicit `provider_id` matching the selected provider map key and
+its `id`, the exact
+public URL `https://models.dev/api.json?type=all`, `auth: {kind: none}`, no
+constant request headers or query overrides, `pagination: {kind: none}`,
+`writes: [models, metadata]`, and `inventory: {mode: merge, scope: public,
+complete: false}`. Response mappings are not configurable for this adapter.
+
+The [models.dev API](https://github.com/anomalyco/models.dev#api) is a
+third-party directory, not provider-authoritative lifecycle evidence. Each
+model map key must match its native `id`. The adapter excludes explicitly
+`deprecated` source rows; absent status, `alpha`, and `beta` are recognized.
+An unfamiliar/malformed lifecycle fails the observation without removing old
+offers. Model types, including unknown future types, never imply execution
+support. New offers have `status: staging`, empty interfaces, and no inferred
+canonical binding or prices. Descriptive names/descriptions may be imported.
+Normal ownership preserves existing manual execution data and verified active
+statuses. Merge-only updates never withdraw old offers from third-party absence.
+When replacing a native feed, the reviewed source migration MUST release that
+feed's ownership of existing verified statuses to manual control before applying
+directory staging defaults. It MUST preserve existing canonical bindings,
+interfaces, tariffs and statuses; the directory cannot inherit native authority.
 
 A provider's own documented feed is preferred for membership. A provider with
 no usable machine feed may remain manual or use a documented, reviewed proxy
@@ -985,6 +1020,15 @@ Optional `transforms` is a destination-path-to-ordered-steps map. v1 knows only:
 - `{kind: prefix, value: <string>}`: prepend a fixed public string to a string
   value, e.g. `openai/` on the `canonical_id` target only; no interpolation,
   lowercasing, alias resolution, or modification of the native ID occurs.
+- `{kind: strip_prefix, value: <nonempty-string>}`: the sole permitted native-ID
+  transform, only on `/provider_model_id` and as its single step. Remove an
+  explicitly reviewed resource wrapper, such as `models/` from the
+  [Gemini listing's resource name](https://ai.google.dev/api/models). Every
+  input must start with that exact literal and leave a nonempty valid model ID;
+  otherwise the entire observation fails. The operation is injective over
+  admitted inputs and preserves the suffix's case/slashes. It does not guess
+  aliases, normalize spellings, or rename stored records. Changing an identity
+  mapping requires reviewed migration and cannot retarget existing bindings.
 - `{kind: parse_decimal}`: a finite base-10 decimal string to a JSON number;
   reject empty, exponent, nonnumeric, overflow, and non-finite input.
 - `{kind: multiply, factor: <finite-number>}`: multiply a numeric value, checking
@@ -1001,7 +1045,8 @@ target must be a mapped destination. Arithmetic for money uses checked decimal
 operations, not accumulated binary floating-point arithmetic. No arbitrary
 scripts, templates, regex replacements, or automatic currency conversion are
 allowed. Dates and model IDs require correct source values or a dedicated
-adapter, rather than speculative generic transformations.
+adapter, except for the explicit checked resource wrapper above. Readers that
+do not support a transform reject that observation and retain previous data.
 
 For example, given a default `interfaces[0]` with a verified token tariff shape,
 an upstream per-token decimal string may map as follows:
@@ -1046,12 +1091,18 @@ For cursor pagination, the first request has no cursor. With `has_more_path`,
 each response must contain a boolean: false completes the listing; true requires
 a nonempty string cursor. Without it, the cursor field must exist: null or an
 empty string terminates, a nonempty string continues. A missing field or wrong
-type is failure, not completion. Cursors are opaque and URL-encoded as query
+type is failure, not completion. For an API that documents omission on its final
+page, `missing_cursor: end` explicitly permits a missing cursor to terminate.
+This option is valid only for `kind: cursor` without `has_more_path`; its
+default is `error`. Unknown policy strings disable the feed with update
+guidance. Wrong types never terminate a page. Cursors are opaque and URL-encoded as query
 values; pagination never changes host, path, or auth.
 
 Repeated cursors, exceeding `max_pages` while continuation remains, conflicting
 duplicate native IDs, any failed page, or any item normalization error invalidate
-the whole feed transaction. Identical duplicate observations may be deduplicated.
+the whole feed transaction. Duplicate observations with equal normalized values
+and equal observed-field sets may be deduplicated; unmapped upstream metadata
+does not create a conflict. Explicit clears and missing fields remain distinct.
 An empty intermediate page with a valid next cursor continues. A feed that needs
 offsets, continuation headers, or another pagination mechanism requires an
 explicit supported adapter; declaring `none` is not a workaround.

@@ -1,8 +1,54 @@
 {
   "api_base": "https://inference.tinfoil.sh/v1",
+  "auth": {
+    "env": "TINFOIL_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:27:21.170707Z",
+          "sequence": 6
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://inference.tinfoil.sh/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/description": "/description",
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "submitted_at": "2026-05-12T00:00:00Z",
-  "status": "active",
   "community": true,
   "metadata": {
     "headquarters": "US",
@@ -14,134 +60,492 @@
   },
   "models": [
     {
-      "provider_model_id": "glm-5-2",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "A decision model from vLLMs sr family",
+      "interfaces": [],
+      "name": "Decision Large",
+      "provider_model_id": "decision-large",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.375,
-              "no_cache": 1.5
-            },
-            "output_tokens": {
-              "text": 5.25
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "z-ai/glm-5.2"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
     },
     {
-      "provider_model_id": "kimi-k3",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "A decision model from vLLMs sr family",
+      "interfaces": [],
+      "name": "Decision Medium",
+      "provider_model_id": "decision-medium",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "no_cache": 2
-            },
-            "output_tokens": {
-              "text": 6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "moonshotai/kimi-k3"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
     },
     {
-      "provider_model_id": "glm-5-3-flash",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "A decision model from vLLMs sr family",
+      "interfaces": [],
+      "name": "Decision Small",
+      "provider_model_id": "decision-small",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.1,
-              "no_cache": 0.4
-            },
-            "output_tokens": {
-              "text": 1.25
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "z-ai/glm-5.3-flash"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
     },
     {
-      "provider_model_id": "deepseek-v4-1-flash",
-      "status": "active",
+      "canonical_id": "deepseek/deepseek-v4.1-flash",
+      "description": "DeepSeek V4.1 Flash (1017), an efficient MoE model with a 1M-token context window, image input, Engram memory, built-in speculative decoding, and tool calling",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.13,
               "no_cache": 0.65
             },
+            "kind": "token",
             "output_tokens": {
               "text": 1.45
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "deepseek/deepseek-v4.1-flash"
+      "name": "DeepSeek V4.1 Flash",
+      "provider_model_id": "deepseek-v4-1-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "glm-5-3",
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Private document processing and conversion service.",
+      "interfaces": [],
+      "name": "Private Document Processing",
+      "provider_model_id": "doc-upload",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Google's most capable open model with image understanding and long-context support",
+      "interfaces": [],
+      "name": "Gemma 4 31B",
+      "provider_model_id": "gemma4-31b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.375,
+              "no_cache": 1.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 5.25
+            }
+          },
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
-          },
+          }
+        }
+      ],
+      "provider_model_id": "glm-5-2",
+      "status": "active"
+    },
+    {
+      "canonical_id": "z-ai/glm-5.3",
+      "description": "Z.ai's latest flagship for agentic coding and long-horizon tasks, with a 1M-token context window",
+      "interfaces": [
+        {
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.45,
               "no_cache": 1.8
             },
+            "kind": "token",
             "output_tokens": {
               "text": 5.75
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "z-ai/glm-5.3"
+      "name": "GLM-5.3",
+      "provider_model_id": "glm-5-3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.3-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.1,
+              "no_cache": 0.4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.25
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "glm-5-3-flash",
+      "status": "active"
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Open-weight model designed for powerful reasoning, agentic tasks, and versatile developer use cases",
+      "interfaces": [],
+      "name": "GPT-OSS 120B",
+      "provider_model_id": "gpt-oss-120b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Safety reasoning model for content classification and trust & safety applications",
+      "interfaces": [],
+      "name": "GPT-OSS Safeguard 120B",
+      "provider_model_id": "gpt-oss-safeguard-120b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
+      "description": "Moonshot's flagship multimodal MoE model with hybrid attention for long-context reasoning, coding, and agentic workflows",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 6
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "name": "Kimi K3",
+      "provider_model_id": "kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "High-performance multilingual language model optimized for dialogue",
+      "interfaces": [],
+      "name": "Llama 3.3 70B",
+      "provider_model_id": "llama3-3-70b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Open-source text embedding model that outperforms OpenAI models on key benchmarks",
+      "interfaces": [],
+      "name": "Nomic Embed Text",
+      "provider_model_id": "nomic-embed-text",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "PII span detection and redaction inside a secure enclave.",
+      "interfaces": [],
+      "name": "Privacy Filter",
+      "provider_model_id": "pii-filter",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Expressive text-to-speech model with instruction-controlled style and multilingual support",
+      "interfaces": [],
+      "name": "Qwen3-TTS 1.7B",
+      "provider_model_id": "qwen3-tts",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Streaming realtime speech-to-text model from Mistral's Voxtral family.",
+      "interfaces": [],
+      "name": "Voxtral Mini 4B Realtime",
+      "provider_model_id": "voxtral-mini-4b-realtime",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Audio-capable model built on Mistral Small 3.1 for transcription, translation, and spoken queries",
+      "interfaces": [],
+      "name": "Voxtral Small 24B",
+      "provider_model_id": "voxtral-small-24b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Text-to-speech model from Mistral's Voxtral family.",
+      "interfaces": [],
+      "name": "Voxtral TTS",
+      "provider_model_id": "voxtral-tts",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Web search tool to augment chat models.",
+      "interfaces": [],
+      "name": "Private Web Search",
+      "provider_model_id": "websearch",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:21.170707Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "High-performance speech recognition and transcription model",
+      "interfaces": [],
+      "name": "Whisper Large V3 Turbo",
+      "provider_model_id": "whisper-large-v3-turbo",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:27:21.170707Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "tinfoil",
-  "weight": 1,
-  "auth": {
-    "kind": "bearer",
-    "env": "TINFOIL_API_KEY"
-  }
+  "status": "active",
+  "submitted_at": "2026-05-12T00:00:00Z",
+  "weight": 1
 }

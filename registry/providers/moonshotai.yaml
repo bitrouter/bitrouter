@@ -1,8 +1,53 @@
 {
   "api_base": "https://api.moonshot.ai/v1",
+  "auth": {
+    "env": "MOONSHOTAI_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-02T11:26:32.358Z",
+          "observed_at": "2026-11-02T11:26:58.817686Z",
+          "sequence": 6
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "account"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "env": "MOONSHOTAI_REGISTRY_API_KEY",
+            "kind": "bearer"
+          },
+          "url": "https://api.moonshot.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "status": "active",
-  "weight": 1,
   "metadata": {
     "datacenters": [
       "SG"
@@ -15,154 +60,212 @@
   },
   "models": [
     {
-      "provider_model_id": "kimi-k3",
+      "availability": {
+        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "scope": "account",
+        "source_url": "https://api.moonshot.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "kimi-k2.6",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k2.7-code",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.3,
-              "no_cache": 3
-            },
-            "output_tokens": {
-              "text": 15
+              "cache_read": 0.19,
+              "no_cache": 0.95
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 4
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://api.moonshot.ai/anthropic",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.3,
-              "no_cache": 3
-            },
-            "output_tokens": {
-              "text": 15
+              "cache_read": 0.19,
+              "no_cache": 0.95
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 4
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3"
-    },
-    {
       "provider_model_id": "kimi-k2.7-code",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.19,
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://api.moonshot.ai/anthropic",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.19,
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "moonshotai/kimi-k2.7-code"
+      "sync": {
+        "field_owners": {}
+      }
     },
     {
-      "provider_model_id": "kimi-k3.1-pro",
+      "availability": {
+        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "scope": "account",
+        "source_url": "https://api.moonshot.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "kimi-k2.7-code-highspeed",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
       "interfaces": [
         {
-          "protocol": "chat_completions",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "no_cache": 2.0,
-              "cache_read": 0.2,
-              "cache_write": 2.0
-            },
-            "output_tokens": {
-              "text": 10.0
+              "cache_read": 0.3,
+              "no_cache": 3
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 15
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://api.moonshot.ai/anthropic",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "no_cache": 2.0,
-              "cache_read": 0.2,
-              "cache_write": 2.0
-            },
-            "output_tokens": {
-              "text": 10.0
+              "cache_read": 0.3,
+              "no_cache": 3
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 15
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3.1-pro"
+      "provider_model_id": "kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3.1-pro",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://api.moonshot.ai/anthropic",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2,
+              "no_cache": 2
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "scope": "account",
+        "source_url": "https://api.moonshot.ai/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "kimi-k3.1-pro-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "moonshotai",
+  "status": "active",
   "submitted_at": "2026-05-25T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "MOONSHOTAI_API_KEY"
-  }
+  "weight": 1
 }
