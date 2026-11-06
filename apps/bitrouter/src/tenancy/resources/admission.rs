@@ -84,7 +84,6 @@ impl State {
         Some((current.clone(), self.profiles.get(&current)?))
     }
 
-
     pub(in crate::tenancy) fn protected(&self, route: &ResourceRef) -> bool {
         self.protected_keys.contains(&route.key())
     }
