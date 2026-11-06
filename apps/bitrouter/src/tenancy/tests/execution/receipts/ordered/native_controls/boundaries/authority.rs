@@ -14,6 +14,7 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
         binding,
         binding_result,
     } = h.fixture;
+    let resources = service.resources.clone();
     service.shutdown().await?;
     drop(service);
     // The pool retains the actual file lease beyond Service::shutdown. Close
@@ -40,20 +41,19 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
         }
     })
     .await??;
-    let resources = crate::tenancy::resources::Resources::with_key(installation.clone(), [61; 32])?;
     let initial = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
     let service = crate::tenancy::Service::start_resources_with_continuations(
         db.clone(),
         Some(owner),
-        Default::default(),
         initial,
-        Arc::new(resources),
-        (
-            None,
-            &crate::config::ContinuationConfig::default(),
-            Some(claim),
-            crate::telemetry::receipt_latency::Sink::default(),
-        ),
+        resources,
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: Some(claim),
+            receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await?;
@@ -116,7 +116,7 @@ async fn native_current_caller_rotation_restart_and_new_defaults_preserve_only_c
     )
     .await?;
     let old_headers = caller_timeout::ordered_headers(&h, &original)?;
-    let mut rotation = h.fixture.issuance("native-rotate")?;
+    let mut rotation = h.fixture.issuance("native-rotate").await?;
     rotation.rotate_credential_id = Some(h.credential.credential_id.clone());
     let rotated = h
         .control(true, HttpVersion::Http1Only)?
