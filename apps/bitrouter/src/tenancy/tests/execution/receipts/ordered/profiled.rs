@@ -111,7 +111,7 @@ pub(super) async fn draft_profiles(
     }
 }
 
-fn rules(rpm: u32, health: bool) -> Result<AdmissionProfileV1> {
+pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfileV1> {
     Ok(serde_json::from_value(json!({"schema_version":1,
         "rate":{"rate_group_id":"shared-rpm","member_rpm":rpm},
         "health": if health { json!({"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,

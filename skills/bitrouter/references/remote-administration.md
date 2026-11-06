@@ -124,6 +124,14 @@ Submission bounds upload and admission, not the lifetime of an admitted stream.
 ordinary v1 submissions keep their eight-attempt bound. This work budget does
 not limit the number of tenants or retained routes. An oversized selection is
 rejected before dispatch rather than truncated.
+
+Operators can pair an internal generation adapter at startup through
+`tenancy.private_adapter`. Use exact HTTPS generation URLs at one origin and
+a dedicated 32-byte key from the named environment variable. A paired
+endpoint requires a profiled ordered generation request and a peer that
+authenticates and consumes each attempt before sending it upstream. See the
+[configuration contract](../../../docs/specs/configuration/README.md#private-generation-adapter).
+
 Ordered selections require an explicit `admission_mode` (`legacy` or
 `profiled_v1`), matching the retained root; missing mode is not a default.
 Installation authority alone can provision admission profiles or profiled

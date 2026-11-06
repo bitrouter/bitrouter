@@ -299,10 +299,18 @@ impl ModelClient {
         request: reqwest::Request,
         cancellation: &CancellationToken,
     ) -> Result<reqwest::Response> {
+        Self::send_with(&self.client, request, cancellation).await
+    }
+
+    pub(crate) async fn send_with(
+        client: &reqwest::Client,
+        request: reqwest::Request,
+        cancellation: &CancellationToken,
+    ) -> Result<reqwest::Response> {
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => Err(ModelError::Cancelled),
-            response = self.client.execute(request) => response.map_err(|error| io_error("sending model request", error)),
+            response = client.execute(request) => response.map_err(|error| io_error("sending model request", error)),
         }
     }
 

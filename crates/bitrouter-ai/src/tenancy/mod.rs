@@ -15,6 +15,7 @@ pub mod identity;
 pub mod native_controls;
 pub mod operation;
 pub mod ordered;
+pub mod private_adapter;
 pub mod profile_observation;
 pub mod resources;
 pub mod resources_v2;
