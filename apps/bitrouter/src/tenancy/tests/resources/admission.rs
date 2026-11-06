@@ -181,6 +181,7 @@ async fn operator_only_profiled_route_protects_historical_configuration_after_re
     let caller = fixture
         .service
         .authenticate(issued.secret.as_deref().context("secret")?)
+        .await
         .map_err(failure)?;
     ensure!(
         matches!(fixture.service.execute(caller,Command::Resource(fixture.tenant.clone(),protected.clone())).await,

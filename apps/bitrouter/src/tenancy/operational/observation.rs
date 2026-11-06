@@ -61,17 +61,11 @@ impl Service {
                 {
                     return denied();
                 }
-                let Some(revision) = state.resource_lifecycle.head(&pinned.key()) else {
+                let Some((current, rules)) = state.resource_admission.current_profile(pinned)
+                else {
                     return denied();
                 };
-                let mut current = pinned.clone();
-                current.revision_id = revision.clone();
-                let Some(rules) = state.resource_admission.profile(&current) else {
-                    return denied();
-                };
-                if state.resource_lifecycle.revoked(&current) {
-                    return denied();
-                }
+                let revision = &current.revision_id;
                 match operational
                     .as_ref()
                     .map(|snapshot| snapshot.observe(&state.installation, &current, rules))

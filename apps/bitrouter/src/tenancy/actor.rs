@@ -200,7 +200,7 @@ impl Worker {
         }
         self.authority
             .read()
-            .map(|guard| Arc::new(Snapshot::from_header(guard.header())))
+            .map(|guard| Arc::new(guard.snapshot()))
             .map_err(Failure::from)
     }
 

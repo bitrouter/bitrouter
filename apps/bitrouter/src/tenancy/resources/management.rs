@@ -339,6 +339,13 @@ pub(in crate::tenancy) async fn prepare(
             if state.resource_lifecycle.head(&input.key) != input.expected_revision.as_ref() {
                 return Ok((context(caller, tenant, &input.key), None));
             }
+            if matches!(&input.definition, PublicDefinition::AdmissionProfile { .. })
+                && !state.resource_admission.has_profile_key(&input.key)
+                && super::storage::resource_key_exists(db, &input.key)
+                    .await.map_err(|_| ErrorCode::StorageUnavailable)?
+            {
+                return Err(ErrorCode::InvalidRequest);
+            }
             let record = resources
                 .prepare_resource(db, state, caller, tenant, input)
                 .await?;
@@ -409,9 +416,10 @@ pub(in crate::tenancy) fn apply(
                 });
             }
             changes.push(Change::Resource(retained.clone()));
-            state
-                .resource_admission
-                .apply_put(&retained.reference, &input.definition);
+            if matches!(&input.definition, PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }) {
+                std::sync::Arc::make_mut(&mut state.resource_admission)
+                    .apply_put(&retained.reference, &input.definition);
+            }
             lifecycle::Record {
                 reference: retained.reference.clone(),
                 is_head: true,
@@ -446,6 +454,17 @@ pub(in crate::tenancy) fn apply(
     };
     let resource = record.reference.resource_id.clone();
     let revision = record.reference.revision_id.clone();
+    if state.resource_admission.tracks(&record.reference) {
+        let admission = std::sync::Arc::make_mut(&mut state.resource_admission);
+        for change in &changes {
+            if let Change::ResourceLifecycle { record, .. } = change
+                && admission.tracks(&record.reference)
+            {
+                admission.apply_lifecycle(record);
+            }
+        }
+        admission.apply_lifecycle(&record);
+    }
     state.resource_lifecycle.insert(record.clone());
     changes.push(Change::ResourceLifecycle {
         installation: state.installation.clone(),

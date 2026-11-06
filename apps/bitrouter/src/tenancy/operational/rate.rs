@@ -75,7 +75,7 @@ impl Rates {
             });
         }
         if !self.windows.contains_key(&key) {
-            if self.windows.len() >= super::super::resources::lifecycle::MAX_RECORDS {
+            if self.windows.len() >= super::MAX_RUNTIME_KEYS {
                 return Err(Denial::Capacity);
             }
             self.windows.try_reserve(1).map_err(|_| Denial::Capacity)?;

@@ -284,6 +284,10 @@ impl Import {
 }
 
 impl Definition {
+    pub(super) fn is_admission_profile(&self) -> bool {
+        matches!(self, Self::AdmissionProfile { .. })
+    }
+
     pub(super) fn is_profiled(&self) -> bool {
         matches!(
             self,

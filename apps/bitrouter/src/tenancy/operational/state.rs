@@ -122,7 +122,7 @@ impl Runtime {
         let binding = if let Some(rules) = &rules.health {
             let key = (installation.clone(), reference.key());
             if !health.contains_key(&key) {
-                if health.len() >= super::super::resources::lifecycle::MAX_RECORDS {
+                if health.len() >= super::MAX_RUNTIME_KEYS {
                     return Err(Denial::Capacity);
                 }
                 health.try_reserve(1).map_err(|_| Denial::Capacity)?;
@@ -206,7 +206,7 @@ impl ReadSnapshot<'_> {
         });
         let capacity = (rules.health.is_none()
             || state.health.contains_key(&key)
-            || state.health.len() < super::super::resources::lifecycle::MAX_RECORDS)
+            || state.health.len() < super::MAX_RUNTIME_KEYS)
             && rules.rate.as_ref().is_none_or(|rate| {
                 state
                     .rates
