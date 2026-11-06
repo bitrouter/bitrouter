@@ -1245,8 +1245,9 @@ and labels belong to source sync state/reporting, not invented build timestamps.
 
 ### 10.1 Mandatory OpenRouter canonical identity audit
 
-Every scheduled/manual sync and publication run MUST fetch OpenRouter's full
-model list from `https://openrouter.ai/api/v1/models?output_modalities=all`, using the
+Every scheduled/manual sync and every promotion that writes new artifact bytes
+MUST fetch OpenRouter's full model list from
+`https://openrouter.ai/api/v1/models?output_modalities=all`, using the
 [documented list API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).
 Require `output_modalities=all`: the API otherwise defaults to text output.
 Omit `offset`, `limit`, and every narrowing filter to request the complete list.
@@ -1361,10 +1362,13 @@ Before publication, pass the canonical identity audit, source validation,
 deterministic build, and stale-dist check; commit both source and generated
 artifacts together. Readers switch a whole validated document atomically.
 The first-party update streams are served from the dedicated `registry-v1`
-publication branch. A trusted post-merge workflow audits the exact final main
-commit afresh and promotes only its admitted artifact bytes. A sync-PR audit
-alone cannot authorize publication after further edits or rebasing. Promotion
-preserves older revision paths, rejects an `as_of` rollback against the previous
+publication branch. The workflow first compares the candidate bytes with each
+target it would write under the revision and default-stream rules. When every
+target already holds those bytes, the workflow completes without publishing or
+fetching an identity snapshot. A missing or different target requires a fresh
+audit of the exact final main commit before promoting the admitted bytes. A
+sync-PR audit alone cannot authorize publication after further edits or rebasing.
+Promotion preserves older revision paths, rejects an `as_of` rollback against the previous
 promoted revision, and cannot replace a stable unqualified v1 artifact with beta
 data. Normal source commits do not directly change consumer streams. Repository
 administration must restrict writes to that branch to this trusted publication

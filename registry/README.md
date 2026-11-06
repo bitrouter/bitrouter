@@ -63,10 +63,20 @@ The independent identity audit still reads the complete unfiltered listing.
 Missing required secrets fail the run, while an independently validated public
 feed can still produce a reviewable proposal after the global audit passes.
 The workflow uploads the exact public identity response and JSON report.
+When the identity audit reports missing IDs, the sync summary lists the affected
+provider offers and curated IDs for review. Use the attached evidence to decide
+whether to unbind an offer, retire a recommendation, or migrate a verified
+same-model rename. The sync run continues to fail until its candidate passes
+admission.
 Manual runs check out the selected commit, so a contributor can validate a
 configuration fix on its branch before merging. Only runs selected from `main`
 update `automation/registry-sync` and propose catalog changes; branch runs
 perform the same synchronization and checks without publishing a proposal.
+
+Promotion compares the candidate bytes with the versioned target and, when
+eligible, the unqualified target on `registry-v1`. Identical targets complete
+as already published. A new or different target requires the fresh publication
+audit.
 
 The v1 migration retained every native provider offer. Delisted canonical
 bindings are explicitly unbound in provider source; historical correspondence

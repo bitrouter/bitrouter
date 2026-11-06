@@ -28,32 +28,50 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Load the previous promoted revision
-        id: prior
+      - name: Compare candidate with its publication targets
+        id: plan
         run: |
-          revision="$(jq -er '.spec_revision' dist/registry/v1/registry.json)"
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          if git show-ref --verify --quiet refs/remotes/origin/registry-v1; then
-            if git show "origin/registry-v1:dist/registry/v1/$revision/registry.json" > "$RUNNER_TEMP/registry-previous.json"; then
-              echo "available=true" >> "$GITHUB_OUTPUT"
+          candidate=dist/registry/v1/registry.json
+          revision="$(jq -er '.spec_revision | strings' "$candidate")"
+          [[ "$revision" =~ ^1\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+          previous="$RUNNER_TEMP/registry-previous.json"
+          previous_default="$RUNNER_TEMP/registry-previous-default.json"
+          publish_default=true
+          published=refs/remotes/origin/registry-v1
+          if git show-ref --verify --quiet "$published"; then
+            if git cat-file -e "$published:dist/registry/v1/$revision/registry.json" 2>/dev/null; then
+              git show "$published:dist/registry/v1/$revision/registry.json" > "$previous"
             fi
-            if [[ "$revision" != *-* ]] && git show origin/registry-v1:dist/registry/v1/registry.json > "$RUNNER_TEMP/registry-previous-default.json"; then
-              echo "default_available=true" >> "$GITHUB_OUTPUT"
+            if git cat-file -e "$published:$candidate" 2>/dev/null; then
+              git show "$published:$candidate" > "$previous_default"
+              prior="$(jq -er '.spec_revision | strings' "$previous_default")"
+              if [[ "${prior%%+*}" != *-* && "${revision%%+*}" == *-* ]]; then
+                publish_default=false
+              fi
             fi
           fi
+          printf 'revision=%s\npublish_default=%s\n' "$revision" "$publish_default" >> "$GITHUB_OUTPUT"
+          if cmp -s "$candidate" "$previous" &&
+             { [[ "$publish_default" == false ]] || cmp -s "$candidate" "$previous_default"; }; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Registry artifact already matches every publication target."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.plan.outputs.changed == 'true'
 
       - name: Audit the exact final candidate afresh
+        if: steps.plan.outputs.changed == 'true'
         env:
-          HAS_PREVIOUS: ${{ steps.prior.outputs.available }}
-          HAS_PREVIOUS_DEFAULT: ${{ steps.prior.outputs.default_available }}
+          REVISION: ${{ steps.plan.outputs.revision }}
         run: |
           args=()
-          if [ "$HAS_PREVIOUS" = true ]; then
+          if [ -f "$RUNNER_TEMP/registry-previous.json" ]; then
             args+=(--previous "$RUNNER_TEMP/registry-previous.json")
           fi
-          if [ "$HAS_PREVIOUS_DEFAULT" = true ]; then
+          if [[ "${REVISION%%+*}" != *-* ]] && [ -f "$RUNNER_TEMP/registry-previous-default.json" ]; then
             args+=(--previous "$RUNNER_TEMP/registry-previous-default.json")
           fi
           cargo run -p dist-helper -- registry audit --report target/registry-publication.json "${args[@]}"
@@ -63,7 +81,7 @@ jobs:
           test -z "$(git status --porcelain -- registry dist/registry apps/bitrouter/registry-dist)"
 
       - name: Preserve exact public identity evidence
-        if: always()
+        if: always() && steps.plan.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: registry-final-publication-audit
@@ -73,8 +91,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Promote admitted bytes while preserving older revisions
+        if: steps.plan.outputs.changed == 'true'
         env:
-          REVISION: ${{ steps.prior.outputs.revision }}
+          REVISION: ${{ steps.plan.outputs.revision }}
+          PUBLISH_DEFAULT: ${{ steps.plan.outputs.publish_default }}
         run: |
           tree="$RUNNER_TEMP/registry-promoted"
           if git show-ref --verify --quiet refs/remotes/origin/registry-v1; then
@@ -85,14 +105,7 @@ jobs:
           fi
           mkdir -p "$tree/dist/registry/v1/$REVISION"
           cp dist/registry/v1/registry.json "$tree/dist/registry/v1/$REVISION/registry.json"
-          publish_unqualified=true
-          if [ -f "$tree/dist/registry/v1/registry.json" ]; then
-            prior="$(jq -er '.spec_revision' "$tree/dist/registry/v1/registry.json")"
-            if [[ "$prior" != *-* && "$REVISION" == *-* ]]; then
-              publish_unqualified=false
-            fi
-          fi
-          if [ "$publish_unqualified" = true ]; then
+          if [ "$PUBLISH_DEFAULT" = true ]; then
             cp dist/registry/v1/registry.json "$tree/dist/registry/v1/registry.json"
           fi
           git -C "$tree" add dist/registry/v1
