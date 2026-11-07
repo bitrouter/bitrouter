@@ -10,6 +10,7 @@ mod checkpoint;
 mod core_choice;
 mod execution;
 mod format;
+mod native_generate_content;
 mod routing;
 pub(in crate::tenancy::resources) mod validation;
 

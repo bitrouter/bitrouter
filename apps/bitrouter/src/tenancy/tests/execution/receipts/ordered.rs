@@ -36,6 +36,7 @@ mod caller_timeout;
 mod canonical;
 mod defaults;
 mod envelope;
+mod generate_content_native;
 mod native_controls;
 mod predecessor;
 mod private_adapter;
@@ -609,6 +610,9 @@ impl OrderedHarness {
             }};
         }
         Ok(match protocol {
+            GenerationProtocol::GenerateContent => {
+                anyhow::bail!("native protocol requires the paired fixture")
+            }
             GenerationProtocol::ChatCompletions => call!(
                 chat_reply,
                 ChatRequest,

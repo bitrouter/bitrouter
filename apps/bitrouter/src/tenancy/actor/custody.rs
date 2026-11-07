@@ -1089,12 +1089,13 @@ impl Worker {
                     let Message {
                         caller,
                         command,
+                        native_adapter_configured,
                         reply,
                     } = *message;
                     let operation = Some(command.operation_id().clone());
                     let result = self
                         .supervise(
-                            self.execute(&caller, &command, &control),
+                            self.execute(&caller, &command, &control, native_adapter_configured),
                             &control,
                             Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT,
                             Policy::Management,

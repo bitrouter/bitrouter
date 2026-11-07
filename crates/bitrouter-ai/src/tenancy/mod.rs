@@ -10,6 +10,7 @@ pub mod configuration;
 pub mod directory;
 pub mod execution;
 pub mod execution_v2;
+pub mod generate_content;
 pub mod generation_defaults;
 pub mod identity;
 pub mod native_controls;
@@ -19,10 +20,12 @@ pub mod private_adapter;
 pub mod profile_observation;
 pub mod resources;
 pub mod resources_v2;
+pub mod resources_v3;
 pub mod usage_evidence;
 pub mod usage_evidence_v2;
 pub mod validation;
 
+mod json;
 mod number;
 
 #[cfg(feature = "schema")]

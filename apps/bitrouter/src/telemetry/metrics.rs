@@ -249,6 +249,7 @@ fn stream_part_type(part: &StreamPart) -> &'static str {
         StreamPart::ReasoningDelta { .. } => "reasoning_delta",
         StreamPart::ReasoningEnd { .. } => "reasoning_end",
         StreamPart::ToolCallDelta { .. } => "tool_call_delta",
+        StreamPart::ToolCallEnd { .. } => "tool_call_end",
         StreamPart::ServerToolCall { .. } => "server_tool_call",
         StreamPart::ServerToolResult { .. } => "server_tool_result",
         StreamPart::File { .. } => "file",

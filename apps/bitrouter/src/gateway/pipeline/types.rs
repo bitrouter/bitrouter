@@ -10,11 +10,15 @@ use bitrouter_ai::types::{
     ModelCompatibility, ModelOperation, Prompt, ReasoningEffortConfig, ServerToolCall, Usage,
 };
 
+pub mod generate_content;
+
 /// Typed model-call input inside the shared gateway lifecycle.
 #[derive(Debug, Clone)]
 pub enum PipelineInput {
     /// Generative messages/tools/options.
     Generation(Box<Prompt>),
+    /// Original private native input, with an optional foreign-wire projection.
+    GenerateContent(Box<generate_content::Input>),
     /// Native evidence and ordered decision questions.
     Decisions(DecisionRequest),
 }
@@ -23,7 +27,7 @@ impl PipelineInput {
     /// Semantic operation derived from the payload.
     pub fn operation(&self) -> ModelOperation {
         match self {
-            Self::Generation(_) => ModelOperation::Generation,
+            Self::Generation(_) | Self::GenerateContent(_) => ModelOperation::Generation,
             Self::Decisions(_) => ModelOperation::Decisions,
         }
     }
@@ -32,6 +36,7 @@ impl PipelineInput {
     pub fn generation_prompt(&self) -> Option<&Prompt> {
         match self {
             Self::Generation(prompt) => Some(prompt),
+            Self::GenerateContent(input) => input.projection(),
             Self::Decisions(_) => None,
         }
     }
@@ -40,6 +45,7 @@ impl PipelineInput {
     pub fn generation_prompt_mut(&mut self) -> Option<&mut Prompt> {
         match self {
             Self::Generation(prompt) => Some(prompt),
+            Self::GenerateContent(input) => input.projection_mut(),
             Self::Decisions(_) => None,
         }
     }
@@ -47,8 +53,16 @@ impl PipelineInput {
     /// Borrow the native decision request when this is a decision call.
     pub fn decision_request(&self) -> Option<&DecisionRequest> {
         match self {
-            Self::Generation(_) => None,
+            Self::Generation(_) | Self::GenerateContent(_) => None,
             Self::Decisions(request) => Some(request),
+        }
+    }
+
+    pub(crate) fn stream(&self) -> bool {
+        match self {
+            Self::Generation(prompt) => prompt.stream,
+            Self::GenerateContent(input) => input.stream(),
+            Self::Decisions(_) => false,
         }
     }
 }
@@ -58,6 +72,8 @@ impl PipelineInput {
 pub enum PipelineOutput {
     /// Generative content/usage/termination.
     Generation(GenerateResult),
+    /// Original native JSON, outside the executable canonical tool-call model.
+    GenerateContent(generate_content::Response),
     /// Ordered typed decision answers and usage.
     Decisions(DecisionResult),
 }
@@ -67,6 +83,7 @@ impl PipelineOutput {
     pub fn usage(&self) -> Option<&Usage> {
         match self {
             Self::Generation(result) => result.usage.as_ref(),
+            Self::GenerateContent(result) => result.usage(),
             Self::Decisions(result) => Some(&result.usage),
         }
     }
@@ -75,6 +92,7 @@ impl PipelineOutput {
     pub fn generation(&self) -> Option<&GenerateResult> {
         match self {
             Self::Generation(result) => Some(result),
+            Self::GenerateContent(_) => None,
             Self::Decisions(_) => None,
         }
     }
@@ -82,7 +100,7 @@ impl PipelineOutput {
     /// Borrow a native decision result.
     pub fn decisions(&self) -> Option<&DecisionResult> {
         match self {
-            Self::Generation(_) => None,
+            Self::Generation(_) | Self::GenerateContent(_) => None,
             Self::Decisions(result) => Some(result),
         }
     }
@@ -90,7 +108,15 @@ impl PipelineOutput {
     pub(crate) fn generation_mut(&mut self) -> Option<&mut GenerateResult> {
         match self {
             Self::Generation(result) => Some(result),
+            Self::GenerateContent(_) => None,
             Self::Decisions(_) => None,
+        }
+    }
+
+    pub(crate) fn native_generate_content(&self) -> Option<&generate_content::Response> {
+        match self {
+            Self::GenerateContent(result) => Some(result),
+            _ => None,
         }
     }
 }
@@ -438,6 +464,24 @@ pub struct PipelineRequest {
 }
 
 impl PipelineRequest {
+    pub(crate) fn new_generate_content(
+        caller: CallerContext,
+        input: generate_content::Input,
+    ) -> Self {
+        let model = input.model().to_owned();
+        Self {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            extensions: http::Extensions::new(),
+            original_model: model.clone(),
+            model,
+            caller,
+            headers: http::HeaderMap::new(),
+            input: PipelineInput::GenerateContent(Box::new(input)),
+            inbound_protocol: Some(ApiProtocol::Custom(
+                bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+            )),
+        }
+    }
     /// Build a request with a fresh uuid request id.
     pub fn new(model: impl Into<String>, caller: CallerContext, prompt: Prompt) -> Self {
         let model = model.into();

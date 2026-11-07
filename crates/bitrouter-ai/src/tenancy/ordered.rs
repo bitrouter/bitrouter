@@ -31,7 +31,7 @@ pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 /// Maximum encoded selection header, enforced by the transport boundary.
 pub const MAX_SELECTION_HEADER_BYTES: usize = 4096;
 
-/// The three ingress protocols qualified for ordered dispatch.
+/// Ingress protocols explicitly retained for ordered dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GenerationProtocol {
@@ -41,6 +41,8 @@ pub enum GenerationProtocol {
     Messages,
     /// Responses ingress.
     Responses,
+    /// Explicit private ordered Generate Content ingress.
+    GenerateContent,
 }
 
 /// Ordered subset of a retained protocol root; indices are stable root ordinals.

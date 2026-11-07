@@ -7,18 +7,15 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::{
-    tenancy::{
-        admission::HealthProfileV1,
-        admission_v2::AdmissionProfileV2,
-        authority::{ResourceKey, ResourceKind},
-        configuration::ResourceRef,
-        identity::{OwnerId, ResourceId},
-        operation::ErrorCode,
-        resources::Definition as PublicDefinition,
-        validation::Validate,
-    },
-    types::ApiProtocol,
+use bitrouter_ai::tenancy::{
+    admission::HealthProfileV1,
+    admission_v2::AdmissionProfileV2,
+    authority::{ResourceKey, ResourceKind},
+    configuration::ResourceRef,
+    identity::{OwnerId, ResourceId},
+    operation::ErrorCode,
+    resources::Definition as PublicDefinition,
+    validation::Validate,
 };
 use sea_orm::ConnectionTrait;
 
@@ -196,6 +193,11 @@ impl State {
         self.record_profile(reference, View::Shared(profile));
     }
 
+    pub(in crate::tenancy) fn record_profiled_route(&mut self, reference: &ResourceRef) {
+        self.protected_keys.insert(reference.key());
+        self.profiled_routes.insert(reference.clone());
+    }
+
     pub(in crate::tenancy) fn apply_put(
         &mut self,
         reference: &ResourceRef,
@@ -241,7 +243,7 @@ impl State {
                 );
                 self.policy_keys.insert(reference.key());
             }
-            Definition::ProfiledRoute { .. } => {
+            Definition::ProfiledRoute { .. } | Definition::NativeProfiledRouteV1 { .. } => {
                 self.protected_keys.insert(reference.key());
                 self.profiled_routes.insert(reference.clone());
             }
@@ -323,12 +325,7 @@ pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
         profiles.insert(artifact)?;
     }
     for artifact in artifacts {
-        let Definition::ProfiledRoute {
-            policy,
-            attachments,
-            ..
-        } = &artifact.definition
-        else {
+        let Some((policy, attachments)) = artifact.definition.admission() else {
             continue;
         };
         ensure!(policy.is_none(), "profiled route requires a static root");
@@ -356,10 +353,7 @@ pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
         );
         let mut observed = HashSet::new();
         for chain in &route.chains {
-            if !matches!(
-                chain.inbound,
-                ApiProtocol::ChatCompletions | ApiProtocol::Messages | ApiProtocol::Responses
-            ) {
+            if super::execution::generation_protocol(&chain.inbound).is_err() {
                 continue;
             }
             ensure!(chain.selector == route.selector, "profiled non-root chain");

@@ -12,6 +12,7 @@ use bitrouter_ai::tenancy::{
 use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
 use std::sync::{Arc, atomic::AtomicBool};
 
+mod native;
 mod shared;
 
 async fn owned_connection(path: &std::path::Path) -> Result<DatabaseConnection> {
@@ -29,6 +30,22 @@ async fn legacy_database(path: &std::path::Path) -> Result<DatabaseConnection> {
         .context("historical ordered migration")?;
     crate::db::migration::Migrator::up(&db, Some(u32::try_from(count)?)).await?;
     db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',2,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
+    Ok(db)
+}
+
+// Preserve the original format-four migration and predecessor probes even as
+// later writer fences are registered. No historical row or payload is retagged.
+async fn migrate_shared_health(db: &DatabaseConnection) -> Result<()> {
+    crate::db::test_migrations::through_shared_health(db).await?;
+    Ok(())
+}
+
+async fn shared_health_database(path: &std::path::Path) -> Result<DatabaseConnection> {
+    let db = owned_connection(path).await?;
+    migrate_shared_health(&db).await?;
+    // A fresh predecessor fixture has the original format-four header. Do not
+    // initialize it with the current writer or retag an existing authority row.
+    db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',4,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
     Ok(db)
 }
 async fn management_mutation(db: &DatabaseConnection) -> Result<()> {
@@ -215,7 +232,7 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
     );
     crate::db::migration::Migrator::up(&db, Some(2)).await?;
     ensure!(version(&db).await? == 3);
-    crate::db::run_migrations(&db).await?;
+    migrate_shared_health(&db).await?;
     ensure!(version(&db).await? == 4);
     management_mutation(&db).await?;
     ensure!(version(&db).await? == 4);
@@ -250,7 +267,7 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
     ensure!(body.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch);
     db.close().await?;
     let db = owned_connection(&path).await?;
-    crate::db::run_migrations(&db).await?;
+    migrate_shared_health(&db).await?;
     ensure!(version(&db).await? == 4);
     ensure!(
         lookup_candidate(
@@ -276,7 +293,7 @@ async fn ordered_migration_failure_rolls_back_schema_and_authority_format_togeth
         "CREATE INDEX idx_tenancy_credentials_directory ON tenancy_credentials (id)",
     )
     .await?;
-    ensure!(crate::db::run_migrations(&db).await.is_err());
+    ensure!(migrate_shared_health(&db).await.is_err());
     ensure!(version(&db).await? == 2);
     let manager = SchemaManager::new(&db);
     ensure!(
@@ -285,7 +302,7 @@ async fn ordered_migration_failure_rolls_back_schema_and_authority_format_togeth
     );
     db.execute_unprepared("DROP INDEX idx_tenancy_credentials_directory")
         .await?;
-    crate::db::run_migrations(&db).await?;
+    migrate_shared_health(&db).await?;
     ensure!(version(&db).await? == 4);
     ensure!(
         crate::db::migration::m20240101_000045_ordered_receipts::Migration
@@ -311,9 +328,9 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
         let db = if migrated {
             legacy_database(&source).await?
         } else {
-            owned_connection(&source).await?
+            shared_health_database(&source).await?
         };
-        crate::db::run_migrations(&db).await?;
+        migrate_shared_health(&db).await?;
         authority::load(&db, chrono::Utc::now()).await?;
         if migrated {
             management_mutation(&db).await?;
@@ -321,7 +338,7 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
         ensure!(version(&db).await? == 4);
         db.close().await?;
         let db = owned_connection(&source).await?;
-        crate::db::run_migrations(&db).await?;
+        migrate_shared_health(&db).await?;
         authority::load(&db, chrono::Utc::now()).await?;
         db.close().await?;
         let mut observed_authority_refusal = false;

@@ -234,6 +234,25 @@ from an unknown dispatch outcome. Dropping a stream or losing a response never
 authorizes automatic replay. Query the stored execution with current authority
 and retain the execution ID in the consumer's own reconciliation records.
 
+Private ordered GenerateContent uses
+`TenancyClient::ordered_generate_content_capabilities()` followed by
+`GatewayClient::ordered_tenant(...).with_generate_content(&capabilities)?`
+and `generate_content_reply(&request)`. The explicit observation must match the
+installation, service instance and capability revision of the binding.
+`bitrouter_ai::tenancy::generate_content::OrderedGenerateContentRequestV1`
+keeps the retained route and stream mode separate from its native request map.
+Non-null cache references additionally require enabled cache policy and an
+explicit provider-native control attachment.
+
+The reply retains complete native JSON values and candidate arrays. SSE keeps
+anonymous and indexed identities distinct, requires every observed candidate to
+finish, and holds all events from the first finish until clean HTTP EOF. The
+configured event limit bounds both retained identities and the terminal group;
+JSON uses the response limit. An error, reset or incomplete tail cannot produce
+`ProtocolEnd::GenerateContentFinished`. Consumers retain responsibility for
+provider-part semantics, content policy, tool execution and financial evidence.
+This private relay uses the existing HTTP/1.1 or HTTP/2 transport without retry.
+
 Both `TenantGateway` and `OrderedTenantGateway` accept
 `with_anthropic_beta(&[reqwest::header::HeaderValue])` before their consuming
 dispatch method. This replaces only that call's Beta values, preserving opaque

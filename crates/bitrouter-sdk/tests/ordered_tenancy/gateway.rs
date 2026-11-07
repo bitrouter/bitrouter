@@ -15,6 +15,18 @@ mod defaults;
 mod envelope;
 #[path = "gateway/envelope_v2.rs"]
 mod envelope_v2;
+#[path = "gateway/generate_content.rs"]
+mod generate_content;
+#[path = "gateway/generate_content_candidates.rs"]
+mod generate_content_candidates;
+#[path = "gateway/generate_content_controls.rs"]
+mod generate_content_controls;
+#[path = "gateway/generate_content_identity.rs"]
+mod generate_content_identity;
+#[path = "gateway/generate_content_validation.rs"]
+mod generate_content_validation;
+#[path = "gateway/generate_content_values.rs"]
+mod generate_content_values;
 #[path = "gateway/native_controls.rs"]
 mod native_controls;
 

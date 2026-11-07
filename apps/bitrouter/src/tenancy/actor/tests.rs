@@ -137,6 +137,7 @@ impl Fixture {
             .commands
             .try_send(
                 Message {
+                    native_adapter_configured: false,
                     caller: self.operator.clone(),
                     command,
                     reply,

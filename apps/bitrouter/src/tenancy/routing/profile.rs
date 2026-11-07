@@ -40,6 +40,50 @@ struct Inner {
 #[derive(Clone)]
 pub(super) struct Profile(Arc<Inner>);
 
+/// Per-provider accounting, before the stitcher projects logical totals.
+#[cfg(feature = "server-tools")]
+pub(crate) struct StreamTurn {
+    profile: Profile,
+    target: RoutingTarget,
+    output_tokens: Option<u64>,
+}
+
+#[cfg(feature = "server-tools")]
+impl StreamTurn {
+    pub(super) fn new(profile: Profile, target: RoutingTarget) -> Self {
+        Self {
+            profile,
+            target,
+            output_tokens: None,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, part: &StreamPart) {
+        if let StreamPart::Usage { usage }
+        | StreamPart::ResponseCompleted {
+            usage: Some(usage), ..
+        } = part
+        {
+            self.output_tokens = observed_output(usage);
+        }
+    }
+
+    /// Called only after the HTTP decoder validated EOF and receipt/ACK work.
+    /// Drop or error leaves the existing request-end Unknown cleanup in charge.
+    pub(crate) fn complete(self, successful: bool) {
+        self.profile.finish(
+            &self.target,
+            if successful {
+                Outcome::Success {
+                    output_tokens: self.output_tokens,
+                }
+            } else {
+                Outcome::Neutral
+            },
+        );
+    }
+}
+
 impl Profile {
     pub(super) fn new(execution: &Arc<TenantExecution>, runtime: Arc<Runtime>) -> Self {
         Self(Arc::new(Inner {

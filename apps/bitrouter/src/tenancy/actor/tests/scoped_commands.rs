@@ -255,6 +255,7 @@ async fn replay_rechecks_credential_expiry_after_preparation_rollback() -> Resul
         .commands
         .try_send(
             Message {
+                native_adapter_configured: false,
                 caller,
                 command: Command::Configuration(fixture.tenant.clone(), draft),
                 reply,

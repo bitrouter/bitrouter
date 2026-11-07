@@ -281,6 +281,18 @@ impl Frozen {
 }
 
 impl Journal {
+    /// Read an armed source observation without freezing or closing its journal.
+    #[cfg(all(test, feature = "server-tools"))]
+    pub(crate) fn received_usage_for_test(&self, input: u64, output: u64) -> Result<bool, Error> {
+        Ok(self.lock()?.slots.iter().flatten().any(|entry| {
+            let usage = entry.evidence.project().usage;
+            entry.live
+                && entry.phase == Phase::Armed
+                && usage.input_tokens == Some(input)
+                && usage.output_tokens == Some(output)
+        }))
+    }
+
     /// One journal per admission must be retained by the execution's future
     /// receipt owner. Public headers/CallerContext cannot construct this owner.
     pub(crate) fn new(execution: &TenantExecution) -> Result<Arc<Self>, Error> {
@@ -629,6 +641,7 @@ impl AttemptPermit {
             Protocol::Responses => Wire::Responses,
             Protocol::Messages => Wire::Messages,
             Protocol::Decisions => Wire::Decisions,
+            Protocol::GenerateContent => Wire::GenerateContent,
         };
         state
             .usage_evidence

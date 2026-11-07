@@ -94,6 +94,9 @@ async fn envelope_actual_canonical_only_predecessor_refuses_all_transports_witho
                     }
                 };
                 let error = match protocol {
+                    GenerationProtocol::GenerateContent => {
+                        anyhow::bail!("native protocol requires the paired predecessor fixture")
+                    }
                     GenerationProtocol::ChatCompletions => call
                         .chat_reply(&serde_json::from_value::<ChatRequest>(request)?)
                         .await

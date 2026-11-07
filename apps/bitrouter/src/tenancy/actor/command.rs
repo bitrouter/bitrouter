@@ -35,6 +35,7 @@ impl Worker {
         caller: &Caller,
         command: &Command,
         control: &Control,
+        native_adapter_configured: bool,
     ) -> Result<StoredResponse, Failure> {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
@@ -52,6 +53,7 @@ impl Worker {
                 command,
                 &crate::tenancy::transaction::ReadConnection::new(&tx, control),
                 control,
+                native_adapter_configured,
             )
             .await;
         control
@@ -126,6 +128,7 @@ impl Worker {
         command: &Command,
         tx: &impl sea_orm::ConnectionTrait,
         control: &Control,
+        native_adapter_configured: bool,
     ) -> Result<Prepared, Failure> {
         control
             .check_read()
@@ -250,6 +253,12 @@ impl Worker {
                     code.into()
                 }
             })?;
+        // Original operations replay above after current authorization, expiry
+        // and digest checks. Transport availability only gates new V3 writes,
+        // after their ordinary prepare authorization and before any mutation.
+        if matches!(command, Command::ResourceV3(..)) && !native_adapter_configured {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
         if let Some(configuration) = &prepared.configuration {
             store::directory::extend_dependencies_in(
                 tx,

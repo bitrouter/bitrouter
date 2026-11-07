@@ -56,6 +56,7 @@ use manifest::{Artifact, Definition, Manifest};
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
 const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const SHARED_HEALTH_COMPILER_VERSION: &str = "tenancy-admission-v2";
+const NATIVE_COMPILER_VERSION: &str = "tenancy-native-generate-content-v1";
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 1024 * 1024;
 const MAX_CLOSURE_BYTES: usize = 8 * 1024 * 1024;
@@ -98,6 +99,12 @@ impl Envelope {
     fn format(artifacts: &[Artifact]) -> u32 {
         if artifacts
             .iter()
+            .any(|artifact| artifact.definition.is_native_route())
+        {
+            return 6;
+        }
+        if artifacts
+            .iter()
             .any(|artifact| artifact.definition.is_shared_profile())
         {
             return 5;
@@ -125,7 +132,7 @@ impl Envelope {
     }
 
     fn persisted_bytes(&self) -> Result<Vec<u8>> {
-        if !matches!(self.format, 4 | 5) {
+        if !matches!(self.format, 4..=6) {
             return manifest::bounded_bytes(self, MAX_ARTIFACT_BYTES);
         }
         // The complete artifact retains the sole profiled projection. Visible
@@ -141,7 +148,12 @@ impl Envelope {
         let profiled: HashSet<_> = self
             .artifacts
             .iter()
-            .filter(|artifact| matches!(artifact.definition, Definition::ProfiledRoute { .. }))
+            .filter(|artifact| {
+                matches!(
+                    artifact.definition,
+                    Definition::ProfiledRoute { .. } | Definition::NativeProfiledRouteV1 { .. }
+                )
+            })
             .map(|artifact| &artifact.reference)
             .collect();
         manifest::bounded_bytes(
@@ -450,7 +462,7 @@ impl Resources {
         let manifest: Manifest = serde_json::from_slice(bytes)
             .map_err(|_| anyhow::anyhow!("invalid resource manifest"))?;
         ensure!(
-            matches!(manifest.format, 1 | 2) && manifest.installation_id == self.installation,
+            matches!(manifest.format, 1..=3) && manifest.installation_id == self.installation,
             "resource manifest installation or format mismatch"
         );
         ensure!(
@@ -460,7 +472,11 @@ impl Resources {
         let mut unique = HashSet::new();
         for resource in &manifest.resources {
             ensure!(
-                manifest.format == 2 || !resource.definition.is_shared_profile(),
+                manifest.format == 3 || !resource.definition.is_native_route(),
+                "native route requires import format three"
+            );
+            ensure!(
+                matches!(manifest.format, 2 | 3) || !resource.definition.is_shared_profile(),
                 "shared health requires import format two"
             );
             ensure!(
@@ -570,6 +586,7 @@ impl Resources {
         }
         let routes = compiler::configuration_routes(document, &artifacts)?;
         let compiler_version = match Envelope::format(&artifacts) {
+            6 => NATIVE_COMPILER_VERSION,
             5 => SHARED_HEALTH_COMPILER_VERSION,
             4 => PROFILED_COMPILER_VERSION,
             _ => COMPILER_VERSION,

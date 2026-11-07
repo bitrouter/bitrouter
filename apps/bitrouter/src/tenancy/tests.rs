@@ -407,6 +407,7 @@ async fn shutdown_settles_admitted_commands_after_the_client_disconnects() -> Re
         .commands
         .try_send(
             super::actor::Message {
+                native_adapter_configured: false,
                 caller: fixture.operator.clone(),
                 command: command(),
                 reply,

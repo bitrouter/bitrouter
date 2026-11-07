@@ -9,6 +9,7 @@ use bitrouter_ai::tenancy::{
 };
 use serde_json::Value;
 
+mod generate_content;
 #[cfg(test)]
 mod tests;
 
@@ -28,6 +29,7 @@ pub(crate) enum Protocol {
     Responses,
     Messages,
     Decisions,
+    GenerateContent,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -96,8 +98,8 @@ impl Evidence {
     }
 
     /// Observe one raw usage object; missing fields stay missing. Repeated snapshots
-    /// are idempotent. Only Messages accepts monotonic cumulative updates, matching
-    /// message_start/message_delta semantics; no protocol's snapshots are summed.
+    /// are idempotent. Messages and GenerateContent accept monotonic cumulative updates;
+    /// no protocol's snapshots are summed.
     pub(crate) fn observe(&mut self, protocol: Protocol, raw: &Value) {
         if self.observations >= MAX_OBSERVATIONS {
             self.mark_incomplete();
@@ -131,6 +133,7 @@ impl Evidence {
                 "output_tokens_details",
             ),
             Protocol::Messages => ("input_tokens", "output_tokens", "", ""),
+            Protocol::GenerateContent => return self.observe_generate_content(raw),
         };
         self.field(0, object.get(input), protocol);
         self.field(1, object.get(output), protocol);
@@ -196,7 +199,12 @@ impl Evidence {
         let Some(value) = value else {
             return;
         };
-        let Some(value) = number(value) else {
+        let value = if protocol == Protocol::GenerateContent {
+            native_number(value)
+        } else {
+            number(value)
+        };
+        let Some(value) = value else {
             self.counters[index] = Counter::Invalid;
             self.mark_incomplete();
             return;
@@ -204,7 +212,10 @@ impl Evidence {
         self.counters[index] = match self.counters[index] {
             Counter::Absent => Counter::Known(value),
             Counter::Known(previous) if previous == value => Counter::Known(value),
-            Counter::Known(previous) if protocol == Protocol::Messages && value >= previous => {
+            Counter::Known(previous)
+                if matches!(protocol, Protocol::Messages | Protocol::GenerateContent)
+                    && value >= previous =>
+            {
                 Counter::Known(value)
             }
             Counter::Known(_) | Counter::Invalid => {
@@ -278,6 +289,13 @@ impl Evidence {
                     .checked_add(values[3]?)
                     .filter(|value| *value <= AuthorityRevision::MAX)
             });
+        }
+        if matches!(self.source, Source::Provider(Protocol::GenerateContent)) {
+            // Native candidates exclude thoughts. Preserve that source fact in
+            // native_usage; inclusive output requires both explicit counters.
+            values[1] = values[1]
+                .and_then(|output| output.checked_add(values[4]?))
+                .filter(|value| *value <= AuthorityRevision::MAX);
         }
         if let Some(input) = values[0] {
             let invalid = match (values[2], values[3]) {
@@ -381,4 +399,9 @@ pub(super) fn aggregate_bounded(
         }
     }
     usage(totals, provenance, complete)
+}
+
+// Share the same exact native int32 grammar between technical capture and projection.
+pub(super) fn native_number(value: &Value) -> Option<u64> {
+    generate_content::number(value)
 }

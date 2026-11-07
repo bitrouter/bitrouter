@@ -82,9 +82,31 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
             credentials,
             ..
         } => (routing, selector, policy, credentials, &[][..], None),
+        Definition::NativeProfiledRouteV1 {
+            routing,
+            selector,
+            policy,
+            credentials,
+            ..
+        } => (routing, selector, policy, credentials, &[][..], None),
         _ => anyhow::bail!("route definition required"),
     };
-    let (mut config, provider_sizes) = routing_config(routing)?;
+    let (mut config, provider_sizes) =
+        routing_config_scoped(routing, None, None, import.definition.is_native_route())?;
+    if !import.definition.is_native_route() {
+        let native = |protocol: &ApiProtocol| matches!(protocol,ApiProtocol::Custom(name) if name==bitrouter_ai::tenancy::generate_content::PROTOCOL || name==bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL);
+        ensure!(
+            !config.providers.values().any(|provider| provider
+                .api_protocol
+                .values()
+                .any(|protocols| protocols.as_slice().iter().any(native))
+                || provider.models.iter().any(|model| model
+                    .api_protocol
+                    .as_ref()
+                    .is_some_and(|protocols| protocols.as_slice().iter().any(native)))),
+            "native protocols require explicit resource format three"
+        );
+    }
     let resolution = config
         .resolve_router(selector)
         .map_err(|_| anyhow::anyhow!("invalid retained selector"))?;
@@ -208,17 +230,40 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
         };
         resolution_capacity(&config, &provider_sizes, clean)?;
         let mut found = false;
-        for inbound in [
+        let mut protocols = vec![
             ApiProtocol::ChatCompletions,
             ApiProtocol::Messages,
             ApiProtocol::Responses,
-            ApiProtocol::Decisions,
-        ] {
+        ];
+        if import.definition.is_native_route() {
+            protocols.push(ApiProtocol::Custom(
+                bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+            ));
+        } else {
+            protocols.push(ApiProtocol::Decisions);
+        }
+        for inbound in protocols {
             let mut prefs = prefs.clone();
             prefs.inbound_protocol = Some(inbound.clone());
             prefs.operation = inbound.operation();
-            let result =
-                crate::config::routing_table::resolve_clean_route_chain(&config, clean, &prefs);
+            let native_chain = matches!(&inbound, ApiProtocol::Custom(name)
+                if name == bitrouter_ai::tenancy::generate_content::PROTOCOL);
+            // Eligibility must precede protocol and endpoint selection. A
+            // bridge-only provider cannot invent an ordinary root; one also
+            // advertising an ordinary codec retains that compatible fallback.
+            let result = if import.definition.is_native_route() && !native_chain {
+                crate::config::routing_table::resolve_clean_route_chain_allowed(
+                    &config,
+                    clean,
+                    &prefs,
+                    |protocol| {
+                        !matches!(protocol,ApiProtocol::Custom(name)
+                        if name==bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+                    },
+                )
+            } else {
+                crate::config::routing_table::resolve_clean_route_chain(&config, clean, &prefs)
+            };
             let targets = match result {
                 Ok(targets) => targets,
                 // An otherwise valid selector can be incompatible with this
@@ -250,7 +295,10 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
                 used_slots.insert((binding.provider.clone(), binding.account.clone()));
                 let approved = ApprovedTarget {
                     credential: binding.credential.clone(),
-                    target: target_value(target)?,
+                    target: target_value_scoped(
+                        target,
+                        import.definition.is_native_route() && native_chain,
+                    )?,
                 };
                 budget
                     .separator(!chain.targets.is_empty())
@@ -285,8 +333,25 @@ pub(super) fn routing_config_bounded(
 // Same parser and local quotas; startup may also charge its shared H budget.
 pub(super) fn routing_config_observed(
     source: &Value,
+    work: Option<&mut ByteBudget>,
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> Result<(Config, HashMap<String, usize>)> {
+    routing_config_scoped(source, work, operation, false)
+}
+
+pub(super) fn native_routing_config_observed(
+    source: &Value,
+    work: Option<&mut ByteBudget>,
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> Result<(Config, HashMap<String, usize>)> {
+    routing_config_scoped(source, work, operation, true)
+}
+
+fn routing_config_scoped(
+    source: &Value,
     mut work: Option<&mut ByteBudget>,
     operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+    native_route: bool,
 ) -> Result<(Config, HashMap<String, usize>)> {
     charge_routing_value(work.as_deref_mut(), operation, source)?;
     bounded_bytes(source, super::MAX_ARTIFACT_BYTES)?;
@@ -368,13 +433,13 @@ pub(super) fn routing_config_observed(
                 .api_protocol
                 .values()
                 .flat_map(|protocols| protocols.as_slice())
-                .all(|protocol| !matches!(protocol, ApiProtocol::Custom(_)))
+                .all(|protocol| qualified_protocol(protocol, native_route))
                 && provider
                     .models
                     .iter()
                     .filter_map(|model| model.api_protocol.as_ref())
                     .flat_map(|protocols| protocols.as_slice())
-                    .all(|protocol| !matches!(protocol, ApiProtocol::Custom(_))),
+                    .all(|protocol| qualified_protocol(protocol, native_route)),
             "custom protocol imports are not qualified"
         );
         ensure!(
@@ -463,12 +528,27 @@ pub(super) fn resolution_capacity(
 }
 
 pub(super) fn target_value(target: &RoutingTarget) -> Result<Value> {
+    target_value_scoped(target, false)
+}
+
+// Only the explicit native route compiler admits the paired bridge identity.
+// Ordinary import/projection callers retain their closed custom-protocol fence.
+fn qualified_protocol(protocol: &ApiProtocol, native_route: bool) -> bool {
+    match protocol {
+        ApiProtocol::Custom(name) => {
+            native_route && name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL
+        }
+        _ => true,
+    }
+}
+
+fn target_value_scoped(target: &RoutingTarget, native_route: bool) -> Result<Value> {
     ensure!(
         target.registry.is_none(),
         "registry targets are not qualified by the owned manifest"
     );
     ensure!(
-        !matches!(target.api_protocol, ApiProtocol::Custom(_)),
+        qualified_protocol(&target.api_protocol, native_route),
         "custom protocol imports are not qualified"
     );
     ensure!(

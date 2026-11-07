@@ -30,6 +30,7 @@ fn enqueue_principal(ready: &Ready, index: usize) -> Result<Reply> {
         .commands
         .try_send(
             Message {
+                native_adapter_configured: false,
                 caller: ready.fixture.operator.clone(),
                 command,
                 reply,

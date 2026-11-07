@@ -1422,6 +1422,10 @@ async fn execute_input(
     >,
 ) -> Response {
     let (input, original_model) = match input {
+        PipelineInput::GenerateContent(_) => {
+            return BitrouterError::bad_request("private native input requires ordered authority")
+                .into_response();
+        }
         PipelineInput::Generation(prompt) => {
             let (prompt, original_model) =
                 prepare_model_prompt(*prompt, &headers, &state.prompt_transforms);
@@ -1455,6 +1459,10 @@ async fn execute_input(
         CallerContext::anonymous()
     };
     let mut req = match &input {
+        PipelineInput::GenerateContent(_) => {
+            return BitrouterError::bad_request("private native input requires ordered authority")
+                .into_response();
+        }
         PipelineInput::Generation(prompt) => {
             PipelineRequest::new(prompt.model.clone(), caller, prompt.as_ref().clone())
         }
@@ -1502,8 +1510,9 @@ pub(crate) async fn handle_tenant(
     if let Err(error) = submission.validate_http_input(&input) {
         return error.into_response();
     }
-    let raw_model = match &input {
+    let raw_model: &str = match &input {
         PipelineInput::Generation(prompt) => &prompt.model,
+        PipelineInput::GenerateContent(input) => input.model(),
         PipelineInput::Decisions(request) => &request.model,
     };
     let execution = match service
@@ -1522,18 +1531,23 @@ pub(crate) async fn handle_tenant(
         }
     };
     let mut req = match &input {
+        PipelineInput::GenerateContent(input) => {
+            PipelineRequest::new_generate_content(execution.caller(), input.as_ref().clone())
+        }
         PipelineInput::Generation(prompt) => PipelineRequest::new(
-            raw_model.clone(),
+            raw_model.to_owned(),
             execution.caller(),
             prompt.as_ref().clone(),
         ),
-        PipelineInput::Decisions(request) => {
-            PipelineRequest::new_decisions(raw_model.clone(), execution.caller(), request.clone())
-        }
+        PipelineInput::Decisions(request) => PipelineRequest::new_decisions(
+            raw_model.to_owned(),
+            execution.caller(),
+            request.clone(),
+        ),
     };
     let request_id = execution.id().to_string();
     req.request_id = request_id.clone();
-    req.original_model = raw_model.clone();
+    req.original_model = raw_model.to_owned();
     req.headers = headers;
     req.inbound_protocol = Some(inbound.clone());
     if let Err(error) = execution.attach(pipeline.clone(), &mut req) {
@@ -1572,9 +1586,7 @@ pub(crate) async fn handle_tenant(
     let waiting_receipt = receipt.clone();
     let waiting_id = request_id.clone();
     tasks.spawn_execution(async move {
-        let streamed = input
-            .generation_prompt()
-            .is_some_and(|prompt| prompt.stream);
+        let streamed = input.stream();
         let prepared = tokio::select! {
             biased;
             () = receipt.cancelled.cancelled() => return,
@@ -1745,7 +1757,7 @@ async fn prepare_http_response(
     let adapter = if inbound == ApiProtocol::Decisions {
         None
     } else {
-        match inbound_adapter_for(&inbound) {
+        match crate::gateway::model::protocol::tenant_adapter_for(&inbound) {
             Some(adapter) => Some(adapter),
             None => {
                 return PreparedHttpResponse {
@@ -1763,10 +1775,7 @@ async fn prepare_http_response(
         .get::<Arc<crate::tenancy::execution::TenantExecution>>()
         .is_some();
     let mut delivery = None;
-    let mut response = if input
-        .generation_prompt()
-        .is_some_and(|prompt| prompt.stream)
-    {
+    let mut response = if input.stream() {
         stream_response(pipeline.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
@@ -1798,6 +1807,26 @@ async fn prepare_http_response(
                                     )
                                     .map_err(BitrouterError::from)
                             })
+                    }
+                    PipelineInput::GenerateContent(input) => {
+                        if let Some(result) = prepared.response.result.native_generate_content() {
+                            input.response_body(result)
+                        } else {
+                            input
+                                .projection()
+                                .zip(prepared.response.result.generation())
+                                .zip(adapter.as_ref())
+                                .ok_or(BitrouterError::UpstreamUnavailable)
+                                .and_then(|((prompt, result), adapter)| {
+                                    adapter
+                                        .render_response(
+                                            result,
+                                            prompt,
+                                            &prepared.response.request_id,
+                                        )
+                                        .map_err(Into::into)
+                                })
+                        }
                     }
                     PipelineInput::Decisions(request) => prepared
                         .response
@@ -1881,7 +1910,7 @@ async fn stream_response(
     req: PipelineRequest,
     inbound: ApiProtocol,
 ) -> Response {
-    let adapter = match inbound_adapter_for(&inbound) {
+    let adapter = match crate::gateway::model::protocol::tenant_adapter_for(&inbound) {
         Some(a) => a,
         None => {
             return BitrouterError::internal(format!(

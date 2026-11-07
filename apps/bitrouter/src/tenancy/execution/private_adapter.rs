@@ -44,6 +44,18 @@ impl Peer {
         )
     }
 
+    #[cfg(all(test, unix, feature = "http2"))]
+    pub(in crate::tenancy) fn for_test_h2(endpoint: Url, key: [u8; 32]) -> anyhow::Result<Self> {
+        let mut peer = Self::for_test(endpoint, key)?;
+        peer.client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .http2_prior_knowledge()
+            .build()?;
+        Ok(peer)
+    }
+
     pub(in crate::tenancy) fn load(
         config: &PrivateAdapterConfig,
         read_timeout: std::time::Duration,

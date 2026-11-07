@@ -17,7 +17,7 @@ use crate::gateway::model::protocol::values::{
 use bitrouter_ai::protocol::messages::{
     MessagesOutputConfig, MessagesOutputFormat, MessagesRequest, MessagesTool,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use async_trait::async_trait;
 
@@ -32,8 +32,8 @@ use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::types::{
     ApiProtocol, Content, DataContent, FinishReason, GenerateResult, GenerationParams, Message,
     Prompt, ProviderMetadata, ResponseFormat, Role, Source, StopDetails, StreamPart, Tool,
-    ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin, provider_namespace,
-    set_provider_metadata,
+    ToolCallBoundary, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin,
+    provider_namespace, set_provider_metadata,
 };
 
 /// The metadata key, within the `anthropic` namespace, under which a block /
@@ -1260,6 +1260,7 @@ impl InboundAdapter for MessagesAdapter {
             pending_sources: Vec::new(),
             pending_reasoning: None,
             pending_usage: None,
+            tool_tail: DeferredToolTail::default(),
         })
     }
 }
@@ -2266,23 +2267,32 @@ fn parse_usage_retains_provider_payload_and_origin() {
 /// event set.
 #[derive(Default)]
 struct MessagesStreamDecoder {
-    /// per content-block index → tool id (empty string for non-tool blocks),
-    /// so an `input_json_delta` knows which canonical tool call it belongs to.
-    block_tool_ids: Vec<String>,
+    /// Open native client-tool blocks, by their wire index.
+    block_tool_ids: HashMap<usize, String>,
+    seen_tool_ids: HashSet<String>,
+    last_block_index: Option<usize>,
+    last_tool_stop: Option<String>,
+    tool_terminal: Option<ToolMessageEnd>,
     /// per content-block index → its canonical kind, so `content_block_stop`
     /// can emit the matching [`StreamPart::TextEnd`] / [`StreamPart::ReasoningEnd`]
-    /// for the block that just closed. `None` for an index never opened or for a
-    /// block kind that carries no lifecycle marker (tool / web-search results).
-    block_kinds: Vec<Option<BlockKind>>,
+    /// for the block that just closed. Tool indices stay recorded after close
+    /// so a later start cannot replace their association.
+    block_kinds: HashMap<usize, BlockKind>,
     /// per content-block index → the thinking block's `signature`, accumulated
     /// from its terminal `signature_delta` so `content_block_stop` can attach it
     /// to the emitted [`StreamPart::ReasoningEnd`] (reasoning continuity — without
     /// it a replayed thinking block is unsigned and Anthropic rejects it).
-    block_signatures: Vec<Option<String>>,
+    block_signatures: HashMap<usize, String>,
     /// Exact provider usage object from `message_start`, retained separately
     /// so the final raw evidence can include both lifecycle fragments.
     initial_usage_raw: Option<Box<serde_json::Value>>,
     usage: Usage,
+}
+
+enum ToolMessageEnd {
+    Open,
+    Reason(FinishReason),
+    Stopped(FinishReason),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -2290,6 +2300,7 @@ enum BlockKind {
     Text,
     Thinking,
     ToolUse,
+    ServerToolUse,
 }
 
 impl StreamDecoder for MessagesStreamDecoder {
@@ -2299,10 +2310,39 @@ impl StreamDecoder for MessagesStreamDecoder {
         if event_name == "ping" || event.data.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let json: serde_json::Value = match serde_json::from_str(event.data.trim()) {
-            Ok(v) => v,
-            Err(_) => return Ok(Vec::new()),
-        };
+        if matches!(self.tool_terminal, Some(ToolMessageEnd::Stopped(_))) && event_name != "error" {
+            return Err(invalid_tool_stream(
+                "Messages stream continued after message_stop",
+            ));
+        }
+        if matches!(self.tool_terminal, Some(ToolMessageEnd::Reason(_)))
+            && matches!(
+                event_name,
+                "content_block_start" | "content_block_delta" | "content_block_stop"
+            )
+        {
+            return Err(invalid_tool_stream(
+                "Messages content continued after its stop reason",
+            ));
+        }
+        let tool_frame = self.tool_terminal.is_some()
+            && matches!(
+                event_name,
+                "content_block_start"
+                    | "content_block_delta"
+                    | "content_block_stop"
+                    | "message_delta"
+                    | "message_stop"
+            );
+        let json: serde_json::Value =
+            match serde_json::from_str::<serde_json::Value>(event.data.trim()) {
+                Ok(v) if !tool_frame || v["type"].as_str() == Some(event_name) => v,
+                _ if tool_frame => {
+                    return Err(invalid_tool_stream("invalid Messages tool stream event"));
+                }
+                Ok(v) => v,
+                Err(_) => return Ok(Vec::new()),
+            };
 
         let mut parts = Vec::new();
         match event_name {
@@ -2332,8 +2372,16 @@ impl StreamDecoder for MessagesStreamDecoder {
                 }
             }
             "content_block_start" => {
-                let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                let wire_index = messages_block_index(&json);
+                let index = wire_index.unwrap_or(0);
                 let block = json.get("content_block");
+                self.last_block_index = Some(index);
+                if let Some(id) = self.last_tool_stop.take() {
+                    parts.push(messages_tool_end(id, true));
+                }
+                if self.block_kinds.get(&index) == Some(&BlockKind::ToolUse) {
+                    return Err(invalid_tool_stream("Messages tool block index was reused"));
+                }
                 // A streamed `web_search_tool_result` block carries its full
                 // `content[]` result array up-front on the start frame (it is
                 // not chunked), so lift each hit into a whole `StreamPart::Source`
@@ -2355,36 +2403,26 @@ impl StreamDecoder for MessagesStreamDecoder {
                     }
                     return Ok(parts);
                 }
-                // Streaming MCP gap: a streamed `mcp_tool_use` block (a
-                // provider-executed remote MCP call) and its companion
-                // `mcp_tool_result` are not recognised here and fall to
-                // `BlockKind::Text`, so they are mishandled on this delta path —
-                // the streaming counterpart of the `web_search` `citations_delta`
-                // gap documented above. Surfacing them faithfully would require
-                // new cross-protocol `StreamPart` plumbing (the other encoders
-                // have no streaming MCP frame to target). The non-streaming
-                // handshake (`parse_response` / `render_response`) is the
-                // complete, faithful round trip; the streamed blocks are a
-                // deferred gap, not yet wired.
+                // Provider-executed arguments never become client call deltas.
+                // Web search results still surface as sources. Streamed native
+                // MCP calls and results have no complete canonical projection.
                 // <https://platform.claude.com/docs/en/agents-and-tools/mcp-connector>
                 let kind = match block.and_then(|b| b.get("type")).and_then(|t| t.as_str()) {
                     Some("thinking") | Some("redacted_thinking") => BlockKind::Thinking,
                     Some("tool_use") => BlockKind::ToolUse,
+                    Some("server_tool_use" | "mcp_tool_use") => BlockKind::ServerToolUse,
                     _ => BlockKind::Text,
                 };
-                let tool_id = block
-                    .and_then(|b| b.get("id"))
-                    .and_then(|i| i.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                while self.block_tool_ids.len() <= index {
-                    self.block_tool_ids.push(String::new());
+                if kind == BlockKind::ToolUse
+                    && (json["type"].as_str() != Some(event_name)
+                        || wire_index.is_none()
+                        || self.block_kinds.contains_key(&index))
+                {
+                    return Err(invalid_tool_stream(
+                        "invalid Messages tool block start or reused index",
+                    ));
                 }
-                self.block_tool_ids[index] = tool_id.clone();
-                while self.block_kinds.len() <= index {
-                    self.block_kinds.push(None);
-                }
-                self.block_kinds[index] = Some(kind);
+                self.block_kinds.insert(index, kind);
                 match kind {
                     // Text / thinking blocks carry an explicit lifecycle on this
                     // wire; surface the open as a canonical start marker so a
@@ -2398,18 +2436,50 @@ impl StreamDecoder for MessagesStreamDecoder {
                         id: index.to_string(),
                         source_protocol: Some(ApiProtocol::Messages),
                     }),
+                    BlockKind::ServerToolUse => {}
                     BlockKind::ToolUse => {
-                        // A tool block's open already frames itself via the
-                        // `name`-bearing `ToolCallDelta` below — no separate
-                        // start marker (see the `StreamPart` enum docs).
+                        let tool_id = block
+                            .and_then(|b| b.get("id"))
+                            .and_then(|id| id.as_str())
+                            .filter(|id| !id.is_empty())
+                            .ok_or_else(|| {
+                                invalid_tool_stream("Messages tool block has no call ID")
+                            })?;
                         let name = block
                             .and_then(|b| b.get("name"))
                             .and_then(|n| n.as_str())
-                            .map(|s| s.to_string());
+                            .filter(|name| !name.is_empty())
+                            .ok_or_else(|| {
+                                invalid_tool_stream("Messages tool block has no name")
+                            })?;
+                        let arguments = match block.and_then(|b| b.get("input")) {
+                            None => String::new(),
+                            Some(serde_json::Value::Object(input)) if input.is_empty() => {
+                                String::new()
+                            }
+                            Some(input @ serde_json::Value::Object(_)) => input.to_string(),
+                            Some(_) => {
+                                return Err(invalid_tool_stream(
+                                    "Messages tool input is not an object",
+                                ));
+                            }
+                        };
+                        if !self.seen_tool_ids.insert(tool_id.to_owned()) {
+                            return Err(invalid_tool_stream("duplicate Messages tool call ID"));
+                        }
+                        self.block_tool_ids.insert(index, tool_id.to_owned());
+                        if self.tool_terminal.is_none() {
+                            self.tool_terminal = Some(ToolMessageEnd::Open);
+                            if self.initial_usage_raw.is_some() {
+                                parts.push(StreamPart::Usage {
+                                    usage: self.usage.clone(),
+                                });
+                            }
+                        }
                         parts.push(StreamPart::ToolCallDelta {
-                            id: tool_id,
-                            name,
-                            arguments: String::new(),
+                            id: tool_id.to_owned(),
+                            name: Some(name.to_owned()),
+                            arguments,
                             provider_metadata: Default::default(),
                         });
                     }
@@ -2440,18 +2510,29 @@ impl StreamDecoder for MessagesStreamDecoder {
                         }
                     }
                     Some("input_json_delta") => {
-                        let id = self.block_tool_ids.get(index).cloned().unwrap_or_default();
-                        if let Some(partial) = delta
-                            .and_then(|d| d.get("partial_json"))
-                            .and_then(|t| t.as_str())
+                        let wire_index = messages_block_index(&json);
+                        if wire_index.and_then(|index| self.block_kinds.get(&index))
+                            == Some(&BlockKind::ServerToolUse)
                         {
-                            parts.push(StreamPart::ToolCallDelta {
-                                id,
-                                name: None,
-                                arguments: partial.to_string(),
-                                provider_metadata: Default::default(),
-                            });
+                            return Ok(parts);
                         }
+                        let id = wire_index
+                            .and_then(|index| self.block_tool_ids.get(&index))
+                            .ok_or_else(|| {
+                                invalid_tool_stream("Messages tool delta has no open block")
+                            })?;
+                        let arguments = delta
+                            .and_then(|d| d.get("partial_json"))
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                invalid_tool_stream("Messages tool delta has no arguments")
+                            })?;
+                        parts.push(StreamPart::ToolCallDelta {
+                            id: id.clone(),
+                            name: None,
+                            arguments: arguments.to_owned(),
+                            provider_metadata: Default::default(),
+                        });
                     }
                     Some("signature_delta") => {
                         // The thinking block's continuity signature, emitted just
@@ -2462,10 +2543,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                             .and_then(|d| d.get("signature"))
                             .and_then(|s| s.as_str())
                         {
-                            while self.block_signatures.len() <= index {
-                                self.block_signatures.push(None);
-                            }
-                            self.block_signatures[index] = Some(sig.to_string());
+                            self.block_signatures.insert(index, sig.to_string());
                         }
                     }
                     // any other delta type: ignore, do not error
@@ -2473,20 +2551,30 @@ impl StreamDecoder for MessagesStreamDecoder {
                 }
             }
             "content_block_stop" => {
-                // Close the matching text / reasoning block so the boundary
-                // survives re-encoding. Tool / web-search blocks carry no end
-                // marker (their framing is the `name`-bearing delta on open and
-                // the next block / terminal on close).
+                // A final tool block can be cut off by the turn's stop
+                // reason. Earlier block stops are independent boundaries.
                 let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                match self.block_kinds.get(index).copied().flatten() {
+                match self.block_kinds.get(&index).copied() {
                     Some(BlockKind::Text) => parts.push(StreamPart::TextEnd {
                         id: index.to_string(),
                     }),
                     Some(BlockKind::Thinking) => parts.push(StreamPart::ReasoningEnd {
                         id: index.to_string(),
-                        signature: self.block_signatures.get(index).cloned().flatten(),
+                        signature: self.block_signatures.remove(&index),
                         native: None,
                     }),
+                    Some(BlockKind::ToolUse) => {
+                        let id = messages_block_index(&json)
+                            .and_then(|index| self.block_tool_ids.remove(&index))
+                            .ok_or_else(|| {
+                                invalid_tool_stream("Messages tool block stop has no open block")
+                            })?;
+                        if self.last_block_index == Some(index) {
+                            self.last_tool_stop = Some(id);
+                        } else {
+                            parts.push(messages_tool_end(id, true));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2545,6 +2633,11 @@ impl StreamDecoder for MessagesStreamDecoder {
                     raw.insert("message_delta".to_string(), u.clone());
                     self.usage.raw = Some(Box::new(serde_json::Value::Object(raw)));
                     self.usage.origin = UsageOrigin::ProviderReported;
+                    if self.tool_terminal.is_some() {
+                        parts.push(StreamPart::Usage {
+                            usage: self.usage.clone(),
+                        });
+                    }
                 }
                 if let Some(reason) = json
                     .get("delta")
@@ -2552,13 +2645,35 @@ impl StreamDecoder for MessagesStreamDecoder {
                     .and_then(|s| s.as_str())
                     .and_then(stop_reason_to_finish)
                 {
-                    parts.push(StreamPart::Usage {
-                        usage: self.usage.clone(),
-                    });
-                    parts.push(StreamPart::Finish { reason });
+                    match self.tool_terminal {
+                        None => {
+                            parts.push(StreamPart::Usage {
+                                usage: self.usage.clone(),
+                            });
+                            parts.push(StreamPart::Finish { reason });
+                        }
+                        Some(ToolMessageEnd::Open) if self.block_tool_ids.is_empty() => {
+                            self.tool_terminal = Some(ToolMessageEnd::Reason(reason));
+                        }
+                        _ => {
+                            return Err(invalid_tool_stream(
+                                "Messages tool stream has a premature or repeated stop reason",
+                            ));
+                        }
+                    }
                 }
             }
-            "message_stop" => {}
+            "message_stop" => match self.tool_terminal.take() {
+                None => {}
+                Some(ToolMessageEnd::Reason(reason)) => {
+                    self.tool_terminal = Some(ToolMessageEnd::Stopped(reason));
+                }
+                _ => {
+                    return Err(invalid_tool_stream(
+                        "Messages tool stream stopped without its stop reason",
+                    ));
+                }
+            },
             "error" => {
                 // Mid-stream error — derive the HTTP status from Anthropic's
                 // `error.type` so 4xx upstream errors pass through to the
@@ -2583,6 +2698,41 @@ impl StreamDecoder for MessagesStreamDecoder {
         }
         Ok(parts)
     }
+
+    fn finish(&mut self) -> Result<Vec<StreamPart>> {
+        match self.tool_terminal.take() {
+            None => Ok(Vec::new()),
+            Some(ToolMessageEnd::Stopped(reason)) => {
+                let mut parts = Vec::new();
+                if let Some(id) = self.last_tool_stop.take() {
+                    parts.push(messages_tool_end(id, messages_tools_complete(&reason)));
+                }
+                parts.push(StreamPart::Finish { reason });
+                Ok(parts)
+            }
+            _ => Err(invalid_tool_stream(
+                "Messages tool stream ended without message_stop",
+            )),
+        }
+    }
+}
+
+fn messages_tool_end(id: String, complete: bool) -> StreamPart {
+    StreamPart::ToolCallEnd {
+        id,
+        boundary: ToolCallBoundary::MessagesBlock { complete },
+    }
+}
+
+fn messages_tools_complete(reason: &FinishReason) -> bool {
+    matches!(reason, FinishReason::Stop | FinishReason::ToolCalls)
+}
+
+fn messages_block_index(value: &serde_json::Value) -> Option<usize> {
+    value
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|index| usize::try_from(index).ok())
 }
 
 /// Messages SSE encoder. Emits the full event envelope: `message_start`,
@@ -2667,6 +2817,163 @@ struct MessagesStreamEncoder {
     /// `thinking` block on this wire.
     pending_reasoning: Option<String>,
     pending_usage: Option<Usage>,
+    tool_tail: DeferredToolTail,
+}
+
+/// Messages emits serial content blocks. Release the ready prefix in source
+/// order and hold only the suffix behind the earliest unresolved call.
+#[derive(Default)]
+struct DeferredToolTail {
+    parts: VecDeque<StreamPart>,
+    calls: HashMap<String, DeferredToolCall>,
+    bytes: usize,
+}
+
+struct DeferredToolCall {
+    /// Taken when its block has been emitted or discarded.
+    arguments: Option<String>,
+    complete: Option<bool>,
+}
+
+const MAX_DEFERRED_TOOL_PARTS: usize = 16_384;
+
+impl DeferredToolTail {
+    fn push(&mut self, part: &StreamPart) -> Result<()> {
+        // Bound retained data and per-part overhead.
+        let bytes = serde_json::to_vec(part)
+            .map_err(|_| invalid_tool_stream("cannot measure Messages tool stream"))?
+            .len();
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.bytes > bitrouter_ai::wire::DEFAULT_JSON_LIMIT
+            || self.parts.len() >= MAX_DEFERRED_TOOL_PARTS
+        {
+            return Err(invalid_tool_stream(
+                "Messages tool stream exceeds its buffer limit",
+            ));
+        }
+        let mut queued = part.clone();
+        if let StreamPart::ToolCallDelta {
+            id,
+            name,
+            arguments,
+            ..
+        } = &mut queued
+        {
+            if name.as_deref().is_some_and(|name| !name.is_empty()) {
+                if id.is_empty() || self.calls.contains_key(id) {
+                    return Err(invalid_tool_stream(
+                        "Messages tool call has a missing or duplicate ID",
+                    ));
+                }
+                self.calls.insert(
+                    id.clone(),
+                    DeferredToolCall {
+                        arguments: Some(std::mem::take(arguments)),
+                        complete: None,
+                    },
+                );
+            } else {
+                let Some(call) = self
+                    .calls
+                    .get_mut(id)
+                    .filter(|call| call.complete.is_none())
+                else {
+                    return Err(invalid_tool_stream(
+                        "Messages tool arguments have no open call",
+                    ));
+                };
+                let Some(accumulated) = call.arguments.as_mut() else {
+                    return Err(invalid_tool_stream(
+                        "Messages tool arguments followed block completion",
+                    ));
+                };
+                accumulated.push_str(arguments);
+                return Ok(());
+            }
+        }
+        self.parts.push_back(queued);
+        Ok(())
+    }
+
+    fn end(&mut self, id: &str, boundary: &ToolCallBoundary) -> Result<()> {
+        let complete = match boundary {
+            ToolCallBoundary::Arguments => return Ok(()),
+            ToolCallBoundary::ResponsesItem {
+                status,
+                terminal_only,
+            } => {
+                if *terminal_only
+                    && self
+                        .calls
+                        .get(id)
+                        .is_some_and(|call| call.complete.is_some())
+                {
+                    return Ok(());
+                }
+                if status.is_none() && *terminal_only {
+                    // A terminal snapshot may omit its optional item status.
+                    // The enclosing response still decides this pending call.
+                    if !self.calls.contains_key(id) {
+                        return Err(invalid_tool_stream("Messages tool end has no open call"));
+                    }
+                    return Ok(());
+                }
+                status.as_deref().is_none_or(|status| status == "completed")
+            }
+            ToolCallBoundary::MessagesBlock { complete } | ToolCallBoundary::Turn { complete } => {
+                *complete
+            }
+        };
+        let call = self
+            .calls
+            .get_mut(id)
+            .filter(|call| call.complete.is_none())
+            .ok_or_else(|| invalid_tool_stream("Messages tool end has no open call"))?;
+        call.complete = Some(complete);
+        Ok(())
+    }
+
+    fn pop_ready(&mut self, terminal: Option<bool>) -> Result<Option<StreamPart>> {
+        while let Some(part) = self.parts.front_mut() {
+            if let StreamPart::ToolCallDelta { id, arguments, .. } = part {
+                let call = self.calls.get_mut(id).ok_or_else(|| {
+                    invalid_tool_stream("Messages tool block has no buffered call")
+                })?;
+                let Some(complete) = call.complete.or(terminal) else {
+                    return Ok(None);
+                };
+                let accumulated = call
+                    .arguments
+                    .take()
+                    .ok_or_else(|| invalid_tool_stream("Messages tool block already consumed"))?;
+                if !complete {
+                    self.parts.pop_front();
+                    continue;
+                }
+                if !accumulated.is_empty()
+                    && serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                        &accumulated,
+                    )
+                    .is_err()
+                {
+                    return Err(invalid_tool_stream(
+                        "Messages tool arguments are not a JSON object",
+                    ));
+                }
+                *arguments = accumulated;
+            }
+            return Ok(self.parts.pop_front());
+        }
+        self.bytes = 0;
+        Ok(None)
+    }
+}
+
+fn invalid_tool_stream(message: &str) -> ModelError {
+    ModelError::InvalidResponse {
+        message: message.into(),
+        usage: None,
+    }
 }
 
 impl MessagesStreamEncoder {
@@ -2931,14 +3238,9 @@ fn render_usage(u: &Usage) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-impl StreamEncoder for MessagesStreamEncoder {
-    fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
-        crate::gateway::model::protocol::reject_unrepresentable_native_reasoning_part(
-            part,
-            &ApiProtocol::Messages,
-        )?;
-        let mut frames = Vec::new();
-        self.ensure_started(&mut frames);
+impl MessagesStreamEncoder {
+    fn encode_part(&mut self, part: &StreamPart, frames: &mut Vec<SseFrame>) {
+        self.ensure_started(frames);
         match part {
             StreamPart::File { .. } => {
                 // Anthropic Messages streaming has no file-output content block;
@@ -2949,16 +3251,16 @@ impl StreamEncoder for MessagesStreamEncoder {
                 // Explicit block boundary from a block-framed upstream — open a
                 // *fresh* text content block so two distinct upstream text blocks
                 // re-encode as two `content_block_start`s, not one merged block.
-                self.open_fresh_block(&mut frames, EncoderBlockKind::Text);
+                self.open_fresh_block(frames, EncoderBlockKind::Text);
             }
             StreamPart::ReasoningStart { .. } => {
-                self.begin_reasoning_buffer(&mut frames);
+                self.begin_reasoning_buffer(frames);
             }
             StreamPart::TextEnd { .. } => {
                 self.pending_reasoning = None;
                 // Close the block the matching start opened; `close_block` is a
                 // no-op if nothing is open, so a stray end is harmless.
-                self.close_block(&mut frames);
+                self.close_block(frames);
             }
             StreamPart::ReasoningEnd { signature, .. } => {
                 // Only signed Anthropic thinking may be emitted on the Messages
@@ -2966,11 +3268,11 @@ impl StreamEncoder for MessagesStreamEncoder {
                 // replayed by Claude Code as an invalid `thinking` block on the
                 // next turn.
                 // <https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking>
-                self.flush_reasoning_buffer(&mut frames, signature.as_deref());
+                self.flush_reasoning_buffer(frames, signature.as_deref());
             }
             StreamPart::TextDelta { text } => {
                 self.pending_reasoning = None;
-                if self.ensure_block_open(&mut frames, EncoderBlockKind::Text) {
+                if self.ensure_block_open(frames, EncoderBlockKind::Text) {
                     frames.push(Self::ev(
                         "content_block_start",
                         serde_json::json!({
@@ -2990,7 +3292,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 ));
             }
             StreamPart::ReasoningDelta { text, .. } => {
-                self.push_reasoning_delta(&mut frames, text);
+                self.push_reasoning_delta(frames, text);
             }
             StreamPart::ToolCallDelta {
                 id,
@@ -3007,8 +3309,8 @@ impl StreamEncoder for MessagesStreamEncoder {
                     // `name:""` on every argument-continuation delta, and
                     // treating `Some("")` as a new call would fragment one tool
                     // call into one empty-named `tool_use` block per delta.
-                    self.close_block(&mut frames);
-                    self.ensure_block_open(&mut frames, EncoderBlockKind::ToolUse);
+                    self.close_block(frames);
+                    self.ensure_block_open(frames, EncoderBlockKind::ToolUse);
                     frames.push(Self::ev(
                         "content_block_start",
                         serde_json::json!({
@@ -3041,7 +3343,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 server_name,
                 dynamic,
             } => {
-                self.close_block(&mut frames);
+                self.close_block(frames);
                 // Open with an empty input; the arguments stream as an
                 // `input_json_delta`, matching how Anthropic frames a tool_use
                 // block (the client builds `input` from the deltas).
@@ -3082,7 +3384,7 @@ impl StreamEncoder for MessagesStreamEncoder {
             StreamPart::ServerToolResult {
                 call_id, output, ..
             } => {
-                self.close_block(&mut frames);
+                self.close_block(frames);
                 let (content, is_error) = server_tool_result_content(output);
                 frames.push(Self::ev(
                     "content_block_start",
@@ -3123,6 +3425,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                     self.pending_sources.push(serde_json::Value::Object(entry));
                 }
             }
+            StreamPart::ToolCallEnd { .. } => {}
             StreamPart::Usage { usage } => self.pending_usage = Some(usage.clone()),
             StreamPart::ResponseStarted { .. } => {
                 // Observability-only metadata (upstream response id); the
@@ -3131,7 +3434,7 @@ impl StreamEncoder for MessagesStreamEncoder {
             }
             StreamPart::Finish { reason } => {
                 let usage = self.pending_usage.take();
-                self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), usage);
+                self.emit_terminal(frames, &finish_to_stop_reason(reason), usage);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
                 // Inbound was Responses; map its status onto Messages'
@@ -3142,8 +3445,60 @@ impl StreamEncoder for MessagesStreamEncoder {
                     "end_turn"
                 };
                 let usage = usage.clone().or_else(|| self.pending_usage.take());
-                self.emit_terminal(&mut frames, stop_reason, usage);
+                self.emit_terminal(frames, stop_reason, usage);
             }
+        }
+    }
+}
+
+impl StreamEncoder for MessagesStreamEncoder {
+    fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
+        crate::gateway::model::protocol::reject_unrepresentable_native_reasoning_part(
+            part,
+            &ApiProtocol::Messages,
+        )?;
+        let mut frames = Vec::new();
+        let terminal = match part {
+            StreamPart::Finish {
+                reason: FinishReason::Error(_),
+            } => {
+                return Err(invalid_tool_stream("Messages upstream stream failed"));
+            }
+            StreamPart::Finish { reason } => Some(messages_tools_complete(reason)),
+            StreamPart::ResponseCompleted { status, .. } => match status.as_str() {
+                "completed" => Some(true),
+                "incomplete" => Some(false),
+                _ => return Err(invalid_tool_stream("Messages upstream response failed")),
+            },
+            StreamPart::ToolCallEnd { id, boundary } => {
+                self.tool_tail.end(id, boundary)?;
+                None
+            }
+            StreamPart::Usage { .. } => {
+                self.encode_part(part, &mut frames);
+                return Ok(frames);
+            }
+            _ if !self.tool_tail.parts.is_empty()
+                || matches!(part, StreamPart::ToolCallDelta { .. }) =>
+            {
+                self.tool_tail.push(part)?;
+                self.ensure_started(&mut frames);
+                None
+            }
+            _ => {
+                self.encode_part(part, &mut frames);
+                return Ok(frames);
+            }
+        };
+
+        while let Some(buffered) = self.tool_tail.pop_ready(terminal)? {
+            self.encode_part(&buffered, &mut frames);
+            if matches!(buffered, StreamPart::ToolCallDelta { .. }) {
+                self.close_block(&mut frames);
+            }
+        }
+        if terminal.is_some() {
+            self.encode_part(part, &mut frames);
         }
         Ok(frames)
     }

@@ -155,7 +155,10 @@ impl Snapshot {
             execution_id: receipt.execution_id.clone(),
             accepted_selection: receipt.accepted_selection.clone(),
             capture: Capture::Captured,
-            extractor_version: 1,
+            extractor_version: ExecutionUsageEvidenceV2::extractor_version_for(
+                receipt.accepted_selection.inbound_protocol,
+                &self.frames,
+            ),
             estimation: if self.estimate.is_some() {
                 Estimation::Captured
             } else if self.estimator_seen {
@@ -253,6 +256,15 @@ fn mapping(protocol: Protocol) -> &'static [(&'static str, Dimension)] {
             ),
             ("server_tool_use.web_search_requests", WebSearchRequests),
         ],
+        // Native scalar facts remain separate; optional fields are not implicit zero.
+        // https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto
+        Protocol::GenerateContent => &[
+            ("promptTokenCount", InputTokens),
+            ("candidatesTokenCount", OutputTokens),
+            ("totalTokenCount", TotalTokens),
+            ("cachedContentTokenCount", CacheReadTokens),
+            ("thoughtsTokenCount", ReasoningTokens),
+        ],
         Protocol::Decisions => &[
             ("input_tokens", InputTokens),
             ("output_tokens", OutputTokens),
@@ -272,7 +284,11 @@ fn extract(value: &Value, paths: &[(&str, Dimension)], prefix: &str, frame: &mut
             && !suffix.contains('.')
             && let Some(value) = object.get(suffix)
         {
-            let number = value.as_u64().filter(|n| *n <= AuthorityRevision::MAX);
+            let number = if frame.protocol == Protocol::GenerateContent {
+                super::evidence::native_number(value)
+            } else {
+                value.as_u64().filter(|n| *n <= AuthorityRevision::MAX)
+            };
             frame.invalid |= number.is_none();
             frame.quantities.push(Quantity {
                 dimension: *dimension,

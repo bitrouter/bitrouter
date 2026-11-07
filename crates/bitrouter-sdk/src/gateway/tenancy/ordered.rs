@@ -24,12 +24,15 @@ use super::{
     reject_stream_shadow,
 };
 
-/// One ordered v2 submission. Only the three generation protocols are exposed.
+mod generate_content;
+
+/// One ordered v2 submission with explicit protocol capability attachments.
 /// Dropping a reply or stream has the same local-only meaning as strict v1.
 pub struct OrderedTenantGateway<'a> {
     inner: TenantGateway<'a>,
     route_id: String,
     generation_defaults_digest: Option<Digest>,
+    generate_content: Option<bool>,
 }
 
 impl std::fmt::Debug for OrderedTenantGateway<'_> {
@@ -88,6 +91,7 @@ impl GatewayClient {
             );
         }
         Ok(OrderedTenantGateway {
+            generate_content: None,
             generation_defaults_digest: binding.selection.generation_defaults_digest.clone(),
             inner: TenantGateway {
                 generation_defaults: None,

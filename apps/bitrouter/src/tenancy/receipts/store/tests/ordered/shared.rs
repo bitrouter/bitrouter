@@ -33,7 +33,7 @@ async fn shared_health_migration_preserves_bytes_and_failure_never_advances_mark
         .with_usage_evidence(crate::tenancy::receipts::usage_evidence::Snapshot::default())?;
     ensure!(commit(&db, &original).await?);
     db.execute_unprepared("CREATE TRIGGER refuse_shared_upgrade BEFORE UPDATE ON tenancy_installation WHEN NEW.schema_version=4 BEGIN SELECT RAISE(ABORT,'refuse shared format upgrade'); END").await?;
-    ensure!(crate::db::run_migrations(&db).await.is_err());
+    ensure!(migrate_shared_health(&db).await.is_err());
     ensure!(version(&db).await? == 3 && !ledger_has_fence(&db).await?);
     ensure!(
         authority::load(&db, chrono::Utc::now())
@@ -45,7 +45,7 @@ async fn shared_health_migration_preserves_bytes_and_failure_never_advances_mark
     ensure!(version(&db).await? == 3 && !ledger_has_fence(&db).await?);
     db.execute_unprepared("DROP TRIGGER refuse_shared_upgrade")
         .await?;
-    crate::db::run_migrations(&db).await?;
+    migrate_shared_health(&db).await?;
     ensure!(version(&db).await? == 4 && ledger_has_fence(&db).await?);
     management_mutation(&db).await?;
     ensure!(version(&db).await? == 4);
@@ -90,7 +90,7 @@ async fn shared_health_migration_rejects_unsupported_versions_and_malformed_iden
             [version_value.into(), identity.into()],
         ))
         .await?;
-        let migrated = crate::db::run_migrations(&db).await;
+        let migrated = migrate_shared_health(&db).await;
         let legacy = version_value == 1;
         ensure!(
             migrated.is_ok() == legacy,
@@ -151,9 +151,9 @@ async fn shared_health_actual_predecessors_refuse_fresh_migrated_and_mutated_sto
                 let db = if migrated {
                     format_three(&source).await?
                 } else {
-                    owned_connection(&source).await?
+                    shared_health_database(&source).await?
                 };
-                crate::db::run_migrations(&db).await?;
+                migrate_shared_health(&db).await?;
                 authority::load(&db, chrono::Utc::now()).await?;
                 if mutated {
                     management_mutation(&db).await?;

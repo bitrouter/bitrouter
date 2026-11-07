@@ -97,7 +97,10 @@ impl Resources {
         command: &Command,
         digest: &str,
     ) -> Result<String> {
-        if !matches!(command, Command::Resource(..) | Command::ResourceV2(..)) {
+        if !matches!(
+            command,
+            Command::Resource(..) | Command::ResourceV2(..) | Command::ResourceV3(..)
+        ) {
             return Ok(digest.to_owned());
         }
         self.key
@@ -424,6 +427,34 @@ pub(in crate::tenancy) fn apply(
 }
 
 impl Service {
+    pub(in crate::tenancy) async fn resource_capabilities_v3(
+        &self,
+        caller: &Caller,
+    ) -> std::result::Result<bitrouter_ai::tenancy::resources_v3::ResourceCapabilitiesV3, Failure>
+    {
+        use bitrouter_ai::tenancy::{
+            ordered::GenerationProtocol, resources_v3::ResourceCapabilitiesV3,
+        };
+        self.with_capability_authority(caller, |state| {
+            Ok(ResourceCapabilitiesV3 {
+                format: 3,
+                installation_id: state.installation.clone(),
+                provisioning_enabled: self.resources.key.is_some()
+                    && self.private_adapter.is_some()
+                    && self.ordered_dispatch_ready(state),
+                max_command_bytes: 1048576,
+                tenant_routes_require_approved_origins: true,
+                generation_protocols: [
+                    GenerationProtocol::ChatCompletions,
+                    GenerationProtocol::Messages,
+                    GenerationProtocol::Responses,
+                    GenerationProtocol::GenerateContent,
+                ],
+            })
+        })
+        .await
+    }
+
     pub(in crate::tenancy) async fn resource_capabilities_v2(
         &self,
         caller: &Caller,

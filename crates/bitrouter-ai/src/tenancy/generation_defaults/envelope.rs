@@ -2,8 +2,7 @@
 use std::{collections::BTreeMap, io::Write};
 
 use serde::{
-    Deserialize, Deserializer, Serialize, Serializer,
-    de::{MapAccess, SeqAccess, Visitor},
+    Deserializer, Serialize, Serializer,
     ser::{SerializeMap, SerializeSeq, SerializeStruct},
 };
 use serde_json::Value;
@@ -18,78 +17,7 @@ use crate::tenancy::{
 pub(super) fn supplemental<'de, D: Deserializer<'de>>(
     d: D,
 ) -> Result<BTreeMap<String, Value>, D::Error> {
-    struct Object;
-    impl<'de> Visitor<'de> for Object {
-        type Value = BTreeMap<String, Value>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a supplemental defaults object")
-        }
-        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-            let mut values = BTreeMap::new();
-            while let Some(key) = map.next_key::<String>()? {
-                if values.contains_key(&key) {
-                    return Err(serde::de::Error::custom("duplicate supplemental key"));
-                }
-                values.insert(key, map.next_value::<UniqueValue>()?.0);
-            }
-            Ok(values)
-        }
-    }
-    d.deserialize_map(Object)
-}
-
-struct UniqueValue(Value);
-impl<'de> Deserialize<'de> for UniqueValue {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct Json;
-        impl<'de> Visitor<'de> for Json {
-            type Value = UniqueValue;
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("JSON without duplicate keys")
-            }
-            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-                Ok(UniqueValue(Value::Null))
-            }
-            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
-                serde_json::Number::from_f64(v)
-                    .map(|n| UniqueValue(Value::Number(n)))
-                    .ok_or_else(|| E::custom("invalid JSON number"))
-            }
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
-                Ok(UniqueValue(v.into()))
-            }
-            fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Self::Value, S::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = seq.next_element::<UniqueValue>()? {
-                    values.push(value.0);
-                }
-                Ok(UniqueValue(Value::Array(values)))
-            }
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let mut values = serde_json::Map::new();
-                while let Some(key) = map.next_key::<String>()? {
-                    if values.contains_key(&key) {
-                        return Err(serde::de::Error::custom("duplicate supplemental key"));
-                    }
-                    values.insert(key, map.next_value::<UniqueValue>()?.0);
-                }
-                Ok(UniqueValue(Value::Object(values)))
-            }
-        }
-        d.deserialize_any(Json)
-    }
+    crate::tenancy::json::object(d, 3)
 }
 
 impl Validate for GenerationDefaultsEnvelopeV1 {
@@ -135,26 +63,8 @@ pub(super) fn validate_parts(
     // Reserve the enclosing request, envelope and supplemental objects.
     // serde_json's default recursion budget rejects the 128th container.
     // Check programmatic Values before recursive hashing/serialization.
-    fn depth(value: &Value, parents: usize) -> Result<(), ValidationError> {
-        match value {
-            Value::Array(values) => {
-                require(parents + 1 < 128, "generation defaults nesting")?;
-                for value in values {
-                    depth(value, parents + 1)?;
-                }
-            }
-            Value::Object(values) => {
-                require(parents + 1 < 128, "generation defaults nesting")?;
-                for value in values.values() {
-                    depth(value, parents + 1)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
     for value in supplemental.values() {
-        depth(value, 3)?;
+        crate::tenancy::validation::json_depth(value, 3, "generation defaults nesting")?;
     }
     Ok(())
 }

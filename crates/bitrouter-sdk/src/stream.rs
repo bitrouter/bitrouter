@@ -10,6 +10,8 @@ use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result, ServiceFailure};
 
+pub(crate) mod generate_content;
+
 /// Compatibility name for the shared public event contract.
 /// New consumers may import its owning type from `bitrouter_ai::stream`.
 pub type ServerEvent<T> = bitrouter_ai::stream::ServerEvent<T>;
@@ -27,6 +29,7 @@ pub(crate) enum Protocol {
     Messages,
     Responses,
     ManagedResponses,
+    GenerateContent,
 }
 
 pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
@@ -56,6 +59,9 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
     Box::pin(async_stream::try_stream! {
         let mut decoder = SseDecoder::new(limit);
         let mut terminal = false;
+        let mut native = generate_content::State::new(limit);
+        let mut held = Vec::new();
+        let mut held_bytes = 0_usize;
         'body: while let Some(chunk) = chunks.next().await {
             let chunk = chunk.map_err(Error::transport)?;
             for byte in chunk {
@@ -65,7 +71,12 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                     yield StreamItem::End(ProtocolEnd::ChatDone);
                     break 'body;
                 }
-                let data: serde_json::Value = serde_json::from_str(&event.data)
+                let parsed = if matches!(protocol, Protocol::GenerateContent) {
+                    serde_json::from_str::<generate_content::json::UniqueValue>(&event.data).map(|value| value.0)
+                } else {
+                    serde_json::from_str::<serde_json::Value>(&event.data)
+                };
+                let data = parsed
                     .map_err(|_| {
                         let error = Error::Response("SSE data is not JSON");
                         if event.event == "error" {
@@ -75,14 +86,21 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                         }
                     })?;
                 let kind = data.get("type").and_then(serde_json::Value::as_str);
-                if data.get("error").is_some() || event.event == "error" || kind == Some("error") {
+                let has_error = data.get("error").is_some_and(|error| {
+                    !matches!(protocol, Protocol::GenerateContent) || !error.is_null()
+                });
+                if has_error || event.event == "error" || kind == Some("error") {
                     Err(error_event(Ok(data.clone()), protocol, status, &headers))?;
+                }
+                if matches!(protocol, Protocol::GenerateContent) && event.event != "message" {
+                    Err(Error::Response("unexpected native SSE event name"))?;
                 }
                 if !matches!(protocol, Protocol::Chat) && event.event != "message" && Some(event.event.as_str()) != kind {
                     Err(Error::Response("SSE event name disagrees with its data type"))?;
                 }
                 terminal = match protocol {
                     Protocol::Chat => false,
+                    Protocol::GenerateContent => false,
                     Protocol::Messages => kind == Some("message_stop"),
                     Protocol::Responses | Protocol::ManagedResponses => matches!(kind, Some("response.completed" | "response.incomplete" | "response.failed")),
                 };
@@ -102,14 +120,36 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                         _ => None,
                     }
                 } else { None };
-                let data = serde_json::from_value(data)
+                let hold_native = matches!(protocol, Protocol::GenerateContent) && native.observe(&data)?;
+                let retained_bytes = event.data.len().saturating_add(event.event.len())
+                    .saturating_add(event.id.len()).saturating_add(std::mem::size_of::<ServerEvent<T>>());
+                let data = if matches!(protocol, Protocol::GenerateContent) {
+                    // Decode the original tokens again into the native event.
+                    // Value deserialization can reinterpret opaque private keys
+                    // when consumers unify serde_json's optional features.
+                    serde_json::from_str(&event.data)
+                } else {
+                    serde_json::from_value(data)
+                }
                     .map_err(|_| Error::Response("SSE data does not match the public contract"))?;
-                yield StreamItem::Event(ServerEvent { event: event.event, id: event.id, data });
+                let output = ServerEvent { event: event.event, id: event.id, data };
+                if hold_native {
+                    held_bytes = held_bytes.checked_add(retained_bytes).filter(|bytes| *bytes <= limit)
+                        .ok_or(Error::Limit)?;
+                    held.push(output);
+                } else {
+                    yield StreamItem::Event(output);
+                }
                 if let Some(end) = end { yield StreamItem::End(end); }
                 if terminal { break 'body; }
             }
         }
-        if !terminal {
+        if matches!(protocol, Protocol::GenerateContent) {
+            decoder.finish_attachment()?;
+            if !native.finished() { Err(Error::IncompleteStream)?; }
+            for event in held { yield StreamItem::Event(event); }
+            yield StreamItem::End(ProtocolEnd::GenerateContentFinished);
+        } else if !terminal {
             decoder.finish()?;
             Err(Error::IncompleteStream)?;
         }

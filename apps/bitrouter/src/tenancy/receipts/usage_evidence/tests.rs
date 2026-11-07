@@ -407,3 +407,45 @@ async fn recovery_verifies_evidence_and_charges_the_shared_budget() -> Result<()
     db.close().await?;
     Ok(())
 }
+
+#[test]
+fn native_generate_content_frames_preserve_exact_scalars_without_implicit_dimensions() -> Result<()>
+{
+    let mut capture = Snapshot::ordered(1)?;
+    let attempt = "native-attempt".try_into()?;
+    capture.observe(&attempt, Protocol::GenerateContent, Source::GenerateContentChunk,
+        &json!({"promptTokenCount":2,"candidatesTokenCount":0,"promptTokensDetails":[{"modality":"TEXT","tokenCount":2}]}));
+    ensure!(capture.frames.len() == 1);
+    let first = &capture.frames[0];
+    ensure!(first.protocol == Protocol::GenerateContent && first.semantics == Semantics::Snapshot);
+    ensure!(
+        first.quantities
+            == vec![
+                Quantity {
+                    dimension: Dimension::InputTokens,
+                    value: Some(2)
+                },
+                Quantity {
+                    dimension: Dimension::OutputTokens,
+                    value: Some(0)
+                }
+            ]
+    );
+    ensure!(first.unsupported && !first.invalid);
+    capture.observe(
+        &attempt,
+        Protocol::GenerateContent,
+        Source::GenerateContentChunk,
+        &json!({"candidatesTokenCount":2147483648_u64,"thoughtsTokenCount":null}),
+    );
+    let next = &capture.frames[1];
+    ensure!(
+        next.invalid
+            && next
+                .quantities
+                .iter()
+                .all(|quantity| quantity.value.is_none())
+    );
+    ensure!(capture.frames[0].quantities[1].value == Some(0));
+    Ok(())
+}

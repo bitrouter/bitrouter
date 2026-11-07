@@ -559,6 +559,8 @@ impl HttpExecutor {
             .as_ref()
             .and_then(|permit| permit.operational())
             .cloned();
+        #[cfg(feature = "server-tools")]
+        let mut tool_turn = crate::tenancy::routing::tool_stream_turn(ctx, target);
 
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
@@ -595,6 +597,11 @@ impl HttpExecutor {
                                 }
                                 if let Some(part) = decoder.pending_terminal() {
                                     shared_attempt.observe(&part);
+                                    // The decoder accepted these counters even
+                                    // while completion awaits transport EOF.
+                                    if let StreamPart::ResponseCompleted { usage: Some(usage), .. } = part {
+                                        yield Ok(StreamPart::Usage { usage });
+                                    }
                                 }
                                 if let Some(capture) = &capture
                                     && let Err(error) = capture.terminal(&sse) {
@@ -609,9 +616,18 @@ impl HttpExecutor {
                                     return;
                                 }
                                 for p in parts {
+                                    #[cfg(feature = "server-tools")]
+                                    if let Some(turn) = &mut tool_turn { turn.observe(&p); }
                                     if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                                     terminal |= p.is_terminal();
-                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() {
+                                        // Received usage has independent custody from
+                                        // the EOF/ACK-gated successful terminal.
+                                        if let StreamPart::ResponseCompleted { usage: Some(usage), .. } = &p {
+                                            yield Ok(StreamPart::Usage { usage: usage.clone() });
+                                        }
+                                        held_terminal = Some(p); continue;
+                                    }
                                     yield Ok(p);
                                 }
                             }
@@ -621,6 +637,14 @@ impl HttpExecutor {
                                 let reported = error_event_usage(&protocol, &sse, &e);
                                 if let Some(usage) = &reported {
                                     shared_attempt.observe(&StreamPart::Usage { usage: usage.clone() });
+                                    // The same qualified source observation must
+                                    // reach tenant evidence before its canonical
+                                    // projection. Invalid content still leaves
+                                    // the attempt unresolved; usage is no terminal.
+                                    if let Err(error) = receipt::event(&mut tenant_attempt, &protocol, &sse) {
+                                        drop(tenant_attempt.take()); yield Err(error);
+                                        return;
+                                    }
                                 }
                                 if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
                                     && let Err(error) = shared_attempt.failed_stream().await
@@ -629,7 +653,7 @@ impl HttpExecutor {
                                     return;
                                 }
                                 if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
-                                    && let Err(error) = receipt::event(&mut tenant_attempt, &protocol, &sse).and_then(|()| receipt::complete(&mut tenant_attempt, false))
+                                    && let Err(error) = (if reported.is_none() { receipt::event(&mut tenant_attempt, &protocol, &sse) } else { Ok(()) }).and_then(|()| receipt::complete(&mut tenant_attempt, false))
                                 {
                                     drop(tenant_attempt.take());
                                     yield Err(error);
@@ -672,9 +696,18 @@ impl HttpExecutor {
                         return;
                     }
                     for p in parts {
+                        #[cfg(feature = "server-tools")]
+                        if let Some(turn) = &mut tool_turn { turn.observe(&p); }
                         if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                         terminal |= p.is_terminal();
-                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() {
+                                        // Received usage has independent custody from
+                                        // the EOF/ACK-gated successful terminal.
+                                        if let StreamPart::ResponseCompleted { usage: Some(usage), .. } = &p {
+                                            yield Ok(StreamPart::Usage { usage: usage.clone() });
+                                        }
+                                        held_terminal = Some(p); continue;
+                                    }
                         yield Ok(p);
                     }
                 }
@@ -700,6 +733,10 @@ impl HttpExecutor {
             // exact actual-send permit leaves its producer.
             if let Some(source)=http_source {source.publish();}
             drop(tenant_attempt.take());
+            #[cfg(feature = "server-tools")]
+            if let (Some(turn), Some(part)) = (tool_turn, held_terminal.as_ref()) {
+                turn.complete(receipt::successful(part));
+            }
             if let Some(part) = held_terminal { yield Ok(part); }
         };
 

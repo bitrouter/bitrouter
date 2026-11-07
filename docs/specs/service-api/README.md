@@ -1168,8 +1168,9 @@ headers, credentials or candidate order. No owned continuation handle is publish
 imported or reconstructed, and no history is replayed. Ordinary gateway response
 IDs retain their existing encoding; this mode does not make them resumable or
 export a separate native-ID mapping. Provider success establishes no
-historical ownership or usage facts. Generate Content `cachedContent` is not
-supported by this mode; the retired protocol remains unavailable.
+historical ownership or usage facts. The ordinary version-one field set does
+not add Generate Content `cachedContent`; that control belongs to the separate
+private operation below. Retired public Google routes remain unavailable.
 
 Source-native fields remain protocol-bound. The existing post-parse merge suppresses
 a supplemental key when source extras already contain that key, including null;
@@ -1193,6 +1194,122 @@ usage-evidence v2 still describe current execution only, with no format changes.
 A predecessor without discovery cannot be assumed to support this mode. Its
 ordinary non-null-control refusal remains meaningful; an empty opted-in request
 has no new custody or publication promise and may still execute ordinarily.
+
+### Private ordered Generate Content
+
+This new version-one operation is scoped to the next alpha release after
+alpha.35. The Rust additions `GenerationProtocol::GenerateContent` and
+`ProtocolEnd::GenerateContentFinished` intentionally require exhaustive-match
+consumers to recompile and handle the new variants. Existing protocol wire
+values, ordinary ordered-v2 discovery, and native-controls-v1's three-field set
+remain unchanged. Old readers reject the unknown protocol rather than treating
+it as Chat. No retired public Google endpoint or provider registration is restored.
+
+Authenticated `GET /control/v1/tenancy/ordered/generate-content/capabilities`
+returns `OrderedGenerateContentCapabilitiesV1`. Its installation, instance and
+capability revision must match the retained dispatch binding. `enabled` requires
+ordered readiness and an explicitly paired operator adapter;
+`cached_content_enabled` additionally reflects current provider-native policy.
+The SDK's explicit `with_generate_content` observation enables this protocol,
+not cache-state ownership or a discovery retry. Non-null effective
+`cachedContent` also requires the independent provider-native header opt-in.
+Source null can suppress a native default; it cannot erase a foreign supplemental
+control. Core rechecks effective controls after the bound defaults merge.
+
+The only data endpoint is `POST /v1/tenancy/ordered/generate-content`, with exact
+media type `application/vnd.bitrouter.ordered-generate-content.v1+json` and no
+query-selected mode. `OrderedGenerateContentRequestV1` is a closed envelope with
+`schema_version: 1`, retained route resource ID `model`, boolean `stream`, and
+`request`, an original native object without competing model, stream or dispatch
+members. Model/mode authority and the existing digest-bound defaults/envelope
+remain outside that original object. Its encoded bound is 16 MiB; programmatic
+native values reserve both enclosing objects within the transport's default
+128-container recursion budget and fail validation before serialization when
+that budget is exceeded. Defaults retain their existing nesting budget.
+
+The request object must come from the retained original native input, preserving
+field presence, IDs, signatures, controls and provider data. A canonical policy
+projection or a prior codec's rendering cannot reconstruct lost source data.
+Authorized preset defaults remain a separate commitment; neither source-default
+flattening nor a raw cache selector establishes historical credential ownership.
+The reached paired endpoint uses protocol `ordered_generate_content`, a fixed
+`/generate-content` path and the same native envelope with the reached provider
+model. Current route/member/profile/credential authority and the exact method,
+endpoint, mode and body commitment bind each signed physical attempt.
+
+Native-to-native JSON preserves the full raw candidates array and native fields.
+Every candidate must have a valid object/content shape and concrete terminal;
+explicit candidate indices are unique nonnegative int32 values. A non-null error
+or prompt-block envelope is refused. The canonical policy/foreign-projection view
+selects only the first candidate and never merges candidates. Missing usage is
+not rewritten to zero, and opaque native signatures/media remain under the
+actual authenticated native response owner.
+
+Native SSE retains full raw payloads without assigning an omitted index to zero.
+The first nonempty candidate event locks the response to either an anonymous
+singleton or explicit indexed mode. Anonymous mode stays one unindexed candidate;
+indexed mode requires unique nonnegative int32 indices in every later candidate
+entry, including singleton events. Null, fractional, negative, out-of-range and
+mixed anonymous/indexed identities are invalid. One candidate's completion does
+not complete or retarget another candidate. Missing/null/unspecified finish is
+nonterminal until a concrete reason seals that candidate; a sealed candidate
+allows only its index and optional identical finish, never content, new metadata
+or a null/unspecified finish downgrade.
+
+Initial native metadata is retained. Root metadata remains allowed while a
+previous candidate is open or the event introduces a new explicit candidate.
+Only when all prior candidates were sealed and no new candidate is introduced
+are root tails restricted to usageMetadata, responseId, modelVersion, candidates
+and neutral `error: null`. Non-null errors and prompt blocks always fail.
+Present responseId/modelVersion must be nonempty nonnull strings and remain
+stable globally. A bounded terminal group is held from the first concrete finish
+until every observed candidate is sealed and HTTP EOF is clean. Only then may
+`GenerateContentFinished` become visible. Reset, cancellation, malformed/error,
+identity switches or conflicting tails never authorize a successful terminal or
+another inference send.
+
+Ordinary compatible candidates use the strict canonical codec; native-only
+constraints exclude incompatible targets before rate/health admission. The native
+paired path must retain signed text/media even where canonical deltas cannot
+represent their metadata. It must not use a safe projection refusal to erase a
+native feature. Actual accepted headers, outcomes, usage observations, deadlines,
+receipt custody and original selected ranks retain the existing ordered rules.
+Unsigned/unknown bridge outcomes and interrupted streams never authorize fallback.
+
+Native routes require explicit resource format three, independently observed at
+`GET /control/v1/tenancy/resource-capabilities/v3`. The existing resource POST
+accepts `ResourcePutV3` with a closed `native_profiled_route_v1` definition;
+[`native-resource-put-v3.schema.json`](native-resource-put-v3.schema.json) and
+[`native-resource-capabilities-v3.schema.json`](native-resource-capabilities-v3.schema.json)
+define its wire fields. Every compiled protocol root has an exact ordinal,
+credential and admission-profile association. Only the native root can target
+the operator-paired `ordered_generate_content` bridge. A Chat grant cannot
+create native membership. Arbitrary custom protocols remain unsupported.
+
+Format-one resource definitions and their three-protocol attachment codec remain
+unchanged; format two still provisions shared-health profiles only. Native
+artifacts and configurations use `tenancy-native-generate-content-v1`, retained
+envelope format six and authority writer/schema five. The data-only migration
+keeps historical receipt/evidence bytes and refuses malformed/future markers;
+predecessor writers must refuse the new marker. Downgrade requires an operator
+backup, not a serving rewrite. Discovery and successful provisioning alone do
+not grant dispatch authority or qualify an adapter's response/usage evidence.
+
+MySQL writer fences require InnoDB for the installation header and migration
+ledger tables. Their engines are checked under the same transaction's metadata
+custody before marker updates; unsupported engines are refused without automatic
+table conversion or retained-data rewrites. Direct framework execution of either
+writer-fence migration refuses on MySQL before any marker or ledger change;
+only the guarded runner may apply the data-only body. This prevents concurrent
+migration discovery from turning a stale historical step count into an
+unprotected fence. A concurrent startup may refuse conservatively; it does not
+automatically retry migrations.
+
+Native requests without an explicit per-call defaults layer preserve absence.
+An explicit defaults envelope retains its committed configuration-defaults
+choice. The original native request and that defaults layer travel separately
+to the reached paired adapter; current authority and the body commitment are
+rechecked at the actual send. Ordinary wires keep their existing defaults.
 
 ### Exact retained admission-profile observations
 
@@ -1363,6 +1480,35 @@ Upstream usage field meanings remain defined by the
 and [Messages streaming specification](https://platform.claude.com/docs/en/build-with-claude/streaming).
 The extractor's qualified sources and bounded projection above do not extend
 those upstream contracts.
+
+#### Private ordered GenerateContent observations
+
+Only the explicit private ordered `generate_content` ingress and paired native
+outbound wire qualify this protocol. Chat permissions and ordinary endpoint
+names do not authorize it. Ordered evidence keeps `schema_version: 2` and uses
+`extractor_version: 2` exactly when the accepted ingress is `generate_content`
+or any retained frame has that protocol; otherwise it stays extractor 1.
+Frameless or unavailable native ingress also requires extractor 2. Predecessor
+readers reject the new extractor or closed protocol value. Evidence V1 rejects
+this protocol and `generate_content_chunk`; its schemas and old bytes stay fixed.
+
+Native JSON and HTTP rejection frames use `json` and `http_error`; native SSE
+uses `generate_content_chunk`. Each original `usageMetadata` object is a snapshot,
+not an additive increment. The scalar mapping is `promptTokenCount` to input,
+`candidatesTokenCount` to output, `totalTokenCount` to total,
+`cachedContentTokenCount` to cache read, and `thoughtsTokenCount` to reasoning.
+The [official UsageMetadata definition](https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto)
+uses int32 counters: retained values must be exact nonnegative integers no larger
+than 2,147,483,647. Missing quantities stay absent, explicit zero stays zero, and
+malformed present quantities are null with `invalid: true`. Detail, tool or
+modality fields outside this scalar mapping set `unsupported` without erasing
+known facts. No implicit cache-write or reasoning zero is asserted.
+
+Original output is the candidate-token counter; thoughts are a separate native
+quantity. A normalized inclusive output requires both explicitly observed values
+and a checked sum. Repeated cumulative snapshots must not be summed. These
+technical observations do not qualify commercial settlement or certify complete
+usage from an estimator, invalid stream, unknown outcome or missing dimensions.
 
 #### Bounds, estimates and children
 

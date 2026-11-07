@@ -39,6 +39,35 @@ pub(super) async fn capabilities(
         .await
 }
 
+pub(super) async fn generate_content_capabilities(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<
+    Json<bitrouter_ai::tenancy::generate_content::OrderedGenerateContentCapabilitiesV1>,
+    Failure,
+> {
+    use bitrouter_ai::tenancy::generate_content::{
+        MIME, OrderedGenerateContentCapabilitiesV1, PATH,
+    };
+    service
+        .with_capability_authority(&caller, |state| {
+            Ok(Json(OrderedGenerateContentCapabilitiesV1 {
+                contract_version: 1,
+                installation_id: state.installation.clone(),
+                instance_id: service.instance.clone(),
+                capability_revision: service.capability_revision(state)?,
+                authority_revision: state.revision,
+                enabled: service.private_adapter.is_some() && service.ordered_dispatch_ready(state),
+                cached_content_enabled: service.private_adapter.is_some()
+                    && service.execution_settings.ordered_native_controls
+                    && service.ordered_dispatch_ready(state),
+                path: PATH.into(),
+                request_media_type: MIME.into(),
+            }))
+        })
+        .await
+}
+
 pub(super) async fn native_controls_capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,

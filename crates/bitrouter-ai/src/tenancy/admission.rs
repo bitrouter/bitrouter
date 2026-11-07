@@ -149,6 +149,8 @@ impl AdmissionProfileV1 {
 #[serde(deny_unknown_fields)]
 pub struct AdmissionAttachmentV1 {
     /// Actual ingress protocol, not the target's upstream protocol.
+    #[serde(deserialize_with = "legacy_protocol")]
+    #[cfg_attr(feature = "schema", schemars(with = "LegacyGenerationProtocol"))]
     pub inbound_protocol: GenerationProtocol,
     /// Original root ordinal, below 256.
     #[serde(deserialize_with = "super::number::integer")]
@@ -162,6 +164,10 @@ pub struct AdmissionAttachmentV1 {
 
 impl Validate for AdmissionAttachmentV1 {
     fn validate(&self) -> Result<(), ValidationError> {
+        require(
+            self.inbound_protocol != GenerationProtocol::GenerateContent,
+            "v1 admission protocol",
+        )?;
         require(
             usize::from(self.candidate_index) < MAX_CANDIDATES,
             "admission ordinal",
@@ -279,4 +285,36 @@ pub enum AvailabilityObservation {
     AuthorityDenied,
     /// Bounded operational state cannot admit another entry.
     CapacityDenied,
+}
+
+// The new private ingress must not widen format-one resource authority or schemas.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LegacyGenerationProtocol {
+    ChatCompletions,
+    Messages,
+    Responses,
+}
+
+fn legacy_protocol<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<GenerationProtocol, D::Error> {
+    Ok(match LegacyGenerationProtocol::deserialize(deserializer)? {
+        LegacyGenerationProtocol::ChatCompletions => GenerationProtocol::ChatCompletions,
+        LegacyGenerationProtocol::Messages => GenerationProtocol::Messages,
+        LegacyGenerationProtocol::Responses => GenerationProtocol::Responses,
+    })
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for LegacyGenerationProtocol {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GenerationProtocol".into()
+    }
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        "bitrouter_ai::tenancy::ordered::GenerationProtocol".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type":"string","enum":["chat_completions","messages","responses"]})
+    }
 }

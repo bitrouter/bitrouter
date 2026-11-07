@@ -63,7 +63,26 @@ impl AuthenticatedRequest {
                 execution
                     .revalidate()
                     .map_err(|code| execution.reject(code))?;
-                if execution.provider_native_controls() {
+                let native_bridge = matches!(&target.api_protocol, bitrouter_ai::types::ApiProtocol::Custom(name)
+                    if name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL);
+                if native_bridge {
+                    let crate::gateway::pipeline::types::PipelineInput::GenerateContent(input) = ctx.input() else {
+                        return Err(execution.reject(ErrorCode::CapabilityMismatch));
+                    };
+                    execution.validate_generate_content(input)?;
+                    let expected = input.render(&target.service_id, input.stream())?;
+                    let expected = serde_json::to_vec(&expected)
+                        .map_err(|_| execution.reject(ErrorCode::InvalidRequest))?;
+                    let actual = applied.body().and_then(reqwest::Body::as_bytes)
+                        .ok_or_else(|| execution.reject(ErrorCode::InvalidRequest))?;
+                    let mut content_types = applied.headers().get_all(reqwest::header::CONTENT_TYPE).iter();
+                    if expected != actual
+                        || content_types.next().and_then(|value| value.to_str().ok())
+                            != Some(bitrouter_ai::tenancy::generate_content::MIME)
+                        || content_types.next().is_some() {
+                        return Err(execution.reject(ErrorCode::CapabilityMismatch));
+                    }
+                } else if execution.provider_native_controls() || matches!(ctx.input(),crate::gateway::pipeline::types::PipelineInput::GenerateContent(_)) {
                     let bytes = applied
                         .body()
                         .and_then(reqwest::Body::as_bytes)
@@ -72,7 +91,7 @@ impl AuthenticatedRequest {
                         .map_err(|_| execution.reject(ErrorCode::InvalidRequest))?;
                     execution.validate_native_controls_body(
                         ctx.require_generation_prompt()?,
-                        &target.api_protocol,
+                        target,
                         &body,
                     )?;
                 }
@@ -307,7 +326,16 @@ pub(super) fn admit_send(
     stream: Option<bool>,
 ) -> Result<SendAdmission> {
     match (binding, execution(ctx)) {
-        (None, None) if permit.is_none() => Ok(SendAdmission::default()),
+        (None, None) if permit.is_none() => {
+            if matches!(&target.api_protocol, bitrouter_ai::types::ApiProtocol::Custom(name)
+                if name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+            {
+                return Err(crate::gateway::error::BitrouterError::Forbidden(
+                    "paired native protocol requires ordered authority".into(),
+                ));
+            }
+            Ok(SendAdmission::default())
+        }
         (Some(binding), Some(execution)) if Arc::ptr_eq(&binding.execution, &execution) => {
             if digest(request).map_err(|code| execution.reject(code))? != binding.digest
                 || execution
@@ -317,6 +345,19 @@ pub(super) fn admit_send(
                     != binding.stamp.candidate()
             {
                 return Err(execution.reject(ErrorCode::Forbidden));
+            }
+            let native_bridge = matches!(&target.api_protocol, bitrouter_ai::types::ApiProtocol::Custom(name)
+                if name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL);
+            if native_bridge && !execution.is_private_adapter_endpoint(request.url()) {
+                return Err(execution.reject(ErrorCode::Forbidden));
+            }
+            if native_bridge {
+                let crate::gateway::pipeline::types::PipelineInput::GenerateContent(input) =
+                    ctx.input()
+                else {
+                    return Err(execution.reject(ErrorCode::CapabilityMismatch));
+                };
+                execution.validate_generate_content(input)?;
             }
             let adapter = if execution.is_private_adapter_endpoint(request.url()) {
                 execution.check_private_adapter_request(request, stream)?;

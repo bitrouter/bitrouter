@@ -58,6 +58,7 @@ use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamP
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
 
 enum ExecutionInput<'a> {
+    GenerateContent(&'a super::types::generate_content::Input),
     #[cfg(feature = "server-tools")]
     Generation(&'a Prompt),
     Decisions(&'a bitrouter_ai::decisions::DecisionRequest),
@@ -651,7 +652,8 @@ struct PipelineStreamUpstream {
 #[async_trait]
 impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
-        let ctx = self.context.fork_for_prompt(prompt.clone());
+        let mut ctx = self.context.fork_for_prompt(prompt.clone());
+        ctx.insert_extension(Arc::new(super::server_tools::stream::ProviderToolTurn));
         let execution = self
             .pipeline
             .execute_stream_with_fallback(&self.chain, &ctx)
@@ -862,6 +864,8 @@ impl Pipeline {
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
                 .ok_or(BitrouterError::UpstreamUnavailable)?;
             registration.validate(self.owned_tasks())?;
+            registration.validate_execution(execution.id())?;
+            execution.claim_preparation()?;
             let tasks = self
                 .owned_tasks()
                 .cloned()
@@ -921,26 +925,20 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        if let Some(execution) = req
+        if req
             .extensions
             .get::<Arc<crate::tenancy::execution::TenantExecution>>()
-            .cloned()
+            .is_some()
         {
+            // Validation does not own a preparation or a failure proposal.
+            // The detached entry claims custody only after exact registration
+            // checks; the registered lifecycle owns abandoned-input cleanup.
             let pipeline = req
                 .extensions
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
-                .ok_or(BitrouterError::UpstreamUnavailable)
-                .and_then(|registration| registration.pipeline(self));
-            match pipeline {
-                Ok(pipeline) => return pipeline.execute_detached(req).await,
-                Err(error) => {
-                    drop(req);
-                    execution
-                        .terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed)
-                        .await?;
-                    return Err(error);
-                }
-            }
+                .ok_or(BitrouterError::UpstreamUnavailable)?
+                .pipeline(self)?;
+            return pipeline.execute_detached(req).await;
         }
         let prepared = self
             .execute_prepared(
@@ -1072,6 +1070,10 @@ impl Pipeline {
                 )
                 .await
                 .map(|outcome| (outcome.result, true, outcome.output_rejection)),
+            (Ok(_), PipelineInput::GenerateContent(input), _) => self
+                .execute_with_fallback(&chain, ExecutionInput::GenerateContent(input), &ctx)
+                .await
+                .map(|result| (result, true, None)),
             (Ok(_), PipelineInput::Decisions(request), _) => self
                 .execute_with_fallback(&chain, ExecutionInput::Decisions(request), &ctx)
                 .await
@@ -1556,6 +1558,8 @@ impl Pipeline {
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
                 .ok_or(BitrouterError::UpstreamUnavailable)?;
             registration.validate(self.owned_tasks())?;
+            registration.validate_execution(execution.id())?;
+            execution.claim_preparation()?;
             let tasks = self
                 .owned_tasks()
                 .cloned()
@@ -2224,6 +2228,16 @@ impl Pipeline {
                 PipelineInput::Generation(prompt) => {
                     content_fragments(prompt, binding.max_input_bytes)
                 }
+                PipelineInput::GenerateContent(input) => {
+                    let prompt = input.projection().ok_or_else(|| {
+                        super::types::generate_content::Input::unavailable(
+                            &bitrouter_ai::types::ApiProtocol::Custom(
+                                bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+                            ),
+                        )
+                    })?;
+                    content_fragments(prompt, binding.max_input_bytes)
+                }
                 PipelineInput::Decisions(request) => {
                     decision_content_fragments(request, binding.max_input_bytes)
                 }
@@ -2438,7 +2452,9 @@ impl Pipeline {
             }
         }
         let native = preparation_runtime(ctx);
-        if operation == ModelOperation::Generation {
+        if operation == ModelOperation::Generation
+            && !matches!(ctx.input(), PipelineInput::GenerateContent(_))
+        {
             let prepared = if let Some(prepared) =
                 ctx.extension::<crate::gateway::routing::preparation::Prepared>()
             {
@@ -2530,7 +2546,9 @@ impl Pipeline {
         .await?;
         let mut context_changed = false;
         let mut routing_prompt = None;
-        if operation == ModelOperation::Generation {
+        if operation == ModelOperation::Generation
+            && !matches!(ctx.input(), PipelineInput::GenerateContent(_))
+        {
             filter_reasoning_effort_targets(&mut chain, ctx.require_generation_prompt()?)?;
             // A native caller may leave the output budget to the selected model.
             // Resolve it before committing the exact prompt and before token counts.
@@ -2844,13 +2862,20 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
-        #[cfg(feature = "server-tools")]
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
             }
             match input {
+                ExecutionInput::GenerateContent(input) => {
+                    if !self
+                        .admit_generate_content_candidate(target, input, false, ctx, &mut excluded)
+                        .await?
+                    {
+                        continue;
+                    }
+                }
                 #[cfg(feature = "server-tools")]
                 ExecutionInput::Generation(prompt) => {
                     if !self
@@ -2873,6 +2898,11 @@ impl Pipeline {
             let outcome = match reached {
                 Err(error) => Err(error),
                 Ok(()) => match input {
+                    ExecutionInput::GenerateContent(input) => {
+                        self.executor
+                            .execute_generate_content(target, input, ctx)
+                            .await
+                    }
                     #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(prompt) => {
                         self.executor.execute(target, prompt, ctx).await
@@ -2884,6 +2914,10 @@ impl Pipeline {
             }
             .and_then(|result| {
                 let matches = match input {
+                    ExecutionInput::GenerateContent(_) => {
+                        result.result.generation().is_some()
+                            || result.result.native_generate_content().is_some()
+                    }
                     #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(_) => result.result.generation().is_some(),
                     ExecutionInput::Decisions(_) => result.result.decisions().is_some(),
@@ -2951,7 +2985,6 @@ impl Pipeline {
                 },
             }
         }
-        #[cfg(feature = "server-tools")]
         if errors.is_empty() && !excluded.issues.is_empty() {
             return Err(BitrouterError::Incompatible { report: excluded });
         }
@@ -3308,16 +3341,23 @@ impl Pipeline {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
-            if !self
-                .admit_candidate(
-                    target,
-                    ctx.require_generation_prompt()?,
-                    true,
-                    ctx,
-                    &mut excluded,
-                )
-                .await?
-            {
+            let admitted = match ctx.input() {
+                PipelineInput::GenerateContent(input) => {
+                    self.admit_generate_content_candidate(target, input, true, ctx, &mut excluded)
+                        .await?
+                }
+                _ => {
+                    self.admit_candidate(
+                        target,
+                        ctx.require_generation_prompt()?,
+                        true,
+                        ctx,
+                        &mut excluded,
+                    )
+                    .await?
+                }
+            };
+            if !admitted {
                 continue;
             }
             self.wait_before_fallback(errors.len()).await;
@@ -3329,11 +3369,18 @@ impl Pipeline {
             self.observe_hop_start(ctx, target).await;
             let outcome = match reached {
                 Err(error) => Err(error),
-                Ok(()) => {
-                    self.executor
-                        .execute_stream(target, ctx.require_generation_prompt()?, ctx)
-                        .await
-                }
+                Ok(()) => match ctx.input() {
+                    PipelineInput::GenerateContent(input) => {
+                        self.executor
+                            .execute_generate_content_stream(target, input, ctx)
+                            .await
+                    }
+                    _ => {
+                        self.executor
+                            .execute_stream(target, ctx.require_generation_prompt()?, ctx)
+                            .await
+                    }
+                },
             };
             match &outcome {
                 Ok(_) => {
@@ -3421,6 +3468,36 @@ impl Pipeline {
                 report.require_admitted()?;
                 Ok(report)
             });
+        self.admit_assessment(assessment, target, ctx, excluded)
+            .await
+    }
+
+    async fn admit_generate_content_candidate(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        stream: bool,
+        ctx: &PipelineContext,
+        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+    ) -> Result<bool> {
+        let assessment = self
+            .executor
+            .preflight_generate_content(target, input, stream, ctx)
+            .and_then(|report| {
+                report.require_admitted()?;
+                Ok(report)
+            });
+        self.admit_assessment(assessment, target, ctx, excluded)
+            .await
+    }
+
+    async fn admit_assessment(
+        &self,
+        assessment: Result<bitrouter_ai::conversion::ConversionReport>,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+    ) -> Result<bool> {
         match assessment {
             Ok(report) => {
                 if !report.admitted.is_empty() {

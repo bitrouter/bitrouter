@@ -23,7 +23,7 @@ use crate::gateway::model::protocol::values::{
 use bitrouter_ai::protocol::responses::{
     ResponsesReasoningConfig, ResponsesRequest, ResponsesText, ResponsesTextFormat, ResponsesTool,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -40,8 +40,8 @@ use crate::gateway::model::target::ModelTarget;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, NativeReasoning,
     Prompt, ProviderMetadata, ReasoningTextKind, ResponseFormat, ResponseOutputCommitment, Role,
-    Source, StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
-    UsageOrigin, provider_namespace, set_provider_metadata,
+    Source, StreamPart, Tool, ToolCallBoundary, ToolChoice, ToolResultContentPart,
+    ToolResultOutput, Usage, UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 const GATEWAY_CONTINUATION_PREFIX: &str = "brc_";
@@ -859,7 +859,8 @@ impl StreamingAssistantTurnCommitment {
                 self.finish_active();
                 self.turn.invalidate();
             }
-            StreamPart::Usage { .. }
+            StreamPart::ToolCallEnd { .. }
+            | StreamPart::Usage { .. }
             | StreamPart::ResponseStarted { .. }
             | StreamPart::Finish { .. }
             | StreamPart::ResponseCompleted { .. } => {}
@@ -2366,8 +2367,9 @@ impl InboundAdapter for ResponsesAdapter {
             reasoning_source: None,
             reasoning_native: None,
             text_item: None,
-            tool_item: None,
-            completed_items: Vec::new(),
+            tool_items: HashMap::new(),
+            tool_indexes: HashMap::new(),
+            output_items: BTreeMap::new(),
             annotation_index: 0,
             pending_mcp_call: None,
             pending_usage: None,
@@ -3653,8 +3655,10 @@ fn parse_usage_retains_provider_payload_and_origin() {
 /// events map back to the canonical tool-call id (#434).
 #[derive(Default)]
 struct ResponsesStreamDecoder {
-    /// item_id → (call_id, tool_name) for in-flight function-call items.
-    function_items: Vec<(String, String, String)>,
+    tool_items: HashMap<String, NativeToolItem>,
+    tool_call_ids: HashSet<String>,
+    tool_output_indexes: HashSet<u64>,
+    terminal_tool_ends: Vec<StreamPart>,
     reasoning_deltas: HashMap<String, (String, String)>,
     /// Running citation count across `response.output_text.annotation.added`
     /// events, so synthesized [`Source`] ids stay unique within the stream
@@ -3670,12 +3674,172 @@ struct ResponsesStreamDecoder {
     successful_terminal: Option<StreamPart>,
 }
 
+struct NativeToolItem {
+    call_id: String,
+    name: String,
+    custom: bool,
+    metadata: ProviderMetadata,
+    index: Option<u64>,
+    arguments: Sha256,
+    arguments_done: bool,
+    item_done: Option<Option<String>>,
+}
+
+fn invalid_responses_tool(message: &str) -> ModelError {
+    ModelError::InvalidResponse {
+        message: message.into(),
+        usage: None,
+    }
+}
+
+fn tool_index(value: &serde_json::Value) -> Result<Option<u64>> {
+    value
+        .get("output_index")
+        .map(|value| {
+            value
+                .as_u64()
+                .ok_or_else(|| invalid_responses_tool("invalid Responses tool output index"))
+        })
+        .transpose()
+}
+
+impl NativeToolItem {
+    fn check_index(&self, index: Option<u64>) -> Result<()> {
+        if self
+            .index
+            .zip(index)
+            .is_some_and(|(opened, current)| opened != current)
+        {
+            return Err(invalid_responses_tool(
+                "Responses tool output index changed",
+            ));
+        }
+        Ok(())
+    }
+
+    fn bind_index(&mut self, index: Option<u64>, used: &mut HashSet<u64>) -> Result<()> {
+        self.check_index(index)?;
+        if let (None, Some(index)) = (self.index, index) {
+            if !used.insert(index) {
+                return Err(invalid_responses_tool(
+                    "duplicate Responses tool output index",
+                ));
+            }
+            self.index = Some(index);
+        }
+        Ok(())
+    }
+
+    fn argument_field(&self) -> &'static str {
+        if self.custom { "input" } else { "arguments" }
+    }
+
+    fn check_arguments(&self, snapshot: &serde_json::Value) -> Result<()> {
+        let text = snapshot
+            .get(self.argument_field())
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_responses_tool("Responses tool snapshot has no arguments"))?;
+        if self.arguments.clone().finalize() != Sha256::digest(text.as_bytes()) {
+            return Err(invalid_responses_tool(
+                "Responses tool snapshot contradicts its arguments",
+            ));
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self, item: &serde_json::Value, index: Option<u64>) -> Result<Option<String>> {
+        self.check_index(index)?;
+        let expected_type = if self.custom {
+            "custom_tool_call"
+        } else {
+            "function_call"
+        };
+        if item["type"].as_str() != Some(expected_type)
+            || item["call_id"].as_str() != Some(self.call_id.as_str())
+            || item["name"].as_str() != Some(self.name.as_str())
+            || client_tool_metadata(item) != self.metadata
+        {
+            return Err(invalid_responses_tool(
+                "Responses tool snapshot changed identity",
+            ));
+        }
+        self.check_arguments(item)?;
+        match item.get("status") {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(status) => match status.as_str() {
+                Some(status @ ("completed" | "incomplete" | "in_progress")) => {
+                    Ok(Some(status.to_owned()))
+                }
+                _ => Err(invalid_responses_tool("invalid Responses tool item status")),
+            },
+        }
+    }
+
+    fn item_end(&self, status: Option<String>, terminal_only: bool) -> StreamPart {
+        StreamPart::ToolCallEnd {
+            id: self.call_id.clone(),
+            boundary: ToolCallBoundary::ResponsesItem {
+                status,
+                terminal_only,
+            },
+        }
+    }
+}
+
 impl ResponsesStreamDecoder {
-    fn call_for_item(&self, item_id: &str) -> Option<(String, String)> {
-        self.function_items
-            .iter()
-            .find(|(id, _, _)| id == item_id)
-            .map(|(_, call_id, name)| (call_id.clone(), name.clone()))
+    fn terminal_tools(&self, output: Option<&serde_json::Value>) -> Result<Vec<StreamPart>> {
+        if self.tool_items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(output) = output.and_then(serde_json::Value::as_array) else {
+            return Err(invalid_responses_tool(
+                "Responses terminal omitted its tool output",
+            ));
+        };
+        let mut seen = HashSet::new();
+        let mut parts = Vec::new();
+        for (index, item) in output.iter().enumerate() {
+            let is_tool = matches!(
+                item["type"].as_str(),
+                Some("function_call" | "custom_tool_call")
+            );
+            let Some(id) = item["id"].as_str() else {
+                if is_tool {
+                    return Err(invalid_responses_tool(
+                        "Responses terminal tool has no item ID",
+                    ));
+                }
+                continue;
+            };
+            let Some(tool) = self.tool_items.get(id) else {
+                if is_tool {
+                    return Err(invalid_responses_tool(
+                        "Responses terminal introduced an unknown tool item",
+                    ));
+                }
+                continue;
+            };
+            let status = tool.snapshot(item, Some(index as u64))?;
+            if !seen.insert(id)
+                || tool
+                    .item_done
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .zip(status.as_ref())
+                    .is_some_and(|(done, terminal)| done != terminal)
+            {
+                return Err(invalid_responses_tool(
+                    "Responses terminal contradicts tool item completion",
+                ));
+            }
+            parts.push(tool.item_end(status, true));
+        }
+        if seen.len() != self.tool_items.len() {
+            return Err(invalid_responses_tool(
+                "Responses terminal omitted a streamed tool item",
+            ));
+        }
+        Ok(parts)
     }
 }
 
@@ -3795,34 +3959,63 @@ impl StreamDecoder for ResponsesStreamDecoder {
                             });
                         }
                         "function_call" | "custom_tool_call" => {
-                            // A function-call item frames itself via the
-                            // `name`-bearing `ToolCallDelta` below — no separate
-                            // start marker (see the `StreamPart` enum docs).
-                            // Track the *real* upstream `item.id` (not the marker
-                            // fallback) so `function_call_arguments.delta` — which
-                            // carries `item_id` — correlates to this call (#434).
-                            let real_item_id = item
-                                .get("id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or_default()
-                                .to_string();
-                            let call_id = item
-                                .get("call_id")
-                                .and_then(|i| i.as_str())
-                                .unwrap_or(&real_item_id)
-                                .to_string();
-                            let name = item
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or_default()
-                                .to_string();
-                            self.function_items
-                                .push((real_item_id, call_id.clone(), name.clone()));
+                            let required = |key| {
+                                item[key]
+                                    .as_str()
+                                    .filter(|value| !value.is_empty())
+                                    .ok_or_else(|| {
+                                        invalid_responses_tool(
+                                            "Responses tool item has missing identity",
+                                        )
+                                    })
+                            };
+                            let real_item_id = required("id")?;
+                            let call_id = required("call_id")?;
+                            let name = required("name")?;
+                            let index = tool_index(&json)?;
+                            let custom = item_type == "custom_tool_call";
+                            let metadata = client_tool_metadata(item);
+                            let argument_field = if custom { "input" } else { "arguments" };
+                            let arguments = item
+                                .get(argument_field)
+                                .map(|value| {
+                                    value.as_str().ok_or_else(|| {
+                                        invalid_responses_tool(
+                                            "invalid initial Responses tool arguments",
+                                        )
+                                    })
+                                })
+                                .transpose()?
+                                .unwrap_or_default();
+                            if self.tool_items.contains_key(real_item_id)
+                                || !self.tool_call_ids.insert(call_id.to_owned())
+                                || index
+                                    .is_some_and(|index| !self.tool_output_indexes.insert(index))
+                            {
+                                return Err(invalid_responses_tool(
+                                    "duplicate Responses tool identity",
+                                ));
+                            }
+                            let mut digest = Sha256::new();
+                            digest.update(arguments.as_bytes());
+                            self.tool_items.insert(
+                                real_item_id.to_owned(),
+                                NativeToolItem {
+                                    call_id: call_id.to_owned(),
+                                    name: name.to_owned(),
+                                    custom,
+                                    metadata: metadata.clone(),
+                                    index,
+                                    arguments: digest,
+                                    arguments_done: false,
+                                    item_done: None,
+                                },
+                            );
                             parts.push(StreamPart::ToolCallDelta {
-                                id: call_id,
-                                name: Some(name),
-                                arguments: String::new(),
-                                provider_metadata: client_tool_metadata(item),
+                                id: call_id.to_owned(),
+                                name: Some(name.to_owned()),
+                                arguments: arguments.to_owned(),
+                                provider_metadata: metadata,
                             });
                         }
                         // Streaming MCP gap: a streamed `mcp_call` item (a
@@ -3901,31 +4094,47 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     });
                 }
             }
-            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
-                // map item_id → call_id (#434); emit a single arguments delta
-                let item_id = json
-                    .get("item_id")
-                    .and_then(|i| i.as_str())
-                    .unwrap_or_default();
-                if let Some((call_id, _)) = self.call_for_item(item_id)
-                    && let Some(delta) = json.get("delta").and_then(|d| d.as_str())
+            "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta"
+            | "response.function_call_arguments.done"
+            | "response.custom_tool_call_input.done" => {
+                let tool = json["item_id"]
+                    .as_str()
+                    .and_then(|id| self.tool_items.get_mut(id))
+                    .ok_or_else(|| {
+                        invalid_responses_tool("Responses tool event has no open item")
+                    })?;
+                tool.bind_index(tool_index(&json)?, &mut self.tool_output_indexes)?;
+                if tool.custom != event_type.starts_with("response.custom_tool_call_input.")
+                    || tool.arguments_done
+                    || tool.item_done.is_some()
                 {
+                    return Err(invalid_responses_tool(
+                        "invalid Responses tool argument lifecycle",
+                    ));
+                }
+                if event_type.ends_with(".done") {
+                    tool.check_arguments(&json)?;
+                    tool.arguments_done = true;
+                    parts.push(StreamPart::ToolCallEnd {
+                        id: tool.call_id.clone(),
+                        boundary: ToolCallBoundary::Arguments,
+                    });
+                } else {
+                    let delta = json["delta"].as_str().ok_or_else(|| {
+                        invalid_responses_tool("missing Responses tool argument delta")
+                    })?;
+                    tool.arguments.update(delta.as_bytes());
                     parts.push(StreamPart::ToolCallDelta {
-                        id: call_id,
+                        id: tool.call_id.clone(),
                         name: None,
-                        arguments: delta.to_string(),
+                        arguments: delta.to_owned(),
                         provider_metadata: Default::default(),
                     });
                 }
             }
-            // the `.done` event repeats the full arguments — do NOT re-emit
-            // them (would duplicate, #434).
-            "response.function_call_arguments.done" | "response.custom_tool_call_input.done" => {}
             "response.output_item.done" => {
-                // Close the matching text / reasoning block so the boundary
-                // survives re-encoding (the merged-block fix). A `function_call`
-                // item carries no end marker (its framing is the `name`-bearing
-                // delta on open and the next item / terminal on close).
+                // Keep each item's own close boundary and validate tool snapshots.
                 if let Some(item) = json.get("item") {
                     let item_type = item
                         .get("type")
@@ -3934,6 +4143,25 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     let item_id = block_marker_id(item, &json);
                     match item_type {
                         "message" => parts.push(StreamPart::TextEnd { id: item_id }),
+                        "function_call" | "custom_tool_call" => {
+                            let tool = item["id"]
+                                .as_str()
+                                .and_then(|id| self.tool_items.get_mut(id))
+                                .ok_or_else(|| {
+                                    invalid_responses_tool("Responses closed an unknown tool item")
+                                })?;
+                            let index = tool_index(&json)?;
+                            tool.bind_index(index, &mut self.tool_output_indexes)?;
+                            let status = tool.snapshot(item, index)?;
+                            if tool.item_done.is_some() || status.as_deref() == Some("in_progress")
+                            {
+                                return Err(invalid_responses_tool(
+                                    "invalid Responses tool item completion",
+                                ));
+                            }
+                            parts.push(tool.item_end(status.clone(), false));
+                            tool.item_done = Some(status);
+                        }
                         "reasoning" => {
                             let seen = self.reasoning_deltas.remove(&item_id);
                             // A bare legacy block-close marker is not a completed
@@ -4038,6 +4266,8 @@ impl StreamDecoder for ResponsesStreamDecoder {
                         usage: None,
                     });
                 }
+                self.terminal_tool_ends =
+                    self.terminal_tools(response.and_then(|r| r.get("output")))?;
                 self.successful_terminal = Some(StreamPart::ResponseCompleted {
                     id,
                     source_protocol: ApiProtocol::Responses,
@@ -4099,7 +4329,11 @@ impl StreamDecoder for ResponsesStreamDecoder {
     fn finish(&mut self) -> Result<Vec<StreamPart>> {
         self.successful_terminal
             .take()
-            .map(|terminal| vec![terminal])
+            .map(|terminal| {
+                let mut parts = std::mem::take(&mut self.terminal_tool_ends);
+                parts.push(terminal);
+                parts
+            })
             .ok_or_else(|| ModelError::InvalidResponse {
                 message: "Responses stream ended before a valid terminal event".to_string(),
                 usage: None,
@@ -4136,11 +4370,9 @@ struct ResponsesStreamEncoder {
     seq: u64,
     created: bool,
     /// Next free `output_index` to hand to a newly-opened item.
-    /// Incremented every time we open + close one.
     next_output_index: u64,
     /// State of the in-flight reasoning item, if any. Reasoning is
-    /// closed before a message item opens (codex and the spec both
-    /// require items to not interleave their deltas).
+    /// closed before a message item opens.
     reasoning_item: Option<ReasoningItemState>,
     reasoning_source: Option<ApiProtocol>,
     reasoning_native: Option<NativeReasoning>,
@@ -4148,15 +4380,16 @@ struct ResponsesStreamEncoder {
     /// first `ToolCallDelta` (new function-call item starts) or on
     /// `Finish` / `ResponseCompleted`.
     text_item: Option<ItemState>,
-    /// State of the in-flight function-call item, if any. Closes on the
-    /// next item of any kind, or on the terminal part.
-    tool_item: Option<ToolItemState>,
-    /// Every closed output item, as its final JSON, in emission order.
+    /// Client tool calls can overlap. Keep each open by call ID until its
+    /// source-proven item boundary or a legacy projected turn terminal.
+    tool_items: HashMap<String, ToolItemState>,
+    tool_indexes: HashMap<String, u64>,
+    /// Final output items by their original output index.
     /// Replayed into `response.completed.response.output` so the
     /// terminal envelope mirrors the non-streaming Responses object —
     /// Codex CLI reconstructs the assistant turn from this array, so an
     /// empty `output` renders as a blank turn (the symptom this fixes).
-    completed_items: Vec<serde_json::Value>,
+    output_items: BTreeMap<u64, serde_json::Value>,
     /// Running count of `response.output_text.annotation.added` events emitted,
     /// supplying the monotonically increasing `annotation_index` each event
     /// carries.
@@ -4226,14 +4459,30 @@ struct ReasoningItemState {
 
 /// Tracking state for one open function-call item.
 struct ToolItemState {
-    /// The upstream tool-call id (`call_id`).
-    call_id: String,
     item_id: String,
     output_index: u64,
     tool_name: String,
     /// Accumulated argument JSON fragments.
     accumulated_args: String,
+    arguments_done: bool,
     provider_metadata: ProviderMetadata,
+}
+
+impl ToolItemState {
+    fn arguments_end(&self) -> (&'static str, serde_json::Value) {
+        let (event, field) = if custom_call(&self.provider_metadata) {
+            ("response.custom_tool_call_input.done", "input")
+        } else {
+            ("response.function_call_arguments.done", "arguments")
+        };
+        (
+            event,
+            serde_json::json!({
+                "item_id": self.item_id, "output_index": self.output_index,
+                (field): self.accumulated_args,
+            }),
+        )
+    }
 }
 
 impl ResponsesStreamEncoder {
@@ -4287,13 +4536,12 @@ impl ResponsesStreamEncoder {
 
     /// Open a reasoning item: `output_item.added` (type=reasoning) +
     /// `content_part.added` (type=reasoning_text). Idempotent — closes
-    /// any open message / tool item first so items never interleave.
+    /// any open message item first.
     fn open_reasoning_item(&mut self, frames: &mut Vec<SseFrame>, native_id: Option<&str>) {
         if self.reasoning_item.is_some() {
             return;
         }
         self.close_text_item(frames);
-        self.close_tool_item(frames);
         let output_index = self.allocate_output_index();
         let item_id =
             native_id.map_or_else(|| format!("rs_{}", uuid::Uuid::new_v4()), str::to_owned);
@@ -4361,7 +4609,7 @@ impl ResponsesStreamEncoder {
                 "item": item.clone(),
             }),
         ));
-        self.completed_items.push(item);
+        self.output_items.insert(state.output_index, item);
     }
 
     /// Force-open a *fresh* reasoning item for an explicit
@@ -4392,13 +4640,12 @@ impl ResponsesStreamEncoder {
 
     /// Open a message item: `output_item.added` (type=message) +
     /// `content_part.added` (type=output_text). Idempotent — closes any
-    /// open reasoning / tool item first so items never interleave.
+    /// open reasoning item first.
     fn open_text_item(&mut self, frames: &mut Vec<SseFrame>) {
         if self.text_item.is_some() {
             return;
         }
         self.close_reasoning_item(frames);
-        self.close_tool_item(frames);
         let output_index = self.allocate_output_index();
         let item_id = format!("msg_{}", uuid::Uuid::new_v4());
         frames.push(self.ev(
@@ -4469,7 +4716,7 @@ impl ResponsesStreamEncoder {
                 "item": item.clone(),
             }),
         ));
-        self.completed_items.push(item);
+        self.output_items.insert(state.output_index, item);
     }
 
     /// Force-open a *fresh* message item for an explicit
@@ -4477,8 +4724,7 @@ impl ResponsesStreamEncoder {
     /// closes any message item already open, so two distinct upstream `message`
     /// items re-encode as two `output_item.added`s rather than one merged block
     /// (the merged-block fix on this wire). Closing the prior item before
-    /// reopening also re-runs the cross-kind close inside `open_text_item`, so
-    /// reasoning / tool items never interleave.
+    /// reopening also closes any open reasoning item.
     /// <https://platform.openai.com/docs/api-reference/responses-streaming>
     fn open_fresh_text_item(&mut self, frames: &mut Vec<SseFrame>) {
         self.close_text_item(frames);
@@ -4495,7 +4741,6 @@ impl ResponsesStreamEncoder {
     ) {
         self.close_reasoning_item(frames);
         self.close_text_item(frames);
-        self.close_tool_item(frames);
         let output_index = self.allocate_output_index();
         let item_id = format!("fc_{}", uuid::Uuid::new_v4());
         let mut item = client_call_item(call_id, name, "", metadata);
@@ -4507,54 +4752,116 @@ impl ResponsesStreamEncoder {
                 "output_index": output_index, "item": item,
             }),
         ));
-        self.tool_item = Some(ToolItemState {
-            call_id: call_id.to_string(),
-            item_id,
-            output_index,
-            tool_name: name.to_string(),
-            accumulated_args: String::new(),
-            provider_metadata: metadata.clone(),
-        });
+        self.tool_indexes.insert(call_id.to_owned(), output_index);
+        self.tool_items.insert(
+            call_id.to_owned(),
+            ToolItemState {
+                item_id,
+                output_index,
+                tool_name: name.to_string(),
+                accumulated_args: String::new(),
+                arguments_done: false,
+                provider_metadata: metadata.clone(),
+            },
+        );
     }
 
-    fn close_tool_item(&mut self, frames: &mut Vec<SseFrame>) {
-        let Some(state) = self.tool_item.take() else {
-            return;
-        };
-        let custom = custom_call(&state.provider_metadata);
-        frames.push(self.ev(
-            if custom {
-                "response.custom_tool_call_input.done"
-            } else {
-                "response.function_call_arguments.done"
-            },
-            serde_json::json!({
-                "item_id": state.item_id, "output_index": state.output_index,
-                (if custom { "input" } else { "arguments" }): state.accumulated_args,
-            }),
-        ));
+    fn finish_tool_item(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        call_id: &str,
+        state: ToolItemState,
+        status: Option<&str>,
+        emit_item: bool,
+    ) {
         let mut item = client_call_item(
-            &state.call_id,
+            call_id,
             &state.tool_name,
             &state.accumulated_args,
             &state.provider_metadata,
         );
         item["id"] = state.item_id.into();
-        item["status"] = "completed".into();
-        frames.push(self.ev(
-            "response.output_item.done",
-            serde_json::json!({
-                "output_index": state.output_index, "item": item.clone(),
-            }),
-        ));
-        self.completed_items.push(item);
+        if let Some(status) = status {
+            item["status"] = status.into();
+        }
+        if emit_item {
+            frames.push(self.ev(
+                "response.output_item.done",
+                serde_json::json!({
+                    "output_index": state.output_index, "item": item,
+                }),
+            ));
+        }
+        self.output_items.insert(state.output_index, item);
+    }
+
+    fn finish_projected_tool(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        id: &str,
+        state: ToolItemState,
+        complete: bool,
+    ) {
+        if complete && !state.arguments_done {
+            let (event, data) = state.arguments_end();
+            frames.push(self.ev(event, data));
+        }
+        let status = if complete { "completed" } else { "incomplete" };
+        self.finish_tool_item(frames, id, state, Some(status), complete);
+    }
+
+    fn end_tool(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        id: &str,
+        boundary: &ToolCallBoundary,
+    ) -> Result<()> {
+        let missing = || invalid_responses_tool("Responses tool end has no matching call");
+        match boundary {
+            ToolCallBoundary::Arguments => {
+                let state = self.tool_items.get_mut(id).ok_or_else(missing)?;
+                if state.arguments_done {
+                    return Err(invalid_responses_tool(
+                        "repeated Responses argument completion",
+                    ));
+                }
+                state.arguments_done = true;
+                let (event, data) = state.arguments_end();
+                frames.push(self.ev(event, data));
+            }
+            ToolCallBoundary::ResponsesItem {
+                status,
+                terminal_only,
+            } => {
+                if let Some(state) = self.tool_items.remove(id) {
+                    self.finish_tool_item(frames, id, state, status.as_deref(), !terminal_only);
+                } else if *terminal_only {
+                    let item = self
+                        .tool_indexes
+                        .get(id)
+                        .and_then(|index| self.output_items.get_mut(index))
+                        .ok_or_else(missing)?;
+                    if let Some(status) = status {
+                        item["status"] = status.as_str().into();
+                    } else if let Some(item) = item.as_object_mut() {
+                        item.remove("status");
+                    }
+                } else {
+                    return Err(missing());
+                }
+            }
+            ToolCallBoundary::MessagesBlock { complete } | ToolCallBoundary::Turn { complete } => {
+                let state = self.tool_items.remove(id).ok_or_else(missing)?;
+                self.finish_projected_tool(frames, id, state, *complete);
+            }
+        }
+        Ok(())
     }
 
     /// Emit the terminal lifecycle frame — `response.completed` (or
     /// `response.incomplete`), carrying the full `response` object (#454-2).
     /// Shared by the `Finish` and `ResponseCompleted` encode arms.
-    /// Closes any still-open reasoning / message / tool items first, and
-    /// replays every closed item into `response.output` so the terminal
+    /// Finalizes open items, then replays them in output-index order so the terminal
     /// envelope mirrors the non-streaming Responses object — Codex CLI
     /// reconstructs the assistant turn from this array.
     fn emit_terminal(
@@ -4566,7 +4873,11 @@ impl ResponsesStreamEncoder {
     ) {
         self.close_reasoning_item(frames);
         self.close_text_item(frames);
-        self.close_tool_item(frames);
+        let mut tools: Vec<_> = self.tool_items.drain().collect();
+        tools.sort_unstable_by_key(|(_, state)| state.output_index);
+        for (call_id, state) in tools {
+            self.finish_projected_tool(frames, &call_id, state, status == "completed");
+        }
         let event_name = match status {
             "completed" => "response.completed",
             "incomplete" => "response.incomplete",
@@ -4577,7 +4888,7 @@ impl ResponsesStreamEncoder {
             "object": "response",
             "model": self.model,
             "status": status,
-            "output": std::mem::take(&mut self.completed_items),
+            "output": std::mem::take(&mut self.output_items).into_values().collect::<Vec<_>>(),
         });
         if let Some(u) = usage {
             // #454-5: numeric, never null; absent stays absent.
@@ -4702,29 +5013,29 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 arguments,
                 provider_metadata,
             } => {
-                // A delta carrying a *non-empty* `name` starts a new
-                // function-call item. `open_tool_item` closes any previously-open
-                // item (reasoning / message / prior tool) first, so each tool
-                // call lands in its own output slot. An empty name is NOT a new
-                // call: some upstreams re-send `name:""` on every
-                // argument-continuation delta, and treating `Some("")` as a new
-                // call fragments one tool call into one broken item per delta
-                // (empty name + partial args) — which Codex rejects as
-                // "unsupported call" / unparsable arguments.
+                // A present but empty name is also a continuation.
                 if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
+                    if id.is_empty() || self.tool_indexes.contains_key(id) {
+                        return Err(ModelError::InvalidResponse {
+                            message: "Responses tool call has a missing or duplicate ID".into(),
+                            usage: None,
+                        });
+                    }
                     self.open_tool_item(&mut frames, id, name, provider_metadata);
                 }
                 if !arguments.is_empty() {
-                    // Append to the in-flight tool item. If a stray
-                    // arguments delta arrives with no opened item (the
-                    // upstream omitted the name), open one with an empty
-                    // name rather than dropping the delta.
-                    if self.tool_item.is_none() {
-                        self.open_tool_item(&mut frames, id, "", provider_metadata);
+                    let state =
+                        self.tool_items
+                            .get_mut(id)
+                            .ok_or_else(|| ModelError::InvalidResponse {
+                                message: "Responses tool arguments have no matching call".into(),
+                                usage: None,
+                            })?;
+                    if state.arguments_done {
+                        return Err(invalid_responses_tool(
+                            "Responses arguments followed their completion",
+                        ));
                     }
-                    let Some(state) = self.tool_item.as_mut() else {
-                        return Ok(frames);
-                    };
                     state.accumulated_args.push_str(arguments);
                     let (item_id, output_index) = (state.item_id.clone(), state.output_index);
                     let custom = custom_call(&state.provider_metadata);
@@ -4742,6 +5053,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     ));
                 }
             }
+            StreamPart::ToolCallEnd { id, boundary } => self.end_tool(&mut frames, id, boundary)?,
             // Buffer a router-executed call; the matching result completes it
             // into one `mcp_call` output item.
             StreamPart::ServerToolCall {
@@ -4765,7 +5077,6 @@ impl StreamEncoder for ResponsesStreamEncoder {
             } => {
                 self.close_reasoning_item(&mut frames);
                 self.close_text_item(&mut frames);
-                self.close_tool_item(&mut frames);
                 let pending = self.pending_mcp_call.take();
                 let pending = pending.filter(|p| &p.id == call_id);
                 let name = pending.as_ref().map(|p| p.name.clone()).unwrap_or_default();
@@ -4799,7 +5110,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     "response.output_item.done",
                     serde_json::json!({ "output_index": output_index, "item": item.clone() }),
                 ));
-                self.completed_items.push(item);
+                self.output_items.insert(output_index, item);
             }
             StreamPart::Source { source } => {
                 // A citation is a `response.output_text.annotation.added` event
@@ -4837,6 +5148,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 // Generate Content) — synthesise the terminal envelope from the reason.
                 let status = match reason {
                     FinishReason::Length => "incomplete",
+                    FinishReason::ContentFilter if !self.tool_items.is_empty() => "incomplete",
                     FinishReason::Error(_) => "failed",
                     _ => "completed",
                 };

@@ -131,6 +131,14 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         );
         return report;
     }
+    if native_google_options_unrepresentable(prompt, protocol) {
+        report.push_projection(
+            protocol,
+            ConversionLocation::GenerationOptions,
+            ConversionReason::HistoryCompatibilityUnknown,
+            ConversionEffect::TaskSemantics,
+        );
+    }
     for (tool, definition) in prompt.tools.iter().enumerate() {
         if let Tool::Function { strict, .. } = definition
             && strict.is_some()
@@ -214,6 +222,25 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
         let mut chat_reasoning_seen = false;
         for (block, content) in entry.content.iter().enumerate() {
             let location = ConversionLocation::MessageContent { message, block };
+            if matches!(&prompt.params.extra_protocol, Some(ApiProtocol::Custom(name)) if name == "generate_content")
+                && !matches!(protocol, ApiProtocol::Custom(name) if name == "generate_content")
+                && matches!(
+                    content,
+                    Content::File {
+                        data: bitrouter_ai::types::DataContent::Url { .. },
+                        ..
+                    }
+                )
+            {
+                report.push_projection(
+                    protocol,
+                    location,
+                    ConversionReason::NativeContinuityUnrepresentable,
+                    ConversionEffect::ReplayAuthority,
+                );
+                continue;
+            }
+
             if let Content::Text {
                 provider_metadata, ..
             } = content
@@ -255,7 +282,16 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                 continue;
             }
             let continuity = match content {
-                Content::Reasoning {
+                Content::Text {
+                    provider_metadata, ..
+                }
+                | Content::File {
+                    provider_metadata, ..
+                }
+                | Content::Reasoning {
+                    provider_metadata, ..
+                }
+                | Content::ToolResult {
                     provider_metadata, ..
                 }
                 | Content::ToolCall {
@@ -271,9 +307,22 @@ pub fn request_admission(prompt: &Prompt, protocol: &ApiProtocol) -> ConversionR
                         });
                     let google = provider_namespace(provider_metadata, "google")
                         .is_some_and(|fields| fields.contains_key("thoughtSignature"));
+                    let native =
+                        matches!(protocol, ApiProtocol::Custom(name) if name == "generate_content");
+                    let source_native = matches!(&prompt.params.extra_protocol, Some(ApiProtocol::Custom(name)) if name == "generate_content");
+                    let unbound =
+                        provider_namespace(provider_metadata, "google").is_some_and(|fields| {
+                            fields
+                                .get("unboundResult")
+                                .and_then(serde_json::Value::as_bool)
+                                == Some(true)
+                        });
                     (anthropic && *protocol != ApiProtocol::Messages)
+                        || (unbound && !native)
                         || (google
-                            && !(*protocol == ApiProtocol::ChatCompletions
+                            && !native
+                            && !(!source_native
+                                && *protocol == ApiProtocol::ChatCompletions
                                 && matches!(content, Content::ToolCall { .. })))
                 }
                 _ => false,
@@ -562,4 +611,70 @@ fn history_refusal(
         }
         _ => None,
     }
+}
+
+fn native_google_options_unrepresentable(prompt: &Prompt, target: &ApiProtocol) -> bool {
+    if matches!(target, ApiProtocol::Custom(name) if name == "generate_content") {
+        return false;
+    }
+    let native_source = matches!(&prompt.params.extra_protocol, Some(ApiProtocol::Custom(name)) if name == "generate_content");
+    let significant = |value: &serde_json::Value| !value.is_null();
+    let native_extra = native_source
+        && prompt.params.extra.iter().any(|(key, value)| {
+            if key == "__google_top_level__" {
+                value
+                    .as_object()
+                    .is_none_or(|fields| fields.values().any(significant))
+            } else {
+                significant(value)
+            }
+        });
+    let native_default = ["cachedContent", "__google_top_level__"].iter().any(|key| {
+        prompt
+            .params
+            .supplemental_extra
+            .get(*key)
+            .is_some_and(|value| {
+                if *key == "__google_top_level__" {
+                    value
+                        .as_object()
+                        .is_none_or(|fields| fields.values().any(significant))
+                } else {
+                    significant(value)
+                }
+            })
+    });
+    let params = &prompt.params;
+    // These native controls have typed slots, but each destination must also
+    // have an actual renderer for them. Provenance filtering alone is not a
+    // semantic permission to discard a control.
+    let typed_loss = native_source
+        && match target {
+            ApiProtocol::ChatCompletions => {
+                params.top_k.is_some()
+                    || params.response_modalities.iter().any(|modality| {
+                        !matches!(
+                            modality,
+                            bitrouter_ai::types::Modality::Text
+                                | bitrouter_ai::types::Modality::Audio
+                        )
+                    })
+            }
+            ApiProtocol::Messages => {
+                params.seed.is_some()
+                    || params.presence_penalty.is_some()
+                    || params.frequency_penalty.is_some()
+                    || !params.response_modalities.is_empty()
+            }
+            ApiProtocol::Responses => {
+                params.top_k.is_some()
+                    || params.seed.is_some()
+                    || !params.stop.is_empty()
+                    || params.presence_penalty.is_some()
+                    || params.frequency_penalty.is_some()
+                    || !params.response_modalities.is_empty()
+            }
+            _ => false,
+        };
+    native_extra || native_default || typed_loss
 }

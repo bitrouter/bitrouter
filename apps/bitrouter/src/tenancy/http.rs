@@ -57,6 +57,18 @@ pub(crate) async fn dispatch(
         "/v1/messages" => bitrouter_ai::types::ApiProtocol::Messages,
         "/v1/responses" => bitrouter_ai::types::ApiProtocol::Responses,
         "/v1/decisions" => bitrouter_ai::types::ApiProtocol::Decisions,
+        "/v1/tenancy/ordered/generate-content" => {
+            if service.private_adapter.is_none()
+                || request.uri().query().is_some()
+                || one_header(request.headers(), "content-type").ok().flatten()
+                    != Some(bitrouter_ai::tenancy::generate_content::MIME)
+            {
+                return Failure::from(ErrorCode::CapabilityMismatch).into_response();
+            }
+            bitrouter_ai::types::ApiProtocol::Custom(
+                bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+            )
+        }
         _ => return Failure::from(ErrorCode::Forbidden).into_response(),
     };
     let (parts, body) = request.into_parts();
@@ -71,6 +83,12 @@ pub(crate) async fn dispatch(
         Ok(submission) => submission,
         Err(error) => return error.into_response(),
     };
+    if matches!(&inbound, bitrouter_ai::types::ApiProtocol::Custom(name)
+        if name == bitrouter_ai::tenancy::generate_content::PROTOCOL)
+        && !submission.has_ordered_selection()
+    {
+        return Failure::from(ErrorCode::CapabilityMismatch).into_response();
+    }
     let bound = match one_header(&parts.headers, "content-length") {
         Ok(Some(value)) => match value.parse::<usize>() {
             Ok(value) => value,
@@ -117,6 +135,10 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(super::ordered::capabilities),
         )
         .route(
+            "/control/v1/tenancy/ordered/generate-content/capabilities",
+            get(super::ordered::generate_content_capabilities),
+        )
+        .route(
             "/control/v1/tenancy/ordered/native-controls/capabilities",
             get(super::ordered::native_controls_capabilities),
         )
@@ -143,6 +165,10 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
         .route(
             "/control/v1/tenancy/resource-capabilities",
             get(resource_capabilities),
+        )
+        .route(
+            "/control/v1/tenancy/resource-capabilities/v3",
+            get(resource_capabilities_v3),
         )
         .route(
             "/control/v1/tenancy/resource-capabilities/v2",
@@ -288,6 +314,7 @@ async fn authenticate(State(state): State<AuthState>, request: Request, next: Ne
         if parts.method == Method::GET
             && parts.uri.path() != "/control/v1/tenancy/capabilities"
             && parts.uri.path() != "/control/v1/tenancy/ordered/capabilities"
+            && parts.uri.path() != "/control/v1/tenancy/ordered/generate-content/capabilities"
             && parts.uri.path() != "/control/v1/tenancy/ordered/native-controls/capabilities"
             && installation.is_none()
         {
@@ -371,8 +398,16 @@ async fn put_resource(
     let command = match body(input)? {
         ResourcePutRequest::V1(input) => Command::Resource(tenant, *input),
         ResourcePutRequest::V2(input) => Command::ResourceV2(tenant, *input),
+        ResourcePutRequest::V3(input) => Command::ResourceV3(tenant, *input),
     };
     Ok(response(service.execute(caller, command).await?))
+}
+
+async fn resource_capabilities_v3(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Response, Failure> {
+    Ok(Json(service.resource_capabilities_v3(&caller).await?).into_response())
 }
 
 async fn resource_capabilities_v2(

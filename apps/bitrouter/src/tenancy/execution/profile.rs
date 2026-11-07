@@ -8,7 +8,7 @@ use bitrouter_ai::types::{OperationScope, StreamPart};
 
 use super::TenantExecution;
 use crate::gateway::{
-    error::Result,
+    error::{BitrouterError, Result},
     pipeline::{
         builder::PipelineBuilder,
         context::{PipelineContext, StreamContext},
@@ -56,12 +56,19 @@ impl ObserveHook for PolicyCompletion {
 #[async_trait]
 impl PreRequestHook for Entry {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        self.0.revalidate().map_err(|code| self.0.reject(code))?;
         let attached = ctx.extension::<TenantExecution>();
         if !attached
             .as_ref()
             .is_some_and(|attached| Arc::ptr_eq(attached, &self.0))
-            || ctx.model() != self.0.route.reference().resource_id.as_str()
+        {
+            // A foreign or stripped input owns no refusal evidence on this
+            // execution, even when it retains a reference to this pipeline.
+            return Err(BitrouterError::Forbidden(
+                "tenant execution context does not own this pipeline".into(),
+            ));
+        }
+        self.0.revalidate().map_err(|code| self.0.reject(code))?;
+        if ctx.model() != self.0.route.reference().resource_id.as_str()
             || self
                 .0
                 .entered
@@ -91,6 +98,19 @@ impl PreRequestHook for Entry {
 }
 
 impl TenantExecution {
+    /// Claim the sole preparation before creating callbacks or owned work.
+    /// A copied input owns neither a new send nor the original's failure path.
+    pub(crate) fn claim_preparation(&self) -> Result<()> {
+        self.preparation_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| {
+                crate::gateway::error::BitrouterError::Forbidden(
+                    "tenant execution preparation was already claimed".into(),
+                )
+            })
+    }
+
     pub(crate) fn attach(
         self: &Arc<Self>,
         pipeline: Arc<Pipeline>,
@@ -102,11 +122,17 @@ impl TenantExecution {
             self.route.apply_generation_defaults(&mut request.input);
         }
         if self.route.is_ordered() {
-            super::native_controls::validate_input(
-                request.input.generation_prompt(),
-                self.submission.binding.native_controls,
-            )
-            .map_err(|code| self.reject(code))?;
+            if let crate::gateway::pipeline::types::PipelineInput::GenerateContent(input) =
+                &request.input
+            {
+                self.validate_generate_content(input)?;
+            } else {
+                super::native_controls::validate_input(
+                    request.input.generation_prompt(),
+                    self.submission.binding.native_controls,
+                )
+                .map_err(|code| self.reject(code))?;
+            }
         }
         #[cfg(feature = "core")]
         let registration = match self.observation.get() {

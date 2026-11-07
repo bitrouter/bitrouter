@@ -23,6 +23,17 @@ impl TenancyClient {
         self.get("tenancy/ordered/capabilities", None).await
     }
 
+    /// Discover private ordered GenerateContent support for the current process.
+    ///
+    /// # Errors
+    /// Returns authentication, unsupported endpoint, bounded transport or contract errors.
+    pub async fn ordered_generate_content_capabilities(
+        &self,
+    ) -> Result<bitrouter_ai::tenancy::generate_content::OrderedGenerateContentCapabilitiesV1> {
+        self.get("tenancy/ordered/generate-content/capabilities", None)
+            .await
+    }
+
     /// Read an operator-only nonsecret manifest of one exact retained protocol root.
     /// The result confers no dispatch authority and never expands a caller selection.
     ///
@@ -52,6 +63,7 @@ impl TenancyClient {
             GenerationProtocol::ChatCompletions => "chat_completions",
             GenerationProtocol::Messages => "messages",
             GenerationProtocol::Responses => "responses",
+            GenerationProtocol::GenerateContent => "generate_content",
         };
         url.query_pairs_mut()
             .append_pair("route_owner_kind", owner_kind)

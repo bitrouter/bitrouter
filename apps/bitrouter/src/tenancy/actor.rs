@@ -55,6 +55,8 @@ use super::{
 pub(super) struct Message {
     pub caller: Caller,
     pub command: Command,
+    /// Trusted service transport configuration, separate from command identity.
+    pub native_adapter_configured: bool,
     pub reply: oneshot::Sender<Result<StoredResponse, Failure>>,
 }
 

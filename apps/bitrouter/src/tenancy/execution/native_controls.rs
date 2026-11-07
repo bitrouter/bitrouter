@@ -81,6 +81,13 @@ fn compatible(prompt: &Prompt, target: &ApiProtocol) -> bool {
     })
 }
 
+fn native_projection_compatible(prompt: &Prompt, target: &ApiProtocol, enabled: bool) -> bool {
+    FIELDS.iter().all(|field| {
+        extra_value_for_protocol(&prompt.params, target, field)
+            .is_none_or(|value| value.is_null() || enabled && belongs(field, target))
+    })
+}
+
 impl super::TenantExecution {
     pub(crate) fn provider_native_controls(&self) -> bool {
         self.submission.binding.native_controls
@@ -91,6 +98,22 @@ impl super::TenantExecution {
         prompt: &Prompt,
         protocol: &ApiProtocol,
     ) -> Result<(), BitrouterError> {
+        if let Some(input) = &self.submission.generate_content {
+            self.validate_generate_content(input)?;
+            if !matches!(protocol,ApiProtocol::Custom(name) if name==bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+                && !native_projection_compatible(prompt, protocol, self.provider_native_controls())
+            {
+                let mut report = ConversionReport::default();
+                report.push_projection(
+                    protocol,
+                    ConversionLocation::GenerationOptions,
+                    ConversionReason::NativeContinuityUnrepresentable,
+                    ConversionEffect::TaskSemantics,
+                );
+                return Err(BitrouterError::Incompatible { report });
+            }
+            return Ok(());
+        }
         if !self.provider_native_controls() {
             return Ok(());
         }
@@ -111,9 +134,32 @@ impl super::TenantExecution {
     pub(crate) fn validate_native_controls_body(
         &self,
         prompt: &Prompt,
-        protocol: &ApiProtocol,
+        target: &crate::gateway::pipeline::types::RoutingTarget,
         body: &serde_json::Value,
     ) -> Result<(), BitrouterError> {
+        let protocol = &target.api_protocol;
+        if let Some(input) = &self.submission.generate_content {
+            self.validate_generate_content(input)?;
+            if matches!(protocol, ApiProtocol::Custom(name) if name ==
+                bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+                && input.render(&target.service_id, input.stream())? != *body
+            {
+                return Err(self.reject(ErrorCode::CapabilityMismatch));
+            }
+            if !matches!(protocol,ApiProtocol::Custom(name) if name==bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+            {
+                self.admit_native_controls(prompt, protocol)?;
+                if !body.is_object()
+                    || FIELDS.iter().any(|field| {
+                        body.get(*field)
+                            != extra_value_for_protocol(&prompt.params, protocol, field)
+                    })
+                {
+                    return Err(self.reject(ErrorCode::CapabilityMismatch));
+                }
+            }
+            return Ok(());
+        }
         if !self.provider_native_controls() {
             return Ok(());
         }

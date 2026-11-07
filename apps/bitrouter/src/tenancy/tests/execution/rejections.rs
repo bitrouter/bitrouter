@@ -304,6 +304,9 @@ async fn execute(
         PipelineInput::Decisions(request) => {
             PipelineRequest::new_decisions(MODEL, execution.caller(), request)
         }
+        PipelineInput::GenerateContent(_) => {
+            anyhow::bail!("native ordered ingress requires its paired fixture")
+        }
     };
     request.request_id = execution.id().to_string();
     request.headers = headers;

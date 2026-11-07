@@ -349,9 +349,13 @@ impl ModelClient {
         adapter
             .parse_response(json)
             .map_err(|error| match response_error(error) {
-                ModelError::InvalidResponse { message, .. } => {
-                    ModelError::InvalidResponse { message, usage }
-                }
+                ModelError::InvalidResponse {
+                    message,
+                    usage: observed,
+                } => ModelError::InvalidResponse {
+                    message,
+                    usage: observed.or(usage),
+                },
                 error => error,
             })
     }

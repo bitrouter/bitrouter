@@ -151,7 +151,10 @@ impl Intent {
             execution_id: self.execution.clone(),
             accepted_selection: self.selection.clone(),
             capture: Capture::Unavailable,
-            extractor_version: 1,
+            extractor_version: ExecutionUsageEvidenceV2::extractor_version_for(
+                self.selection.inbound_protocol,
+                &[],
+            ),
             estimation: Estimation::NotCaptured,
             estimate: None,
             attempts: Vec::new(),

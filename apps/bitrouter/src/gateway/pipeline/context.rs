@@ -816,6 +816,9 @@ impl PipelineContext {
     /// can still estimate prompt tokens. The estimate is deliberately rough but
     /// should not collapse tool-heavy agent follow-up turns to `0`.
     fn prompt_text_chars(&self) -> u64 {
+        if let super::types::PipelineInput::GenerateContent(input) = self.input() {
+            return input.text_characters();
+        }
         let Some(prompt) = self.generation_prompt() else {
             return self
                 .decision_request()
@@ -994,6 +997,9 @@ impl PipelineContext {
             raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
             media_input_count: match &self.input {
+                PipelineInput::GenerateContent(input) => input.projection().map_or(0, |prompt| {
+                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
+                }),
                 PipelineInput::Generation(prompt) => {
                     count_media(prompt.messages.iter().flat_map(|m| &m.content))
                 }

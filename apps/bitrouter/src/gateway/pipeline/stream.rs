@@ -100,7 +100,8 @@ impl StreamInterest {
             StreamPart::TextStart { .. }
             | StreamPart::TextEnd { .. }
             | StreamPart::ReasoningStart { .. }
-            | StreamPart::ReasoningEnd { .. } => 0,
+            | StreamPart::ReasoningEnd { .. }
+            | StreamPart::ToolCallEnd { .. } => 0,
             // No hook subscribes to file parts yet; they pass through unfiltered.
             StreamPart::File { .. } => 0,
             // No hook subscribes to source (citation) parts; they pass through

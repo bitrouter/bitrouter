@@ -77,7 +77,7 @@ use self::{
 
 /// Current authority store format, shared by live and offline target readers.
 /// Historical migrations keep their own fixed version transitions.
-pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 4;
+pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 5;
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -885,6 +885,7 @@ impl Service {
         let message = Message {
             caller,
             command,
+            native_adapter_configured: self.private_adapter.is_some(),
             reply,
         };
         self.enqueue(message.into(), safety)?;
