@@ -282,7 +282,7 @@ async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() ->
     persist_intent(&db, &intent).await?;
     let before = inventory(&db, &installation).await?;
     ensure!(
-        before.rows == 1 && before.unknown_count == 1 && before.bytes + 16 * 1024 == MAX_OBLIGATION
+        before.rows == 1 && before.unknown.len() == 1 && before.bytes + 16 * 1024 == MAX_OBLIGATION
     );
     let candidate = terminal(&intent)?;
     for (name, sql) in [
