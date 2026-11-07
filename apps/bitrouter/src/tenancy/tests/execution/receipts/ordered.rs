@@ -1,5 +1,6 @@
 //! Real leased storage, SDK transports, provider sends and v2 durable readback.
 use super::*;
+use crate::config::tenancy::capacity::CapacityConfig;
 use bitrouter_ai::{
     control::ControlScope,
     protocol::{
@@ -219,6 +220,27 @@ impl OrderedHarness {
         profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
+        Self::with_runtime_capacity(
+            count,
+            limit,
+            malformed,
+            defaults,
+            profiles,
+            CapacityConfig::default(),
+            edit,
+        )
+        .await
+    }
+
+    async fn with_runtime_capacity(
+        count: usize,
+        limit: u8,
+        malformed: Option<usize>,
+        defaults: Value,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        capacity: CapacityConfig,
+        edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
+    ) -> Result<Self> {
         let directory = tempfile::tempdir()?;
         let (db, owner, claim) = crate::db::connect_owned_tenancy(&format!(
             "sqlite://{}",
@@ -317,6 +339,10 @@ impl OrderedHarness {
                 )
                 .await?;
         }
+        let config = crate::config::tenancy::TenancyConfig {
+            capacity,
+            ..Default::default()
+        };
         fixture.service = crate::tenancy::Service::start_resources_with_continuations(
             fixture.db.clone(),
             Some(owner),
@@ -327,7 +353,7 @@ impl OrderedHarness {
                 continuations: &crate::config::ContinuationConfig::default(),
                 claim: Some(claim),
                 receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
-                config: &crate::config::tenancy::TenancyConfig::default(),
+                config: &config,
             },
             None,
         )
