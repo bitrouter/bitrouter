@@ -3,19 +3,22 @@
 #[cfg(test)]
 mod tests;
 
+mod put;
+
 use bitrouter_ai::tenancy::{
     authority::{GrantScope, OwnerKind, Permission, ResourceKey, ResourceKind},
     configuration::ResourceRef,
     identity::{RevisionId, TenantId},
     operation::ErrorCode,
-    resources::{Definition as PublicDefinition, ResourceCapabilities, ResourceStatus},
+    resources::{ResourceCapabilities, ResourceStatus},
+    resources_v2::ResourceCapabilitiesV2,
 };
 use chrono::{DateTime, Utc};
 use sea_orm::ConnectionTrait;
 
 use super::{
     Resources, compiler, lifecycle,
-    manifest::{Artifact, CredentialBinding, Definition, Import},
+    manifest::{Artifact, Import},
     storage,
 };
 use crate::tenancy::{
@@ -94,7 +97,7 @@ impl Resources {
         command: &Command,
         digest: &str,
     ) -> Result<String> {
-        if !matches!(command, Command::Resource(..)) {
+        if !matches!(command, Command::Resource(..) | Command::ResourceV2(..)) {
             return Ok(digest.to_owned());
         }
         self.key
@@ -114,7 +117,7 @@ impl Resources {
         state: &Snapshot,
         caller: &Caller,
         tenant: &TenantId,
-        input: &bitrouter_ai::tenancy::resources::ResourcePut,
+        input: put::Put<'_>,
     ) -> Result<StoredResource> {
         if self.key.is_none() {
             return Err(ErrorCode::CapabilityMismatch);
@@ -123,72 +126,9 @@ impl Resources {
             .to_string()
             .try_into()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        let definition = match &input.definition {
-            PublicDefinition::AdmissionProfile { profile } => Definition::AdmissionProfile {
-                profile: profile.clone(),
-            },
-            PublicDefinition::ProfiledRoute {
-                routing,
-                selector,
-                policy,
-                credentials,
-                attachments,
-            } => Definition::ProfiledRoute {
-                routing: routing.clone(),
-                selector: selector.clone(),
-                policy: policy.clone(),
-                credentials: credentials
-                    .iter()
-                    .map(|binding| CredentialBinding {
-                        provider: binding.provider.clone(),
-                        account: binding.account.clone(),
-                        credential: binding.credential.clone(),
-                    })
-                    .collect(),
-                attachments: attachments.clone(),
-            },
-            PublicDefinition::Credential { secret } => Definition::Credential {
-                credential: crate::gateway::providers::auth::credentials::Credential::ApiKey {
-                    value: secret.clone(),
-                },
-                oauth_generation: 0,
-                oauth: None,
-            },
-            PublicDefinition::Route {
-                routing,
-                selector,
-                policy,
-                credentials,
-            } => Definition::Route {
-                routing: routing.clone(),
-                selector: selector.clone(),
-                policy: policy.clone(),
-                credentials: credentials
-                    .iter()
-                    .map(|binding| CredentialBinding {
-                        provider: binding.provider.clone(),
-                        account: binding.account.clone(),
-                        credential: binding.credential.clone(),
-                    })
-                    .collect(),
-                exploration: Vec::new(),
-                core_choice: None,
-                assessment: None,
-                block: None,
-            },
-            PublicDefinition::Policy {
-                document,
-                name,
-                dependencies,
-            } => Definition::Policy {
-                document: serde_json::from_value(document.clone())
-                    .map_err(|_| ErrorCode::InvalidRequest)?,
-                name: name.clone(),
-                dependencies: dependencies.clone(),
-            },
-        };
+        let definition = input.definition()?;
         let import = Import {
-            reference: reference(&input.key, revision),
+            reference: reference(input.key, revision),
             definition,
         };
         import.validate().map_err(|_| ErrorCode::InvalidRequest)?;
@@ -322,36 +262,36 @@ pub(in crate::tenancy) async fn prepare(
     command: &Command,
     now: DateTime<Utc>,
 ) -> Result<(ReadContext, Option<StoredResource>)> {
-    match command {
-        Command::Resource(tenant, input) => {
-            authorize_profile_put(state, caller, input)?;
-            authorize(
-                state,
-                caller,
-                tenant,
-                &input.key,
-                permission(input.key.resource_kind, false),
-                now,
-            )?;
-            // Authorized CAS rejection belongs to the durable operation path.
-            // Do not spend compilation/crypto work on a known stale head, but
-            // still let apply retain its exact keyed digest and scoped outcome.
-            if state.resource_lifecycle.head(&input.key) != input.expected_revision.as_ref() {
-                return Ok((context(caller, tenant, &input.key), None));
-            }
-            if matches!(&input.definition, PublicDefinition::AdmissionProfile { .. })
-                && !state.resource_admission.has_profile_key(&input.key)
-                && super::storage::resource_key_exists(db, &input.key)
-                    .await
-                    .map_err(|_| ErrorCode::StorageUnavailable)?
-            {
-                return Err(ErrorCode::InvalidRequest);
-            }
-            let record = resources
-                .prepare_resource(db, state, caller, tenant, input)
-                .await?;
-            Ok((context(caller, tenant, &input.key), Some(record)))
+    if let Some((tenant, input)) = put::input(command) {
+        input.authorize(state, caller)?;
+        authorize(
+            state,
+            caller,
+            tenant,
+            input.key,
+            permission(input.key.resource_kind, false),
+            now,
+        )?;
+        // Authorized CAS rejection belongs to the durable operation path.
+        // Do not spend compilation/crypto work on a known stale head, but
+        // still let apply retain its exact keyed digest and scoped outcome.
+        if state.resource_lifecycle.head(input.key) != input.expected_revision.as_ref() {
+            return Ok((context(caller, tenant, input.key), None));
         }
+        if input.definition()?.is_admission_profile()
+            && !state.resource_admission.has_profile_key(input.key)
+            && super::storage::resource_key_exists(db, input.key)
+                .await
+                .map_err(|_| ErrorCode::StorageUnavailable)?
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        let record = resources
+            .prepare_resource(db, state, caller, tenant, input)
+            .await?;
+        return Ok((context(caller, tenant, input.key), Some(record)));
+    }
+    match command {
         Command::RevokeResource(tenant, input) => {
             let key = input.reference.key();
             authorize(
@@ -383,78 +323,78 @@ pub(in crate::tenancy) fn apply(
         .and_then(|value| value.try_into().ok())
         .ok_or(ErrorCode::AuthorityUnavailable)?;
     let mut changes = Vec::new();
-    let record = match command {
-        Command::Resource(tenant, input) => {
-            authorize_profile_put(state, caller, input)?;
-            authorize(
-                state,
-                caller,
-                tenant,
-                &input.key,
-                permission(input.key.resource_kind, false),
-                now,
-            )?;
-            if state.resource_lifecycle.head(&input.key) != input.expected_revision.as_ref() {
-                return Err(ErrorCode::RevisionConflict);
-            }
-            let retained = prepared
-                .resource
-                .as_ref()
+    let record = if let Some((tenant, input)) = put::input(command) {
+        input.authorize(state, caller)?;
+        authorize(
+            state,
+            caller,
+            tenant,
+            input.key,
+            permission(input.key.resource_kind, false),
+            now,
+        )?;
+        if state.resource_lifecycle.head(input.key) != input.expected_revision.as_ref() {
+            return Err(ErrorCode::RevisionConflict);
+        }
+        let retained = prepared
+            .resource
+            .as_ref()
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        if let Some(previous) = state.resource_lifecycle.head(input.key) {
+            let previous = reference(input.key, previous.clone());
+            let mut old = state
+                .resource_lifecycle
+                .record(&previous)
+                .cloned()
                 .ok_or(ErrorCode::AuthorityUnavailable)?;
-            if let Some(previous) = state.resource_lifecycle.head(&input.key) {
-                let previous = reference(&input.key, previous.clone());
-                let mut old = state
-                    .resource_lifecycle
-                    .record(&previous)
-                    .cloned()
-                    .ok_or(ErrorCode::AuthorityUnavailable)?;
-                old.is_head = false;
-                old.authority_revision = authority_revision;
-                state.resource_lifecycle.insert(old.clone());
-                changes.push(Change::ResourceLifecycle {
-                    installation: state.installation.clone(),
-                    record: old,
-                });
-            }
-            changes.push(Change::Resource(retained.clone()));
-            if matches!(
-                &input.definition,
-                PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-            ) {
-                std::sync::Arc::make_mut(&mut state.resource_admission)
-                    .apply_put(&retained.reference, &input.definition);
-            }
-            lifecycle::Record {
-                reference: retained.reference.clone(),
-                is_head: true,
-                revoked: false,
-                authority_revision,
-            }
+            old.is_head = false;
+            old.authority_revision = authority_revision;
+            state.resource_lifecycle.insert(old.clone());
+            changes.push(Change::ResourceLifecycle {
+                installation: state.installation.clone(),
+                record: old,
+            });
         }
-        Command::RevokeResource(tenant, input) => {
-            let key = input.reference.key();
-            authorize(
-                state,
-                caller,
-                tenant,
-                &key,
-                permission(key.resource_kind, true),
-                now,
-            )?;
-            if state.revision != input.expected_authority_revision {
-                return Err(ErrorCode::RevisionConflict);
-            }
-            lifecycle::Record {
-                reference: input.reference.clone(),
-                is_head: state
-                    .resource_lifecycle
-                    .record(&input.reference)
-                    .is_some_and(|r| r.is_head),
-                revoked: true,
-                authority_revision,
-            }
+        changes.push(Change::Resource(retained.clone()));
+        if input.affects_admission() {
+            input.apply(
+                std::sync::Arc::make_mut(&mut state.resource_admission),
+                &retained.reference,
+            );
         }
-        _ => return Err(ErrorCode::InvalidRequest),
+        lifecycle::Record {
+            reference: retained.reference.clone(),
+            is_head: true,
+            revoked: false,
+            authority_revision,
+        }
+    } else {
+        match command {
+            Command::RevokeResource(tenant, input) => {
+                let key = input.reference.key();
+                authorize(
+                    state,
+                    caller,
+                    tenant,
+                    &key,
+                    permission(key.resource_kind, true),
+                    now,
+                )?;
+                if state.revision != input.expected_authority_revision {
+                    return Err(ErrorCode::RevisionConflict);
+                }
+                lifecycle::Record {
+                    reference: input.reference.clone(),
+                    is_head: state
+                        .resource_lifecycle
+                        .record(&input.reference)
+                        .is_some_and(|r| r.is_head),
+                    revoked: true,
+                    authority_revision,
+                }
+            }
+            _ => return Err(ErrorCode::InvalidRequest),
+        }
     };
     let resource = record.reference.resource_id.clone();
     let revision = record.reference.revision_id.clone();
@@ -483,24 +423,22 @@ pub(in crate::tenancy) fn apply(
     })
 }
 
-fn authorize_profile_put(
-    state: &Snapshot,
-    caller: &Caller,
-    input: &bitrouter_ai::tenancy::resources::ResourcePut,
-) -> Result<()> {
-    if matches!(
-        input.definition,
-        PublicDefinition::AdmissionProfile { .. } | PublicDefinition::ProfiledRoute { .. }
-    ) && !matches!(caller, Caller::Installation(_))
-    {
-        return Err(ErrorCode::Forbidden);
-    }
-    state
-        .resource_admission
-        .validate_put(&input.key, &input.definition)
-}
-
 impl Service {
+    pub(in crate::tenancy) async fn resource_capabilities_v2(
+        &self,
+        caller: &Caller,
+    ) -> std::result::Result<ResourceCapabilitiesV2, Failure> {
+        let previous = self.resource_capabilities(caller).await?;
+        Ok(ResourceCapabilitiesV2 {
+            format: 2,
+            installation_id: previous.installation_id,
+            provisioning_enabled: previous.provisioning_enabled,
+            max_command_bytes: previous.max_command_bytes,
+            tenant_routes_require_approved_origins: previous.tenant_routes_require_approved_origins,
+            admission_profile_versions: [1, 2],
+        })
+    }
+
     pub(in crate::tenancy) async fn resource_capabilities(
         &self,
         caller: &Caller,

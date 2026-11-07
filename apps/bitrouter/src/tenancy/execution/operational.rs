@@ -78,7 +78,7 @@ impl TenantExecution {
                         Some(ordinal),
                         rank,
                         Some(pinned.clone()),
-                        rules.fallback,
+                        crate::tenancy::resources::admission::profile::View::from(rules).fallback(),
                         now,
                     ));
                     let admission =

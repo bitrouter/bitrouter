@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourcePutV2",
+  "description": "Create or rotate a shared-health profile through the existing authority writer.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource provisioning format, exactly two.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 2,
+      "maximum": 2
+    },
+    "operation_id": {
+      "description": "Stable identity for replay and uncertain-outcome recovery.",
+      "$ref": "#/$defs/OperationId"
+    },
+    "installation_id": {
+      "description": "Explicit persistent installation identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "key": {
+      "description": "Operator-pool Policy member key, independent of group identities.",
+      "$ref": "#/$defs/ResourceKey"
+    },
+    "expected_revision": {
+      "description": "Null creates a new managed key; otherwise compare its exact current head.",
+      "$ref": "#/$defs/RequiredNullable_RevisionId"
+    },
+    "definition": {
+      "description": "Closed, bounded shared-health profile definition.",
+      "$ref": "#/$defs/DefinitionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "operation_id",
+    "installation_id",
+    "key",
+    "expected_revision",
+    "definition"
+  ],
+  "$defs": {
+    "OperationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceKey": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id"
+      ],
+      "additionalProperties": false
+    },
+    "RequiredNullable_RevisionId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "DefinitionV2": {
+      "description": "The closed set of definitions supported by format-two provisioning.",
+      "oneOf": [
+        {
+          "description": "An operator-pool Policy resource with explicit shared health identity.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "description": "Independently addressable member rules and immutable group membership.",
+              "$ref": "#/$defs/AdmissionProfileV2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "admission_profile_v2"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "profile"
+          ]
+        }
+      ]
+    },
+    "AdmissionProfileV2": {
+      "description": "Immutable shared-health membership with an independently rotatable member RPM.",
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "description": "Profile format, exactly two. V1 retains profile-local health semantics.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 2,
+          "maximum": 2
+        },
+        "rate": {
+          "description": "Null disables charging; a zero member ceiling refuses locally.",
+          "$ref": "#/$defs/RequiredNullable_RateProfileV1"
+        },
+        "observe_rate_group_id": {
+          "description": "Optional read-only rate group in this profile's operator pool.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "description": "Null disables health admission and observation. Requires a null group.",
+          "$ref": "#/$defs/RequiredNullable_HealthProfileV1"
+        },
+        "health_group_id": {
+          "description": "Installation/operator-pool-scoped circuit identity; present exactly when health is enabled.",
+          "$ref": "#/$defs/RequiredNullable_ResourceId"
+        },
+        "fallback": {
+          "description": "Explicit permission to advance after a qualified terminal rejection.",
+          "$ref": "#/$defs/FallbackRule"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "rate",
+        "health",
+        "health_group_id",
+        "fallback"
+      ]
+    },
+    "RequiredNullable_RateProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RateProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RateProfileV1": {
+      "description": "Shared sliding-window identity and this member's current ceiling.",
+      "type": "object",
+      "properties": {
+        "rate_group_id": {
+          "description": "Scoped by installation and operator-pool owner, independent of revisions.",
+          "$ref": "#/$defs/ResourceId"
+        },
+        "member_rpm": {
+          "description": "Maximum reached entries in the shared 60-second window; zero is valid.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rate_group_id",
+        "member_rpm"
+      ]
+    },
+    "ResourceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RequiredNullable_HealthProfileV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HealthProfileV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "HealthProfileV1": {
+      "description": "Circuit rules, immutable for a profile key, including across RPM rotations.",
+      "type": "object",
+      "properties": {
+        "rules": {
+          "description": "Closed classification of actual provider terminal outcomes.",
+          "$ref": "#/$defs/HealthRules"
+        },
+        "failure_threshold": {
+          "description": "Consecutive failures needed to open the circuit; at least one.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "transient_cooldown_seconds": {
+          "description": "Transient cooldown in seconds; zero is valid.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "persistent_cooldown_seconds": {
+          "description": "Persistent cooldown in seconds, at least the transient cooldown.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "probe_lease_seconds": {
+          "description": "Exclusive probe lease in seconds; at least one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rules",
+        "failure_threshold",
+        "transient_cooldown_seconds",
+        "persistent_cooldown_seconds",
+        "probe_lease_seconds"
+      ]
+    },
+    "HealthRules": {
+      "description": "Versioned provider availability classification.",
+      "oneOf": [
+        {
+          "description": "Protocol terminal success, persistent authorization failures and transient failures.",
+          "type": "string",
+          "const": "availability_v1"
+        }
+      ]
+    },
+    "RequiredNullable_ResourceId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "FallbackRule": {
+      "description": "Ordered fallback permission; uncertainty never authorizes another attempt.",
+      "oneOf": [
+        {
+          "description": "Stop after any reached provider attempt.",
+          "type": "string",
+          "const": "stop"
+        },
+        {
+          "description": "Advance only after an explicitly qualified terminal HTTP rejection.",
+          "type": "string",
+          "const": "ordered_terminal_rejections_v1"
+        }
+      ]
+    }
+  }
+}

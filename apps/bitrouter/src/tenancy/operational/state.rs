@@ -8,13 +8,10 @@ use std::{
 };
 
 use bitrouter_ai::tenancy::{
-    admission::{
-        AdmissionProfileV1, AvailabilityObservation, HealthObservation, HealthProfileV1,
-        RateObservationV1,
-    },
+    admission::{AvailabilityObservation, HealthObservation, HealthProfileV1, RateObservationV1},
     authority::ResourceKey,
     configuration::ResourceRef,
-    identity::InstallationId,
+    identity::{InstallationId, OwnerId, ResourceId},
 };
 
 use super::{
@@ -22,7 +19,35 @@ use super::{
     rate::{self, Rates},
 };
 
-type HealthKey = (InstallationId, ResourceKey);
+use crate::tenancy::resources::admission::profile::View as ProfileView;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum HealthScope {
+    ProfileLocal(ResourceKey),
+    SharedGroup(OwnerId, ResourceId),
+}
+
+type HealthKey = (InstallationId, HealthScope);
+
+fn health_binding<'a>(
+    installation: &InstallationId,
+    reference: &ResourceRef,
+    profile: ProfileView<'a>,
+) -> Result<Option<(HealthKey, &'a HealthProfileV1)>, Denial> {
+    let scope = match profile {
+        ProfileView::Local(_) => HealthScope::ProfileLocal(reference.key()),
+        ProfileView::Shared(profile) => match (&profile.health, &profile.health_group_id) {
+            (Some(_), Some(group)) => {
+                HealthScope::SharedGroup(reference.owner_id.clone(), group.clone())
+            }
+            (None, None) => return Ok(None),
+            _ => return Err(Denial::Unavailable),
+        },
+    };
+    Ok(profile
+        .health()
+        .map(|rules| ((installation.clone(), scope), rules)))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Denial {
@@ -83,31 +108,31 @@ fn rate_key(
 }
 
 impl Runtime {
-    pub(in crate::tenancy) fn admit(
+    pub(in crate::tenancy) fn admit<'a>(
         self: &Arc<Self>,
         installation: &InstallationId,
         reference: &ResourceRef,
-        rules: &AdmissionProfileV1,
+        rules: impl Into<ProfileView<'a>>,
     ) -> Result<Ticket, Denial> {
-        self.admit_clock(installation, reference, rules, Instant::now)
+        self.admit_clock(installation, reference, rules.into(), Instant::now)
     }
 
     #[cfg(test)]
-    pub(super) fn admit_at(
+    pub(super) fn admit_at<'a>(
         self: &Arc<Self>,
         installation: &InstallationId,
         reference: &ResourceRef,
-        rules: &AdmissionProfileV1,
+        rules: impl Into<ProfileView<'a>>,
         now: Instant,
     ) -> Result<Ticket, Denial> {
-        self.admit_clock(installation, reference, rules, || now)
+        self.admit_clock(installation, reference, rules.into(), || now)
     }
 
     fn admit_clock(
         self: &Arc<Self>,
         installation: &InstallationId,
         reference: &ResourceRef,
-        rules: &AdmissionProfileV1,
+        rules: ProfileView<'_>,
         clock: impl FnOnce() -> Instant,
     ) -> Result<Ticket, Denial> {
         let mut state = self.0.lock().map_err(|_| Denial::Unavailable)?;
@@ -119,8 +144,7 @@ impl Runtime {
             rates,
             next_lease,
         } = &mut *state;
-        let binding = if let Some(rules) = &rules.health {
-            let key = (installation.clone(), reference.key());
+        let binding = if let Some((key, rules)) = health_binding(installation, reference, rules)? {
             if !health.contains_key(&key) {
                 if health.len() >= super::MAX_RUNTIME_KEYS {
                     return Err(Denial::Capacity);
@@ -133,7 +157,7 @@ impl Runtime {
         } else {
             None
         };
-        if let Some(rate) = &rules.rate
+        if let Some(rate) = rules.rate()
             && let Err(error) = rates.admit(
                 rate_key(installation, reference, &rate.rate_group_id),
                 rate.member_rpm,
@@ -162,11 +186,11 @@ impl Runtime {
     }
 
     #[cfg(test)]
-    pub(super) fn observe(
+    pub(super) fn observe<'a>(
         &self,
         installation: &InstallationId,
         reference: &ResourceRef,
-        rules: &AdmissionProfileV1,
+        rules: impl Into<ProfileView<'a>>,
         now: Instant,
     ) -> Result<View, Denial> {
         let mut snapshot = self.snapshot()?;
@@ -176,38 +200,50 @@ impl Runtime {
 }
 
 impl ReadSnapshot<'_> {
-    pub(in crate::tenancy) fn observe(
+    pub(in crate::tenancy) fn observe<'a>(
         &self,
         installation: &InstallationId,
         reference: &ResourceRef,
-        rules: &AdmissionProfileV1,
+        rules: impl Into<ProfileView<'a>>,
     ) -> View {
         let state = &self.state;
         let now = self.now;
-        let key = (installation.clone(), reference.key());
-        let health = if rules.health.is_none() {
+        let rules = rules.into();
+        let binding = match health_binding(installation, reference, rules) {
+            Ok(binding) => binding,
+            Err(_) => {
+                return View {
+                    rate: None,
+                    observed_shared_count: None,
+                    health: HealthObservation::Unavailable,
+                    availability: AvailabilityObservation::AuthorityDenied,
+                };
+            }
+        };
+        let health = if binding.is_none() {
             HealthObservation::Disabled
         } else {
-            state
-                .health
-                .get(&key)
+            binding
+                .as_ref()
+                .and_then(|(key, _)| state.health.get(key))
                 .map_or(HealthObservation::Healthy, |entry| entry.observe(now))
         };
-        let rate = rules.rate.as_ref().map(|rate| RateObservationV1 {
+        let rate = rules.rate().map(|rate| RateObservationV1 {
             member_rpm: rate.member_rpm,
             shared_count: state
                 .rates
                 .count(&rate_key(installation, reference, &rate.rate_group_id), now),
         });
-        let observed_shared_count = rules.observe_rate_group_id.as_ref().map(|group| {
+        let observed_shared_count = rules.observed_group().map(|group| {
             state
                 .rates
                 .count(&rate_key(installation, reference, group), now)
         });
-        let capacity = (rules.health.is_none()
-            || state.health.contains_key(&key)
+        let capacity = (binding
+            .as_ref()
+            .is_none_or(|(key, _)| state.health.contains_key(key))
             || state.health.len() < super::MAX_RUNTIME_KEYS)
-            && rules.rate.as_ref().is_none_or(|rate| {
+            && rules.rate().is_none_or(|rate| {
                 state
                     .rates
                     .has_capacity(&rate_key(installation, reference, &rate.rate_group_id), now)

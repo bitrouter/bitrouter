@@ -99,7 +99,9 @@ async fn profile_cas_rotation_has_one_winner_preserves_rules_and_reloads_exact_h
         state
             .resource_admission
             .profile(&pinned)
-            .and_then(|profile| profile.rate.as_ref())
+            .and_then(
+                |profile| crate::tenancy::resources::admission::profile::View::from(profile).rate()
+            )
             .map(|rate| rate.member_rpm)
             == Some(0)
     );

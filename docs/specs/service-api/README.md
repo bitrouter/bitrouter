@@ -35,9 +35,8 @@ migration and rollback rules below, even when an older client uses only receipts
 
 Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
-formats retain their existing meanings and eight-attempt bound. The ordered receipt migration follows capacity migrations 042–044. The
-capacity-only binary rejects its SQLite migration ledger entry, and its
-immutable audit readers require the earlier exact catalog.
+formats retain their existing meanings and eight-attempt bound. The new store
+format prevents an older binary from opening upgraded authority data.
 
 ### Offline recovery evidence v2
 
@@ -612,6 +611,72 @@ variants. It initializes one unambiguous head for a new profile key atomically;
 identical reimport never rewinds the head. Later rotations use authenticated CAS.
 Missing retained profile heads are errors, not disabled admission rules.
 
+#### Shared health profiles
+
+`AdmissionProfileV2` makes circuit membership explicit while keeping each member
+independently addressable. The additive format-two
+[`ResourcePutV2`](../resource-provisioning-v2/put.schema.json) accepts only
+`admission_profile_v2` definitions, on operator-pool Policy keys and with
+installation authority. Other definitions continue through format-one puts.
+The existing POST resource endpoint selects the closed decoder by the raw
+`format` token; missing, duplicate and unsupported versions fail before writing.
+V1 profile codecs, schemas, fingerprints and profile-local health remain exact.
+
+V2 adds required nullable `health_group_id` to the existing profile fields and
+requires `schema_version: 2`. Health and group MUST both be non-null or both be
+null. Missing group data never falls back to local health. Exact integral
+decimals and exponents retain the bounded integer semantics; fractional or
+out-of-range values, unknown fields and duplicates fail closed. Existing 4 KiB
+profile and 1 MiB command bounds remain unchanged.
+
+Before publishing V2 members, discover
+`GET /control/v1/tenancy/resource-capabilities/v2` using
+`TenancyClient::resource_capabilities_v2`. Its closed
+[`ResourceCapabilitiesV2`](../resource-provisioning-v2/capabilities.schema.json)
+has `format: 2` and `admission_profile_versions: [1, 2]`. Require the expected
+installation and enabled provisioning. A 404, V1 response or malformed
+capability is unsupported; do not retry a grouped write as V1 or remove its
+group. `put_resource_v2` retains ordinary CAS, operation recovery and result
+identity checks, with a distinct `resource.put.v2` fingerprint domain. V1
+discovery, status, revocation, grants and configuration contracts are unchanged.
+
+Health identity is the installation plus a tagged choice of either the full V1
+profile key or the V2 operator-pool owner and health-group ID. Equal spellings
+across these families, pools or installations cannot collide. Member revision,
+RPM, rate group, credential, tenant, route and candidate ordinal do not partition
+group health. All retained members of one group MUST have identical complete
+health rules, including classification, failure threshold, both cooldowns and
+probe lease. Distinct members may have different rate ceilings, rate groups,
+read-only rate associations and fallback rules. A shared circuit does not grant
+resource or dispatch authority.
+
+Only member RPM may rotate on one key. Family, group, health rules, rate presence
+and group, read-only rate association and fallback are immutable across every
+revision. A PolicyLock key, V1 member and V2 member cannot change families.
+Revoked, superseded, unreferenced and all-revoked members still constrain group
+rules after restart. Changing a group's rules requires a new group and member
+keys followed by explicit route/configuration publication. Concurrent first puts
+and imports validate against the same serialized authority writer; failed
+validation publishes no new resource, managed head or group.
+
+Admission, observation, capacity and captured completion tickets use the same
+tagged identity. One half-open probe owns the group across all members; stale
+results cannot complete a newer lease. Rate-denied probes release neutrally;
+charged timestamps are not refunded. A null-health profile creates no health
+state and cannot open or close a shared circuit. Its explicit read-only rate
+association can still expose shared count without charging. Observations never
+allocate state or claim a probe and are not dispatch permission.
+
+Private format-two imports permit V2 profiles alongside existing definitions;
+format-one imports reject V2. Exact attachment references, total root coverage
+and current/pinned revocation checks apply to both profile families. Admission
+mode remains `profiled_v1`; ordered selection, receipts and evidence do not add
+a caller-supplied group or change their codecs. The encrypted profile definition
+and exact reference bind membership. V2 resource artifacts use authenticated
+compiler `tenancy-admission-v2`. Any configuration closure containing V2 uses
+that compiler and retained envelope 5, with format 4's compact route validation.
+V1-only profiled closures remain envelope 4 with their original compiler.
+
 Credential writes require `credential.manage`; route and policy writes require
 `resource.draft` on the addressed key. Every dependency in the compiled closure
 requires current `resource.read`; credential dependencies also require
@@ -828,16 +893,19 @@ V1 and v2 reads are explicit: requesting the wrong format returns
 correlation pagination can list both formats and retains multiplicity. Neither
 an execution ID nor a correlation ID expands receipt-read authority.
 
-Fresh stores and explicitly migrated stores use authority format 3. Only
-released format-one stores migrate; unreleased format-two stores are refused
-without implicit conversion. Profiled configuration envelopes use format 4
-and an authenticated admission compiler subtype; retained formats 1–3 remain
-readable under their original compiler bindings. Every
-management write preserves that marker. An older binary MUST refuse the store,
-including after fresh initialization or a later management mutation. Existing
-v1 receipt bytes and integrity digests remain unchanged. Rollback requires the
-stopped-writer, compatible-backup procedure below; deleting v2 records or
-resetting a version marker is not a supported downgrade.
+Fresh stores use authority format 4. Ordered receipt storage follows the
+receipt archive, obligation, and capacity migrations. On an existing
+format-2 installation, the profiled-authority migration records format 3 and
+the shared-health migration records format 4. Each fence preserves the
+installation identity, operation counters, saturation state, and receipt
+bytes. Retained resource envelopes 1–4 keep their original compiler bindings.
+Shared-health closures use envelope 5. Format-1 installations retain the validated capacity upgrade path,
+including explicit acknowledgment for a stopped legacy count latch.
+
+The older capacity build rejects SQLite stores carrying the ordered migration
+ledger entry. Its immutable audit readers also require the older exact receipt
+and authority catalog. An operator rollback uses a verified pre-upgrade
+backup.
 
 #### Request-local generation defaults
 

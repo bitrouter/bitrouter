@@ -76,7 +76,7 @@ use self::{
 
 /// Current authority store format, shared by live and offline target readers.
 /// Historical migrations keep their own fixed version transitions.
-pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 3;
+pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 4;
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
