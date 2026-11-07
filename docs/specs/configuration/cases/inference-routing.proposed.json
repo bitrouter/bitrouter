@@ -1,0 +1,248 @@
+[
+  {
+    "name": "omitted fields preserve disabled defaults",
+    "value": {},
+    "schema_valid": true
+  },
+  {
+    "name": "explicitly disabled",
+    "value": {
+      "enabled": false
+    },
+    "schema_valid": true
+  },
+  {
+    "name": "load-aware enabled",
+    "value": {
+      "enabled": true,
+      "policy": "load_aware",
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://provider-a.example/v1",
+          "max_active": 8
+        },
+        {
+          "id": "provider-b-model",
+          "provider": "provider-b",
+          "model": "model-one",
+          "endpoint": "https://provider-b.example/v1",
+          "max_active": 8
+        }
+      ]
+    },
+    "schema_valid": true
+  },
+  {
+    "name": "prefix-aware enabled",
+    "value": {
+      "enabled": true,
+      "policy": "prefix_affinity",
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://provider-a.example/v1",
+          "max_active": 8
+        },
+        {
+          "id": "provider-b-model",
+          "provider": "provider-b",
+          "model": "model-one",
+          "endpoint": "https://provider-b.example/v1",
+          "max_active": 8
+        }
+      ]
+    },
+    "schema_valid": true
+  },
+  {
+    "name": "null object",
+    "value": null,
+    "schema_valid": false
+  },
+  {
+    "name": "null boolean",
+    "value": {
+      "enabled": null
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "unknown root field",
+    "value": {
+      "global_quota": 100
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "unknown nested field",
+    "value": {
+      "queue": {
+        "unbounded": true
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "enabled without destinations",
+    "value": {
+      "enabled": true
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "empty enabled destinations",
+    "value": {
+      "enabled": true,
+      "destinations": []
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "zero capacity",
+    "value": {
+      "limits": {
+        "max_active": 0
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "fractional capacity",
+    "value": {
+      "limits": {
+        "max_active": 1.5
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "negative timeout",
+    "value": {
+      "queue": {
+        "wait_timeout_ms": -1
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "null timeout",
+    "value": {
+      "queue": {
+        "wait_timeout_ms": null
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "unknown policy",
+    "value": {
+      "policy": "cheapest"
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "zero tenant weight",
+    "value": {
+      "tenant_weights": {
+        "tenant": 0
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "null account",
+    "value": {
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://provider-a.example/v1",
+          "max_active": 8,
+          "account": null
+        }
+      ]
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "relative endpoint",
+    "value": {
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "/v1",
+          "max_active": 8
+        }
+      ]
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "oversized integer",
+    "value": {
+      "limits": {
+        "max_active": 4294967296
+      }
+    },
+    "schema_valid": false
+  },
+  {
+    "name": "inconsistent per-tenant ceiling",
+    "value": {
+      "queue": {
+        "max_requests": 1,
+        "per_tenant_requests": 2
+      }
+    },
+    "schema_valid": true,
+    "semantic_valid": false
+  },
+  {
+    "name": "duplicate destination identity",
+    "value": {
+      "enabled": true,
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://provider-a.example/v1",
+          "max_active": 8
+        },
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://provider-a.example/v1",
+          "max_active": 8
+        }
+      ]
+    },
+    "schema_valid": true,
+    "semantic_valid": false
+  },
+  {
+    "name": "endpoint contains credentials",
+    "value": {
+      "destinations": [
+        {
+          "id": "provider-a-model",
+          "provider": "provider-a",
+          "model": "model-one",
+          "endpoint": "https://user:pass@provider-a.example/v1",
+          "max_active": 8
+        }
+      ]
+    },
+    "schema_valid": true,
+    "semantic_valid": false
+  }
+]
