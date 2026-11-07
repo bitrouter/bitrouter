@@ -1,0 +1,81 @@
+name: Windows startup diagnostic
+
+'on':
+  push:
+    branches:
+      - codex/core-ci-windows-startup-8e35-1adcd1d
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-startup-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: short
+  BITROUTER_BUILD_REVISION: ${{ github.sha }}
+
+jobs:
+  windows-startup:
+    name: Five PowerShell startup and cleanup diagnostics
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.99.1
+          components: rustfmt
+          cache-on-failure: false
+          cache-key: complete-v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.114
+      - name: Capture exact diagnostic source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --exit-code
+          git rev-parse HEAD 'HEAD^{tree}' > ci-evidence/source.txt
+          sha256sum Cargo.lock >> ci-evidence/source.txt
+          rustc -vV > ci-evidence/compiler.txt
+          cargo nextest --version >> ci-evidence/compiler.txt
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Compile and diagnose all five PowerShell cases
+        shell: bash
+        env:
+          FILTER: test(harness::tools::tests::powershell_) | test(=harness::tools::tests::dropped_powershell_future_stops_descendants)
+        run: |
+          set -euo pipefail
+          cargo nextest list --locked -p bitrouter --all-features --lib --build-jobs 2 \
+            --profile ci -E "$FILTER" --message-format json > ci-evidence/selection.json
+          jq -e '
+            [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+            | length == 5 and all(.ignored == false)
+          ' ci-evidence/selection.json
+          cargo nextest run --locked -p bitrouter --all-features --lib --build-jobs 2 \
+            --profile ci --test-threads 2 --retries 0 --no-fail-fast --no-tests fail \
+            --failure-output final --success-output final -E "$FILTER" \
+            2>&1 | tee ci-evidence/windows-startup.log
+      - name: Preserve diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-startup-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            ci-evidence/
+            target/nextest/ci/junit.xml
+          retention-days: 7
+          if-no-files-found: error
