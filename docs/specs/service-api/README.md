@@ -759,6 +759,24 @@ define required fields, nullability, versions and semantic constraints. All
 reads other than discovery require `Bitrouter-Installation-Id`; protected
 responses use `Cache-Control: no-store`.
 
+#### Proposed provider scheduler composition
+
+Status: proposed implementation integration; no wire revision or new endpoint.
+A trusted operator host may fetch the existing candidate manifest, rank a fixed
+model's compatible candidates, and submit the existing explicit ordered v2
+selection using separately authorized inference credentials. All existing
+instance/revision bindings, profile protection, ordinal constraints and
+actual-send checks apply. Manifest reads and ranking reserve no capacity.
+
+An enabled serving-side scheduler may queue and book local concurrency for the
+accepted sequence; it MUST NOT rerank or broaden that selection. Ordinary
+inference credentials do not gain manifest access or implicit operator planning.
+Unknown outcomes retain existing receipt and fallback fences. This composition
+does not introduce request idempotency or physical capacity commitments.
+Internal module behavior and proposed host configuration are owned by the
+[gateway boundary](../../development/gateway.md#proposed-provider-scheduling-boundary)
+and [configuration contract](../configuration/README.md#proposed-inference-routing-configuration).
+
 #### Discovery, selection and authority
 
 `OrderedCapabilitiesV2` reports contract version 2, installation/instance IDs,
