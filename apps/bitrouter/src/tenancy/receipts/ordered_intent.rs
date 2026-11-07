@@ -339,6 +339,8 @@ pub(in crate::tenancy) async fn retire(
 
 pub(in crate::tenancy) struct PendingInventory {
     pub rows: u64,
+    #[cfg(test)]
+    pub bytes: u64,
     pub unknown: Vec<(TenantId, ExecutionId, chrono::DateTime<chrono::Utc>)>,
 }
 
@@ -404,6 +406,8 @@ pub(in crate::tenancy) async fn inventory(
         ));
     }
     Ok(PendingInventory {
+        #[cfg(test)]
+        bytes,
         rows: unknown.len() as u64,
         unknown,
     })
