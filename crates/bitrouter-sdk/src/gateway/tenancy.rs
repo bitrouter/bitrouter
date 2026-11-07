@@ -243,6 +243,23 @@ fn bearer_headers(credential: &str) -> Result<HeaderMap, Error> {
 }
 
 impl TenantGateway<'_> {
+    /// Replace this call's `anthropic-beta` values, preserving their bytes and order.
+    ///
+    /// Repeated values and comma-separated contents remain unchanged. An empty
+    /// slice removes the header. Construct opaque values with
+    /// [`HeaderValue::from_bytes`], which rejects invalid HTTP field-value bytes.
+    /// This does not change the shared client's defaults or dispatch binding.
+    /// The service forwards these values only to Messages upstreams; provider
+    /// authentication may subsequently merge its required beta tokens.
+    #[must_use]
+    pub fn with_anthropic_beta(mut self, values: &[HeaderValue]) -> Self {
+        self.headers.remove("anthropic-beta");
+        for value in values {
+            self.headers.append("anthropic-beta", value.clone());
+        }
+        self
+    }
+
     /// Dispatch Chat Completions as JSON or SSE, retaining explicit stream ends.
     ///
     /// # Errors
