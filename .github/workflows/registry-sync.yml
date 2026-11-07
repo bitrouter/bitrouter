@@ -72,6 +72,27 @@ jobs:
             echo "passed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Summarize canonical identity repairs for review
+        if: always() && steps.gate.outputs.passed == 'false'
+        run: |
+          if [ -f target/registry-sync.json ]; then
+            jq -r '
+              select(.audit.outcome == "invalid_ids")
+              | [.audit.mismatches[] | select(.code == "canonical_id_not_found")] as $missing
+              | select($missing | length > 0)
+              | "### Canonical identity review\n",
+                "Review the missing references below against the attached public catalog.",
+                "For a verified same-model rename, migrate the binding and ledger together.",
+                "Otherwise, consider unbinding the provider offer while retaining its native ID, lifecycle and historical evidence.",
+                "Curated IDs require a separate retirement or migration decision.\n",
+                ($missing[] | if has("provider") then
+                  "- Provider \(.provider | @json), native ID \(.provider_model_id | @json)"
+                else
+                  "- Curated ID \(.canonical_id | @json)"
+                end)
+            ' target/registry-sync.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Validate complete independent changes
         if: steps.gate.outputs.passed == 'true'
         id: build
