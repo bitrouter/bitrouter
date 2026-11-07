@@ -29,9 +29,62 @@ use crate::gateway::providers::auth::ContinuationAuthority;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::routing::RouterRequestIdentity;
 use bitrouter_ai::types::{
-    ApiProtocol, ChatStreamOptions, Content, FinishReason, Message, ModelOperation, Prompt,
-    StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, Message,
+    ModelOperation, Prompt, StreamPart, Usage,
 };
+
+// Pure post-parse merge shared by retained presets and request-local defaults.
+// Never interprets provider JSON as routing, credentials, headers or Prompt state.
+pub(crate) fn apply_parameter_defaults<'a>(
+    params: &mut GenerationParams,
+    values: impl IntoIterator<Item = (&'a String, &'a serde_json::Value)>,
+) {
+    for (k, v) in values {
+        // Don't clobber an explicit request value; presets are defaults.
+        if params.extra.contains_key(k) {
+            continue;
+        }
+
+        // Promote the protocol fields normalized by inbound adapters into
+        // the same typed slots when they come from a preset. Otherwise a
+        // preset `store: true`, for example, could bypass the cross-wire
+        // safety checks by remaining an untyped supplemental field.
+        match k.as_str() {
+            "store" => {
+                if params.store.is_none() {
+                    params.store = v.as_bool();
+                }
+                if params.store.is_some() {
+                    continue;
+                }
+            }
+            "parallel_tool_calls" => {
+                if params.parallel_tool_calls.is_none() {
+                    params.parallel_tool_calls = v.as_bool();
+                }
+                if params.parallel_tool_calls.is_some() {
+                    continue;
+                }
+            }
+            "stream_options" => {
+                if params.chat_stream_options.is_none()
+                    && let Ok(options) = serde_json::from_value::<ChatStreamOptions>(v.clone())
+                {
+                    params.chat_stream_options = Some(options);
+                }
+                if params.chat_stream_options.is_some() {
+                    continue;
+                }
+            }
+            _ => {}
+        }
+
+        params
+            .supplemental_extra
+            .entry(k.clone())
+            .or_insert_with(|| v.clone());
+    }
+}
 
 static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -693,52 +746,7 @@ impl PipelineContext {
                 prompt.system = Some(system.clone());
             }
         }
-        for (k, v) in &overrides.params {
-            // Don't clobber an explicit request value; presets are defaults.
-            if prompt.params.extra.contains_key(k) {
-                continue;
-            }
-
-            // Promote the protocol fields normalized by inbound adapters into
-            // the same typed slots when they come from a preset. Otherwise a
-            // preset `store: true`, for example, could bypass the cross-wire
-            // safety checks by remaining an untyped supplemental field.
-            match k.as_str() {
-                "store" => {
-                    if prompt.params.store.is_none() {
-                        prompt.params.store = v.as_bool();
-                    }
-                    if prompt.params.store.is_some() {
-                        continue;
-                    }
-                }
-                "parallel_tool_calls" => {
-                    if prompt.params.parallel_tool_calls.is_none() {
-                        prompt.params.parallel_tool_calls = v.as_bool();
-                    }
-                    if prompt.params.parallel_tool_calls.is_some() {
-                        continue;
-                    }
-                }
-                "stream_options" => {
-                    if prompt.params.chat_stream_options.is_none()
-                        && let Ok(options) = serde_json::from_value::<ChatStreamOptions>(v.clone())
-                    {
-                        prompt.params.chat_stream_options = Some(options);
-                    }
-                    if prompt.params.chat_stream_options.is_some() {
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-
-            prompt
-                .params
-                .supplemental_extra
-                .entry(k.clone())
-                .or_insert_with(|| v.clone());
-        }
+        apply_parameter_defaults(&mut prompt.params, overrides.params.iter());
         Ok(())
     }
 

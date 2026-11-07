@@ -44,19 +44,23 @@ fn command(binary: &Path, root: &Path) -> Command {
     command
 }
 
-struct Predecessor {
+pub(super) struct Predecessor {
     child: Child,
-    endpoint: String,
+    pub(super) endpoint: String,
     control: String,
-    http2: bool,
+    pub(super) http2: bool,
     _root: tempfile::TempDir,
 }
 
 impl Predecessor {
     async fn start() -> Result<Self> {
+        Self::start_at("BITROUTER_PREDECESSOR_BRO", BASELINE).await
+    }
+
+    pub(super) async fn start_at(variable: &str, baseline: &str) -> Result<Self> {
         let binary = std::path::PathBuf::from(
-            std::env::var_os("BITROUTER_PREDECESSOR_BRO")
-                .context("set BITROUTER_PREDECESSOR_BRO to the actual 07cc1bb executable")?,
+            std::env::var_os(variable)
+                .context("set the predecessor executable environment variable")?,
         );
         ensure!(
             binary.is_absolute() && binary.is_file(),
@@ -81,7 +85,7 @@ impl Predecessor {
         );
         let artifact: ArtifactIdentity = serde_json::from_slice(&identity.stdout)?;
         ensure!(
-            artifact.source_revision.as_deref() == Some(BASELINE),
+            artifact.source_revision.as_deref() == Some(baseline),
             "wrong predecessor source revision"
         );
 
@@ -121,7 +125,7 @@ impl Predecessor {
         })
     }
 
-    fn control(&self, version: HttpVersion) -> Result<TenancyClient> {
+    pub(super) fn control(&self, version: HttpVersion) -> Result<TenancyClient> {
         Ok(TenancyClient::with_options(
             &self.control,
             OPERATOR,
@@ -133,7 +137,7 @@ impl Predecessor {
         )?)
     }
 
-    async fn ready(&mut self) -> Result<TenantCapabilities> {
+    pub(super) async fn ready(&mut self) -> Result<TenantCapabilities> {
         let control = self.control(HttpVersion::Http1Only)?;
         tokio::time::timeout(DEADLINE, async {
             loop {
@@ -155,7 +159,7 @@ impl Predecessor {
         .context("predecessor readiness deadline")?
     }
 
-    async fn stop(&mut self) -> Result<()> {
+    pub(super) async fn stop(&mut self) -> Result<()> {
         self.child.start_kill()?;
         tokio::time::timeout(DEADLINE, self.child.wait())
             .await
@@ -164,14 +168,14 @@ impl Predecessor {
     }
 }
 
-struct Provisioned {
-    tenant: TenantId,
-    route: ResourceRef,
-    revision: ConfigurationRevision,
-    credential: CredentialIssued,
+pub(super) struct Provisioned {
+    pub(super) tenant: TenantId,
+    pub(super) route: ResourceRef,
+    pub(super) revision: ConfigurationRevision,
+    pub(super) credential: CredentialIssued,
 }
 
-async fn provision(
+pub(super) async fn provision(
     control: &TenancyClient,
     caps: &TenantCapabilities,
     base: &str,
@@ -331,7 +335,7 @@ async fn provision(
     })
 }
 
-fn observed(provider: &Provider) -> Result<Vec<String>> {
+pub(super) fn observed(provider: &Provider) -> Result<Vec<String>> {
     let observed = provider
         .observed
         .lock()

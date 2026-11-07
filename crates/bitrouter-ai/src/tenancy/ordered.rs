@@ -57,7 +57,8 @@ pub struct OrderedCandidateSelectionV1 {
     /// Unique ordinals below 256, in the requested dispatch order, length 1–64.
     #[serde(deserialize_with = "indices")]
     pub candidate_indices: Vec<u16>,
-    /// Digest of opt-in canonical request defaults, omitted when unused.
+    /// Digest of canonical defaults or a domain-separated defaults envelope,
+    /// omitted when unused. The requested object identifies its hash contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_defaults_digest: Option<Digest>,
 }
@@ -101,7 +102,8 @@ pub struct AcceptedSelectionV2 {
     /// Accepted order; skipped candidates never become fabricated attempts.
     #[serde(deserialize_with = "indices")]
     pub candidate_indices: Vec<u16>,
-    /// Digest of opt-in canonical request defaults, omitted when unused.
+    /// Digest of canonical defaults or a domain-separated defaults envelope,
+    /// omitted when unused. The requested object identifies its hash contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_defaults_digest: Option<Digest>,
 }
@@ -374,6 +376,22 @@ pub struct OrderedDispatchBindingV2 {
     pub selection: OrderedCandidateSelectionV1,
 }
 impl OrderedDispatchBindingV2 {
+    /// Bind the complete canonical and supplemental defaults before retaining
+    /// this submission identity. Uses the existing digest slot with a distinct
+    /// domain; supply the same envelope to the ordered gateway for this call.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults, bindings or an oversized selection header.
+    pub fn with_generation_defaults_envelope(
+        mut self,
+        defaults: &super::generation_defaults::GenerationDefaultsEnvelopeV1,
+    ) -> Result<Self, ValidationError> {
+        self.selection.generation_defaults_digest = Some(defaults.digest()?);
+        self.validate()?;
+        bytes(&self.selection, MAX_SELECTION_HEADER_BYTES / 4 * 3)?;
+        Ok(self)
+    }
+
     /// Bind canonical defaults before retaining this submission identity.
     /// Supply the same defaults to the SDK's ordered gateway for this call.
     ///
