@@ -339,7 +339,11 @@ impl OrderedHarness {
             draft(&fixture, &route, "ordered-draft", 25).await?
         };
         let credential = if profiles.is_some() {
-            profiled::grant_pool(&fixture, count).await?
+            let references = definitions
+                .iter()
+                .map(|entry| serde_json::from_value(entry["reference"].clone()))
+                .collect::<std::result::Result<Vec<ResourceRef>, _>>()?;
+            profiled::grant_pool(&fixture, &references).await?
         } else {
             fixture.issue("ordered-client").await?
         };

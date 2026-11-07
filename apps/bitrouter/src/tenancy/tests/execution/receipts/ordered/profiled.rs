@@ -22,7 +22,10 @@ pub(super) fn reference(index: usize) -> Result<ResourceRef> {
     })
 }
 
-pub(super) async fn grant_pool(fixture: &Fixture, count: usize) -> Result<CredentialIssued> {
+pub(super) async fn grant_pool(
+    fixture: &Fixture,
+    references: &[ResourceRef],
+) -> Result<CredentialIssued> {
     let binding = crate::tenancy::store::directory::binding_in(
         &fixture.db,
         &fixture.tenant,
@@ -31,11 +34,20 @@ pub(super) async fn grant_pool(fixture: &Fixture, count: usize) -> Result<Creden
     )
     .await?
     .context("binding")?;
-    let scope = GrantScope::Tenant {
-        operator_pools: (0..count)
-            .map(|index| reference(index).map(|reference| reference.key()))
-            .collect::<Result<_>>()?,
-    };
+    // Resource edits may share profiles across many candidate ordinals. Grant
+    // every retained pool key, including unselected profiles, without inventing
+    // keys for profiles the fixture no longer imports.
+    let mut operator_pools = Vec::new();
+    for reference in references.iter().filter(|reference| {
+        reference.owner_kind == OwnerKind::OperatorPool
+            && reference.resource_kind == ResourceKind::Policy
+    }) {
+        let key = reference.key();
+        if !operator_pools.contains(&key) {
+            operator_pools.push(key);
+        }
+    }
+    let scope = GrantScope::Tenant { operator_pools };
     let Caller::Installation(owner) = &fixture.operator else {
         anyhow::bail!("operator");
     };

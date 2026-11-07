@@ -213,6 +213,25 @@ async fn profiled_arbitrary_64_of_256_preserves_255_and_ignores_revoked_unselect
         },
     )
     .await?;
+    let expected_scope = GrantScope::Tenant {
+        operator_pools: vec![reference(0)?.key(), reference(1)?.key()],
+    };
+    let binding = crate::tenancy::store::directory::binding_in(
+        &harness.fixture.db,
+        &harness.fixture.tenant,
+        &harness.fixture.binding,
+        64 * 1024,
+    )
+    .await?
+    .context("shared-profile binding")?;
+    let credential = crate::tenancy::store::directory::credential_in(
+        &harness.fixture.db,
+        &harness.credential.credential_id,
+        64 * 1024,
+    )
+    .await?
+    .context("shared-profile credential")?;
+    ensure!(binding.scope == expected_scope && credential.scope == expected_scope);
     let census = manifest(&harness).await?;
     ensure!(census.candidates.len() == 256);
     let mut providers = std::collections::HashSet::new();
