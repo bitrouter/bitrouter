@@ -29,8 +29,16 @@ async fn shared_health_upgrade_preserves_ordered_receipt_evidence_and_digest_byt
     }
     ensure!(
         crate::tenancy::store::load(&db, chrono::Utc::now())
-            .await
-            .is_err()
+            .await?
+            .installation
+            == installation
+    );
+    ensure!(
+        crate::tenancy::store::startup::read_header_in(&db, 4096)
+            .await?
+            .context("historical header")?
+            .format
+            == crate::tenancy::store::startup::Format::V3
     );
     crate::db::run_migrations(&db).await?;
     ensure!(

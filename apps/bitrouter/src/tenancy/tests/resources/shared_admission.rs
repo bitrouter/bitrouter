@@ -1,10 +1,23 @@
 use super::*;
+use crate::tenancy::resources::lifecycle;
 use bitrouter_ai::tenancy::{
     admission_v2::AdmissionProfileV2,
     identity::RevisionId,
     resources_v2::{DefinitionV2, ResourcePutV2},
 };
 use serde_json::json;
+
+async fn revision_count(fixture: &Fixture) -> Result<usize> {
+    let row = fixture
+        .db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS count FROM tenancy_resource_revisions",
+        ))
+        .await?
+        .context("catalog count")?;
+    Ok(usize::try_from(row.try_get::<i64>("", "count")?)?)
+}
 
 fn input(fixture: &Fixture, name: &str, operation: &str, rpm: u32) -> Result<ResourcePutV2> {
     Ok(ResourcePutV2 {
@@ -75,8 +88,14 @@ async fn rejected(
 ) -> Result<()> {
     let before = fixture.service.current().map_err(failure)?;
     let revision = before.revision;
-    let count = before.resource_lifecycle.len();
-    let head = before.resource_lifecycle.head(&input.key).cloned();
+    let count = revision_count(fixture).await?;
+    let head = lifecycle::head(&fixture.db, &fixture.installation, &input.key)
+        .await?
+        .map(|record| record.reference.revision_id);
+    let published = before
+        .resource_admission
+        .working_bytes()
+        .map_err(|code| failure(code.into()))?;
     let key = input.key.clone();
     drop(before);
     let response = fixture
@@ -89,17 +108,21 @@ async fn rejected(
         _ => anyhow::bail!("unexpected accepted profile"),
     }
     let after = fixture.service.current().map_err(failure)?;
-    ensure!(after.revision == revision && after.resource_lifecycle.len() == count);
-    ensure!(after.resource_lifecycle.head(&key) == head.as_ref());
-    let row = fixture
-        .db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "SELECT COUNT(*) AS count FROM tenancy_resource_revisions".to_owned(),
-        ))
-        .await?
-        .context("catalog count")?;
-    ensure!(usize::try_from(row.try_get::<i64>("", "count")?)? == count);
+    ensure!(
+        after.revision == revision
+            && after
+                .resource_admission
+                .working_bytes()
+                .map_err(|code| failure(code.into()))?
+                == published
+    );
+    ensure!(
+        lifecycle::head(&fixture.db, &fixture.installation, &key)
+            .await?
+            .map(|record| record.reference.revision_id)
+            == head
+    );
+    ensure!(revision_count(fixture).await? == count);
     Ok(())
 }
 
@@ -144,9 +167,20 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
     let (winner, applied) = winners.pop().context("winner")?;
     let mut loser = losers.pop().context("loser")?;
     let state = fixture.service.current().map_err(failure)?;
-    ensure!(state.resource_lifecycle.len() == 1);
-    ensure!(state.resource_lifecycle.head(&winner.key) == applied.resource_revision.as_ref());
-    ensure!(state.resource_lifecycle.head(&loser.key).is_none());
+    ensure!(revision_count(&fixture).await? == 1);
+    ensure!(state.resource_admission.has_profile_key(&winner.key));
+    ensure!(!state.resource_admission.has_profile_key(&loser.key));
+    ensure!(
+        lifecycle::head(&fixture.db, &fixture.installation, &winner.key)
+            .await?
+            .map(|record| record.reference.revision_id)
+            == applied.resource_revision
+    );
+    ensure!(
+        lifecycle::head(&fixture.db, &fixture.installation, &loser.key)
+            .await?
+            .is_none()
+    );
     drop(state);
     // The rejected candidate did not install its conflicting group rules.
     loser.operation_id = "compatible-after-race".try_into()?;
@@ -248,10 +282,20 @@ async fn every_group_rule_is_immutable_across_rotation_all_revocation_and_restar
         ErrorCode::InvalidRequest,
     )
     .await?;
-    let state = fixture.service.current().map_err(failure)?;
-    ensure!(state.resource_lifecycle.revoked(&old) && state.resource_lifecycle.revoked(&current));
-    ensure!(state.resource_lifecycle.head(&original.key) == Some(&current.revision_id));
-    drop(state);
+    for reference in [&old, &current] {
+        ensure!(
+            lifecycle::exact(&fixture.db, &fixture.installation, reference)
+                .await?
+                .context("retained profile revision")?
+                .revoked
+        );
+    }
+    ensure!(
+        lifecycle::head(&fixture.db, &fixture.installation, &original.key)
+            .await?
+            .map(|record| record.reference.revision_id)
+            == Some(current.revision_id)
+    );
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -384,10 +428,12 @@ async fn revoked_policy_lock_and_shared_profile_keys_cannot_change_family_after_
         matches!(fixture.service.execute(fixture.operator.clone(),Command::Resource(fixture.tenant.clone(),policy)).await,Err(error) if error.0.code==ErrorCode::InvalidRequest)
     );
     let state = fixture.service.current().map_err(failure)?;
-    ensure!(state.revision == before && state.resource_lifecycle.len() == 2);
+    ensure!(state.revision == before && revision_count(&fixture).await? == 2);
     for reference in [shared_ref, policy_ref] {
-        ensure!(state.resource_lifecycle.head(&reference.key()) == Some(&reference.revision_id));
-        ensure!(state.resource_lifecycle.revoked(&reference));
+        let record = lifecycle::head(&fixture.db, &fixture.installation, &reference.key())
+            .await?
+            .context("retained revoked head")?;
+        ensure!(record.reference == reference && record.revoked);
     }
     drop(state);
     fixture.service.shutdown().await?;
