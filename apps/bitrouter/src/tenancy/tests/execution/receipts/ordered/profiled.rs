@@ -23,11 +23,14 @@ pub(super) fn reference(index: usize) -> Result<ResourceRef> {
 }
 
 pub(super) async fn grant_pool(fixture: &Fixture, count: usize) -> Result<CredentialIssued> {
-    let state = fixture.service.current().map_err(failure)?;
-    let binding = state
-        .bindings
-        .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-        .context("binding")?;
+    let binding = crate::tenancy::store::directory::binding_in(
+        &fixture.db,
+        &fixture.tenant,
+        &fixture.binding,
+        64 * 1024,
+    )
+    .await?
+    .context("binding")?;
     let scope = GrantScope::Tenant {
         operator_pools: (0..count)
             .map(|index| reference(index).map(|reference| reference.key()))

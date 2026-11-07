@@ -111,7 +111,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         (
             "tenancy_installation",
             "schema_version",
-            3_i32,
+            0_i32,
             "installation_id",
             fixture.installation.as_str(),
             "unsupported authority store format",

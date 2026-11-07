@@ -65,7 +65,13 @@ async fn profile_cas_rotation_has_one_winner_preserves_rules_and_reloads_exact_h
     );
     restart(&mut fixture).await?;
     let state = fixture.service.current().map_err(failure)?;
-    ensure!(state.resource_lifecycle.head(&pinned.key()) == Some(&winner));
+    ensure!(
+        state
+            .resource_admission
+            .current_profile(&pinned)
+            .map(|(reference, _)| reference.revision_id)
+            == Some(winner.clone())
+    );
     drop(state);
     fixture.service.shutdown().await?;
     // Re-reading an old immutable import must not rewind an RPM CAS winner.
@@ -82,7 +88,13 @@ async fn profile_cas_rotation_has_one_winner_preserves_rules_and_reloads_exact_h
         .await?;
     restart(&mut fixture).await?;
     let state = fixture.service.current().map_err(failure)?;
-    ensure!(state.resource_lifecycle.head(&pinned.key()) == Some(&winner));
+    ensure!(
+        state
+            .resource_admission
+            .current_profile(&pinned)
+            .map(|(reference, _)| reference.revision_id)
+            == Some(winner)
+    );
     ensure!(
         state
             .resource_admission

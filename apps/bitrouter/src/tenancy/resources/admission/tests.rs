@@ -181,8 +181,10 @@ async fn initial_profile_head_is_unambiguous_and_reimport_cannot_repair_missing_
     import(&resources, &db, vec![profile("v1")?]).await?;
     import(&resources, &db, vec![profile("v1")?]).await?;
     let profile_ref = reference(ResourceKind::Policy, "profile", "v1")?;
-    let current = crate::tenancy::store::load_existing(&db, chrono::Utc::now()).await?;
-    ensure!(current.resource_lifecycle.head(&profile_ref.key()) == Some(&profile_ref.revision_id));
+    let current = lifecycle::head(&db, &resources.installation, &profile_ref.key())
+        .await?
+        .context("profile head")?;
+    ensure!(current.reference == profile_ref);
     ensure!(import(&resources, &db, vec![profile("v2")?]).await.is_err());
     db.execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
         .await?;
