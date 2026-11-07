@@ -1,19 +1,15 @@
 //! Local gateway endpoint selection and best-effort startup shared by setup and launch.
 
-#[cfg(feature = "harness")]
 use crate::commands::invocation;
-#[cfg(feature = "harness")]
 use crate::style::Palette;
 
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
-#[cfg(any(feature = "harness", test))]
 pub(crate) const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
 
 /// Placeholder credential injected when no real key is available. Ignored by
 /// the daemon under `skip_auth: true` (the `bro init` default); the
 /// harness merely needs *some* credential to start.
-#[cfg(any(feature = "harness", test))]
 pub(crate) const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -67,7 +63,6 @@ fn rewrite_host(host: &str) -> &str {
 /// someone else's daemon, which we can only warn about. Exact-match only:
 /// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
 /// the warn path — the fail-safe direction (never a wrong auto-start).
-#[cfg(any(feature = "harness", test))]
 pub(crate) fn listen_is_local(listen: &str) -> bool {
     let (host, _port) = split_listen(listen);
     matches!(
@@ -94,7 +89,6 @@ pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
 /// readiness. Best-effort throughout: on any failure it warns and returns so
 /// the agent still launches (and surfaces its own connection error) — matching
 /// spawn's "never block the launch" stance.
-#[cfg(feature = "harness")]
 pub(crate) async fn ensure_local_daemon(
     source: &crate::paths::ConfigSource,
     cfg: &crate::config::Config,
@@ -135,7 +129,7 @@ pub(crate) async fn ensure_local_daemon(
                 Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { .. }) => {
                     eprintln!(
                         "{cyan}note:{reset} daemon started but is not ready yet — \
-                         the agent may need a moment; logs at {}",
+                         the client may need a moment; logs at {}",
                         log_path.display(),
                         cyan = p.cyan,
                         reset = p.reset,
@@ -144,7 +138,7 @@ pub(crate) async fn ensure_local_daemon(
                 Ok(crate::daemon::DaemonStartOutcome::Exited { status, log_tail }) => {
                     eprintln!(
                         "{cyan}note:{reset} daemon exited during startup ({status}) — \
-                         launching the agent anyway",
+                         continuing without a ready daemon",
                         cyan = p.cyan,
                         reset = p.reset,
                     );
@@ -153,7 +147,7 @@ pub(crate) async fn ensure_local_daemon(
                 Err(e) => {
                     eprintln!(
                         "{cyan}note:{reset} could not start the daemon ({e:#}) — \
-                         launching the agent anyway",
+                         continuing without a ready daemon",
                         cyan = p.cyan,
                         reset = p.reset,
                     );
@@ -169,7 +163,6 @@ pub(crate) async fn ensure_local_daemon(
 
 /// Best-effort TCP reachability probe against the daemon's listen address.
 /// Prints a one-line warning when nothing is listening; never errors.
-#[cfg(feature = "harness")]
 pub(crate) fn warn_if_daemon_unreachable(listen: &str) {
     use std::net::{TcpStream, ToSocketAddrs};
     use std::time::Duration;
@@ -190,7 +183,7 @@ pub(crate) fn warn_if_daemon_unreachable(listen: &str) {
         let p = Palette::for_stderr();
         eprintln!(
             "{cyan}note:{reset} no BitRouter daemon appears to be listening on {probe} — \
-             start one with `{cli} start` (the agent will fail to reach it otherwise).",
+             start one with `{cli} start` (the client will fail to reach it otherwise).",
             cyan = p.cyan,
             reset = p.reset,
             cli = invocation::name(),

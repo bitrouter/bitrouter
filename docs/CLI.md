@@ -1,5 +1,33 @@
 # BitRouter CLI Reference
 
+`bro connect [codex|claude|opencode|pi|deepseek-harness|hermes|openclaw] --model ID [--display-name LABEL]` adds a gateway model to native model
+pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
+`--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
+Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
+without local config/startup. Read the [connection contract](../skills/bitrouter/references/connect.md)
+for gateway auth, client differences, restart requirements and recovery.
+
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw add an independent BitRouter provider. Use
+`--instance PATH` for the actual client configuration, `--protocol chat-completions|responses|messages`
+(default: chat-completions), and repeatable `--profile NAME` for initialized Harness or Hermes profiles.
+Hermes and OpenClaw initially support Chat Completions. Hermes selects the current
+profile unless profiles are named explicitly. OpenClaw uses the actual Gateway
+configuration selected by `--instance`; its agent policies remain enforced.
+BitRouter is the provider and Automatos is its router model. The gateway request
+ID remains `bitrouter/automatos`: OpenClaw exposes `automatos` as a provider alias,
+while Hermes' picker displays the exact model ID under BitRouter.
+`--status` is offline; `--check` checks saved configuration and the gateway catalog using
+the saved credential, without inference; `--update` replaces an existing connection.
+See the connection contract for per-client reload and recovery behavior.
+
+For these five independent-provider clients, repeat `--model ID` to register
+several advertised selectors under one provider. The first retains the existing
+primary alias/display-name behavior; JSON reports also list all `models`.
+`--update` replaces the full list when model flags are supplied and preserves it
+otherwise. Catalog checks cover every ID. Codex/Claude remain single-model.
+Select routes for agents, sessions, and jobs in the native harness; connection
+setup does not rewrite workflow bindings or create routing strategies.
+
 MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
 Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.

@@ -75,6 +75,14 @@ pub fn apply_defaults(config: &mut Config, config_path: Option<&Path>) {
             },
         );
     }
+    // The native picker uses a stable branded name for the existing router.
+    // Preserve an explicitly configured automatos route and the auto default.
+    if !config.routers.contains_key("automatos")
+        && !config.presets.contains_key("automatos")
+        && let Some(auto) = config.routers.get("auto").cloned()
+    {
+        config.routers.insert("automatos".into(), auto);
+    }
 }
 
 /// Native startup defaults do not override an external harness's model choice.
@@ -3573,6 +3581,16 @@ mod tests {
     async fn native_defaults_load_without_configuration_and_preserve_overrides() -> Result<()> {
         let mut config = Config::default();
         apply_defaults(&mut config, None);
+        assert_eq!(config.routers.get("automatos"), config.routers.get("auto"));
+        assert!(
+            crate::config::routing_table::list_models_for(&config)
+                .iter()
+                .any(|model| model.id == "bitrouter/automatos")
+        );
+        assert_eq!(
+            native_model_mode(&config, "bitrouter/automatos")?,
+            bitrouter_ai::core::protocol::ModelMode::Policy
+        );
         assert!(
             config.chat.model.is_none(),
             "external harness defaults must stay unset"
@@ -3604,6 +3622,23 @@ mod tests {
         assert_eq!(native_default_model(&config), Some("provider:model"));
         config.policy.path = Some("missing.yaml".into());
         assert!(load_for_config(&config, None).await.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn automatos_respects_explicit_binding_and_default_opt_out() -> Result<()> {
+        let mut config = crate::config::parse(
+            "routers:\n  automatos:\n    selection:\n      kind: model\n      model: fixture:custom\n",
+        )?;
+        let original = config.routers.get("automatos").cloned();
+        apply_defaults(&mut config, None);
+        assert_eq!(config.routers.get("automatos"), original.as_ref());
+        let mut disabled = Config {
+            inherit_defaults: false,
+            ..Default::default()
+        };
+        apply_defaults(&mut disabled, None);
+        assert!(!disabled.routers.contains_key("automatos"));
         Ok(())
     }
 

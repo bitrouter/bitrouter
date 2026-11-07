@@ -10,7 +10,11 @@ Decision JSONL records include a digest of the canonical ingress request ID,
 including direct Core calls without HTTP headers. An evaluator can join these
 to native attempt records while guarded trajectory IDs remain owner-opaque.
 
-Codex has two deliberate BitRouter facets:
+Codex has three deliberate BitRouter facets:
+
+- `bro connect codex --model ID` adds a persistent gateway model option
+  (default `bitrouter/automatos`), including in builds without `harness`;
+  see [persistent connections](connect.md) for desktop behavior and restore.
 
 - `bro run codex` drives the maintained ACP adapter for one headless turn;
   `--background` gives controller ownership to the daemon.
@@ -62,7 +66,7 @@ provider-qualified routes, presets, and user-defined virtual models retain
 their normal routing behavior. A daemon reload updates this mapping too.
 
 `init --model ID` saves the default model. `run codex PROMPT --model ID` overrides it
-for one session. No vendor CLI config file is rewritten.
+for one session. These launch/ACP commands do not rewrite vendor CLI config files.
 
 ## Native interface
 

@@ -1,5 +1,32 @@
 # CLI reference
 
+`bro connect [codex|claude|opencode|pi|deepseek-harness|hermes|openclaw] --model ID [--display-name LABEL]` adds a gateway model to native model
+pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
+`--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
+Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
+without local config/startup. Read the [connection contract](connect.md) for gateway auth,
+client differences, restart requirements, catalog snapshots and recovery.
+
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw add an independent BitRouter provider. Use
+`--instance PATH` for the actual client configuration, `--protocol chat-completions|responses|messages`
+(default: chat-completions), and repeatable `--profile NAME` for initialized Harness or Hermes profiles.
+Hermes and OpenClaw initially support Chat Completions. Hermes defaults to its
+selected home/profile; OpenClaw uses the selected Gateway configuration and
+retains existing model restrictions. BitRouter is the provider, Automatos its
+router model. The gateway request remains `bitrouter/automatos`; OpenClaw's native
+alias preserves the short selection while Hermes lists the exact ID under BitRouter.
+`--status` is offline; `--check` checks saved configuration and the gateway catalog using
+the saved credential, without inference; `--update` replaces an existing connection.
+See the connection contract for per-client reload and recovery behavior.
+
+For these five independent-provider clients, repeat `--model ID` to register
+several advertised selectors under one provider. The first retains the existing
+primary alias/display-name behavior; JSON reports also list all `models`.
+`--update` replaces the full list when model flags are supplied and preserves it
+otherwise. Catalog checks cover every ID. Codex/Claude remain single-model.
+Select routes for agents, sessions, and jobs in the native harness; connection
+setup does not rewrite workflow bindings or create routing strategies.
+
 HTTP/2 is a default-on application Cargo feature (`http2`), forwarded to axum,
 reqwest, the SDK and the shared transport's `h2` dependency. The explicitly
 no-default-features `gateway` and `gateway-shared` distributions remain
