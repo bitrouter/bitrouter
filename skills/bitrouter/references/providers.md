@@ -351,13 +351,14 @@ server_tools:
       - kind: exa              # HTTP, key from api_key or EXA_API_KEY
       - kind: firecrawl        # HTTP, key from api_key or FIRECRAWL_API_KEY
       - kind: tavily           # HTTP, key from api_key or TAVILY_API_KEY
+      - kind: keenable         # HTTP, key from api_key or KEENABLE_API_KEY
       - kind: native           # reuse a provider's NATIVE search for every model
         name: native           # backend id a caller pins (default "native")
         model: anthropic/claude-opus-4.8
         tool: { type: "anthropic:web_search_20250305" }
 ```
 
-HTTP backends (`parallel` / `exa` / `firecrawl` / `tavily`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `native` backend runs a nested completion (so it needs a routable model) — it forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
+HTTP backends (`parallel` / `exa` / `firecrawl` / `tavily` / `keenable`) take an optional `api_key` (supports `${VAR}`) and `api_base`; a backend with no resolvable key is skipped. The `native` backend runs a nested completion (so it needs a routable model) — it forwards a provider's own search tool, making one provider's native web search usable from models that lack it.
 
 ### Built-in web fetch (BYOK)
 
