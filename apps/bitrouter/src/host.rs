@@ -1356,7 +1356,7 @@ mod tests {
                     .context("control finalizer was abandoned")?;
                 anyhow::bail!("test pending control shutdown failure")
             };
-            let supervision = tokio::spawn(supervise_http_shutdown(
+            let mut supervision = tokio::spawn(supervise_http_shutdown(
                 http,
                 control,
                 std::future::pending::<Result<()>>(),
@@ -1364,42 +1364,59 @@ mod tests {
                 shutdown_tx,
                 control_shutdown_tx,
             ));
-            tokio::time::timeout(std::time::Duration::from_secs(1), control_started_rx)
-                .await
-                .context("control shutdown did not begin")??;
-            let draining = tokio::time::timeout(std::time::Duration::from_secs(1), draining_rx)
-                .await
-                .context("pending control IPC prevented HTTP shutdown progress");
-            // Always release both owned futures, including when the old ordering
-            // reproduces starvation, so the regression test leaves no detached work.
-            let still_running = !supervision.is_finished();
-            finish_http_tx
-                .send(())
-                .map_err(|_| anyhow::anyhow!("HTTP finalizer receiver disappeared"))?;
-            tokio::task::yield_now().await;
-            let retained_control = !supervision.is_finished();
-            finish_control_tx
-                .send(())
-                .map_err(|_| anyhow::anyhow!("control finalizer receiver disappeared"))?;
-            let error = tokio::time::timeout(std::time::Duration::from_secs(2), supervision)
-                .await
-                .context("shutdown did not finish after both finalizers")??
-                .err()
-                .context("control failure was lost")?;
-            draining??;
-            anyhow::ensure!(
-                still_running && retained_control,
-                "supervisor must drain HTTP and await both finalizers"
-            );
-            let chain = format!("{error:#}");
-            anyhow::ensure!(
-                chain.contains("test pending control shutdown failure"),
-                "{chain}"
-            );
-            anyhow::ensure!(
-                chain.contains("test HTTP finalization failure") == http_failure,
-                "{chain}"
-            );
+            let mut joined = false;
+            let result: Result<()> = async {
+                tokio::time::timeout(std::time::Duration::from_secs(1), control_started_rx)
+                    .await
+                    .context("control shutdown did not begin")??;
+                tokio::time::timeout(std::time::Duration::from_secs(1), draining_rx)
+                    .await
+                    .context("pending control IPC prevented HTTP shutdown progress")??;
+                let still_running = !supervision.is_finished();
+                finish_http_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("HTTP finalizer receiver disappeared"))?;
+                tokio::task::yield_now().await;
+                let retained_control = !supervision.is_finished();
+                finish_control_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("control finalizer receiver disappeared"))?;
+                let error =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), &mut supervision)
+                        .await
+                        .context("shutdown did not finish after both finalizers")?;
+                joined = true;
+                let error = error?.err().context("control failure was lost")?;
+                anyhow::ensure!(
+                    still_running && retained_control,
+                    "supervisor must drain HTTP and await both finalizers"
+                );
+                let chain = format!("{error:#}");
+                anyhow::ensure!(
+                    chain.contains("test pending control shutdown failure"),
+                    "{chain}"
+                );
+                anyhow::ensure!(
+                    chain.contains("test HTTP finalization failure") == http_failure,
+                    "{chain}"
+                );
+                Ok(())
+            }
+            .await;
+            // Preserve the first failure after cleaning up the synthetic
+            // supervisor, including observation and final-join timeouts.
+            let cleanup = if joined {
+                Ok(())
+            } else {
+                supervision.abort();
+                match supervision.await {
+                    Ok(result) => result.context("supervisor failed during test cleanup"),
+                    Err(error) if error.is_cancelled() => Ok(()),
+                    Err(error) => Err(anyhow::Error::from(error))
+                        .context("supervisor task failed during test cleanup"),
+                }
+            };
+            combine_shutdown_results(result, cleanup)?;
         }
         Ok(())
     }
