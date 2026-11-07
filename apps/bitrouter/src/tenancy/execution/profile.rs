@@ -96,7 +96,11 @@ impl TenantExecution {
         pipeline: Arc<Pipeline>,
         request: &mut crate::gateway::pipeline::types::PipelineRequest,
     ) -> Result<()> {
-        self.route.apply_generation_defaults(&mut request.input);
+        if self.submission.configuration_defaults
+            == bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults::Apply
+        {
+            self.route.apply_generation_defaults(&mut request.input);
+        }
         if self.route.is_ordered() {
             super::ordered_prompt(request.input.generation_prompt())
                 .map_err(|code| self.reject(code))?;

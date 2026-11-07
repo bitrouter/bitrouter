@@ -1,6 +1,6 @@
 //! Canonical precedence and closed-body regressions.
 use super::*;
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use serde_json::json;
 
 fn defaults() -> Result<CanonicalGenerationDefaultsV1> {
@@ -108,6 +108,40 @@ fn envelope_member_is_reserved_on_nonordered_protocol_parsing_only() -> Result<(
             new[ENVELOPE_BODY_MEMBER] = value;
             assert!(crate::gateway::http::parse_input(&protocol, new).is_err());
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn versioned_raw_envelope_decoder_preserves_exact_numeric_tokens_and_depth() -> Result<()> {
+    let raw = r#"{"bitrouter_generation_defaults_envelope":{"schema_version":2.0,"canonical":{"schema_version":1e0,"seed":9.223372036854775807e18},"supplemental":{},"configuration_defaults":"preserve_absence"}}"#;
+    let decoded: OrderedBody = serde_json::from_str(raw)?;
+    let Envelope::V2(value) = decoded.envelope.context("envelope")? else {
+        anyhow::bail!("wrong version")
+    };
+    ensure!(value.canonical.as_ref().context("canonical")?.seed == Some(i64::MAX));
+    value.digest()?;
+    for bad in [
+        raw.replace("2.0", "2.00000000000000001"),
+        raw.replace("9.223372036854775807e18", "9.223372036854775808e18"),
+        raw.replace(
+            "\"supplemental\":{}",
+            "\"supplemental\":{\"k\":1,\"\\u006b\":1}",
+        ),
+    ] {
+        assert!(serde_json::from_str::<OrderedBody>(&bad).is_err());
+    }
+    for depth in [124, 125] {
+        let raw = format!(
+            r#"{{"bitrouter_generation_defaults_envelope":{{"schema_version":2,"supplemental":{{"k":{}null{}}},"configuration_defaults":"preserve_absence"}}}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        );
+        let decoded: OrderedBody = serde_json::from_str(&raw)?;
+        assert_eq!(
+            decoded.envelope.context("envelope")?.digest().is_ok(),
+            depth == 124
+        );
     }
     Ok(())
 }

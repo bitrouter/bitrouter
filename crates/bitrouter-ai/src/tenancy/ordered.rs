@@ -392,6 +392,22 @@ impl OrderedDispatchBindingV2 {
         Ok(self)
     }
 
+    /// Bind version-two defaults and their configuration-layer choice before retaining
+    /// this submission identity. Uses the existing digest slot with a distinct
+    /// domain; supply the same envelope to the ordered gateway for this call.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults, bindings or an oversized selection header.
+    pub fn with_generation_defaults_envelope_v2(
+        mut self,
+        defaults: &super::generation_defaults::GenerationDefaultsEnvelopeV2,
+    ) -> Result<Self, ValidationError> {
+        self.selection.generation_defaults_digest = Some(defaults.digest()?);
+        self.validate()?;
+        bytes(&self.selection, MAX_SELECTION_HEADER_BYTES / 4 * 3)?;
+        Ok(self)
+    }
+
     /// Bind canonical defaults before retaining this submission identity.
     /// Supply the same defaults to the SDK's ordered gateway for this call.
     ///

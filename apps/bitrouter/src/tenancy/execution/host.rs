@@ -146,6 +146,8 @@ impl Authority {
             principal: self.identity.principal.clone(),
             credential: self.identity.credential.clone(),
             binding: self.identity.binding.clone(),
+            configuration_defaults:
+                bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults::Apply,
             deadline: self.service.submission_deadline(),
             cancelled: tokio_util::sync::CancellationToken::new(),
             session_closed: None,
