@@ -63,6 +63,9 @@ async fn owner_with_deadline(
         )
         .await
         .map_err(|error| anyhow::anyhow!("admission {error:?}"))?;
+    lease
+        .bind_execution(&execution)
+        .map_err(|error| anyhow::anyhow!("execution registration {error:?}"))?;
     let observation = service.receipt_observer.timing(&correlation);
     Ok(ReceiptOwner::new(
         Identity {

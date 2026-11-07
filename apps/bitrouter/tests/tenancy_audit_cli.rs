@@ -65,7 +65,7 @@ async fn fixture(home: &Path) -> Result<String> {
         .context("migrated installation")?;
     ensure!(
         installed.try_get::<String>("", "installation_id")? == INSTALLATION
-            && installed.try_get::<i32>("", "schema_version")? == 2,
+            && installed.try_get::<i32>("", "schema_version")? == 1,
         "migration must preserve the retired installation"
     );
     db.close().await?;

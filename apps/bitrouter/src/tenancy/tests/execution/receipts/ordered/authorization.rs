@@ -34,11 +34,14 @@ async fn scoped_key(
 
 async fn narrow_binding(harness: &OrderedHarness, credentials: &[usize]) -> Result<()> {
     let fixture = &harness.fixture;
-    let current = fixture.service.current().map_err(failure)?;
-    let binding = current
-        .bindings
-        .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-        .context("current recipient binding")?;
+    let binding = crate::tenancy::store::directory::binding_in(
+        &fixture.db,
+        &fixture.tenant,
+        &fixture.binding,
+        64 * 1024,
+    )
+    .await?
+    .context("current recipient binding")?;
     let operation = harness
         .control(true, HttpVersion::Http1Only)?
         .put_binding(

@@ -48,9 +48,9 @@ async fn new_schema_refusal_precedes_even_migration_ledger_creation() -> Result<
 async fn pending_migration_estimates_the_current_wal_visible_image_before_writing() -> Result<()> {
     let (_directory, owned) = fixture().await?;
     let previous = migration::Migrator::migrations()
-        .len()
-        .checked_sub(1)
-        .context("migration registry")?;
+        .iter()
+        .position(|migration| migration.name() == "m20240101_000044_capacity_upgrade")
+        .context("capacity migration")?;
     migration::Migrator::up(&owned.db, Some(u32::try_from(previous)?)).await?;
     owned
         .db

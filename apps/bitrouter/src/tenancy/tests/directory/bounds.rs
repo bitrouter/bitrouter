@@ -46,7 +46,7 @@ async fn directory_byte_budget_shortens_pages_without_skipping_entries() -> Resu
     let fixture = Fixture::new().await?;
     let server = Server::start(&fixture.service).await?;
     let scope = GrantScope::Tenant {
-        operator_pools: (0..256)
+        operator_pools: (0..64)
             .map(|index| {
                 Ok(ResourceKey {
                     owner_kind: OwnerKind::OperatorPool,
@@ -57,7 +57,7 @@ async fn directory_byte_budget_shortens_pages_without_skipping_entries() -> Resu
             })
             .collect::<Result<_>>()?,
     };
-    for index in 0..16 {
+    for index in 0..64 {
         server
             .client
             .put_binding(
@@ -77,7 +77,7 @@ async fn directory_byte_budget_shortens_pages_without_skipping_entries() -> Resu
             .await?;
     }
     let first = server.page(&fixture.installation).await?;
-    ensure!(first.entries.len() < 19 && first.next_after.is_some());
+    ensure!(first.entries.len() < 67 && first.next_after.is_some());
     ensure!(serde_json::to_vec(&first)?.len() <= MAX_DIRECTORY_PAGE_BYTES);
     let second = server
         .client
@@ -91,7 +91,7 @@ async fn directory_byte_budget_shortens_pages_without_skipping_entries() -> Resu
     ensure!(second.next_after.is_none());
     ensure!(serde_json::to_vec(&second)?.len() <= MAX_DIRECTORY_PAGE_BYTES);
     let all: Vec<_> = first.entries.iter().chain(&second.entries).collect();
-    ensure!(all.len() == 19 && all.windows(2).all(|pair| pair[0].key() < pair[1].key()));
+    ensure!(all.len() == 67 && all.windows(2).all(|pair| pair[0].key() < pair[1].key()));
     // The cut is caused by exact JSON bytes, including the envelope and cursor.
     let mut oversized = first.clone();
     oversized

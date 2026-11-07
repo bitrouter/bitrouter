@@ -375,13 +375,12 @@ async fn directory_pages_are_complete_sorted_and_fenced_by_every_authority_chang
             &fixture.tenant,
             &TenantPut {
                 operation_id: "directory-suspend".try_into()?,
-                expected_revision: fixture
-                    .service
-                    .current()
-                    .map_err(failure)?
-                    .tenants
-                    .get(&fixture.tenant)
-                    .map(|tenant| tenant.revision.clone()),
+                expected_revision: Some(
+                    crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                        .await?
+                        .context("current tenant")?
+                        .revision,
+                ),
                 state: TenantState::Suspended,
                 installation_id: fixture.installation.clone(),
             },

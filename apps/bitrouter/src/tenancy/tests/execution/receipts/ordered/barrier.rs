@@ -122,10 +122,14 @@ async fn revoke_after_send(harness: &OrderedHarness, change: &str) -> Result<(u1
     let current = fixture.service.current().map_err(failure)?;
     let (operation, status, code) = match change {
         "binding" => {
-            let binding = current
-                .bindings
-                .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-                .context("recipient binding")?;
+            let binding = crate::tenancy::store::directory::binding_in(
+                &fixture.db,
+                &fixture.tenant,
+                &fixture.binding,
+                64 * 1024,
+            )
+            .await?
+            .context("recipient binding")?;
             let mut retained_slot = harness.route.key();
             retained_slot.resource_kind = ResourceKind::Credential;
             retained_slot.resource_id = "static-slot-1".try_into()?;
