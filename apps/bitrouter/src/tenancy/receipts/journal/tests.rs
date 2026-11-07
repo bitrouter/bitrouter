@@ -6,6 +6,8 @@ use bitrouter_ai::tenancy::{
 };
 use serde_json::json;
 
+mod ordered_cancellation;
+
 // Unit-only construction bypasses admission to exercise the pure state machine.
 // Production constructors require &TenantExecution and an exact retained lookup.
 fn owner(execution: &str) -> Result<Owner> {
@@ -40,6 +42,7 @@ fn stamp(owner: &Owner, model: &str) -> Result<TargetStamp> {
         )?,
         route,
         credential,
+        ordinal: None,
         candidate: format!("exact-private-projection:{model}")
             .into_bytes()
             .into(),
@@ -134,6 +137,71 @@ fn duplicate_generated_identity_is_rejected_without_overwriting_the_original_att
     let frozen = journal.freeze()?;
     ensure!(frozen.attempts.len() == 1 && frozen.attempts[0].attempt_id == id);
     ensure!(frozen.attempts[0].outcome == Outcome::Failed);
+    Ok(())
+}
+
+#[test]
+fn ordered_journal_retains_all_sixty_four_actual_attempts() -> Result<()> {
+    let owner = owner("ordered-execution")?;
+    let ordinals: Vec<u16> = (0..64).rev().collect();
+    let journal = Journal::with_selection(owner.clone(), Some(&ordinals))?;
+    let mut ids = std::collections::HashSet::new();
+    for ordinal in &ordinals {
+        let mut stamp = stamp(&owner, &format!("model-{ordinal}"))?;
+        stamp.ordinal = Some(*ordinal);
+        let mut permit = journal.reserve(stamp.clone())?;
+        ensure!(ids.insert(permit.arm(&stamp)?));
+        permit.http_status(503)?;
+        drop(permit);
+    }
+    let frozen = journal.freeze()?;
+    ensure!(frozen.attempts.len() == 64 && frozen.dispatch == DispatchState::Started);
+    ensure!(frozen.candidate_ordinals == ordinals.into_iter().map(Some).collect::<Vec<_>>());
+    ensure!(frozen.http_statuses == vec![Some(503); 64]);
+    ensure!(
+        frozen
+            .attempts
+            .iter()
+            .all(|attempt| attempt.outcome == Outcome::Failed)
+    );
+    Ok(())
+}
+
+#[test]
+fn ordered_arm_rejects_repetition_backwards_or_unknown_paid_work() -> Result<()> {
+    for unknown in [false, true] {
+        let owner = owner("ordered-guard")?;
+        let journal = Journal::with_selection(owner.clone(), Some(&[3, 1, 0]))?;
+        let mut first = stamp(&owner, "first")?;
+        first.ordinal = Some(1);
+        let mut active = journal.reserve(first.clone())?;
+        active.arm(&first)?;
+        let mut later = stamp(&owner, "later")?;
+        later.ordinal = Some(0);
+        let mut concurrent = journal.reserve(later.clone())?;
+        ensure!(matches!(concurrent.arm(&later), Err(Error::Phase)));
+        drop(concurrent);
+        if !unknown {
+            active.http_status(503)?;
+        }
+        drop(active);
+        for ordinal in [3, 1, 2] {
+            let mut denied = stamp(&owner, "denied")?;
+            denied.ordinal = Some(ordinal);
+            let mut permit = journal.reserve(denied.clone())?;
+            ensure!(permit.arm(&denied).is_err());
+        }
+        let mut next = journal.reserve(later.clone())?;
+        if unknown {
+            ensure!(matches!(next.arm(&later), Err(Error::Phase)));
+        } else {
+            next.arm(&later)?;
+            next.http_status(503)?;
+        }
+        drop(next);
+        let frozen = journal.freeze()?;
+        ensure!(frozen.attempts.len() == if unknown { 1 } else { 2 });
+    }
     Ok(())
 }
 

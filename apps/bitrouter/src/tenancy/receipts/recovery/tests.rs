@@ -18,6 +18,7 @@ fn seed() -> Result<Seed> {
         execution: "execution".try_into()?,
         correlation: "correlation".try_into()?,
         revision: "revision".try_into()?,
+        ordered: None,
     };
     let origin = serde_json::from_value(json!({
         "acquisition":"b7a8854e-80da-46ef-b805-0dc03b061c57", "instance":"instance"

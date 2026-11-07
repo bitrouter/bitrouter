@@ -209,6 +209,17 @@ impl RouteHook for Profile {
         ctx: &mut PipelineContext,
     ) -> Result<()> {
         let execution = self.execution()?;
+        if execution.route().is_ordered() {
+            // The immutable view already validated exact caller order. Runtime
+            // admission still runs at each send, but cannot permute this chain.
+            for target in chain.iter() {
+                execution
+                    .route()
+                    .match_candidate(target)
+                    .map_err(|code| execution.reject(code))?;
+            }
+            return Ok(());
+        }
         let candidates = chain
             .iter()
             .map(|target| {

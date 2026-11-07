@@ -225,77 +225,110 @@ impl Validate for NumericUsage {
 }
 impl Validate for Attempt {
     fn validate(&self) -> Result<(), ValidationError> {
-        require(
-            self.outcome != Outcome::Completed || self.target.is_some(),
-            "completed attempt target",
-        )?;
-        if let Some(target) = &self.target {
-            target.validate()?;
-        }
-        self.usage.validate()?;
-        require(self.native_usage.len() <= 32, "native usage count")?;
-        let mut names = std::collections::HashSet::new();
-        for counter in &self.native_usage {
-            require(
-                names.insert(counter.name),
-                "duplicate native usage dimension",
-            )?;
-            counter.validate()?;
-        }
-        bytes(&self.native_usage, 8192)
+        validate_attempt_facts(
+            self.outcome,
+            self.target.as_ref(),
+            &self.usage,
+            &self.native_usage,
+        )
     }
 }
+
+pub(super) fn validate_attempt_facts(
+    outcome: Outcome,
+    target: Option<&Target>,
+    usage: &Usage,
+    native_usage: &[NumericUsage],
+) -> Result<(), ValidationError> {
+    require(
+        outcome != Outcome::Completed || target.is_some(),
+        "completed attempt target",
+    )?;
+    if let Some(target) = target {
+        target.validate()?;
+    }
+    usage.validate()?;
+    require(native_usage.len() <= 32, "native usage count")?;
+    let mut names = std::collections::HashSet::new();
+    for counter in native_usage {
+        require(
+            names.insert(counter.name),
+            "duplicate native usage dimension",
+        )?;
+        counter.validate()?;
+    }
+    bytes(&native_usage, 8192)
+}
+
+// Borrow facts across receipt versions without cloning or projecting into v1.
+pub(super) trait ReceiptAttempt: Validate {
+    fn id(&self) -> &AttemptId;
+    fn outcome(&self) -> Outcome;
+    fn usage(&self) -> &Usage;
+}
+impl ReceiptAttempt for Attempt {
+    fn id(&self) -> &AttemptId {
+        &self.attempt_id
+    }
+    fn outcome(&self) -> Outcome {
+        self.outcome
+    }
+    fn usage(&self) -> &Usage {
+        &self.usage
+    }
+}
+
+pub(super) fn validate_receipt_facts<A: ReceiptAttempt>(
+    outcome: Outcome,
+    attempts: &[A],
+    usage: &Usage,
+) -> Result<(), ValidationError> {
+    require(
+        outcome != Outcome::Completed || attempts.iter().any(|a| a.outcome() == Outcome::Completed),
+        "completed execution attempt",
+    )?;
+    let mut ids = std::collections::HashSet::new();
+    for attempt in attempts {
+        require(ids.insert(attempt.id()), "duplicate attempt identity")?;
+        attempt.validate()?;
+    }
+    usage.validate()?;
+    let provenance = if attempts.is_empty()
+        || attempts
+            .iter()
+            .any(|a| a.usage().provenance == Provenance::Unknown)
+    {
+        Provenance::Unknown
+    } else if attempts
+        .iter()
+        .any(|a| a.usage().provenance == Provenance::Estimated)
+    {
+        Provenance::Estimated
+    } else {
+        Provenance::Provider
+    };
+    require(usage.provenance == provenance, "aggregate provenance")?;
+    require(
+        !usage.complete || (!attempts.is_empty() && attempts.iter().all(|a| a.usage().complete)),
+        "aggregate completeness",
+    )?;
+    for (index, total) in usage.quantities().into_iter().enumerate() {
+        if let Some(total) = total {
+            require(!attempts.is_empty(), "total without attempts")?;
+            let sum = attempts.iter().try_fold(0_u64, |sum, a| {
+                sum.checked_add(a.usage().quantities()[index]?)
+            });
+            require(sum == Some(total), "total must include every attempt")?;
+        }
+    }
+
+    Ok(())
+}
+
 impl Validate for ExecutionReceipt {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.attempts.len() <= 8, "attempt count")?;
-        require(
-            self.outcome != Outcome::Completed
-                || self
-                    .attempts
-                    .iter()
-                    .any(|a| a.outcome == Outcome::Completed),
-            "completed execution attempt",
-        )?;
-        let mut ids = std::collections::HashSet::new();
-        for attempt in &self.attempts {
-            require(
-                ids.insert(&attempt.attempt_id),
-                "duplicate attempt identity",
-            )?;
-            attempt.validate()?;
-        }
-        self.usage.validate()?;
-        let provenance = if self.attempts.is_empty()
-            || self
-                .attempts
-                .iter()
-                .any(|a| a.usage.provenance == Provenance::Unknown)
-        {
-            Provenance::Unknown
-        } else if self
-            .attempts
-            .iter()
-            .any(|a| a.usage.provenance == Provenance::Estimated)
-        {
-            Provenance::Estimated
-        } else {
-            Provenance::Provider
-        };
-        require(self.usage.provenance == provenance, "aggregate provenance")?;
-        require(
-            !self.usage.complete
-                || (!self.attempts.is_empty() && self.attempts.iter().all(|a| a.usage.complete)),
-            "aggregate completeness",
-        )?;
-        for (index, total) in self.usage.quantities().into_iter().enumerate() {
-            if let Some(total) = total {
-                require(!self.attempts.is_empty(), "total without attempts")?;
-                let sum = self.attempts.iter().try_fold(0_u64, |sum, a| {
-                    sum.checked_add(a.usage.quantities()[index]?)
-                });
-                require(sum == Some(total), "total must include every attempt")?;
-            }
-        }
+        validate_receipt_facts(self.outcome, &self.attempts, &self.usage)?;
         bytes(self, 1_048_576)
     }
 }

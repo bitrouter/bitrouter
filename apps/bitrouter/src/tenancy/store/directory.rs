@@ -5,7 +5,7 @@
 //! a transaction or treats these unregistered facts as current authorization.
 
 mod facts;
-mod pages;
+pub(in crate::tenancy) mod pages;
 pub(super) mod query;
 
 use anyhow::{Result, ensure};
@@ -170,7 +170,6 @@ pub(in crate::tenancy) async fn tenant_page_in(
 }
 
 /// Load one principal page after an exclusive stable-ID cursor.
-#[cfg(test)]
 pub(in crate::tenancy) async fn principal_page_in(
     db: &impl ConnectionTrait,
     after: Option<&PrincipalId>,
@@ -180,7 +179,6 @@ pub(in crate::tenancy) async fn principal_page_in(
 }
 
 /// Load one binding page ordered by the full `(tenant_id, id)` primary key.
-#[cfg(any(test, feature = "core"))]
 pub(in crate::tenancy) async fn binding_page_in(
     db: &impl ConnectionTrait,
     after: Option<&(TenantId, BindingId)>,

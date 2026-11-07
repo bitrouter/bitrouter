@@ -91,9 +91,10 @@ fn order(sort: SortOrder) -> state::Order {
 
 fn refusal(error: state::Refusal) -> BitrouterError {
     match error {
-        state::Refusal::RateLimited => BitrouterError::UpstreamRateLimited {
+        // This gate runs before the send boundary. Preserve the local rate-limit
+        // class so HTTP provenance and the existing local fallback fence agree.
+        state::Refusal::RateLimited => BitrouterError::RateLimited {
             retry_after: Some(61),
-            detail: None,
         },
         state::Refusal::CircuitOpen => BitrouterError::UpstreamUnavailable,
         state::Refusal::Capacity | state::Refusal::Unavailable => {

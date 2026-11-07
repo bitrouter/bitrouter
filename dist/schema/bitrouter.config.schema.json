@@ -2477,6 +2477,14 @@
             "null"
           ]
         },
+        "ordered_attempt_limit": {
+          "default": 8,
+          "description": "Maximum candidates in an explicit ordered v2 submission, from 1 through\n64. This is a per-execution work budget; ordinary v1 stays bounded at 8.",
+          "format": "uint8",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
         "resource_import": {
           "default": null,
           "description": "Privileged JSON manifest imported before listeners open. Relative paths\nare relative to the server process's working directory, never a tenant.",

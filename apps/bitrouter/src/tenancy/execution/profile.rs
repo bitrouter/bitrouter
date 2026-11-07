@@ -97,6 +97,10 @@ impl TenantExecution {
         request: &mut crate::gateway::pipeline::types::PipelineRequest,
     ) -> Result<()> {
         self.route.apply_generation_defaults(&mut request.input);
+        if self.route.is_ordered() {
+            super::ordered_prompt(request.input.generation_prompt())
+                .map_err(|code| self.reject(code))?;
+        }
         #[cfg(feature = "core")]
         let registration = match self.observation.get() {
             Some(observation) => self.service.pipelines.register_observed(
@@ -126,14 +130,22 @@ impl TenantExecution {
         if self.route.block_profile().is_some() {
             builder.routing_table(self.block_table());
         }
-        let http_continuation = crate::continuation::ContinuationRuntime::for_tenant(
-            self.service.http_registry.clone(),
-            self.clone(),
-        )
-        .map_err(|_| {
-            self.reject(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable)
-        })?;
-        builder.pre_resolution_hook(http_continuation.clone());
+        let http_continuation = if self.route.is_ordered() {
+            None
+        } else {
+            Some(
+                crate::continuation::ContinuationRuntime::for_tenant(
+                    self.service.http_registry.clone(),
+                    self.clone(),
+                )
+                .map_err(|_| {
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable)
+                })?,
+            )
+        };
+        if let Some(continuation) = &http_continuation {
+            builder.pre_resolution_hook(continuation.clone());
+        }
         if let Some(policy) = &self.continuation {
             builder.native_private_context(policy.clone());
         }
@@ -257,9 +269,11 @@ impl TenantExecution {
                 observation: self.observation.get().cloned(),
             });
         }
-        builder
-            .route_hook(http_continuation.clone())
-            .required_finalizer(http_continuation);
+        if let Some(continuation) = http_continuation {
+            builder
+                .route_hook(continuation.clone())
+                .required_finalizer(continuation);
+        }
         Ok(Arc::new(builder.build()?))
     }
 }

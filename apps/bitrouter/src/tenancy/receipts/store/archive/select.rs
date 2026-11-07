@@ -1,4 +1,5 @@
 //! One indexed key page per maintenance turn; no history-wide eligibility scan.
+use super::super::format::Terminal;
 use super::*;
 use crate::tenancy::receipts::store::obligations::{self, Key};
 
@@ -95,15 +96,21 @@ pub(super) async fn next(
             continue;
         }
         let key = cursor.as_ref().context("archive cursor missing")?;
-        let candidate = super::super::lookup_candidate_bounded(
+        let candidate = super::super::load::terminal(
             tx,
             installation,
             &key.tenant,
             &key.execution,
-            charge,
+            Some(charge),
+            false,
         )
         .await?
         .context("archive candidate disappeared")?;
+        let Terminal::V1(candidate) = candidate else {
+            continue;
+        };
+        let candidate = std::sync::Arc::into_inner(candidate)
+            .context("receipt shared during archive selection")?;
         let eligible = known(&candidate).is_ok() && !held(tx, &candidate, charge).await?;
         charge(0, 0)?;
         return Ok(Selection {

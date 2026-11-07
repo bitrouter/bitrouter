@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 pub(in crate::tenancy) enum Request {
     One(ExecutionId),
+    OneV2(ExecutionId),
     UsageEvidence(ExecutionId),
+    UsageEvidenceV2(ExecutionId),
     Page {
         correlation: CorrelationId,
         after: Option<ExecutionId>,
@@ -124,23 +126,35 @@ pub(in crate::tenancy) async fn body(
     storage_failure: impl Fn() -> Failure,
 ) -> Result<Vec<u8>, Failure> {
     let encoded = match request {
-        Request::UsageEvidence(id) => {
-            let candidate = super::store::lookup_candidate(db, installation, tenant, id)
+        Request::One(id)
+        | Request::OneV2(id)
+        | Request::UsageEvidence(id)
+        | Request::UsageEvidenceV2(id) => {
+            use super::store::format::{Format, Terminal};
+            let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
                 .map_err(|_| storage_failure())?
                 .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-            let evidence = match candidate.usage_evidence {
-                Some(evidence) => evidence.document,
-                None => super::usage_evidence::historical(&candidate.receipt),
+            let expected = if matches!(request, Request::OneV2(_) | Request::UsageEvidenceV2(_)) {
+                Format::V2
+            } else {
+                Format::V1
             };
-            serde_json::to_vec(&evidence)
-        }
-        Request::One(id) => {
-            let receipt = super::store::lookup(db, installation, tenant, id)
-                .await
-                .map_err(|_| storage_failure())?
-                .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-            serde_json::to_vec(&receipt)
+            if terminal.format() != expected {
+                return Err(ErrorCode::CapabilityMismatch.into());
+            }
+            if matches!(request, Request::One(_) | Request::OneV2(_)) {
+                return Ok(terminal.json().as_bytes().to_vec());
+            }
+            match terminal {
+                Terminal::V1(candidate) => match &candidate.usage_evidence {
+                    Some(evidence) => return Ok(evidence.json.as_bytes().to_vec()),
+                    None => {
+                        serde_json::to_vec(&super::usage_evidence::historical(&candidate.receipt))
+                    }
+                },
+                Terminal::V2(candidate) => return Ok(candidate.evidence.json.as_bytes().to_vec()),
+            }
         }
         Request::Page {
             correlation,

@@ -341,8 +341,18 @@ fn usage(values: [Option<u64>; 5], provenance: Provenance, complete: bool) -> Us
 /// An oversized input is unknown without scanning it; the caller must also
 /// reject that invalid receipt, not truncate it to the first eight attempts.
 pub(crate) fn aggregate(attempts: &[bitrouter_ai::tenancy::execution::Attempt]) -> Usage {
+    aggregate_bounded(attempts, 8)
+}
+
+/// Ordered journals supply their admitted slot count; the default remains eight.
+/// Invalid capacity and oversized input stay unknown without retaining a subtotal.
+pub(super) fn aggregate_bounded(
+    attempts: &[bitrouter_ai::tenancy::execution::Attempt],
+    limit: usize,
+) -> Usage {
     if attempts.is_empty()
-        || attempts.len() > 8
+        || !(1..=64).contains(&limit)
+        || attempts.len() > limit
         || attempts
             .iter()
             .any(|attempt| attempt.usage.provenance == Provenance::Unknown)

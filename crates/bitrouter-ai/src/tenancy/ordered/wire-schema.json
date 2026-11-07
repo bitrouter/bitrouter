@@ -1,0 +1,1408 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ordered dispatch contracts",
+  "description": "Strict revision-bound selection, discovery and version-two execution facts. Semantic validation and live authorization remain required.",
+  "$comment": "Wire objects reject duplicate fields during decoding; JSON Schema validates parsed values. Encoded document/header limits and cross-document invariants are enforced at runtime.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/OrderedCandidateSelectionV1"
+    },
+    {
+      "$ref": "#/$defs/CandidateManifestV1"
+    },
+    {
+      "$ref": "#/$defs/OrderedCapabilitiesV2"
+    },
+    {
+      "$ref": "#/$defs/OrderedDispatchBindingV2"
+    },
+    {
+      "$ref": "#/$defs/ExecutionReceiptV2"
+    },
+    {
+      "$ref": "#/$defs/ExecutionUsageEvidenceV2"
+    }
+  ],
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "Target": {
+      "type": "object",
+      "properties": {
+        "provider_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "account_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_version": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "provider_id",
+        "model_id",
+        "account_id",
+        "credential_id",
+        "credential_version"
+      ],
+      "additionalProperties": false
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "enum": [
+            "provider",
+            "estimated",
+            "unknown"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "provenance",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provenance": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_tokens": {
+                "type": "null"
+              },
+              "output_tokens": {
+                "type": "null"
+              },
+              "cache_read_tokens": {
+                "type": "null"
+              },
+              "cache_write_tokens": {
+                "type": "null"
+              },
+              "reasoning_tokens": {
+                "type": "null"
+              },
+              "complete": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cache_read_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cache_write_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "reasoning_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provenance": {
+                "const": "estimated"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "complete": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "NumericUsage": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "enum": [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens"
+          ]
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "RouteRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource_kind": {
+          "type": "string",
+          "const": "route"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "CredentialRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource_kind": {
+          "type": "string",
+          "const": "credential"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "GenerationProtocol": {
+      "type": "string",
+      "enum": [
+        "chat_completions",
+        "messages",
+        "responses"
+      ]
+    },
+    "CandidateIndices": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "OrderedCandidateSelectionV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "route",
+        "candidate_indices"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "route": {
+          "$ref": "#/$defs/RouteRef"
+        },
+        "candidate_indices": {
+          "$ref": "#/$defs/CandidateIndices"
+        }
+      }
+    },
+    "AcceptedSelectionV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "inbound_protocol",
+        "candidate_indices"
+      ],
+      "properties": {
+        "route": {
+          "$ref": "#/$defs/RouteRef"
+        },
+        "inbound_protocol": {
+          "$ref": "#/$defs/GenerationProtocol"
+        },
+        "candidate_indices": {
+          "$ref": "#/$defs/CandidateIndices"
+        }
+      }
+    },
+    "CandidateDescriptorV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_index",
+        "target",
+        "credential"
+      ],
+      "properties": {
+        "candidate_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "credential": {
+          "$ref": "#/$defs/CredentialRef"
+        }
+      }
+    },
+    "CandidateManifestV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "installation_id",
+        "tenant_id",
+        "execution_revision",
+        "authority_revision",
+        "route",
+        "inbound_protocol",
+        "candidates"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "route": {
+          "$ref": "#/$defs/RouteRef"
+        },
+        "inbound_protocol": {
+          "$ref": "#/$defs/GenerationProtocol"
+        },
+        "candidates": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/CandidateDescriptorV1"
+          }
+        }
+      },
+      "$comment": "Maximum encoded size 1 MiB. Runtime validation enforces strictly increasing root ordinals, matching credential revisions and tenant-qualified ownership; pool access requires live service authorization."
+    },
+    "OrderedCapabilitiesV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "installation_id",
+        "instance_id",
+        "capability_revision",
+        "authority_revision",
+        "attempt_limit",
+        "revision_bound_dispatch",
+        "strict_receipts",
+        "dispatch_enabled"
+      ],
+      "properties": {
+        "contract_version": {
+          "type": "integer",
+          "const": 2
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "capability_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "attempt_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "revision_bound_dispatch": {
+          "type": "boolean"
+        },
+        "strict_receipts": {
+          "type": "boolean"
+        },
+        "dispatch_enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "OrderedDispatchBindingV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "Bitrouter-Tenancy-Version",
+        "Bitrouter-Installation-Id",
+        "Bitrouter-Instance-Id",
+        "Bitrouter-Capability-Revision",
+        "Bitrouter-Execution-Revision",
+        "Bitrouter-Correlation-Id",
+        "Bitrouter-Receipt-Mode",
+        "selection"
+      ],
+      "properties": {
+        "Bitrouter-Tenancy-Version": {
+          "type": "string",
+          "const": "2"
+        },
+        "Bitrouter-Installation-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Instance-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Capability-Revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Execution-Revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Correlation-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Receipt-Mode": {
+          "type": "string",
+          "const": "strict"
+        },
+        "selection": {
+          "$ref": "#/$defs/OrderedCandidateSelectionV1"
+        }
+      }
+    },
+    "AttemptV2": {
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "native_usage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NumericUsage"
+          },
+          "maxItems": 32
+        },
+        "candidate_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "observed_http_status": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 599
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "attempt_id",
+        "target",
+        "outcome",
+        "usage",
+        "native_usage",
+        "candidate_index",
+        "observed_http_status"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "$ref": "#/$defs/Target"
+              },
+              "observed_http_status": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 200,
+                    "maximum": 299
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExecutionReceiptV2": {
+      "type": "object",
+      "properties": {
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "enum": [
+            "committed",
+            "incomplete",
+            "unknown"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttemptV2"
+          },
+          "maxItems": 64
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "schema_version": {
+          "type": "integer",
+          "const": 2
+        },
+        "accepted_selection": {
+          "$ref": "#/$defs/AcceptedSelectionV2"
+        },
+        "attempt_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "required": [
+        "installation_id",
+        "tenant_id",
+        "principal_id",
+        "execution_id",
+        "correlation_id",
+        "execution_revision",
+        "state",
+        "outcome",
+        "attempts",
+        "usage",
+        "recorded_at",
+        "schema_version",
+        "accepted_selection",
+        "attempt_limit"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "attempts": {
+                "minItems": 1,
+                "contains": {
+                  "properties": {
+                    "outcome": {
+                      "const": "completed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "attempts": {
+                "contains": {
+                  "properties": {
+                    "outcome": {
+                      "type": "string",
+                      "const": "unknown"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "unknown"
+              },
+              "outcome": {
+                "type": "string",
+                "const": "unknown"
+              }
+            }
+          }
+        }
+      ],
+      "$comment": "Maximum encoded size 1 MiB. Runtime validation enforces accepted count <= attempt_limit, actual attempts as a unique selected subsequence, no attempt after unknown/cancelled/completed, tenant ownership and conservative aggregate usage. Missing usage alone may leave a completed receipt incomplete."
+    },
+    "AttemptEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "target",
+        "outcome",
+        "terminal_observed"
+      ],
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "terminal_observed": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "terminal_observed": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "completed",
+                  "failed"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "attempt_id",
+        "protocol",
+        "source",
+        "semantics",
+        "quantities",
+        "unsupported",
+        "invalid"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "protocol": {
+          "$ref": "#/$defs/GenerationProtocol"
+        },
+        "source": {
+          "enum": [
+            "json",
+            "http_error",
+            "chat_chunk",
+            "response_terminal",
+            "message_start",
+            "message_delta"
+          ]
+        },
+        "semantics": {
+          "type": "string",
+          "const": "snapshot"
+        },
+        "quantities": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dimension",
+              "value"
+            ],
+            "properties": {
+              "dimension": {
+                "enum": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens",
+                  "cache_read_tokens",
+                  "cache_write_tokens",
+                  "reasoning_tokens",
+                  "web_search_requests",
+                  "input_audio_tokens",
+                  "output_audio_tokens",
+                  "input_image_tokens",
+                  "output_image_tokens",
+                  "cache_write_five_minute_tokens",
+                  "cache_write_one_hour_tokens"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "unsupported": {
+          "type": "boolean"
+        },
+        "invalid": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "invalid": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "quantities": {
+                "items": {
+                  "properties": {
+                    "value": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "chat_completions"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "json",
+                  "http_error",
+                  "chat_chunk"
+                ]
+              },
+              "semantics": {
+                "const": "snapshot"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "responses"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "json",
+                  "http_error",
+                  "response_terminal"
+                ]
+              },
+              "semantics": {
+                "const": "snapshot"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "messages"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "json",
+                  "http_error",
+                  "message_start",
+                  "message_delta"
+                ]
+              },
+              "semantics": {
+                "const": "snapshot"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "version",
+        "characters_per_token",
+        "coverage",
+        "trigger",
+        "prompt_characters",
+        "output_characters",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "stream_character_ceiling"
+        },
+        "version": {
+          "const": 1
+        },
+        "characters_per_token": {
+          "const": 4
+        },
+        "coverage": {
+          "const": "prompt_text_and_observed_text_reasoning"
+        },
+        "trigger": {
+          "enum": [
+            "completed",
+            "disconnected"
+          ]
+        },
+        "prompt_characters": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_characters": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "ExecutionUsageEvidenceV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "installation_id",
+        "tenant_id",
+        "execution_id",
+        "capture",
+        "extractor_version",
+        "estimation",
+        "attempts",
+        "frames",
+        "truncated",
+        "dropped_frames",
+        "estimate",
+        "accepted_selection"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 2
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "capture": {
+          "enum": [
+            "captured",
+            "not_captured",
+            "unavailable"
+          ]
+        },
+        "extractor_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "estimation": {
+          "enum": [
+            "not_captured",
+            "not_used",
+            "captured"
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/AttemptEvidence"
+          }
+        },
+        "frames": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/Frame"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "dropped_frames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "estimate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Estimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accepted_selection": {
+          "$ref": "#/$defs/AcceptedSelectionV2"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "capture": {
+                "enum": [
+                  "not_captured",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "attempts": {
+                "maxItems": 0
+              },
+              "frames": {
+                "maxItems": 0
+              },
+              "truncated": {
+                "const": false
+              },
+              "estimation": {
+                "const": "not_captured"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "truncated": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "dropped_frames": {
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "dropped_frames": {
+                "minimum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "estimation": {
+                "const": "captured"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "estimate": {
+                "type": "object"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "estimate": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 512
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 9,
+                    "maxItems": 16
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 1024
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 17,
+                    "maxItems": 24
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 1536
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 25,
+                    "maxItems": 32
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 2048
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 33,
+                    "maxItems": 40
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 2560
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 41,
+                    "maxItems": 48
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 3072
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 49,
+                    "maxItems": 56
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 3584
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 57,
+                    "maxItems": 64
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "frames": {
+                "maxItems": 4096
+              }
+            }
+          }
+        }
+      ],
+      "$comment": "For A accepted candidates, K=ceil(A/8): encoded bytes <=256*K KiB (maximum 2 MiB), frame bytes <=192*K KiB, 64*K KiB reserved for identities/terminal data, <=512*K frames, <=128 frames per actual attempt and <=32 quantities per frame. Runtime validation enforces byte bounds, unique attempt/quantity identities, sequence, exact receipt/selection/protocol/attempt binding and tenant ownership. Absent quantities remain absent; invalid values are explicit null with invalid=true. No auxiliary executions."
+    }
+  }
+}

@@ -18,6 +18,7 @@ mod capacity_directory;
 mod capacity_history;
 mod configuration;
 mod conformance;
+mod directory;
 #[cfg(feature = "core")]
 mod eval;
 pub(in crate::tenancy) mod execution;

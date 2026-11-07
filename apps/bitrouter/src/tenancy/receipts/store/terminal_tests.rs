@@ -896,6 +896,7 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
             .map(|s| s.len())
             .sum::<usize>();
         let mut expected = vec![
+            (1, 256),
             (0, 0),
             (1, 256),
             (1, bytes * 3),
@@ -936,7 +937,10 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
                 let seen = calls
                     .into_inner()
                     .map_err(|_| anyhow::anyhow!("callback trace poisoned"))?;
-                ensure!(seen == expected[..refuse.map_or(expected.len(), |index| index + 1)]);
+                ensure!(
+                    seen == expected[..refuse.map_or(expected.len(), |index| index + 1)],
+                    "callback schedule: {seen:?}, expected {expected:?}"
+                );
                 match refuse {
                     None => {
                         same_completion(&loaded?.context("valid charged lookup missing")?, &value)?
@@ -951,10 +955,10 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
                     }
                 }
                 let body = reader.counts()?;
-                // Debit indices 2 and 9 precede the respective body SELECTs;
+                // Debit indices 3 and 10 precede the respective body SELECTs;
                 // later callback failures must not pretend those reads vanished.
-                let receipt_read = refuse.is_none_or(|index| index > 2);
-                let usage_read = captured && refuse.is_none_or(|index| index > 9);
+                let receipt_read = refuse.is_none_or(|index| index > 3);
+                let usage_read = captured && refuse.is_none_or(|index| index > 10);
                 ensure!(
                     body[0]
                         == (

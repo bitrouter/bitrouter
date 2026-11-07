@@ -1488,6 +1488,10 @@ pub(crate) async fn handle_tenant(
 ) -> Response {
     // The opaque capture capability is never observed or converted upstream.
     headers.remove(crate::tenancy::execution::BLOCK_LINK_HEADER);
+    headers.remove(crate::tenancy::execution::SELECTION_HEADER);
+    if let Err(error) = submission.validate_http_input(&input) {
+        return error.into_response();
+    }
     let raw_model = match &input {
         PipelineInput::Generation(prompt) => &prompt.model,
         PipelineInput::Decisions(request) => &request.model,

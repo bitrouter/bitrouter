@@ -67,13 +67,18 @@ async fn serve(
         }
     }
     if wire.broken_body {
-        // A real socket receives the request and fails while returning bytes.
-        // This is after application send admission, not a fabricated receipt.
-        return Response::new(axum::body::Body::from_stream(futures::stream::once(
-            async {
-                Err::<axum::body::Bytes, _>(std::io::Error::other("fixture transport body failed"))
-            },
-        )));
+        use futures::StreamExt;
+        // Flush a successful response prefix before failing its body. An error
+        // on the first poll can instead become a proxy-generated 502, which is
+        // a known HTTP rejection and correctly produces a Failed attempt.
+        let prefix = futures::stream::once(async {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{\"answers\":"))
+        });
+        let failure = futures::stream::once(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Err::<axum::body::Bytes, _>(std::io::Error::other("fixture transport body failed"))
+        });
+        return Response::new(axum::body::Body::from_stream(prefix.chain(failure)));
     }
     // Native Decisions follows the project's first-party typed Decisions contract;
     // it is deliberately a distinct response from the Legacy SystemOne schema.
@@ -196,4 +201,32 @@ impl Drop for Endpoint {
         self.wire.resume.cancel();
         self.wire.stop.cancel();
     }
+}
+
+#[tokio::test]
+async fn transport_failure_preserves_success_headers_before_body_failure() -> Result<()> {
+    for direct in [false, true] {
+        let mut endpoint = Endpoint::transport_failure().await?;
+        let checked = async {
+            let builder = reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never());
+            let client = if direct { builder.no_proxy() } else { builder }.build()?;
+            let response = client
+                .post(format!("{}/decisions", endpoint.url))
+                .json(&json!({"questions":[{"name":"probe","choices":[{"value":"unknown"}]}]}))
+                .send()
+                .await?;
+            ensure!(response.status() == StatusCode::OK);
+            ensure!(response.bytes().await.is_err());
+            let observed = endpoint.receive().await?;
+            ensure!(observed.path == "/v1/decisions" && endpoint.calls() == 1);
+            Ok(())
+        }
+        .await;
+        let closed = endpoint.finish().await;
+        checked.and(closed)?;
+    }
+    Ok(())
 }
