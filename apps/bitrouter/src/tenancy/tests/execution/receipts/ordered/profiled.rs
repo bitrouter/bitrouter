@@ -4,6 +4,7 @@ use crate::tenancy::{command::Command, model::Caller, tests::issued};
 use bitrouter_ai::tenancy::{
     admission::{AdmissionProfileV1, AvailabilityObservation, HealthObservation},
     authority::{BindingPut, GrantScope, TenantRole},
+    operation::{DispatchState, ErrorCode},
 };
 
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
@@ -266,14 +267,47 @@ async fn profiled_local_zero_then_terminal_rejection_falls_back_without_inventin
 
 #[tokio::test]
 async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<()> {
-    let harness =
-        OrderedHarness::with_profiles(1, 8, None, Value::Null, Some(&[rules(1, false)?])).await?;
+    const REQUESTS: usize = 16;
+    let mut capacity = CapacityConfig::default();
+    let authority_bytes_per_read = capacity.authority_views.bytes / capacity.management.reads;
+    // This race targets shared RPM admission, not the default eight-read
+    // overload boundary. Size every preceding runtime owner for all sixteen
+    // requests and preserve the default authority reservation per read.
+    capacity.ingress.requests = REQUESTS;
+    capacity.execution.instance_active = REQUESTS;
+    capacity.execution.tenant_active = REQUESTS;
+    capacity.management.queue = REQUESTS * 2;
+    capacity.management.reads = REQUESTS * 2;
+    capacity.authority_views.bytes = authority_bytes_per_read * capacity.management.reads;
+    let read_slots = capacity.management.reads;
+    let harness = OrderedHarness::with_runtime_capacity(
+        1,
+        8,
+        None,
+        Value::Null,
+        Some(&[rules(1, false)?]),
+        capacity,
+        |_| Ok(()),
+    )
+    .await?;
+    ensure!(harness.fixture.service.reads.available_permits() == read_slots);
+    ensure!(
+        harness
+            .fixture
+            .service
+            .execution_settings
+            .capacity
+            .authority_views
+            .bytes
+            / read_slots
+            == authority_bytes_per_read
+    );
     let binding = harness
         .binding(vec![0], GenerationProtocol::ChatCompletions)
         .await?;
     // Exercise the shared RPM race after a normal read-only configuration
-    // cache warmup. Cold duplicate misses have a separate eight-read bound and
-    // correctly refuse before creating an execution or reaching rate admission.
+    // cache warmup. The overload test below separately checks refusals before
+    // an execution or rate admission exists.
     let submission = harness
         .fixture
         .service
@@ -298,7 +332,7 @@ async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<
             .shared_count
             == 0
     );
-    let results = futures::future::join_all((0..16).map(|_| {
+    let results = futures::future::join_all((0..REQUESTS).map(|_| {
         harness.invoke(
             &binding,
             GenerationProtocol::ChatCompletions,
@@ -308,16 +342,30 @@ async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<
     }))
     .await;
     ensure!(results.iter().filter(|result| result.is_ok()).count() == 1);
+    let completed_id = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .context("completed response identity")?;
     let mut refused_ids = std::collections::BTreeSet::new();
     for result in &results {
         let Err(error) = result else {
             continue;
         };
-        let Some(bitrouter_sdk::gateway::tenancy::Error::Response(failure)) = error.downcast_ref()
-        else {
+        let dispatch = error
+            .downcast_ref::<bitrouter_sdk::gateway::tenancy::Error>()
+            .context("expected SDK rate refusal")?;
+        let bitrouter_sdk::gateway::tenancy::Error::Response(failure) = dispatch else {
             anyhow::bail!("expected actual HTTP rate refusal: {error}");
         };
         ensure!(failure.metadata.status == 429 && failure.problem.is_none());
+        ensure!(
+            failure.tenancy_error.is_none(),
+            "expected admitted RPM refusal, received {}",
+            serde_json::to_string(&failure.tenancy_error)?
+        );
+        // An ordinary gateway body is not positive dispatch evidence. The
+        // retained receipt below must establish every admitted outcome.
+        ensure!(dispatch.dispatch_state() == DispatchState::Unknown);
         let id = failure
             .metadata
             .execution_id
@@ -360,11 +408,21 @@ async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<
         )
         .await?;
     ensure!(page.execution_ids.len() == 16 && page.next_after.is_none());
+    let mut response_ids = refused_ids.clone();
+    ensure!(response_ids.insert(completed_id.clone()));
+    ensure!(
+        page.execution_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            == response_ids
+    );
     let mut completed = 0;
     for id in page.execution_ids {
         let receipt = harness.receipt(&id).await?;
         if receipt.outcome == Outcome::Completed {
             completed += 1;
+            ensure!(&id == completed_id);
             ensure!(receipt.attempts.len() == 1);
         } else {
             ensure!(refused_ids.contains(&id));
@@ -373,6 +431,83 @@ async fn profiled_sixteen_actual_requests_race_for_one_shared_entry() -> Result<
         }
     }
     ensure!(completed == 1);
+    harness.fixture.service.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn profiled_runtime_read_overload_has_no_execution_or_rate_charge() -> Result<()> {
+    let harness =
+        OrderedHarness::with_profiles(1, 8, None, Value::Null, Some(&[rules(1, false)?])).await?;
+    let binding = harness
+        .binding(vec![0], GenerationProtocol::ChatCompletions)
+        .await?;
+    let reads = u32::try_from(
+        harness
+            .fixture
+            .service
+            .execution_settings
+            .capacity
+            .management
+            .reads,
+    )?;
+    let held = tokio::time::timeout(TIMEOUT, harness.fixture.service.reads.acquire_many(reads))
+        .await
+        .context("fixture read slots did not drain")??;
+    let result = harness
+        .invoke(
+            &binding,
+            GenerationProtocol::ChatCompletions,
+            false,
+            HttpVersion::Http1Only,
+        )
+        .await;
+    drop(held);
+    let error = result.err().context("expected preadmission read refusal")?;
+    let dispatch = error
+        .downcast_ref::<bitrouter_sdk::gateway::tenancy::Error>()
+        .context("expected SDK dispatch error")?;
+    ensure!(dispatch.dispatch_state() == DispatchState::NotStarted);
+    let bitrouter_sdk::gateway::tenancy::Error::Response(failure) = dispatch else {
+        anyhow::bail!("expected HTTP capacity response");
+    };
+    ensure!(
+        failure.metadata.status == 429
+            && failure.metadata.execution_id.is_none()
+            && failure.problem.is_none()
+            && failure.gateway_error.is_none()
+    );
+    let body = failure.tenancy_error.as_ref().context("capacity body")?;
+    ensure!(
+        body.code == ErrorCode::CapacityExceeded
+            && body.dispatch_state == DispatchState::NotStarted
+            && body.execution_id.is_none()
+            && body.operation_id.is_none()
+    );
+    let page = harness
+        .control(false, HttpVersion::Http1Only)?
+        .executions(
+            &harness.fixture.installation,
+            &harness.fixture.tenant,
+            &"ordered-correlation".try_into()?,
+            None,
+            100,
+        )
+        .await?;
+    ensure!(page.execution_ids.is_empty() && page.next_after.is_none());
+    ensure!(harness.observed()?.is_empty());
+    ensure!(
+        manifest(&harness)
+            .await?
+            .runtime_observation
+            .context("observation")?
+            .candidates[0]
+            .rate
+            .as_ref()
+            .context("rate")?
+            .shared_count
+            == 0
+    );
     harness.fixture.service.shutdown().await?;
     Ok(())
 }
