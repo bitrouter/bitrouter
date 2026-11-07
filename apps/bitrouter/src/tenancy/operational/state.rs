@@ -3,7 +3,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, TryLockError},
     time::Instant,
 };
 
@@ -66,6 +66,7 @@ pub(super) enum HealthOutcome {
 }
 
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug))]
 struct State {
     rates: Rates,
     health: HashMap<HealthKey, Health>,
@@ -108,6 +109,14 @@ fn rate_key(
 }
 
 impl Runtime {
+    #[cfg(test)]
+    pub(in crate::tenancy) fn test_state(&self) -> Result<String, Denial> {
+        self.0
+            .try_lock()
+            .map(|state| format!("{state:?}"))
+            .map_err(read_lock_failure)
+    }
+
     pub(in crate::tenancy) fn admit<'a>(
         self: &Arc<Self>,
         installation: &InstallationId,
@@ -185,6 +194,15 @@ impl Runtime {
         })
     }
 
+    /// Bounded management reads do not wait on admission or completion work.
+    pub(in crate::tenancy) fn try_snapshot(&self) -> Result<ReadSnapshot<'_>, Denial> {
+        let state = self.0.try_lock().map_err(read_lock_failure)?;
+        Ok(ReadSnapshot {
+            state,
+            now: Instant::now(),
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn observe<'a>(
         &self,
@@ -196,6 +214,13 @@ impl Runtime {
         let mut snapshot = self.snapshot()?;
         snapshot.now = now;
         Ok(snapshot.observe(installation, reference, rules))
+    }
+}
+
+fn read_lock_failure<T>(error: TryLockError<T>) -> Denial {
+    match error {
+        TryLockError::WouldBlock => Denial::Capacity,
+        TryLockError::Poisoned(_) => Denial::Unavailable,
     }
 }
 
@@ -287,5 +312,21 @@ impl Ticket {
 impl Drop for Ticket {
     fn drop(&mut self) {
         self.release(HealthOutcome::Neutral, Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod profile_read_errors {
+    use super::*;
+    #[test]
+    fn poison_is_unavailable_while_contention_is_capacity() {
+        assert_eq!(
+            read_lock_failure(TryLockError::Poisoned(std::sync::PoisonError::new(()))),
+            Denial::Unavailable
+        );
+        assert_eq!(
+            read_lock_failure::<()>(TryLockError::WouldBlock),
+            Denial::Capacity
+        );
     }
 }
