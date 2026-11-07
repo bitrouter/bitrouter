@@ -1176,6 +1176,9 @@ impl HttpExecutor {
                 })?
                 .insert("previous_response_id".into(), binding.response_id().into());
         }
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution.validate_native_controls_body(prompt, &target.api_protocol, &body)?;
+        }
         Ok((body, report))
     }
 

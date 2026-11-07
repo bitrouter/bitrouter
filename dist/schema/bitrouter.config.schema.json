@@ -2485,6 +2485,11 @@
           "minimum": 1,
           "type": "integer"
         },
+        "ordered_native_controls": {
+          "default": false,
+          "description": "Accept explicitly opted-in provider-native controls on ordered requests.\nProvider state may be shared by principals using the same upstream account;\nthis policy does not establish historical tenant ownership of opaque IDs.",
+          "type": "boolean"
+        },
         "resource_import": {
           "default": null,
           "description": "Privileged JSON manifest imported before listeners open. Relative paths\nare relative to the server process's working directory, never a tenant.",

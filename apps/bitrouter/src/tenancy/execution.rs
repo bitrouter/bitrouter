@@ -53,6 +53,7 @@ pub(crate) mod host;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native;
+mod native_controls;
 mod oauth;
 mod operational;
 mod profile;
@@ -92,6 +93,7 @@ struct DispatchIdentity {
     execution_revision: RevisionId,
     correlation_id: CorrelationId,
     selection: Option<OrderedCandidateSelectionV1>,
+    native_controls: bool,
 }
 
 impl Submission {
@@ -100,7 +102,11 @@ impl Submission {
         input: &crate::gateway::pipeline::types::PipelineInput,
     ) -> Result<(), Failure> {
         if self.binding.selection.is_some() {
-            ordered_prompt(input.generation_prompt()).map_err(Failure::from)?;
+            native_controls::validate_input(
+                input.generation_prompt(),
+                self.binding.native_controls,
+            )
+            .map_err(Failure::from)?;
         }
         Ok(())
     }
@@ -212,6 +218,8 @@ impl Service {
         guard.check(&submission.authority, |view| {
             let state = view.facts();
             if !self.dispatch_ready(state)
+                || (submission.binding.native_controls
+                    && !self.execution_settings.ordered_native_controls)
                 || (submission.binding.selection.is_some() && !self.ordered_dispatch_ready(state))
                 || submission.binding.installation_id != state.installation
                 || submission.binding.instance_id != self.instance
@@ -1093,6 +1101,12 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>,
 }
 
 fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
+    use bitrouter_ai::tenancy::native_controls::{HEADER, PROVIDER_NATIVE_V1};
+    let native_controls = match one_header(headers, HEADER)? {
+        None => false,
+        Some(PROVIDER_NATIVE_V1) => true,
+        Some(_) => return Err(ErrorCode::InvalidRequest.into()),
+    };
     let mut document = serde_json::Map::new();
     for name in [
         "Bitrouter-Tenancy-Version",
@@ -1112,7 +1126,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
         .and_then(serde_json::Value::as_str)
     {
         Some("1") => {
-            if headers.contains_key(SELECTION_HEADER) {
+            if headers.contains_key(SELECTION_HEADER) || native_controls {
                 return Err(ErrorCode::InvalidRequest.into());
             }
             let binding: DispatchBinding = serde_json::from_value(document.into())
@@ -1127,6 +1141,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: None,
+                native_controls: false,
             })
         }
         Some("2") => {
@@ -1168,6 +1183,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 execution_revision: binding.execution_revision,
                 correlation_id: binding.correlation_id,
                 selection: Some(binding.selection),
+                native_controls,
             })
         }
         _ => Err(ErrorCode::InvalidRequest.into()),

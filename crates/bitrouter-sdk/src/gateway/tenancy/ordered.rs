@@ -12,6 +12,7 @@ use bitrouter_ai::{
             GenerationDefaultsEnvelopeV2, MAX_DEFAULTS_BYTES,
         },
         identity::Digest,
+        native_controls::{HEADER, OrderedNativeControlsCapabilitiesV1, PROVIDER_NATIVE_V1},
         ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
         validation::Validate,
     },
@@ -99,6 +100,52 @@ impl GatewayClient {
 }
 
 impl OrderedTenantGateway<'_> {
+    /// Opt in to opaque native controls using an explicit matching observation.
+    ///
+    /// Responses prior-response/conversation and Messages context values remain
+    /// provider-owned data. A literal public-handle prefix is never resolved.
+    /// Current grants, selected credentials and normal fallback rules still apply.
+    /// This does not promise provider-state ownership or publication of a handle.
+    ///
+    /// # Errors
+    /// Rejects disabled, invalid or differently bound discovery before any I/O.
+    pub fn with_native_controls(
+        mut self,
+        capabilities: &OrderedNativeControlsCapabilitiesV1,
+    ) -> Result<Self, Error> {
+        capabilities
+            .validate()
+            .map_err(|_| Error::Request("invalid native controls capabilities"))?;
+        if !capabilities.enabled
+            || [
+                (
+                    "bitrouter-installation-id",
+                    capabilities.installation_id.as_str(),
+                ),
+                ("bitrouter-instance-id", capabilities.instance_id.as_str()),
+                (
+                    "bitrouter-capability-revision",
+                    capabilities.capability_revision.as_str(),
+                ),
+            ]
+            .iter()
+            .any(|(name, expected)| {
+                self.inner
+                    .headers
+                    .get(*name)
+                    .is_none_or(|value| value.as_bytes() != expected.as_bytes())
+            })
+        {
+            return Err(Error::Request(
+                "native controls discovery does not match dispatch",
+            ));
+        }
+        self.inner
+            .headers
+            .insert(HEADER, HeaderValue::from_static(PROVIDER_NATIVE_V1));
+        Ok(self)
+    }
+
     /// Attach the canonical defaults already bound to this submission.
     /// Typed caller values win; typed null and an empty stop list permit default
     /// filling. Opaque source extras are never promoted across protocols.
