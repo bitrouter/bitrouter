@@ -1,5 +1,5 @@
 //! Original GenerateContent counters, not canonical zero-filled Usage.
-//! https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto
+//! <https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto>
 use super::{Counter, Evidence, Protocol};
 use serde_json::Value;
 

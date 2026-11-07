@@ -1,7 +1,7 @@
 //! Bounded native SSE framing, including a checked partial-frame EOF.
 //! The general eventsource stream discards unfinished fields at EOF; that must
 //! not release an already held native terminal as a successful completion.
-//! https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
+//! <https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream>
 use crate::gateway::model::{
     error::{ModelError, Result},
     protocol::SseEvent,

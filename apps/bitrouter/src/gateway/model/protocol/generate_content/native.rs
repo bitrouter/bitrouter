@@ -1,5 +1,5 @@
 //! Whole native responses remain independent of restricted canonical conversion.
-//! https://ai.google.dev/api/generate-content#GenerateContentResponse
+//! <https://ai.google.dev/api/generate-content#GenerateContentResponse>
 
 use crate::gateway::{
     model::error::{ModelError, Result},

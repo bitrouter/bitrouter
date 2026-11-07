@@ -2,7 +2,7 @@
 //!
 //! Candidate.index is optional, while a missing/unspecified finish is not a
 //! terminal. Anonymous singleton and indexed identity modes never mix.
-//! https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto
+//! <https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto>
 
 use crate::gateway::model::error::{ModelError, Result};
 use serde_json::{Map, Value};
