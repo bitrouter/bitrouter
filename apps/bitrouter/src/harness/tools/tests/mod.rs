@@ -908,6 +908,7 @@ async fn assert_windows_descendant_cleanup(action: &str) -> Result<(), Box<dyn s
         "Add-Content ticks.txt tick\n[Console]::WriteLine('ready')\nwhile ($true) { Add-Content ticks.txt tick; Start-Sleep -Milliseconds 50 }",
     )?;
     let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    let interpreter = tools.interpreter.as_ref().map(|value| value.identity());
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let (sender, mut receiver) = mpsc::channel(64);
@@ -929,19 +930,35 @@ async fn assert_windows_descendant_cleanup(action: &str) -> Result<(), Box<dyn s
             )
             .await
     });
+    let mut startup_chunks = Vec::new();
     let ready = tokio::time::timeout(Duration::from_secs(10), async {
         while let Some(event) = receiver.recv().await {
-            if matches!(event, RunEvent::ToolOutputDelta {text, ..} if text.contains("ready")) {
-                return Ok::<(), String>(());
+            if let RunEvent::ToolOutputDelta { source, text, .. } = event {
+                let is_ready = text.contains("ready");
+                // Preserve chunk boundaries in a bounded startup trace.
+                if startup_chunks.len() < 16 {
+                    startup_chunks.push((source, text));
+                }
+                if is_ready {
+                    return Ok::<(), String>(());
+                }
             }
         }
         Err("shell exited before descendant started".to_string())
     })
     .await;
     if !matches!(ready, Ok(Ok(()))) {
+        let finished_before_cancel = task.is_finished();
+        let ticks_before_cancel =
+            std::fs::metadata(workspace.path().join("ticks.txt")).map(|metadata| metadata.len());
         cancel.cancel();
-        task.await?;
-        return Err("descendant did not start".into());
+        let result = task.await;
+        return Err(format!(
+            "descendant did not start: readiness={ready:?}, interpreter={interpreter:?}, \
+             finished_before_cancel={finished_before_cancel}, ticks_before_cancel={ticks_before_cancel:?}, \
+             chunks={startup_chunks:?}, shell_after_cancel={result:?}"
+        )
+        .into());
     }
     match action {
         "cancel" => cancel.cancel(),
