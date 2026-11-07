@@ -248,11 +248,10 @@ async fn authority_revocation_after_binding_prevents_any_provider_send() -> Resu
                 (401, ErrorCode::Unauthorized)
             }
             _ => {
-                let current = fixture.service.current().map_err(failure)?;
-                let tenant = current
-                    .tenants
-                    .get(&fixture.tenant)
-                    .context("current tenant")?;
+                let tenant =
+                    crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                        .await?
+                        .context("current tenant")?;
                 let operation = control
                     .put_tenant(
                         &fixture.tenant,

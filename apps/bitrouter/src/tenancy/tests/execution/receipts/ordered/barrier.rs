@@ -119,7 +119,6 @@ async fn drained_receipt(harness: &OrderedHarness, ordinals: &[u16]) -> Result<E
 async fn revoke_after_send(harness: &OrderedHarness, change: &str) -> Result<(u16, ErrorCode)> {
     let fixture = &harness.fixture;
     let control = harness.control(true, HttpVersion::Http1Only)?;
-    let current = fixture.service.current().map_err(failure)?;
     let (operation, status, code) = match change {
         "binding" => {
             let binding = crate::tenancy::store::directory::binding_in(
@@ -157,7 +156,10 @@ async fn revoke_after_send(harness: &OrderedHarness, change: &str) -> Result<(u1
             (result, 403, ErrorCode::Forbidden)
         }
         "tenant" => {
-            let tenant = current.tenants.get(&fixture.tenant).context("tenant")?;
+            let tenant =
+                crate::tenancy::store::directory::tenant_in(&fixture.db, &fixture.tenant, 4096)
+                    .await?
+                    .context("tenant")?;
             let result = control
                 .put_tenant(
                     &fixture.tenant,
