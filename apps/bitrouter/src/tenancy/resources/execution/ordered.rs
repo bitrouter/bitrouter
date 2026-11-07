@@ -6,6 +6,7 @@
 
 use super::*;
 use bitrouter_ai::tenancy::{
+    admission::AdmissionMode,
     authority::ResourceKind,
     configuration::LearningMode,
     ordered::{
@@ -89,6 +90,11 @@ impl RetainedExecutionRevision {
                 )
                 .map_err(|_| ErrorCode::CapabilityMismatch)?;
                 Ok(CandidateDescriptorV1 {
+                    admission_profile: route
+                        .profile_for_ordinal(
+                            u16::try_from(ordinal).map_err(|_| ErrorCode::CapacityExceeded)?,
+                        )?
+                        .cloned(),
                     candidate_index: u16::try_from(ordinal)
                         .map_err(|_| ErrorCode::CapacityExceeded)?,
                     target,
@@ -98,6 +104,8 @@ impl RetainedExecutionRevision {
             .collect::<std::result::Result<Vec<_>, ErrorCode>>()?;
         let manifest = CandidateManifestV1 {
             schema_version: 1,
+            admission_mode: route.admission_mode(),
+            runtime_observation: None,
             installation_id: self.installation.clone(),
             tenant_id: self.tenant.clone(),
             execution_revision: self.revision.clone(),
@@ -130,14 +138,44 @@ impl CachePin<RetainedExecutionRevision> {
         reference: &ResourceRef,
         inbound: &ApiProtocol,
         ordinals: &[u16],
+        mode: AdmissionMode,
     ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
         let mut route = self.selected_ordered_data(reference, inbound, ordinals)?;
+        if route.admission_mode() != mode {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
         route._revision = Some(self.clone());
         Ok(Arc::new(route))
     }
 }
 
 impl RetainedRoute {
+    pub(crate) fn admission_mode(&self) -> AdmissionMode {
+        if self.data.admission.is_some() {
+            AdmissionMode::ProfiledV1
+        } else {
+            AdmissionMode::Legacy
+        }
+    }
+
+    fn profile_for_ordinal(
+        &self,
+        ordinal: u16,
+    ) -> std::result::Result<Option<&ResourceRef>, ErrorCode> {
+        let Some(attachments) = &self.data.admission else {
+            return Ok(None);
+        };
+        let RouteSelection::Wire(inbound) = &self.selection else {
+            return Err(ErrorCode::CapabilityMismatch);
+        };
+        let protocol = generation_protocol(inbound).map_err(|_| ErrorCode::CapabilityMismatch)?;
+        attachments
+            .iter()
+            .find(|item| item.inbound_protocol == protocol && item.candidate_index == ordinal)
+            .map(|item| Some(&item.profile))
+            .ok_or(ErrorCode::AuthorityUnavailable)
+    }
+
     fn ordered_root(&self) -> std::result::Result<&Chain, ErrorCode> {
         if self.ordered.is_some()
             || self.data.policy.is_some()
@@ -179,6 +217,9 @@ impl RetainedRoute {
         // not be removed merely because the caller supplied a shorter list.
         if self.data.dependencies.iter().any(|reference| {
             reference != self.reference()
+                && !self.data.admission.as_ref().is_some_and(|attachments| {
+                    attachments.iter().any(|item| &item.profile == reference)
+                })
                 && (reference.resource_kind != ResourceKind::Credential
                     || !self
                         .data
@@ -205,7 +246,7 @@ impl RetainedRoute {
                 .candidates
                 .get(usize::from(*ordinal))
                 .ok_or(ErrorCode::InvalidRequest)?;
-            if candidates.contains(&index) {
+            if self.admission_mode() == AdmissionMode::Legacy && candidates.contains(&index) {
                 return Err(ErrorCode::InvalidRequest);
             }
             let candidate = self
@@ -232,6 +273,11 @@ impl RetainedRoute {
             if !dependencies.contains(&candidate.credential) {
                 dependencies.push(candidate.credential.clone());
             }
+            if let Some(profile) = self.profile_for_ordinal(*ordinal)?
+                && !dependencies.contains(profile)
+            {
+                dependencies.push(profile.clone());
+            }
         }
         self.ordered = Some(Selection {
             candidates,
@@ -245,6 +291,30 @@ impl RetainedRoute {
         self.ordered.is_some()
     }
 
+    /// Bind a private execution cursor to its exact retained root entry. Equal
+    /// target projections at different ordinals remain distinct entries.
+    pub(in crate::tenancy) fn reached_profile(
+        &self,
+        rank: usize,
+        target: &RoutingTarget,
+    ) -> std::result::Result<(u16, &ResourceRef), ErrorCode> {
+        let selection = self.ordered.as_ref().ok_or(ErrorCode::CapabilityMismatch)?;
+        let ordinal = *selection.ordinals.get(rank).ok_or(ErrorCode::Forbidden)?;
+        let index = *selection.candidates.get(rank).ok_or(ErrorCode::Forbidden)?;
+        let candidate = self
+            .data
+            .candidates
+            .get(index)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        if candidate.projection != self.candidate_key(target)? {
+            return Err(ErrorCode::Forbidden);
+        }
+        let profile = self
+            .profile_for_ordinal(ordinal)?
+            .ok_or(ErrorCode::CapabilityMismatch)?;
+        Ok((ordinal, profile))
+    }
+
     pub(crate) fn ordered_ordinals(&self) -> Option<&[u16]> {
         self.ordered
             .as_ref()
@@ -253,6 +323,7 @@ impl RetainedRoute {
 
     pub(crate) fn accepted_selection(
         &self,
+        generation_defaults_digest: Option<&bitrouter_ai::tenancy::identity::Digest>,
     ) -> std::result::Result<Option<AcceptedSelectionV2>, ErrorCode> {
         let Some(selection) = &self.ordered else {
             return Ok(None);
@@ -266,6 +337,8 @@ impl RetainedRoute {
             _ => return Err(ErrorCode::CapabilityMismatch),
         };
         Ok(Some(AcceptedSelectionV2 {
+            generation_defaults_digest: generation_defaults_digest.cloned(),
+            admission_mode: self.admission_mode(),
             route: self.reference().clone(),
             inbound_protocol,
             candidate_indices: selection.ordinals.clone(),

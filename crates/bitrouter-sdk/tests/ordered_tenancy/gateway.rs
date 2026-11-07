@@ -9,6 +9,9 @@ use bitrouter_ai::{
 use bitrouter_sdk::gateway::tenancy::{Body, Error, ErrorSource, EventStream, Problem};
 use futures_util::StreamExt;
 
+#[path = "gateway/defaults.rs"]
+mod defaults;
+
 fn request(protocol: usize, stream: bool) -> Value {
     match protocol {
         0 => json!({"model":"route","messages":[],"stream":stream}),

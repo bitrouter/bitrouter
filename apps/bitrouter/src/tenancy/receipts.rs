@@ -43,9 +43,13 @@ impl super::execution::TenantExecution {
             Ok(None) => false,
             Ok(Some(attempt)) => {
                 attempt.outcome != Outcome::Failed
-                    || attempt
-                        .http_status
-                        .is_none_or(|status| matches!(status, 401 | 403))
+                    || attempt.http_status.is_none_or(|status| {
+                        if self.profiled() {
+                            status < 300
+                        } else {
+                            matches!(status, 401 | 403)
+                        }
+                    })
             }
             Err(_) => true,
         }

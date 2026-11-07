@@ -126,6 +126,12 @@ impl TenantExecution {
             .executor(self.service.executor.clone())
             .pre_resolution_hook_for(Entry(self.clone()), OperationScope::Both);
         crate::tenancy::routing::install(&mut builder, self, self.service.routing.clone());
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+        if let Some(exporter) = self.service.operational_exporter.get() {
+            builder.observe_hook(crate::telemetry::exporter::OtelObserveHook::new(
+                exporter.clone(),
+            ));
+        }
         #[cfg(all(feature = "core", feature = "harness"))]
         if self.route.block_profile().is_some() {
             builder.routing_table(self.block_table());

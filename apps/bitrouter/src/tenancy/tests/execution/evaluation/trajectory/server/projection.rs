@@ -93,7 +93,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
             .await?
             .context("header missing")?;
         ensure!(
-            loaded.format == startup::Format::V2
+            loaded.format == startup::Format::V3
                 && loaded.header.revision.get() == u64::try_from(wide)?
                 && loaded.header.operation_ids == 7
                 && loaded.header.safety_operation_ids == 3
@@ -111,7 +111,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         (
             "tenancy_installation",
             "schema_version",
-            3_i32,
+            0_i32,
             "installation_id",
             fixture.installation.as_str(),
             "unsupported authority store format",

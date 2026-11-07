@@ -91,13 +91,9 @@ pub(crate) async fn dispatch(
             Ok(Err(_)) => return Failure::from(ErrorCode::PayloadTooLarge).into_response(),
             Err(_) => return Failure::from(ErrorCode::CapacityExceeded).into_response(),
         };
-    let value = match serde_json::from_slice(&body) {
-        Ok(value) => value,
-        Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
-    };
-    let input = match crate::gateway::http::parse_input(&inbound, value) {
+    let input = match submission.parse_http_input(&inbound, &body) {
         Ok(input) => input,
-        Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
+        Err(error) => return error.into_response(),
     };
     drop(body);
     crate::gateway::http::handle_tenant(

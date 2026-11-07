@@ -24,6 +24,7 @@ const MAX_TARGET_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ROUTE_DEPENDENCIES: usize = 16_384;
 
 struct Source {
+    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachmentV1>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
     choice: Option<super::super::core_choice::Profile>,
@@ -57,6 +58,7 @@ pub(super) fn decode_with_operation(
         ExecutionCapacityExceeded
     );
     super::super::core_choice::validate_graph(&artifacts, &document.routes, false)?;
+    super::super::admission::validate_graph(&artifacts)?;
     let mut sources = HashMap::new();
     let mut policies = HashMap::new();
     let mut graph = HashMap::new();
@@ -80,6 +82,7 @@ pub(super) fn decode_with_operation(
                 sources.insert(
                     reference,
                     Source {
+                        admission: None,
                         routing: Arc::new(routing),
                         credentials,
                         choice: core_choice.map(|profile| *profile),
@@ -89,6 +92,26 @@ pub(super) fn decode_with_operation(
                     },
                 );
             }
+            Definition::ProfiledRoute {
+                routing,
+                credentials,
+                attachments,
+                ..
+            } => {
+                sources.insert(
+                    reference,
+                    Source {
+                        routing: Arc::new(routing),
+                        credentials,
+                        envelope,
+                        admission: Some(attachments),
+                        choice: None,
+                        assessment: None,
+                        block: None,
+                    },
+                );
+            }
+            Definition::AdmissionProfile { .. } => {}
             Definition::Policy { document, name, .. } => {
                 policies.insert(
                     reference,
@@ -212,6 +235,15 @@ pub(super) fn decode_with_operation(
         );
     }
     for parent in retained.values() {
+        if parent.admission.is_some() {
+            ensure!(
+                document.policy.is_none()
+                    && document.learning.mode
+                        == bitrouter_ai::tenancy::configuration::LearningMode::Off
+                    && document.learning.max_evaluations == 0,
+                "profiled route requires static ordered configuration"
+            );
+        }
         if let Some(reference) = &parent.assessment {
             ensure!(
                 matches!(&parent.native, super::NativeChains::Ready(chains) if chains.iter().any(|chain|
@@ -430,6 +462,7 @@ fn route_data(
     );
     native_budget.check_operation()?;
     Ok(RouteData {
+        admission: source.admission,
         reference: route.reference,
         assessment: source.assessment,
         block: source.block,

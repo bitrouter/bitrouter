@@ -124,6 +124,21 @@ Submission bounds upload and admission, not the lifetime of an admitted stream.
 ordinary v1 submissions keep their eight-attempt bound. This work budget does
 not limit the number of tenants or retained routes. An oversized selection is
 rejected before dispatch rather than truncated.
+Ordered selections require an explicit `admission_mode` (`legacy` or
+`profiled_v1`), matching the retained root; missing mode is not a default.
+Installation authority alone can provision admission profiles or profiled
+routes through the existing resource API. Profiles use explicit rate/health
+rules; zero RPM is valid local refusal. A profiled route permanently protects
+its key, including old revisions and configurations. Do not downgrade a denied
+profiled request to legacy or v1. New authority stores use format three and
+refuse unreleased format-two stores; retain a compatible stopped-writer backup
+before changing binaries. See the [service contract](../../../docs/specs/service-api/README.md#resource-provisioning)
+for exact profile, import-head and protection semantics.
+Use `observe_rate_group_id` only for an explicit same-owner read-only association.
+It can expose a measured shared count while `rate:null` remains uncharged;
+absence is unavailable, never an assumed zero. Read through the existing operator
+candidate-manifest endpoint, retain the instance identity, and do not treat the
+sample as admission authority or a durable/fleet-wide counter.
 The optional execution total starts at admission; `null` or omission permits
 ongoing active work. The idle setting bounds each provider read and blocked
 output handoff, preventing silent upstreams or unread response bodies from
@@ -319,3 +334,11 @@ clients never substitute local config or credentials. Local IPC, SIGHUP, and
 remote reload now share startup-field rejection rules. Read `running` and the
 safe changed-field categories before choosing reload or restart; file writes
 alone do not establish activation.
+
+For ordered per-call generation defaults, freeze the binding returned by
+`OrderedDispatchBindingV2::with_generation_defaults`, then attach the same
+closed object with `OrderedTenantGateway::with_generation_defaults`. Use only
+the nine canonical fields in the service API specification. Keep the object in
+the existing bounded body, never in provider extras or a custom header. Typed
+null and empty stop permit default filling; explicit typed values win. An
+unused extension leaves existing request and selection bytes unchanged.

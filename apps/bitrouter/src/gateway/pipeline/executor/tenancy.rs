@@ -128,6 +128,24 @@ pub(super) fn has_execution(ctx: &PipelineContext) -> bool {
     execution(ctx).is_some()
 }
 
+pub(super) fn legacy_routing(ctx: &PipelineContext) -> bool {
+    execution(ctx).is_some_and(|execution| !execution.profiled())
+}
+
+pub(super) fn transport_failed(
+    ctx: &PipelineContext,
+    error: &crate::gateway::model::error::ModelError,
+) {
+    use crate::gateway::model::error::ModelError;
+    if let Some(execution) = execution(ctx) {
+        match error {
+            ModelError::Timeout => execution.operational_transport_failure(true),
+            ModelError::Transport { .. } => execution.operational_transport_failure(false),
+            _ => {}
+        }
+    }
+}
+
 /// Stop owned I/O without dropping the enclosing settlement/callback future.
 pub(super) fn cancellation(ctx: &PipelineContext) -> Result<tokio_util::sync::CancellationToken> {
     let Some(execution) = execution(ctx) else {

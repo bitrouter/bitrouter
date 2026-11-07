@@ -104,8 +104,8 @@ impl TargetStamp {
             credential,
             candidate: candidate.into(),
             target: projected,
-            ordinal: retained
-                .candidate_ordinal(target)
+            ordinal: execution
+                .actual_ordinal(target)
                 .map_err(|_| Error::Binding)?,
         })
     }
@@ -375,6 +375,7 @@ impl Journal {
             ordinal: stamp.ordinal,
         });
         Ok(AttemptPermit {
+            operational: None,
             journal: self.clone(),
             index,
             stamp,
@@ -500,12 +501,24 @@ fn outcome(phase: Phase) -> Result<Outcome, Error> {
 
 /// Non-Clone, Send+Sync custody of exactly one slot. No writable fields or public constructor.
 pub(crate) struct AttemptPermit {
+    operational: Option<Arc<crate::tenancy::operational::Hop>>,
     journal: Arc<Journal>,
     index: usize,
     stamp: TargetStamp,
 }
 
 impl AttemptPermit {
+    pub(in crate::tenancy) fn bind_operational(
+        &mut self,
+        hop: Option<Arc<crate::tenancy::operational::Hop>>,
+    ) {
+        self.operational = hop;
+    }
+
+    pub(crate) fn operational(&self) -> Option<&Arc<crate::tenancy::operational::Hop>> {
+        self.operational.as_ref()
+    }
+
     pub(crate) fn stamp(&self) -> &TargetStamp {
         &self.stamp
     }

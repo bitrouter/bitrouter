@@ -143,7 +143,7 @@ pub(crate) async fn apply_in(
                 outcome.validate(request)?;
                 ensure!(
                     serde_json::to_string(&outcome)? == json
-                        && header.format == startup::Format::V2
+                        && header.format != startup::Format::V1
                         && header.header.revision.get() >= outcome.new_authority_revision
                         && header.header.created_at == outcome.installation_created_at
                         && header.header.operation_ids >= outcome.ordinary_operations

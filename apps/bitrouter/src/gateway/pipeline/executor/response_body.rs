@@ -76,6 +76,12 @@ pub(super) async fn read(response: reqwest::Response, ctx: &PipelineContext) -> 
         () = cancellation.cancelled() => Err(BitrouterError::UpstreamUnavailable),
         result = read_bounded(response, limit) => result,
     };
+    if let Err(error @ (BitrouterError::UpstreamTimeout | BitrouterError::Upstream { .. })) =
+        &result
+        && let Some(execution) = super::tenancy::execution(ctx)
+    {
+        execution.operational_transport_failure(matches!(error, BitrouterError::UpstreamTimeout));
+    }
     match result {
         // The received rejection is authoritative even when its optional
         // diagnostic body resets or stalls. Losing a 401/403 here must not turn
