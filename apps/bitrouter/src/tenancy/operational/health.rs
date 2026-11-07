@@ -8,12 +8,14 @@ use bitrouter_ai::tenancy::admission::{HealthObservation, HealthProfileV1};
 use super::state::{Denial, HealthOutcome};
 
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Health {
     phase: Phase,
     active: u32,
 }
 
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug))]
 enum Phase {
     #[default]
     Healthy,
