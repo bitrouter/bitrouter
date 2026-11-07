@@ -9,7 +9,7 @@ mod server;
 
 async fn format_three(path: &std::path::Path) -> Result<DatabaseConnection> {
     let db = legacy_database(path).await?;
-    Migrator::up(&db, Some(1)).await?;
+    Migrator::up(&db, Some(2)).await?;
     ensure!(version(&db).await? == 3);
     Ok(db)
 }
@@ -35,7 +35,14 @@ async fn shared_health_migration_preserves_bytes_and_failure_never_advances_mark
     db.execute_unprepared("CREATE TRIGGER refuse_shared_upgrade BEFORE UPDATE ON tenancy_installation WHEN NEW.schema_version=4 BEGIN SELECT RAISE(ABORT,'refuse shared format upgrade'); END").await?;
     ensure!(crate::db::run_migrations(&db).await.is_err());
     ensure!(version(&db).await? == 3 && !ledger_has_fence(&db).await?);
-    ensure!(authority::load(&db, chrono::Utc::now()).await.is_err());
+    ensure!(
+        authority::load(&db, chrono::Utc::now())
+            .await?
+            .installation
+            .as_str()
+            == "installation"
+    );
+    ensure!(version(&db).await? == 3 && !ledger_has_fence(&db).await?);
     db.execute_unprepared("DROP TRIGGER refuse_shared_upgrade")
         .await?;
     crate::db::run_migrations(&db).await?;
@@ -83,11 +90,16 @@ async fn shared_health_migration_rejects_unsupported_versions_and_malformed_iden
             [version_value.into(), identity.into()],
         ))
         .await?;
+        let migrated = crate::db::run_migrations(&db).await;
+        let legacy = version_value == 1;
         ensure!(
-            crate::db::run_migrations(&db).await.is_err(),
-            "accepted {version_value} {identity:?}"
+            migrated.is_ok() == legacy,
+            "unexpected migration result for {version_value} {identity:?}"
         );
-        ensure!(version(&db).await? == version_value && !ledger_has_fence(&db).await?);
+        // The writer fence records valid legacy stores without releasing their
+        // capacity latch. Unsupported versions and malformed identities keep
+        // both their original marker and their original migration ledger.
+        ensure!(version(&db).await? == version_value && ledger_has_fence(&db).await? == legacy);
         db.close().await?;
     }
     Ok(())
