@@ -1,0 +1,106 @@
+name: Core Linux observation diagnostic
+
+on:
+  push:
+    branches: [codex/core-ci-linux-observation-8df608c]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: core-linux-observation-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  observation:
+    name: Exact prebuilt observation startup diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 8df608c7f1b4d5ab5e63f04aa074c7fe40d37d3d
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-tests-cf7fc5c81f3f4867b5be77bb3fffc6b51540f3c4
+          run-id: 42355513761
+          github-token: ${{ github.token }}
+          path: .ci-archive
+      - name: Verify the original exact-source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 8df608c7f1b4d5ab5e63f04aa074c7fe40d37d3d
+          test "$(git rev-parse 'HEAD^{tree}')" = 7de2f86b4520e3df7f2fb11ba039e96fff7dd1e5
+          test "$(cat .ci-archive/tests.sha)" = cf7fc5c81f3f4867b5be77bb3fffc6b51540f3c4
+          test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
+          (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
+          tar --zstd -xf .ci-archive/tests.tar.zst \
+            target/nextest/binaries-metadata.json \
+            target/nextest/cargo-metadata.json \
+            target/debug/deps/bitrouter-24756891c87d7966
+          printf '%s  %s\n' \
+            46caa5229b6993b54364055947ed433718f1cd7dbc9e28915e6b4adcf39e43d1 \
+            target/debug/deps/bitrouter-24756891c87d7966 | sha256sum -c -
+          mkdir -m 700 ci-evidence
+          {
+            git rev-parse HEAD 'HEAD^{tree}'
+            cat .ci-archive/tests.sha .ci-archive/tests.tar.zst.sha256
+            uname -a
+          } > ci-evidence/source.txt
+      - name: Retain the actual child error without changing assertions
+        shell: bash
+        env:
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: cumulative
+          BITROUTER_TEST_STOPPED_NATIVE_KEY: HR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0=
+        run: |
+          set -euo pipefail
+          diagnostics="$(realpath ci-evidence)"
+          export BITROUTER_TEST_STOPPED_NATIVE_DIAGNOSTICS="$diagnostics"
+          binary="$PWD/target/debug/deps/bitrouter-24756891c87d7966"
+          prefix=tenancy::tests::execution::native::session::choice::recovery::companion::observation
+          # Keep raw fixture output in the authenticated evidence artifact,
+          # never in public job logs. The original byte and witness bounds apply.
+          parent_status=0
+          "$binary" --ignored --exact \
+            "$prefix::owned_startup_and_native_repair_capacity_consumers" \
+            --nocapture --test-threads=1 \
+            > "$diagnostics/parent.stdout" 2> "$diagnostics/parent.stderr" || parent_status=$?
+          printf 'parent exit=%s\n' "$parent_status" | tee "$diagnostics/parent.exit"
+          # Match the child environment scrub performed by the public parent.
+          for variable in $(compgen -e); do
+            case "$variable" in
+              OTEL_*|BITROUTER_TELEMETRY_*|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|http_proxy|https_proxy|all_proxy)
+                unset "$variable"
+                ;;
+            esac
+          done
+          export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+          startup_status=0
+          for attempt in $(seq 1 20); do
+            directory="$diagnostics/startup-$attempt"
+            mkdir -m 700 "$directory"
+            root=$(mktemp -d "$RUNNER_TEMP/core-observation.XXXXXX")
+            status=0
+            BITROUTER_TEST_STOPPED_NATIVE_ROOT="$root" \
+            BITROUTER_TEST_STOPPED_NATIVE_MODE=observation-startup \
+              "$binary" --ignored --exact "$prefix::controller" \
+              --nocapture --test-threads=1 \
+              > "$directory/stdout" 2> "$directory/stderr" || status=$?
+            printf '%s\n' "$status" > "$directory/exit"
+            printf 'startup attempt=%s exit=%s stderr_bytes=%s\n' \
+              "$attempt" "$status" "$(wc -c < "$directory/stderr")"
+            if (( status != 0 )); then
+              startup_status=$status
+              break
+            fi
+          done
+          (( parent_status == 0 && startup_status == 0 ))
+      - name: Preserve private diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-linux-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-evidence/
+          retention-days: 1
