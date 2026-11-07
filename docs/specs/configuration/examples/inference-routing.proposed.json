@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "policy": "prefix_affinity",
+  "destinations": [
+    {
+      "id": "provider-a-model",
+      "provider": "provider-a",
+      "model": "model-one",
+      "endpoint": "https://provider-a.example/v1",
+      "max_active": 8
+    },
+    {
+      "id": "provider-b-model",
+      "provider": "provider-b",
+      "model": "model-one",
+      "endpoint": "https://provider-b.example/v1",
+      "max_active": 8
+    }
+  ]
+}
