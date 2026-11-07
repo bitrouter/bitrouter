@@ -190,6 +190,28 @@ configuration for a v1-only binary, whose store compatibility must also be
 checked before rollback. See the
 [ordered dispatch contract](../service-api/README.md#ordered-static-dispatch-v2).
 
+### Private generation adapter
+
+The optional startup-only `tenancy.private_adapter` pairs this installation
+with one operator-controlled adapter. It requires enabled tenancy and accepts
+an `audience`, one to eight exact `endpoints` at the same HTTPS origin, and a
+`key_env` naming an environment variable containing an unpadded base64url
+32-byte key. Omission disables pairing. Secrets stay in the environment and
+peer memory.
+
+Only actual generation sends using a static credential on profiled ordered
+routes to a configured URL receive a signed attempt claim. Provider-side input
+counting is unavailable for paired endpoints. The peer must check the audience, destination,
+body digest and expiry, and redeem the exact attempt against its own live
+authority before making an external call. The private transport does not
+follow redirects, retry or use environment proxies. Terminate TLS at the
+trusted adapter endpoint so that authenticated transport protects the body.
+Core accepts provider
+status only after authenticating the outcome against the same attempt. An
+adapter refusal, missing proof or indeterminate result stops fallback.
+For a streaming success, the authenticated headers admit the stream and the
+protocol decoder still requires a valid terminal.
+
 ### Provisioning authority and retained settings
 
 Import, learning-registration and wrapping-key options require tenancy to be

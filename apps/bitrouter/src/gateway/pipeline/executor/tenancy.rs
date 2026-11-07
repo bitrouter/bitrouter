@@ -304,9 +304,10 @@ pub(super) fn admit_send(
     request: &mut reqwest::Request,
     target: &RoutingTarget,
     ctx: &PipelineContext,
-) -> Result<Option<bitrouter_ai::tenancy::identity::AttemptId>> {
+    stream: Option<bool>,
+) -> Result<SendAdmission> {
     match (binding, execution(ctx)) {
-        (None, None) if permit.is_none() => Ok(None),
+        (None, None) if permit.is_none() => Ok(SendAdmission::default()),
         (Some(binding), Some(execution)) if Arc::ptr_eq(&binding.execution, &execution) => {
             if digest(request).map_err(|code| execution.reject(code))? != binding.digest
                 || execution
@@ -317,6 +318,12 @@ pub(super) fn admit_send(
             {
                 return Err(execution.reject(ErrorCode::Forbidden));
             }
+            let adapter = if execution.is_private_adapter_endpoint(request.url()) {
+                execution.check_private_adapter_request(request, stream)?;
+                stream
+            } else {
+                None
+            };
             if let Some(remaining) = execution.remaining() {
                 let timeout = request
                     .timeout()
@@ -335,7 +342,7 @@ pub(super) fn admit_send(
             } else {
                 None
             };
-            execution
+            let attempt_id = execution
                 .arm_attempt_with_oauth(
                     target,
                     permit,
@@ -343,13 +350,74 @@ pub(super) fn admit_send(
                     binding.oauth.as_ref(),
                     counted.as_deref(),
                 )
-                .map(Some)
-                .map_err(|code| execution.reject(code))
+                .map_err(|code| execution.reject(code))?;
+            let adapter = adapter
+                .map(|stream| {
+                    execution.handoff_private_adapter(
+                        request,
+                        target,
+                        &binding.credential,
+                        attempt_id.clone(),
+                        stream,
+                    )
+                })
+                .transpose()?;
+            Ok(SendAdmission {
+                attempt_id: Some(attempt_id),
+                adapter,
+            })
         }
         (_, Some(execution)) => Err(execution.reject(ErrorCode::Forbidden)),
         (_, None) => Err(crate::gateway::error::BitrouterError::Forbidden(
             "tenant request lost execution custody".into(),
         )),
+    }
+}
+
+#[derive(Default)]
+pub(super) struct SendAdmission {
+    pub(super) attempt_id: Option<bitrouter_ai::tenancy::identity::AttemptId>,
+    pub(super) adapter: Option<crate::tenancy::execution::private_adapter::Exchange>,
+}
+
+impl SendAdmission {
+    /// Provider status reaches receipt, health and retry classification only
+    /// after the paired adapter has authenticated it.
+    pub(super) async fn send(
+        &self,
+        client: &super::ModelClient,
+        request: reqwest::Request,
+        ctx: &PipelineContext,
+        scrubber: &mut super::UpstreamErrorScrubber,
+    ) -> Result<reqwest::Response> {
+        let cancellation = cancellation(ctx)?;
+        if let Some(adapter) = &self.adapter {
+            use bitrouter_ai::tenancy::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
+
+            capture_adapter_envelope(scrubber, request.headers().get(ATTEMPT_HEADER));
+            let response = adapter.send(request, &cancellation).await?;
+            capture_adapter_envelope(scrubber, response.headers().get(OUTCOME_HEADER));
+            return Ok(response);
+        }
+        client.send(request, &cancellation).await.map_err(|error| {
+            transport_failed(ctx, &error);
+            scrubber.scrub_error(error.into())
+        })
+    }
+}
+
+fn capture_adapter_envelope(
+    scrubber: &mut super::UpstreamErrorScrubber,
+    header: Option<&reqwest::header::HeaderValue>,
+) {
+    if let Some(value) = header.and_then(|header| header.to_str().ok())
+        && let Some((payload, tag)) = value.split_once('.')
+    {
+        for secret in [value, payload, tag] {
+            scrubber
+                .redactor
+                .add_replacement(secret.into(), "[redacted adapter envelope]".into());
+        }
     }
 }
 
