@@ -147,6 +147,8 @@ jobs:
       with:
         toolchain: 1.99.1
         cache-on-failure: false
+        # Keep cache restore without optional PR cache writes after archive upload.
+        cache-save-if: ${{ github.event_name != 'pull_request' }}
         cache-key: complete-v1
     - uses: taiki-e/install-action@v2
       with:
