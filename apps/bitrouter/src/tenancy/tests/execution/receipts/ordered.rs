@@ -36,6 +36,7 @@ mod caller_timeout;
 mod canonical;
 mod defaults;
 mod envelope;
+mod native_controls;
 mod predecessor;
 mod profiled;
 
@@ -52,6 +53,8 @@ struct ProviderControls {
     missing_usage: AtomicBool,
     held_stream: Mutex<Option<Arc<barrier::Gate>>>,
     bodies: Mutex<Vec<Value>>,
+    native_state: Mutex<Option<String>>,
+    stateful: AtomicBool,
 }
 
 impl Default for ProviderControls {
@@ -61,6 +64,8 @@ impl Default for ProviderControls {
             missing_usage: AtomicBool::new(false),
             held_stream: Mutex::new(None),
             bodies: Mutex::new(Vec::new()),
+            native_state: Mutex::new(None),
+            stateful: AtomicBool::new(false),
         }
     }
 }
@@ -135,6 +140,9 @@ async fn ordered_provider(
     } else {
         full_usage(protocol)
     };
+    if state.controls.stateful.load(Ordering::SeqCst) {
+        return native_controls::provider_reply(&state.controls, protocol, &body, usage);
+    }
     if body["stream"] == true {
         let gate = match state.controls.held_stream.lock() {
             Ok(mut gate) => gate.take(),
@@ -223,13 +231,25 @@ impl OrderedHarness {
         profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
-        Self::with_runtime_capacity(
+        Self::with_native_mode(count, limit, malformed, defaults, profiles, false, edit).await
+    }
+
+    async fn with_native_mode(
+        count: usize,
+        limit: u8,
+        malformed: Option<usize>,
+        defaults: Value,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        native_controls: bool,
+        edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
+    ) -> Result<Self> {
+        Self::with_runtime_options(
             count,
             limit,
             malformed,
             defaults,
             profiles,
-            CapacityConfig::default(),
+            (native_controls, CapacityConfig::default()),
             edit,
         )
         .await
@@ -242,6 +262,27 @@ impl OrderedHarness {
         defaults: Value,
         profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
         capacity: CapacityConfig,
+        edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
+    ) -> Result<Self> {
+        Self::with_runtime_options(
+            count,
+            limit,
+            malformed,
+            defaults,
+            profiles,
+            (false, capacity),
+            edit,
+        )
+        .await
+    }
+
+    async fn with_runtime_options(
+        count: usize,
+        limit: u8,
+        malformed: Option<usize>,
+        defaults: Value,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        (native_controls, capacity): (bool, CapacityConfig),
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
         let directory = tempfile::tempdir()?;
@@ -379,6 +420,7 @@ impl OrderedHarness {
         )
         .await?;
         fixture.service.execution_settings.ordered_attempt_limit = limit;
+        fixture.service.execution_settings.ordered_native_controls = native_controls;
         let revision = if profiles.is_some() {
             profiled::draft_profiles(&fixture, &route).await?
         } else {

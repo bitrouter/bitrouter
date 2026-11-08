@@ -7,6 +7,7 @@
 
 mod directory;
 mod eval;
+mod native_controls;
 mod ordered;
 mod profile_observation;
 mod resources;

@@ -850,7 +850,9 @@ membership and required credential dependencies without changing the cached
 revision, active configuration or another request. It never grants permission
 to a selected resource. Only policy-free static generation roots without
 learning, experiments, auxiliary counting, native harness, OAuth refresh or
-continuation requirements qualify. Continuation-bearing input fails explicitly.
+continuation requirements qualify. Ordinary v2 continuation-bearing input fails
+explicitly; the separately discovered provider-native opt-in below accepts
+opaque controls without introducing owned-handle authority.
 Unselected private credentials do not become usable through later hooks.
 
 The selected order bypasses runtime sorting and weighted permutation. Existing
@@ -1067,7 +1069,7 @@ Streaming Chat forces `stream_options.include_usage=true`, replacing a raw
 nonobject options value with an object; JSON rendering does not perform that
 streaming transformation.
 
-Ordered continuation checks remain mandatory after merge and during attach.
+Ordinary ordered continuation checks remain mandatory after merge and during attach.
 Effective non-null `previous_response_id`, `conversation`, `context_management`
 or `cachedContent` refuses before provider I/O, including false, zero, empty
 strings, objects and arrays. Null is not continuation authority. Store and all
@@ -1128,6 +1130,69 @@ execution ID or status. These observations do not cause automatic retries.
 8. Repeated opaque Beta values remain isolated per call over HTTP/1.1 and HTTP/2
    for JSON and SSE; replacing or clearing them cannot change the binding,
    request body or another call's headers.
+
+### Explicit provider-native controls on ordered requests
+
+The default-off startup option `tenancy.ordered_native_controls` permits an
+explicit caller opt-in to provider-owned state under the current selected
+credentials. The operator accepts that principals using the same provider
+account may share its state namespace. This option proves no historical tenant,
+principal, credential or response ownership. Installations needing isolation
+must keep it disabled or use provider credentials with genuinely isolated state.
+The option is immutable for a serving instance; restart requires fresh discovery.
+
+Authenticated `GET /control/v1/tenancy/ordered/native-controls/capabilities`
+returns the closed [version-one descriptor](ordered-native-controls-capabilities-v1.schema.json).
+It binds installation, instance and capability revision, reports current authority
+revision, and enables the mode only when operator policy and ordered dispatch
+readiness both hold. It leaves `OrderedCapabilitiesV2` unchanged. The explicit SDK
+`ordered_native_controls_capabilities` read and `with_native_controls` helper
+require matching discovery, with no automatic refresh, speculative dispatch or
+downgrade. The observation is not an authority lease.
+
+An ordered Responses or Messages ingress request opts in with exactly one
+`Bitrouter-Native-Controls: provider_native_v1` header. Missing header preserves
+ordinary v2 refusal. Unknown or duplicate values and v1 use fail before dispatch.
+Core consumes the header; it never reaches the provider. Normal current caller
+authentication, route/member/profile/credential authorization, defaults digest,
+admission, deadline and receipt rules remain mandatory. Caller credential rotation
+under the same principal and new per-call/configuration defaults are allowed when
+current authority permits them. Neither old caller credentials nor old defaults
+are recovered or pinned from a raw value.
+
+Responses `previous_response_id` and `conversation`, and Messages
+`context_management`, retain opaque JSON values and provider validation. A literal
+`brc_` prefix is forwarded unchanged in this explicit mode; it never invokes a
+managed resolver or a fallback between modes. Values cannot choose endpoints,
+headers, credentials or candidate order. No owned continuation handle is published,
+imported or reconstructed, and no history is replayed. Ordinary gateway response
+IDs retain their existing encoding; this mode does not make them resumable or
+export a separate native-ID mapping. Provider success establishes no
+historical ownership or usage facts. Generate Content `cachedContent` is not
+supported by this mode; the retired protocol remains unavailable.
+
+Source-native fields remain protocol-bound. The existing post-parse merge suppresses
+a supplemental key when source extras already contain that key, including null;
+this mode does not change that merge. Fields which remain in both maps use the
+renderer precedence for each actual target: source presence (including null) wins
+only on that source protocol. In that case a Responses source null masks a
+supplemental prior-response value on Responses, but cannot mask that foreign value
+on Messages. Incompatible targets are skipped before rate/health
+admission and provider attempts, retaining original selection ranks, root ordinals
+and profiles. If none qualifies the request fails; Core never strips a non-null
+source control to manufacture fresh generation. This is an intentional safety
+boundary rather than cross-protocol omission compatibility. Retained route
+defaults containing native controls remain outside the ordered static-root
+contract; request-local bound envelopes provide the explicit path.
+
+Raw values supply no original-member affinity. The existing classified rejection
+rules may permit the next selected compatible target; unknown transport/body/stream
+outcomes, cancellation or completed work stop further sends. Rendering and the
+authenticated outbound body are checked against effective controls. Receipt and
+usage-evidence v2 still describe current execution only, with no format changes.
+A predecessor without discovery cannot be assumed to support this mode. Its
+ordinary non-null-control refusal remains meaningful; an empty opted-in request
+has no new custody or publication promise and may still execute ordinarily.
 
 ### Exact retained admission-profile observations
 

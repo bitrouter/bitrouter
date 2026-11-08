@@ -3401,18 +3401,26 @@ impl Pipeline {
         ctx: &PipelineContext,
         excluded: &mut bitrouter_ai::conversion::ConversionReport,
     ) -> Result<bool> {
-        let assessment = if ctx
-            .extension::<super::native::NativeManagedRequest>()
-            .is_some()
-        {
-            self.executor.preflight_managed(target, prompt, stream, ctx)
-        } else {
-            self.executor.preflight(target, prompt, stream)
-        }
-        .and_then(|report| {
-            report.require_admitted()?;
-            Ok(report)
-        });
+        let controls = ctx
+            .extension::<crate::tenancy::execution::TenantExecution>()
+            .map_or(Ok(()), |execution| {
+                execution.admit_native_controls(prompt, &target.api_protocol)
+            });
+        let assessment = controls
+            .and_then(|()| {
+                if ctx
+                    .extension::<super::native::NativeManagedRequest>()
+                    .is_some()
+                {
+                    self.executor.preflight_managed(target, prompt, stream, ctx)
+                } else {
+                    self.executor.preflight(target, prompt, stream)
+                }
+            })
+            .and_then(|report| {
+                report.require_admitted()?;
+                Ok(report)
+            });
         match assessment {
             Ok(report) => {
                 if !report.admitted.is_empty() {
