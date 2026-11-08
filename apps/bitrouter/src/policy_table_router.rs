@@ -2,37 +2,50 @@
 //! Model selection, context planning and settlement run inside the SDK pipeline.
 //! Learn attribution retains one policy snapshot through guards and execution.
 
+#[cfg(feature = "semantic-routing")]
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+#[cfg(feature = "semantic-routing")]
 use std::sync::Arc;
 
-use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
+use crate::config::PolicyKeyStrategy;
+#[cfg(feature = "semantic-routing")]
+use bitrouter_ai::routing::PolicyModelTarget;
+#[cfg(feature = "semantic-routing")]
+use bitrouter_ai::types::Tool;
+use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role};
+#[cfg(feature = "semantic-routing")]
 use http::HeaderMap;
-use {
-    crate::config::PolicyKeyStrategy, crate::config::PolicyTableConfig,
-    bitrouter_ai::routing::PolicyModelTarget,
-};
 
+#[cfg(feature = "semantic-routing")]
+use crate::config::PolicyTableConfig;
+#[cfg(feature = "semantic-routing")]
 use crate::continuation::ContinuationAdjustment;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::observability::decision::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::exploration::RouteExploration;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::workflow::decision::{
     PolicyDecisionJsonlRecorder, PolicyDecisionRecord,
 };
 use crate::gateway::routing::workflow::ir::{HarnessId, WorkflowIdentity};
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::workflow::online::OnlineWorkflowState;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
+#[cfg(feature = "semantic-routing")]
 use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
+#[cfg(feature = "semantic-routing")]
+use bitrouter_ai::eval::{ExperimentArm, RouteActionCandidate};
+#[cfg(feature = "semantic-routing")]
 use bitrouter_ai::harness::inspection::NextStepRole;
-use {
-    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
-    bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
-};
+use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
@@ -65,6 +78,7 @@ impl fmt::Display for PolicyDecisionReason {
 
 #[derive(Debug, Clone)]
 pub struct PolicyDecision {
+    #[cfg(feature = "semantic-routing")]
     policy_snapshot: PolicySnapshot,
     pub key_strategy: PolicyKeyStrategy,
     pub request_key: String,
@@ -112,14 +126,17 @@ pub struct PolicyDecision {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "semantic-routing")]
 struct PolicySnapshot(Arc<PolicyTable>);
 
+#[cfg(feature = "semantic-routing")]
 impl std::fmt::Debug for PolicySnapshot {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PolicySnapshot(<opaque>)")
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 impl std::ops::Deref for PolicySnapshot {
     type Target = PolicyTable;
 
@@ -141,10 +158,12 @@ impl PolicyDecision {
         &self.workflow_identity
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn tool_use_tier(&self) -> Option<String> {
         self.policy_snapshot.tool_use_tier.clone()
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
         self.policy_snapshot
             .tool_safe_tiers
@@ -153,6 +172,7 @@ impl PolicyDecision {
             .collect()
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn effective_tier_efforts(
         &self,
         inherited: Option<ReasoningEffort>,
@@ -169,6 +189,7 @@ impl PolicyDecision {
             .collect()
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
         self.policy_snapshot.effort_of_tier(tier)
     }
@@ -178,21 +199,27 @@ impl PolicyDecision {
 /// guardrails. Learned-state databases never participate in this hot path.
 pub struct PolicyTable {
     /// Tier name → model id the request is rewritten to.
+    #[cfg(feature = "semantic-routing")]
     tiers: HashMap<String, PolicyModelTarget>,
     /// Request fingerprint → tier name.
+    #[cfg(feature = "semantic-routing")]
     fingerprints: HashMap<String, String>,
     /// Tier for a fingerprint absent from `fingerprints`.
+    #[cfg(feature = "semantic-routing")]
     default_tier: Option<String>,
     /// Guardrail target tier for tool-carrying requests whose chosen tier is not
     /// tool-safe.
+    #[cfg(feature = "semantic-routing")]
     tool_use_tier: Option<String>,
     /// Tiers that handle tool calls reliably.
+    #[cfg(feature = "semantic-routing")]
     tool_safe_tiers: Vec<String>,
 }
 
 impl PolicyTable {
     /// Build the shared spec from config, or `None` when the section is inert
     /// (no tiers defined).
+    #[cfg(feature = "semantic-routing")]
     pub fn from_config(config: &PolicyTableConfig) -> Option<Arc<Self>> {
         if config.tiers.is_empty() {
             return None;
@@ -212,6 +239,7 @@ impl PolicyTable {
     /// transform is baked into the built `App` and cannot be unregistered, so
     /// "no policy table" has to be expressible as a table: every lookup misses,
     /// so `route_prompt` leaves the caller's model alone.
+    #[cfg(feature = "semantic-routing")]
     pub fn inert() -> Arc<Self> {
         Arc::new(Self {
             tiers: HashMap::new(),
@@ -225,6 +253,7 @@ impl PolicyTable {
     /// Resolve the exact task-aware predictive key, its unknown-family
     /// baseline, then the default. The returned key is the key that actually
     /// selected the tier, except that defaults retain the primary key.
+    #[cfg(feature = "semantic-routing")]
     fn tier_for_workflow<'table, 'key>(
         &'table self,
         predictive_primary: &'key str,
@@ -250,6 +279,7 @@ impl PolicyTable {
             .map(|tier| (tier, predictive_primary))
     }
 
+    #[cfg(feature = "semantic-routing")]
     fn guardrail_with_status<'a>(&'a self, tier: &'a str, prompt: &Prompt) -> (&'a str, bool) {
         if !prompt.tools.is_empty()
             && !self.tool_safe_tiers.iter().any(|t| t == tier)
@@ -261,22 +291,26 @@ impl PolicyTable {
     }
 
     /// The model id a tier routes to.
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn model_of_tier(&self, tier: &str) -> Option<&str> {
         self.target_of_tier(tier).map(PolicyModelTarget::model)
     }
 
     /// The policy-owned effort override for a tier. An absent override
     /// preserves caller effort.
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
         self.target_of_tier(tier)
             .and_then(PolicyModelTarget::effort)
     }
 
     /// The complete model/effort target selected by a tier.
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn target_of_tier(&self, tier: &str) -> Option<&PolicyModelTarget> {
         self.tiers.get(tier)
     }
 
+    #[cfg(feature = "semantic-routing")]
     fn stable_tier_of_target(
         &self,
         model: &str,
@@ -305,6 +339,7 @@ impl PolicyTable {
             })
     }
 
+    #[cfg(feature = "semantic-routing")]
     fn route_measurement(
         &self,
         logging_action_tier: &str,
@@ -393,6 +428,7 @@ impl PolicyTable {
 ///
 /// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
 /// (`None` when no tiers are defined) or [`PolicyTableRouter::new`].
+#[cfg(feature = "semantic-routing")]
 pub struct PolicyTableRouter {
     /// Swappable so `bro reload` can install a fresh spec into the
     /// *live* transform. The router itself is baked into the built `App` and
@@ -412,6 +448,7 @@ pub struct PolicyTableRouter {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "semantic-routing")]
 struct EvalDecisionObserver {
     pending: Option<PendingEvalDecisionStore>,
     policy: String,
@@ -420,7 +457,93 @@ struct EvalDecisionObserver {
     default_baseline: Option<String>,
 }
 
+#[cfg(feature = "semantic-routing")]
 impl PolicyTableRouter {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::{
+            error::BitrouterError,
+            scheduling::payload::{Weight, compact_dto},
+        };
+        fn pairs(
+            weight: &mut Weight,
+            values: &HashMap<String, String>,
+        ) -> crate::gateway::error::Result<()> {
+            weight.add(
+                values
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<(String, String)>() + 64)
+                    .ok_or(BitrouterError::UpstreamUnavailable)?,
+            )?;
+            for (key, value) in values {
+                weight.string(key)?;
+                weight.string(value)?;
+            }
+            Ok(())
+        }
+        let table = self.table();
+        let mut weight = Weight::new();
+        weight.add(std::mem::size_of::<Self>() + std::mem::size_of::<PolicyTable>() + 256)?;
+        weight.add(
+            table
+                .tiers
+                .capacity()
+                .checked_mul(std::mem::size_of::<(String, PolicyModelTarget)>() + 64)
+                .ok_or(BitrouterError::UpstreamUnavailable)?,
+        )?;
+        for (name, target) in &table.tiers {
+            weight.string(name)?;
+            weight.string(&target.model)?;
+        }
+        pairs(&mut weight, &table.fingerprints)?;
+        pairs(&mut weight, &self.classifier_constraints)?;
+        for value in [
+            &table.default_tier,
+            &table.tool_use_tier,
+            &self.state_namespace,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            weight.string(value)?;
+        }
+        weight.add(
+            table
+                .tool_safe_tiers
+                .capacity()
+                .checked_mul(std::mem::size_of::<String>())
+                .ok_or(BitrouterError::UpstreamUnavailable)?,
+        )?;
+        for tier in &table.tool_safe_tiers {
+            weight.string(tier)?;
+        }
+        let mut bytes = weight.total();
+        for retained in [
+            compact_dto(&self.progress_guard)?,
+            compact_dto(&self.exploration)?,
+        ] {
+            bytes = bytes
+                .checked_add(retained)
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        if let Some(observer) = &self.eval_observer {
+            let mut weight = Weight::new();
+            weight.add(std::mem::size_of::<EvalDecisionObserver>() + 64)?;
+            weight.string(&observer.policy)?;
+            weight.string(&observer.policy_digest)?;
+            if let Some(default) = &observer.default_baseline {
+                weight.string(default)?;
+            }
+            pairs(&mut weight, &observer.route_baselines)?;
+            bytes = bytes
+                .checked_add(weight.total())
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        // Recorder/pending-store services have independent process owners and
+        // budgets. Their Arc handles are included in Self/observer above.
+        Ok(bytes)
+    }
+
     /// Build a static router from the `policy_table:` config, or `None` when the
     /// section is inert (no tiers defined) — mirroring
     /// `FusionAliasConfig::from_settings`, so an unconfigured deployment wires no
@@ -1158,13 +1281,17 @@ impl PolicyTableRouter {
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 fn key_strategy_name() -> &'static str {
     "agent_trace"
 }
 
+#[cfg(feature = "semantic-routing")]
 const MAX_PREDICTION_REASON_CODES: usize = 8;
+#[cfg(feature = "semantic-routing")]
 const PREDICTION_CONFIDENCE_PPM_MAX: u32 = 1_000_000;
 
+#[cfg(feature = "semantic-routing")]
 fn prediction_role_name(role: NextStepRole) -> &'static str {
     match role {
         NextStepRole::Orchestrate => "orchestrate",
@@ -1176,6 +1303,7 @@ fn prediction_role_name(role: NextStepRole) -> &'static str {
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 fn prediction_action_name(action: NextActionClass) -> &'static str {
     match action {
         NextActionClass::ReasonOrPlan => "reason_or_plan",
@@ -1188,6 +1316,7 @@ fn prediction_action_name(action: NextActionClass) -> &'static str {
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 fn prediction_confidence_ppm(confidence: f32) -> u32 {
     let scaled = f64::from(confidence) * f64::from(PREDICTION_CONFIDENCE_PPM_MAX);
     if scaled.is_nan() || scaled <= 0.0 {
@@ -1200,6 +1329,7 @@ fn prediction_confidence_ppm(confidence: f32) -> u32 {
     u32::try_from(rounded).unwrap_or(PREDICTION_CONFIDENCE_PPM_MAX)
 }
 
+#[cfg(feature = "semantic-routing")]
 fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
     evidence
         .iter()
@@ -1212,6 +1342,7 @@ fn prediction_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(feature = "semantic-routing")]
 fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
     evidence
         .iter()
@@ -1232,6 +1363,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 /// `bitrouter/auto` request left to this table would be fingerprinted and
 /// rewritten by the legacy inline policy table instead of reaching the signed
 /// policy its slug addresses.
+#[cfg(feature = "semantic-routing")]
 fn is_explicitly_routed(model: &str) -> bool {
     model.starts_with('@') || model.contains(':') || crate::config::presets::is_reserved(model)
 }
@@ -1241,6 +1373,7 @@ fn is_explicitly_routed(model: &str) -> bool {
 /// `bitrouter/fusion` alias injects (id `bitrouter.fusion`) or a caller's
 /// `{"type":"bitrouter:advisor"}`. Such a request is driven by a server-tool
 /// flow that already chose its outer model, so the policy table leaves it alone.
+#[cfg(feature = "semantic-routing")]
 fn carries_bitrouter_server_tool(prompt: &Prompt) -> bool {
     prompt.tools.iter().any(|tool| match tool {
         Tool::ProviderDefined { id, name, .. } => {
@@ -1253,12 +1386,13 @@ fn carries_bitrouter_server_tool(prompt: &Prompt) -> bool {
 /// Whether `name` carries the explicit `bitrouter:` / `bitrouter.` namespace —
 /// the documented `{"type":"bitrouter:<tool>"}` server-tool declaration form, as
 /// opposed to a bare or foreign-namespaced tool a provider defines itself.
+#[cfg(feature = "semantic-routing")]
 fn is_bitrouter_namespaced(name: &str) -> bool {
     name.split_once([':', '.'])
         .is_some_and(|(namespace, _)| namespace == "bitrouter")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 mod tests {
     use std::collections::BTreeMap;
 

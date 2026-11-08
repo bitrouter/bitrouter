@@ -623,6 +623,52 @@
       ],
       "type": "object"
     },
+    "DestinationConfig": {
+      "additionalProperties": false,
+      "description": "Exact configured destination. Credentials are never part of this declaration.",
+      "properties": {
+        "account": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "endpoint": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+          "type": "string"
+        },
+        "max_active": {
+          "default": 8,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "model": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "model",
+        "endpoint"
+      ],
+      "type": "object"
+    },
     "EvalAuthorityConfig": {
       "description": "Identity and metric scope admitted for one evaluator authority.",
       "properties": {
@@ -939,6 +985,99 @@
         }
       ]
     },
+    "InferenceRoutingConfig": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "destinations": {
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "destinations"
+            ]
+          }
+        }
+      ],
+      "description": "Local provider scheduling settings, disabled by default.",
+      "properties": {
+        "destinations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DestinationConfig"
+          },
+          "maxItems": 4096,
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "#/$defs/LimitConfig",
+          "default": {
+            "max_active": 128,
+            "max_state_bytes": 33554432,
+            "max_state_entries": 4096,
+            "max_uncertain": 128,
+            "uncertainty_ttl_ms": 120000
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/Policy",
+          "default": "load_aware"
+        },
+        "prefix": {
+          "$ref": "#/$defs/PrefixConfig",
+          "default": {
+            "max_bytes": 16777216,
+            "max_entries": 65536,
+            "max_projection_bytes": 32768,
+            "ttl_ms": 120000
+          }
+        },
+        "queue": {
+          "$ref": "#/$defs/QueueConfig",
+          "default": {
+            "max_bytes": 67108864,
+            "max_requests": 1024,
+            "per_tenant_bytes": 8388608,
+            "per_tenant_requests": 128,
+            "request_timeout_ms": 120000,
+            "wait_timeout_ms": 2000
+          }
+        },
+        "tenant_weights": {
+          "additionalProperties": {
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "default": {},
+          "maxProperties": 128,
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "Ingress": {
       "additionalProperties": false,
       "description": "Aggregate upload ownership, separate from the fixed protocol body ceiling.",
@@ -967,6 +1106,48 @@
           "type": "string"
         }
       ]
+    },
+    "LimitConfig": {
+      "additionalProperties": false,
+      "description": "Process-local concurrency, uncertain work retention and logical state budgets.",
+      "properties": {
+        "max_active": {
+          "default": 128,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_state_bytes": {
+          "default": 33554432,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_state_entries": {
+          "default": 4096,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_uncertain": {
+          "default": 128,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "uncertainty_ttl_ms": {
+          "default": 120000,
+          "format": "uint32",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "Management": {
       "additionalProperties": false,
@@ -1312,6 +1493,14 @@
       },
       "type": "array"
     },
+    "Policy": {
+      "description": "Provider ranking policy within frozen, eligible provider membership.",
+      "enum": [
+        "load_aware",
+        "prefix_affinity"
+      ],
+      "type": "string"
+    },
     "PolicyConfig": {
       "description": "Current routing-policy artifact configuration.",
       "properties": {
@@ -1345,6 +1534,41 @@
           "type": "string"
         }
       ]
+    },
+    "PrefixConfig": {
+      "additionalProperties": false,
+      "description": "Bounds for approximate prefix observations; lengths are bytes, never tokens.",
+      "properties": {
+        "max_bytes": {
+          "default": 16777216,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_entries": {
+          "default": 65536,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_projection_bytes": {
+          "default": 32768,
+          "format": "uint32",
+          "maximum": 1048576,
+          "minimum": 256,
+          "type": "integer"
+        },
+        "ttl_ms": {
+          "default": 120000,
+          "format": "uint32",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "PresetConfig": {
       "description": "An `@preset` definition.",
@@ -1910,6 +2134,55 @@
       "required": [
         "id"
       ],
+      "type": "object"
+    },
+    "QueueConfig": {
+      "additionalProperties": false,
+      "description": "Finite queue storage and total request deadlines, in bytes and milliseconds.",
+      "properties": {
+        "max_bytes": {
+          "default": 67108864,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_requests": {
+          "default": 1024,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "per_tenant_bytes": {
+          "default": 8388608,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "per_tenant_requests": {
+          "default": 128,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "request_timeout_ms": {
+          "default": 120000,
+          "format": "uint32",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "wait_timeout_ms": {
+          "default": 2000,
+          "format": "uint32",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "RateLimit": {
@@ -3136,6 +3409,37 @@
         "mode": "local"
       },
       "description": "Explicit local or shared gateway authority. A database URL does not opt in."
+    },
+    "inference_routing": {
+      "$ref": "#/$defs/InferenceRoutingConfig",
+      "default": {
+        "destinations": [],
+        "enabled": false,
+        "limits": {
+          "max_active": 128,
+          "max_state_bytes": 33554432,
+          "max_state_entries": 4096,
+          "max_uncertain": 128,
+          "uncertainty_ttl_ms": 120000
+        },
+        "policy": "load_aware",
+        "prefix": {
+          "max_bytes": 16777216,
+          "max_entries": 65536,
+          "max_projection_bytes": 32768,
+          "ttl_ms": 120000
+        },
+        "queue": {
+          "max_bytes": 67108864,
+          "max_requests": 1024,
+          "per_tenant_bytes": 8388608,
+          "per_tenant_requests": 128,
+          "request_timeout_ms": 120000,
+          "wait_timeout_ms": 2000
+        },
+        "tenant_weights": {}
+      },
+      "description": "Provider scheduling configuration. Activation is disabled and not yet available."
     },
     "inherit_defaults": {
       "default": true,

@@ -71,8 +71,9 @@ replay and pruning remain available without the learning runtime.
 `bro build-info` reports the local executable's version, source revision (or
 `null` when unavailable), target platform, sorted effective features, distribution
 profile and handoff fingerprint. It reads no configuration or service storage.
-Use `--human` for a text view. The profile is `gateway` for no optional features,
-`full` for the manifest's default capability set, and `custom` for other sets.
+Use `--human` for a text view. The profile is `gateway` for exactly `semantic-routing`,
+`gateway-shared` for `db-postgres,multi-instance,semantic-routing`, `full` for the
+manifest's default capability set, and `custom` for other sets.
 Aliases and transitive features are normalized at build time; `--all-features`
 is a custom selection, not the official full profile.
 

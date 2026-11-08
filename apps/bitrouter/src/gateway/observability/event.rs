@@ -16,6 +16,8 @@ struct EventEntry {
     name: &'static str,
     typed: Arc<dyn Any + Send + Sync>,
     json: serde_json::Value,
+    #[cfg(feature = "inference-routing")]
+    retained: Option<crate::gateway::scheduling::payload::Tracked>,
 }
 
 /// Per-request, pull-based event bus. Stores every event emitted during the
@@ -42,7 +44,51 @@ impl EventBus {
             name,
             typed: Arc::new(event),
             json,
+            #[cfg(feature = "inference-routing")]
+            retained: None,
         });
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn emit_accounted<E: PipelineEvent>(
+        &mut self,
+        event: E,
+        measure: fn(&E) -> crate::gateway::error::Result<u64>,
+    ) {
+        self.emit(event);
+        if let Some(entry) = self.events.last_mut() {
+            let value = entry.typed.clone();
+            entry.retained = Some(Arc::new(move || {
+                measure(
+                    value
+                        .downcast_ref::<E>()
+                        .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?,
+                )
+            }));
+        }
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_bytes(&self) -> crate::gateway::error::Result<u64> {
+        let mut bytes = (self.events.capacity() * (std::mem::size_of::<EventEntry>() + 64)) as u64;
+        for entry in &self.events {
+            let retained = entry.retained.as_ref().ok_or_else(|| {
+                crate::gateway::error::BitrouterError::bad_request(
+                    "scheduled queue cannot retain an unaccounted event",
+                )
+            })?;
+            // Event JSON is a fresh serialization. Charge its tree storage and
+            // the independently attested typed payload, including skipped data.
+            bytes = bytes
+                .checked_add(retained()?)
+                .and_then(|n| {
+                    n.checked_add(
+                        crate::gateway::scheduling::payload::compact_dto(&entry.json).ok()?,
+                    )
+                })
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+        }
+        Ok(bytes)
     }
 
     /// Whether an event of type `E` has been emitted (compile-time type-safe).

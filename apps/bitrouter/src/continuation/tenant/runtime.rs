@@ -45,6 +45,57 @@ pub(crate) struct Runtime {
     delivered: Mutex<Option<crate::gateway::model::protocol::responses::AssistantTurnCommitment>>,
 }
 impl Runtime {
+    #[cfg(feature = "inference-routing")]
+    fn scheduling_retained_bytes(&self) -> PipelineResult<u64> {
+        let request = self
+            .request
+            .lock()
+            .map_err(|_| self.error(ErrorCode::AuthorityUnavailable))?;
+        let mut bytes = std::mem::size_of::<Self>() as u64 + 4096;
+        if let Some(request) = request.as_ref() {
+            if request.previous.is_some() {
+                return Err(BitrouterError::bad_request(
+                    "scheduled continuation history is unsupported",
+                ));
+            }
+            let ticket = &request.reservation.ticket;
+            for value in [
+                &ticket.public_id,
+                &ticket.physical,
+                &ticket.generation,
+                &ticket.producer,
+            ] {
+                bytes = bytes
+                    .checked_add(value.capacity() as u64)
+                    .ok_or(BitrouterError::UpstreamUnavailable)?;
+            }
+        }
+        drop(request);
+        let finalized = self
+            .finalization
+            .lock()
+            .map_err(|_| self.error(ErrorCode::AuthorityUnavailable))?
+            .is_some();
+        let proved = matches!(
+            &*self
+                .proof
+                .lock()
+                .map_err(|_| self.error(ErrorCode::AuthorityUnavailable))?,
+            Ok(Some(_))
+        );
+        let delivered = self
+            .delivered
+            .lock()
+            .map_err(|_| self.error(ErrorCode::AuthorityUnavailable))?
+            .is_some();
+        if finalized || proved || delivered {
+            return Err(BitrouterError::bad_request(
+                "completed continuation cannot enter scheduling queue",
+            ));
+        }
+        Ok(bytes)
+    }
+
     fn error(&self, code: ErrorCode) -> BitrouterError {
         self.execution.reject(code)
     }
@@ -205,6 +256,9 @@ impl Runtime {
             {
                 // Cross-wire rendering still needs the no-parent egress check.
                 // There is no continuation reservation or lookup on this branch.
+                #[cfg(feature = "inference-routing")]
+                ctx.insert_accounted_extension(self.clone(), Self::scheduling_retained_bytes);
+                #[cfg(not(feature = "inference-routing"))]
                 ctx.insert_extension(self.clone());
             }
             return Ok(HookDecision::Allow);
@@ -236,6 +290,9 @@ impl Runtime {
             .request
             .lock()
             .map_err(|_| self.error(ErrorCode::AuthorityUnavailable))? = Some(request);
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(self.clone(), Self::scheduling_retained_bytes);
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(self.clone());
         let previous = ctx
             .require_generation_prompt()?

@@ -32,20 +32,21 @@ manual path even when they share its installation directory.
   `--features <sorted-effective-features>` when the feature set is nonempty.
   Use the exact command printed for that binary; a generic full installer or
   package-manager upgrade would change its capabilities. An empty feature set
-  is the gateway profile; it keeps `--no-default-features` and omits `--features`.
-  The `gateway-shared` profile retains exactly `db-postgres,multi-instance`;
+  is a custom gateway-only build; it keeps `--no-default-features` and omits `--features`.
+  The `gateway` archive selects `semantic-routing`. The `gateway-shared` profile
+  retains exactly `db-postgres,multi-instance,semantic-routing`;
   its source command includes both normalized feature names. Enabling only
   `core` is a custom profile. Cargo installs into its configured bin directory, so select that binary explicitly if the current
   installation is elsewhere.
 - A gateway release archive is also a manual update path: download the archive
   and checksum for the same release and target, verify and extract it, then
   inspect `bro build-info` before switching the service executable. Require
-  `profile: "gateway"` and an empty feature list. `bro update` does not download
+  `profile: "gateway"` and `["semantic-routing"]`. `bro update` does not download
   these archives automatically. Keep active-work and explicit restart checks;
   never substitute a full-product archive for a missing gateway asset.
 - Shared gateway archives are named `bitrouter-gateway-shared-<target>.tar.gz`
   (`.zip` on Windows), with a matching `.sha256` file. Require
-  `profile: "gateway-shared"` and exactly `["db-postgres", "multi-instance"]`
+  `profile: "gateway-shared"` and exactly `["db-postgres", "multi-instance", "semantic-routing"]`
   in both `manifest.json` and `bro --json build-info`. Use the owning service
   manager for shared rollout/drain; this profile does not gain a local-daemon
   handoff or a release-installer receipt. `bro update` keeps delegating to the
@@ -93,3 +94,9 @@ must match the profile, target and effective features. Legacy caches without
 artifact identity are treated as unknown, and gateway/gateway-shared/custom installations
 never reuse or advertise full-profile release checks. Disable the nudge with
 `BITROUTER_NO_UPDATE_CHECK=1`.
+
+`semantic-routing` and `inference-routing` can be built independently. Without
+semantic routing, use concrete models/static routers; semantic policy bindings
+and `decision_model` fail validation. `inference_routing` defaults to disabled;
+`enabled: true` currently fails explicitly even when compiled. No scheduler
+activation, queue or prefix affinity is available yet.

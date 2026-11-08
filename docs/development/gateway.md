@@ -135,18 +135,20 @@ Gateway cache membership, upstream metadata and downloaded skill bytes do not
 confer native consent or workspace authority. Keep those boundaries with
 [harness resource loading](harness-resources.md).
 
-## Proposed provider scheduling boundary
+## Provider scheduling boundary
 
-Status: **proposed, unimplemented, pending review**. This is the concrete module
-contract for the provider inference router; existing behavior above remains the
-reference until implementation. Configuration belongs solely to the
-[canonical configuration proposal](../specs/configuration/README.md#proposed-inference-routing-configuration).
+Status: **local provider scheduling implemented, explicitly enabled**.
+Gateway-only assembly omits the semantic policy runtime, selector and decision
+backend. Semantic builds retain model decisions. Scheduling starts after route
+hooks and frozen request checks; disabled requests retain the existing chain and
+allocate no queue, reservation or prefix state. Configuration belongs to the
+[canonical configuration contract](../specs/configuration/README.md#inference-routing-configuration).
 The runtime uses application modules, with no new crate, RPC or public plugin ABI.
 
 ### Composition and feature ownership
 
 Keep `ModelSelector::prepare_selection/select_variant` as the semantic seam.
-`PolicyRuntime` and semantic assessment/decision-model execution move behind
+`PolicyRuntime`, policy selection and the TypeSafe decision transport compile behind
 `semantic-routing`. Static resolution, request checks, continuation validation,
 protocol conversion, execution and settlement stay in the gateway.
 Pure input validation does not require either routing feature.
@@ -155,20 +157,23 @@ Pure input validation does not require either routing feature.
 | --- | --- | --- |
 | No default features | Explicit model/static mapping | Existing static chain |
 | semantic-routing | Existing policy selector | Existing static chain |
-| inference-routing | Explicit model/static mapping | Opt-in scheduler |
-| Both routing features | Semantic decision first | Opt-in scheduler for that decision |
+| inference-routing | Explicit model/static mapping | Local scheduling when enabled |
+| Both routing features | Semantic decision first | Local scheduling when enabled |
 
 Neither routing feature enables `core`, `harness`, MCP or an exporter.
 Full/default builds include semantic-routing for compatibility and compile
 inference-routing with activation default-off. Existing gateway release archives
-retain semantic capability by explicitly selecting semantic-routing when their
-manifest is changed; the truly minimal no-default-feature build is separately
-tested as a custom profile. That artifact selection change must be reflected in
-build identities, transition checks and distribution manifests together.
+retain semantic capability by explicitly selecting semantic-routing; the truly
+minimal no-default-feature build is tested separately as a custom profile.
+Build identities, transition checks and distribution manifests use these same
+feature sets.
 A feature-off build rejects configured semantic policies and decision-model
 activation, rather than ignoring them. Static router/check bindings remain valid.
 
-Semantic auxiliary inference uses an assembly-created dedicated pipeline with
+The existing semantic assessment uses the assembly-owned single-attempt typed
+decision executor, separate from generation and its model selector. It cannot
+re-enter selection through a generation alias. The following auxiliary generation
+contract applies when that path is introduced: an assembly-created pipeline with
 concrete model, no model selector and no decision runtime. Its caller, cost
 budget, cancellation and deadline are inherited; existing paid-work gates remain.
 An internal operation tag forbids recursion. It may share provider scheduling
@@ -184,8 +189,91 @@ from its own authenticated policy.
 
 ### Minimal internal interfaces and consumers
 
-The following signatures describe implementation contracts, not currently
-exported Rust APIs. Add types only with the consuming implementation.
+The implemented reservation foundation is `gateway::scheduling`. Assembly owns
+one runtime owner; tenant service clones share its write-once attachment and
+per-execution pipelines borrow it without closing the pool on completion. The
+owner reads the routing table's published configuration/generation at entry.
+Each enabled request keeps an immutable Scheduler snapshot (policy, DRR weights,
+absolute time budget and prefix projector). One lazily allocated pool/worker
+survives disable/re-enable, including active and uncertain work. Disabled startup
+creates only the owner, with no pool or worker. The existing reload coordinator
+validates the complete candidate before routing-table publication; mixed cold/hot
+changes fail before publication. No new reload wire participant is introduced.
+Old queued entries retain their own weight/policy/TTL. Prefix namespaces separate
+generations and evidence retains its original TTL. Shutdown closes the shared
+pool and joins its sole worker. `drain_pending_settlements` remains a reusable
+settlement barrier. Required local/owned drains terminate an allocated pool;
+before first activation the legacy absent-scheduler drain remains reusable.
+A previously enabled pool is still terminal when currently disabled. Explicit
+process-owner shutdown always closes admission.
+
+For a scheduled attempt, the frozen ordinal, process generation and exact target
+allocation identify the candidate; destination tuple and protocol are checked again
+at booking and send. This handle is not credential or execution authority. The
+pipeline owns the non-cloneable reservation before `reached_hop`; a successful
+stream handoff transfers it to the returned producer. Only the concrete HTTP
+send and protocol collectors emit mandatory evidence. Non-2xx rejection follows
+the existing receipt status rule; successful headers retain capacity until body
+and terminal/EOF validation. Ambiguous errors stop fallback even where disabled
+ordinary execution retains a more permissive legacy policy.
+
+Every active booking reserves an uncertainty credit. Drop before send rolls back;
+drop or timeout after send retains work until explicit terminal evidence or TTL.
+The owned reaper and synchronous admission cleanup bound uncertainty and sample
+retention; expiry never changes a durable receipt or creates retry permission.
+Shutdown closes booking/send admission and joins the reaper, reporting remaining
+active custody rather than claiming provider termination. Inference settings
+remain restart-required, so reload cannot reconstruct or reset live counters.
+The reaper enforces deadlines independently of observer awaits and stream polls.
+Expired unsent owners cannot resume a send; expired sent owners become uncertain.
+Ownership entries and bytes remain charged until the producer actually drops,
+even after advisory uncertainty expires. Scheduled HTTP uses the existing
+no-redirect/no-retry client, and validates terminal ordering before exposing
+stream parts. Only explicit gateway fallback can start another reserved attempt.
+
+Read-only inspection exposes local counts, outstanding estimated work, typed
+outcome counters and success-conditioned timing summaries. It never books,
+expires, samples or warms state. Measurements retain at most 32 samples per
+destination, separated by input/output bucket and response mode, for five minutes;
+three comparable samples are required for a mean. JSON duration is not TTFT.
+The current work estimate counts canonical serialized prompt bytes without
+retaining an encoded copy. Adapter prefix projections use independent framing
+and do not change that frozen work charge.
+State charges destination strings, fixed attempt records and bounded samples
+against configured logical entry/byte limits before retention. These limits are
+not a prediction of allocator RSS or upstream physical capacity.
+
+The local fair queue enforces global and per-tenant request/retained-byte limits
+before storing a waiter. One owned worker dispatches pinned FIFO destination lanes using
+weighted tenant deficit, with a persistent cursor and a 64-entry tick. It also
+owns reservation expiry; a fully capacity-blocked pass sleeps on actual changes
+or the earliest deadline. Cancellation removes the waiter, and an abandoned grant
+releases its reservation. Closing drains waiters with the existing unavailable
+error before joining the worker. Read-only trace inspection exposes bounded totals
+for admission, dispatch, full, expiry, cancellation, closure and state refusal,
+plus current count, bytes and capacity/credit waits, without tenant labels.
+Adaptive first attempts have individually charged lanes, so a pinned request
+cannot trap work eligible for another destination. All lanes within a tenant
+spend the same deficit and preserve the older dispatchable head's earning turn.
+
+Tenant identity comes from admitted TenantExecution or authenticated caller
+identity. Anonymous/local work shares one local flow. The existing configuration
+defines tenant weights and a single default service class; request headers and
+`service_tier` cannot select priority. No provider RPM or health gate runs while
+waiting. After a grant the existing live authority, rate and receipt gates run.
+
+Queue bytes cover request-owned prompt/context storage, retained target copies,
+host DTO events and extensions, including spare String/Vec capacity. Opaque JSON
+map storage and inbound header backing are compacted before retention. Shared
+deployment and authority graphs stay with their existing owners and budgets.
+Private host producers explicitly account skipped/opaque state; unaccounted
+plugin events/extensions are rejected before queue admission. This is a logical
+allocation bound, not an allocator RSS guarantee. Disabled assembly does not
+allocate the private accounting map or callbacks. Existing native/continuation
+history and shared scheduled roots remain unsupported.
+
+The following signatures describe ownership contracts. Concrete internal names
+may differ; the operator embedding API is `gateway::planning::rank_manifest`.
 
 | Interface | Input / output | Consumer |
 | --- | --- | --- |
@@ -332,6 +420,84 @@ system/tools/messages and all model-input-affecting controls. No digest export.
 TTL bounds belief; LRU bounds index memory. Tentative scoring stays disabled
 for this version; reservations still add load immediately. No shared-prefill claim.
 
+### Local approximate prefix evidence
+
+The prefix-affinity runtime now owns a private, process-keyed index. Each built-in
+adapter owns a versioned semantic projection: typed generation controls and tool
+prelude, then system instructions and ordered message/content boundaries. Frames
+are UTF-8 with explicit lengths and typed delimiters; this is not a serialization
+of HTTP or a claim about engine tokenization. Stream/store/request identifiers and
+credentials are excluded from content. Rendering compatibility, model, provider,
+endpoint/account, configuration generation and credential scope partition the
+cache domain. Tenant execution uses its retained credential resource revision;
+static transport uses a blinded credential commitment, never a raw key identifier.
+Existing preflight still rejects dynamic auth/body appliers before scheduling.
+
+Projection hashes at most max_projection_bytes in complete 256-byte blocks using
+chained HMAC-SHA256. Discarded string tails contribute their byte lengths without
+being scanned/hashed; a structural visit cap equal to the projection limit bounds
+large collections. The full framed byte length remains the match denominator.
+No raw prompt, credential, usage object or exportable digest is stored in the index.
+Only private request/attempt metadata holds bounded digest vectors. Unknown raw
+provider extras, unproven metadata, multimodal/opaque content, dynamic header
+cache domains or exhausted projection work disable affinity without altering a
+valid request. Text, function tool schemas and typed ephemeral cache breakpoints
+are supported conservatively; changes to these projections require adapter
+version changes. Cross-tenant cache sharing is absent; anonymous callers receive no affinity.
+
+Each block contribution has independent attempt ownership. Booking records short
+(at most one second) tentative placement; send records recent exposure; validated
+success records successful exposure. Rejection/unsent cleanup removes only that
+attempt. Unknown outcomes retain diagnostic exposure but score zero. Cached read/
+write counts require normalized provider-reported evidence; missing cache fields
+remain unknown, explicit numeric zero is retained, estimates are ignored. Cached
+usage never asserts residency of a particular block or adds affinity credit.
+
+TTL/decay and an LRU of observation updates bound index belief and memory separately
+from reservation custody. Read-only lookup neither refreshes LRU nor inserts or
+expires data. Only contiguous complete-block matches count; current-attempt
+exclusion is available and pre-booking inspection cannot self-warm. Per-entry
+bounds include all three ordered indexes; live attempt digest storage is charged
+to the existing state budget. Index pressure may discard advisory evidence or
+omit tracking, and never frees capacity, changes receipts or grants replay.
+The queue's owned worker also reaps prefix deadlines. Default load-only scheduling
+creates no prefix projector/index. Internal provider policy consumes only the
+read-only matching path, without scanning diagnostic counters or updating evidence.
+Public activation uses the same bounded queue, evidence and authority path.
+
+### Provider planning implementation
+
+The queue worker refreshes destination pressure, fresh shape-qualified latency
+and optional prefix evidence immediately before the first ordinary booking.
+Ranking and booking share the scheduler mutex; no provider, authority or health
+owner is called under that lock. The frozen score above uses checked u128 rational
+cross-products; common denominators cancel without rounding pressure or score
+ties. Affinity is already rounded down to millionths by the prefix index.
+
+Rank the bookable candidates repeatedly under the 110% pressure band, choosing
+minimum discounted score and applying latency only when every exact-score tie
+has at least three fresh matching samples. Otherwise choose original ordinal.
+Unavailable candidates follow in original ordinal order. This full sequence is
+frozen before the first per-hop execution admission. Every later attempt queues
+for its next original target and never reranks. Current live admission may still
+refuse it; the existing fallback classifier and unknown-outcome fences decide
+whether another attempt is legal. Target storage and model/prompt are unchanged.
+Ranking is bounded by the frozen membership cap of 4096; temporary ranking memory
+is finite, and retained order storage is charged before queue admission.
+The gateway records an accounted compatibility mask using pure executor input
+preflight, without eagerly invoking conversion observers or authority rejection.
+First adaptive ranking excludes known incompatible inputs and appends their
+original ordinals after the eligible sequence. Reached exclusions still run the
+existing lazy callbacks/aggregation without queueing. All-excluded input bypasses
+the queue entirely. Pinned/ordered and frozen fallback candidates run existing
+per-hop conversion/native-control admission before any queue wait or DRR charge.
+
+An adaptive first waiter can inspect any destination in its frozen set, while
+subsequent attempts and caller-supplied ordered requests remain pinned. Shared
+pressure includes reservations, sends and uncertainty, so the next queued request
+sees the previous grant before it scores. Foreign instance/generation handles
+are refused. No booking race spins or independent health circuit is introduced.
+
 ### Supported roots and hosted planning
 
 Initial scheduled roots are static Chat Completions, Responses and Messages,
@@ -352,9 +518,18 @@ does not warm the prefix index and promises no future availability.
 The serving scheduler enforces local fairness/concurrency on that fixed sequence.
 It never reranks accepted input. The official server exposes no new planner RPC
 and does not automatically convert ordinary inference credentials into operator
-planning authority. Operator-host integration tests are the first composition
-consumer of the shared ranking function; trusted embedding can use that same
-application-owned function without moving it into the SDK.
+planning authority. Operator-host integration tests consume the same application-owned
+ranking function as the queue. Trusted embedding calls
+`gateway::planning::rank_manifest` with existing capabilities and manifest, an
+explicit compatible subset represented by original-ordinal `Signal` values,
+one fixed attempt work charge and the policy. The host owns model compatibility
+and comparable bucket/mode telemetry; the helper does not infer them from opaque
+model names. Missing latency remains None. The helper validates the manifest,
+negotiated attempt ceiling, installation/authority binding and supplied ordinals,
+then returns the existing explicit v2 binding. It neither truncates a selection
+nor supplies a generation-defaults approval; callers needing defaults use the
+existing explicit reviewed binding workflow. No ranking code moves into the SDK,
+and no runtime observation is an execution grant.
 
 Ordinary nonordered tenant candidates can be ranked only inside their retained
 authorized set. Profile-protected routes still require explicit ordered mode.
@@ -362,7 +537,7 @@ Existing v1/v2 messages, private signatures and receipt formats are unchanged.
 
 ### Acceptance contract
 
-Before activation, test all four reduced-feature compositions, disabled
+Maintain tests for all four reduced-feature compositions, disabled
 compatibility, semantic recursion bypass, both assembly paths, order preservation,
 authority revocation during queue/reservation, legacy/profiled RPM differences,
 race-limited bookings, idempotent terminal/drop/late-terminal cleanup, bounded
@@ -376,3 +551,30 @@ no-cache fixture. Report successes, refusals, failures and workload variability;
 lower throughput cannot manufacture a latency improvement. Warm-cache results
 must compare load-aware and session-stickiness baselines. These are acceptance
 targets, not measured properties.
+
+### Local composition verification
+
+`routing_composition` covers static/semantic selection with JSON and SSE, explicit
+scheduling, missing-feature rejection, hot reload and cold-change refusal. Its
+Cargo-built `routing_topology_fixture` launches two isolated production gateway
+assemblies and an HTTP provider in separate owned processes. Inference builds
+hold one provider stream while selecting a different provider; semantic builds
+choose the model on the user side. The test also checks generation constraints,
+shrinking deadlines, stream shutdown, bounded attempts and provider-wire privacy.
+
+Run the same suite in every reduced build (no Core or Harness needed):
+
+```sh
+for features in '' semantic-routing inference-routing semantic-routing,inference-routing; do
+  cargo test -p bitrouter --no-default-features --features "$features" --test routing_composition
+done
+```
+
+The test builds its matching Cargo fixture if none is prebuilt. CI can build the
+example first and set `BITROUTER_TEST_EXAMPLES_DIR` and
+`BITROUTER_TEST_PREBUILT_ONLY=1`; the fixture's reported capabilities must match
+the test binary. Never reuse an all-feature fixture for a reduced-feature test.
+Children are isolated from ambient credentials, and killed and reaped on failure.
+This establishes local synthetic behavior, not provider savings or production
+performance. Effectiveness and release performance budgets above require their
+separate workload measurements.

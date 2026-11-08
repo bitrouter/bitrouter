@@ -128,6 +128,7 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
             selections.extend(definition.tiers.values().map(|target| target.model.clone()));
             // Construction qualifies the immutable in-memory policy path without
             // introducing a shared backend or any policy-file access.
+            #[cfg(feature = "semantic-routing")]
             if !config.trajectory.enabled {
                 crate::policy_lock::PolicyRuntime::from_document(
                     &config,

@@ -37,6 +37,8 @@ mod canonical;
 mod defaults;
 mod envelope;
 mod native_controls;
+#[cfg(feature = "inference-routing")]
+mod planning;
 mod predecessor;
 mod private_adapter;
 mod profiled;
@@ -188,6 +190,8 @@ async fn ordered_provider(
 }
 
 struct OrderedHarness {
+    #[cfg(feature = "inference-routing")]
+    scheduling_destinations: Vec<crate::config::inference_routing::DestinationConfig>,
     fixture: Fixture,
     route: ResourceRef,
     revision: ConfigurationRevision,
@@ -201,6 +205,19 @@ struct OrderedHarness {
     _directory: tempfile::TempDir,
 }
 impl OrderedHarness {
+    #[cfg(feature = "inference-routing")]
+    fn install_scheduler(&self) -> Result<Arc<crate::gateway::scheduling::Scheduler>> {
+        let config = crate::config::inference_routing::InferenceRoutingConfig {
+            destinations: self.scheduling_destinations.clone(),
+            ..Default::default()
+        };
+        let scheduler = crate::gateway::scheduling::Scheduler::new(&config, 1)?;
+        self.fixture
+            .service
+            .clone()
+            .with_scheduler(Some(scheduler.clone()))?;
+        Ok(scheduler)
+    }
     async fn new(count: usize, limit: u8, malformed: Option<usize>) -> Result<Self> {
         Self::with_defaults(count, limit, malformed, Value::Null).await
     }
@@ -340,6 +357,8 @@ impl OrderedHarness {
         };
         let route = reference(ResourceKind::Route, MODEL)?;
         let mut providers = serde_json::Map::new();
+        #[cfg(feature = "inference-routing")]
+        let mut scheduling_destinations = Vec::new();
         let mut endpoints = Vec::new();
         let mut credentials = Vec::new();
         let mut definitions = Vec::new();
@@ -355,6 +374,15 @@ impl OrderedHarness {
             } else {
                 base.clone()
             };
+            #[cfg(feature = "inference-routing")]
+            scheduling_destinations.push(crate::config::inference_routing::DestinationConfig {
+                id: provider.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                endpoint: api_base.clone(),
+                account: None,
+                max_active: 1,
+            });
             providers.insert(provider.clone(), json!({"api_base":api_base, "api_protocol":[{"*":"chat_completions"}], "models":[{"id":model}]}));
             endpoints.push(json!({"provider":provider, "service_id":model}));
             definitions.push(json!({"reference":credential,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}}));
@@ -496,6 +524,8 @@ impl OrderedHarness {
                 async move { axum::serve(listener, app).await },
             ));
         Ok(Self {
+            #[cfg(feature = "inference-routing")]
+            scheduling_destinations,
             fixture,
             route,
             revision,

@@ -565,6 +565,10 @@ pub trait StreamDecoder: Send {
     /// Feed one SSE event; emit zero or more canonical parts.
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>>;
 
+    /// Opt in to additional protocol terminal-order checks. Canonical batch
+    /// validation remains the executor's responsibility.
+    fn enforce_terminal_order(&mut self) {}
+
     /// Validated provider termination held back for trailing usage. Observing
     /// this fact does not authorize delivery or flush/consume decoder state.
     fn pending_terminal(&self) -> Option<StreamPart> {

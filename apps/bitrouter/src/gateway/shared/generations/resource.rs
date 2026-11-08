@@ -117,6 +117,7 @@ impl Resource {
                 auth_appliers: input.auth_appliers,
                 correlation_key: input.correlation_key,
                 policies: input.policies,
+                #[cfg(feature = "semantic-routing")]
                 policy_lock: input.policy_lock,
             };
             let assembled = build_shared_app(&input.config, &inputs).await?;

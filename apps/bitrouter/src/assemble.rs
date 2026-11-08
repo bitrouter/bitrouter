@@ -133,6 +133,7 @@ pub struct Assembled {
     pub policy_store: Arc<PolicyStore>,
     /// Live named routing policies loaded from `policy-lock.yaml`. The model
     /// selector and daemon reloader share this last-known-good registry.
+    #[cfg(feature = "semantic-routing")]
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
     /// explicitly enabled; this handle shares the serving routing snapshots.
@@ -145,9 +146,9 @@ pub struct Assembled {
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
     pub continuation_registry: ContinuationRegistry,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     pub(crate) pending_eval_decisions: PendingEvalDecisionStore,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
     #[cfg(feature = "core")]
@@ -197,6 +198,7 @@ pub(crate) struct SharedAssembly {
     pub auth_appliers: AuthAppliers,
     pub correlation_key: crate::trajectory::canonical::CorrelationKey,
     pub policies: Vec<crate::policy::Policy>,
+    #[cfg(feature = "semantic-routing")]
     pub policy_lock: Option<crate::policy_lock::PolicyLock>,
 }
 
@@ -414,7 +416,9 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
 }
 
 fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
+    config.validate_router_config()?;
     config.tenancy.validate(config)?;
+    config.inference_routing.validate_destinations(config)?;
     crate::telemetry::receipt_latency::Config::read(config)?;
     config
         .gateway_state
@@ -667,6 +671,7 @@ async fn assemble_app(
     validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
     let receipt_observation_config = crate::telemetry::receipt_latency::Config::read(config)?;
+    #[cfg(feature = "semantic-routing")]
     let decision_runtime = config
         .decision_model
         .as_ref()
@@ -1160,6 +1165,7 @@ async fn assemble_app(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
+    #[cfg(feature = "semantic-routing")]
     let policy_decision_recorder = if is_shared {
         None
     } else {
@@ -1167,6 +1173,7 @@ async fn assemble_app(
             .map_err(anyhow::Error::from)?
             .map(Arc::new)
     };
+    #[cfg(feature = "semantic-routing")]
     if policy_decision_recorder.is_some() {
         tracing::info!(
             env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
@@ -1262,13 +1269,14 @@ async fn assemble_app(
     } else {
         None
     };
+    #[cfg(feature = "semantic-routing")]
     let trajectory_runtime = trajectory_services
         .as_ref()
         .map(|(runtime, _)| runtime.clone());
     let trajectory_for_settlement = trajectory_services
         .as_ref()
         .and_then(|(_, settlement)| settlement.clone());
-    #[cfg(feature = "multi-instance")]
+    #[cfg(all(feature = "multi-instance", feature = "semantic-routing"))]
     let shared_policy_runtime = shared
         .map(|inputs| {
             crate::policy_lock::PolicyRuntime::from_document(
@@ -1279,8 +1287,9 @@ async fn assemble_app(
             )
         })
         .transpose()?;
-    #[cfg(not(feature = "multi-instance"))]
+    #[cfg(all(not(feature = "multi-instance"), feature = "semantic-routing"))]
     let shared_policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>> = None;
+    #[cfg(feature = "semantic-routing")]
     let policy_runtime = match shared_policy_runtime {
         Some(runtime) => runtime,
         None => crate::policy_lock::PolicyRuntime::new(
@@ -1293,6 +1302,7 @@ async fn assemble_app(
         .await
         .context("loading policy-lock.yaml")?,
     };
+    #[cfg(feature = "semantic-routing")]
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(feature = "core")]
     let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
@@ -1301,6 +1311,7 @@ async fn assemble_app(
         policy_runtime.clone(),
     )
     .with_storage_budget(metering_storage.clone());
+    #[cfg(feature = "semantic-routing")]
     let block_policies = (!is_shared).then(|| {
         crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
             db.clone(),
@@ -1309,11 +1320,14 @@ async fn assemble_app(
         )
         .with_storage_budget(metering_storage.clone())
     });
+    #[cfg(feature = "semantic-routing")]
+    let binding_policies = policy_runtime.clone();
     let canonical_binding = (!is_shared).then(|| {
         let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
             routing_table.clone(),
-            policy_runtime.clone(),
+            #[cfg(feature = "semantic-routing")]
+            binding_policies,
         );
         match &metering_storage {
             Some(storage) => binding.with_storage_budget(storage.clone()),
@@ -1332,10 +1346,10 @@ async fn assemble_app(
         crate::gateway::metering::judge::JudgeCosts::new(db.clone())
             .with_storage_budget(metering_storage.clone())
     });
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     let response_observer_for_tests = response_observer.clone();
     #[cfg(feature = "core")]
     let untracked_recorder = (!is_shared).then(|| {
@@ -1355,6 +1369,12 @@ async fn assemble_app(
     };
     #[cfg(not(feature = "harness"))]
     let session_context = SessionContextHook::default();
+    #[cfg(feature = "inference-routing")]
+    let scheduling = Some(crate::gateway::scheduling::runtime::Runtime::new(
+        routing_table.clone(),
+    )?);
+    #[cfg(feature = "inference-routing")]
+    let scheduling_for_pipeline = scheduling.clone();
     let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -1365,6 +1385,10 @@ async fn assemble_app(
                 lm.owned_drain();
             }
             lm.routing_table(routing_table).executor(executor);
+            #[cfg(feature = "inference-routing")]
+            if let Some(scheduler) = scheduling_for_pipeline {
+                lm.scheduling_runtime(scheduler, true);
+            }
             if !is_shared {
                 lm.native_cost_estimator(pricing_for_native);
                 lm.native_cost_source(Arc::new(metering_for_native_costs));
@@ -1410,14 +1434,17 @@ async fn assemble_app(
                     .copied()
                     .map(std::time::Duration::from_millis),
             );
+            #[cfg(feature = "semantic-routing")]
             lm.model_selector(policy_runtime_for_selector);
             if let Some(runtime) = continuation_for_route {
                 lm.route_hook(runtime);
             }
+            #[cfg(feature = "semantic-routing")]
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             if let Some(binding) = &canonical_binding {
                 lm.route_hook(binding.clone());
             }
+            #[cfg(feature = "semantic-routing")]
             if let Some(policies) = &block_policies {
                 lm.route_hook(policies.clone());
             }
@@ -1476,6 +1503,7 @@ async fn assemble_app(
             if !is_shared {
                 lm.router_preparation_hook(gateway_requests_for_hooks.clone());
             }
+            #[cfg(feature = "semantic-routing")]
             if let Some(policies) = block_policies {
                 lm.router_preparation_hook(policies);
             }
@@ -1545,6 +1573,7 @@ async fn assemble_app(
         Some(transform) => app.prompt_transform(transform),
         None => app,
     };
+    #[cfg(feature = "semantic-routing")]
     let app = match decision_runtime {
         Some(runtime) => app.decision_model(runtime),
         None => app,
@@ -1606,6 +1635,10 @@ async fn assemble_app(
         ),
         None => None,
     };
+    #[cfg(feature = "inference-routing")]
+    let tenancy = tenancy
+        .map(|service| service.with_scheduling_runtime(scheduling))
+        .transpose()?;
     if let (Some(storage), Some(service)) = (&metering_storage, &tenancy)
         && storage.set(service.storage_budget()).is_err()
     {
@@ -1633,6 +1666,7 @@ async fn assemble_app(
         #[cfg(feature = "harness")]
         acp_runtime,
         policy_store: policy_store_for_reload,
+        #[cfg(feature = "semantic-routing")]
         policy_runtime,
         #[cfg(feature = "core")]
         evolution,
@@ -1640,9 +1674,9 @@ async fn assemble_app(
         #[cfg(feature = "core")]
         eval_service,
         continuation_registry,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "semantic-routing"))]
         pending_eval_decisions: pending_eval_decisions_for_tests,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "semantic-routing"))]
         response_observer: response_observer_for_tests,
         #[cfg(feature = "core")]
         trajectory_outbox_publisher,
@@ -3160,7 +3194,7 @@ mod server_tools_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 mod trajectory_assembly_tests {
     use std::collections::BTreeMap;
     #[cfg(feature = "core")]

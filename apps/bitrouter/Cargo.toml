@@ -20,10 +20,13 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql", "http2"]
+default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql", "http2", "semantic-routing", "inference-routing"]
+# Routing capabilities are independent of the native runtime and transports.
+semantic-routing = []
+inference-routing = []
 # The same JSON/SSE API over HTTP/2, including cleartext private-network ingress.
 http2 = ["axum/http2", "reqwest/http2", "bitrouter-sdk/http2", "dep:h2"]
-core = ["dep:rand_distr"]
+core = ["dep:rand_distr", "semantic-routing"]
 harness = ["mcp", "dep:jsonschema", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
 mcp = ["dep:rmcp", "dep:process-wrap"]
 server-tools = ["mcp"]

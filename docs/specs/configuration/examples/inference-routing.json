@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "policy": "prefix_affinity",
   "destinations": [
     {

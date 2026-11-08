@@ -387,22 +387,29 @@ impl SendAdmission {
         &self,
         client: &super::ModelClient,
         request: reqwest::Request,
+        target: &RoutingTarget,
         ctx: &PipelineContext,
         scrubber: &mut super::UpstreamErrorScrubber,
     ) -> Result<reqwest::Response> {
         let cancellation = cancellation(ctx)?;
+        let scheduling = super::scheduling::Attempt::from_context(ctx);
         if let Some(adapter) = &self.adapter {
             use bitrouter_ai::tenancy::private_adapter::{ATTEMPT_HEADER, OUTCOME_HEADER};
 
             capture_adapter_envelope(scrubber, request.headers().get(ATTEMPT_HEADER));
+            scheduling.begin_send(target)?;
             let response = adapter.send(request, &cancellation).await?;
             capture_adapter_envelope(scrubber, response.headers().get(OUTCOME_HEADER));
+            scheduling.headers(response.status().as_u16());
             return Ok(response);
         }
-        client.send(request, &cancellation).await.map_err(|error| {
+        scheduling.begin_send(target)?;
+        let response = client.send(request, &cancellation).await.map_err(|error| {
             transport_failed(ctx, &error);
             scrubber.scrub_error(error.into())
-        })
+        })?;
+        scheduling.headers(response.status().as_u16());
+        Ok(response)
     }
 }
 

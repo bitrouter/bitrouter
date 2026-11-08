@@ -5,6 +5,7 @@
 
 pub mod policy;
 pub mod types;
+#[cfg(feature = "semantic-routing")]
 pub mod typesafe;
 
 use std::sync::Arc;

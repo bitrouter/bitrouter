@@ -41,6 +41,7 @@ pub mod agent;
 pub mod checker;
 pub mod decision;
 pub mod gateway_state;
+pub mod inference_routing;
 pub mod mcp;
 pub mod pattern;
 pub mod presets;
@@ -113,6 +114,8 @@ pub struct Config {
     /// Typed decision backend for native context routing. Absent means the
     /// conservative compiler runs without remote semantic judgments.
     pub decision_model: Option<decision::DecisionModelConfig>,
+    /// Provider scheduling configuration. Activation is disabled and not yet available.
+    pub inference_routing: inference_routing::InferenceRoutingConfig,
     /// The interactive session's own configuration.
     pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
@@ -183,6 +186,7 @@ impl Default for Config {
             tenancy: tenancy::TenancyConfig::default(),
             agent_api: AgentApiConfig::default(),
             decision_model: None,
+            inference_routing: inference_routing::InferenceRoutingConfig::default(),
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
@@ -217,6 +221,17 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        self.inference_routing.validate()?;
+        if !cfg!(feature = "semantic-routing")
+            && (self.decision_model.is_some()
+                || self.policy.path.is_some()
+                || self.policy.mode == PolicyRuntimeMode::Adaptive
+                || self.router_policy_bindings().next().is_some())
+        {
+            return Err(BitrouterError::bad_request(
+                "configured model policies and decision_model require the semantic-routing feature",
+            ));
+        }
         for grant in self.skills.mcp_sources.values() {
             grant.validate().map_err(BitrouterError::bad_request)?;
         }

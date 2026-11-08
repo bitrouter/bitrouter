@@ -4,47 +4,64 @@
 //! ledger can compile a candidate, but only explicit publication replaces this
 //! file. Serving never reads learned database rows for semantic selection.
 
+#[cfg(feature = "semantic-routing")]
 use crate::actions::administration::PolicyReportRuntime;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "semantic-routing")]
 use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::commands::invocation;
 use crate::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyRuntimeMode, PolicyTableConfig,
-    TrajectoryConfig, validate_policy_table_config,
+    validate_policy_table_config,
 };
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::pipeline::context::PipelineContext;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::pipeline::hooks::RouteHook;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::pipeline::routing::ModelSelector;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::pipeline::types::RoutingTarget;
 use anyhow::{Context, Result};
 use bitrouter_ai::routing::PolicyModelTarget;
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "semantic-routing")]
+use crate::config::TrajectoryConfig;
+#[cfg(feature = "semantic-routing")]
 use crate::continuation::{ContinuationAdjustment, ContinuationRequestPlan};
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
 use crate::gateway::routing::experiment_identity::{
     HISTORY_OPTIMIZER_ID, HISTORY_OPTIMIZER_VERSION, experiment_id, explore_compiler_config_digest,
     retreat_compiler_config_digest, treatment_context_digest,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 use crate::gateway::routing::exploration::RouteRejection;
 use crate::gateway::routing::exploration::{
     OptimizationGate, PolicyOptimizationState, RouteExploration,
 };
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+#[cfg(feature = "semantic-routing")]
 use crate::gateway::routing::workflow::ir::RouteProjection;
 use crate::gateway::routing::workflow::predictive::{
     PredictiveRouteProjection, PredictorContract, compiled_predictor_contract,
 };
+#[cfg(feature = "semantic-routing")]
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
+#[cfg(feature = "semantic-routing")]
 use crate::trajectory::correlation::{TrajectoryRuntime, stable_id};
-use crate::trajectory::guard::{ProgressGuardPolicy, RouteIntentClauseDisposition};
+use crate::trajectory::guard::ProgressGuardPolicy;
+#[cfg(feature = "semantic-routing")]
+use crate::trajectory::guard::RouteIntentClauseDisposition;
+#[cfg(feature = "semantic-routing")]
 use crate::trajectory::store::GuardedRouteInput;
 
 pub const DEFAULT_POLICY_LOCK_FILENAME: &str = "policy-lock.yaml";
@@ -53,7 +70,7 @@ const BUNDLED_POLICY: &str = include_str!("../policy/default.yaml");
 
 /// Product defaults stay in the host; SDK embedders keep explicit routing.
 pub fn apply_defaults(config: &mut Config, config_path: Option<&Path>) {
-    if !config.inherit_defaults {
+    if !cfg!(feature = "semantic-routing") || !config.inherit_defaults {
         return;
     }
     if !config.routers.contains_key("auto")
@@ -2603,6 +2620,7 @@ pub fn write_atomic_unlocked(
 }
 
 #[derive(Default)]
+#[cfg(feature = "semantic-routing")]
 struct PolicySnapshot {
     path: Option<PathBuf>,
     digest: Option<String>,
@@ -2614,9 +2632,44 @@ struct PolicySnapshot {
 /// Exact live policy input retained while an evolution admission is prepared.
 /// This exposes the in-memory version; reading a newer file from disk would
 /// incorrectly validate a candidate against policy state that is not serving.
+#[cfg(feature = "semantic-routing")]
 pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
 
+#[cfg(feature = "semantic-routing")]
 impl PolicyRoutingSnapshot {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::{
+            error::BitrouterError,
+            scheduling::payload::{Weight, compact_dto},
+        };
+        let mut weight = Weight::new();
+        weight.add(std::mem::size_of::<Self>() + std::mem::size_of::<PolicySnapshot>() + 128)?;
+        if let Some(path) = &self.0.path {
+            weight.add(path.capacity())?;
+        }
+        if let Some(digest) = &self.0.digest {
+            weight.string(digest)?;
+        }
+        let mut bytes = weight.total();
+        for retained in [
+            compact_dto(&self.0.document)?,
+            compact_dto(&self.0.administration)?,
+        ] {
+            bytes = bytes
+                .checked_add(retained)
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        for (name, router) in &self.0.routers {
+            let retained = router.scheduling_retained_bytes()?;
+            bytes = bytes
+                .checked_add(name.capacity() as u64 + 256)
+                .and_then(|bytes| bytes.checked_add(retained))
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        Ok(bytes)
+    }
+
     #[cfg(feature = "multi-instance")]
     pub(crate) fn digest(&self) -> Option<&str> {
         self.0.digest.as_deref()
@@ -2628,8 +2681,10 @@ impl PolicyRoutingSnapshot {
 }
 
 /// Fully built policy candidate that has not yet replaced the live snapshot.
+#[cfg(feature = "semantic-routing")]
 pub(crate) struct PreparedPolicySnapshot(Arc<PolicySnapshot>);
 
+#[cfg(feature = "semantic-routing")]
 enum PolicyTrajectory {
     Legacy(Arc<TrajectoryRuntime>),
     #[cfg(feature = "core")]
@@ -2642,6 +2697,7 @@ enum PolicyTrajectory {
 /// Live last-known-good policy registry shared by the model selector and
 /// daemon reloader. A request clones one snapshot before deciding, so reloads
 /// never mix old and new policy state inside one request.
+#[cfg(feature = "semantic-routing")]
 pub struct PolicyRuntime {
     snapshot: RwLock<Arc<PolicySnapshot>>,
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
@@ -2653,6 +2709,7 @@ pub struct PolicyRuntime {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "semantic-routing")]
 struct PredictiveSingleTargetDispatch;
 
 /// Prevent a predictive named-policy decision from inheriting the SDK's
@@ -2660,9 +2717,11 @@ struct PredictiveSingleTargetDispatch;
 /// failed provider accepted no generation and incurred no charge, a semantic
 /// request may be dispatched to exactly one physical target.
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "semantic-routing")]
 pub(crate) struct PredictiveSingleTargetRouteHook;
 
 #[async_trait::async_trait]
+#[cfg(feature = "semantic-routing")]
 impl RouteHook for PredictiveSingleTargetRouteHook {
     async fn revalidate_context(
         &self,
@@ -2689,6 +2748,7 @@ impl RouteHook for PredictiveSingleTargetRouteHook {
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 impl PolicyRuntime {
     pub(crate) async fn new(
         config: &Config,
@@ -2974,6 +3034,7 @@ impl PolicyRuntime {
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "semantic-routing")]
 impl ModelSelector for PolicyRuntime {
     async fn prepare_selection(
         &self,
@@ -2992,6 +3053,12 @@ impl ModelSelector for PolicyRuntime {
                 "router references unavailable policy '{policy}'"
             )));
         }
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(
+            Arc::new(snapshot),
+            PolicyRoutingSnapshot::scheduling_retained_bytes,
+        );
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(Arc::new(snapshot));
         Ok(())
     }
@@ -3028,8 +3095,20 @@ impl ModelSelector for PolicyRuntime {
             .extension::<EvalInvocation>()
             .unwrap_or_else(|| Arc::new(EvalInvocation::new(ctx.caller().user_id())));
         if !ctx.has_event::<EvalInvocation>() {
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(
+                invocation.as_ref().clone(),
+                EvalInvocation::scheduling_retained_bytes,
+            );
+            #[cfg(not(feature = "inference-routing"))]
             ctx.emit(invocation.as_ref().clone());
         }
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(
+            invocation.clone(),
+            EvalInvocation::scheduling_retained_bytes,
+        );
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(invocation.clone());
         let prepared = ctx.extension::<crate::gateway::routing::preparation::Prepared>();
         let assessment = prepared
@@ -3199,6 +3278,12 @@ impl ModelSelector for PolicyRuntime {
             #[cfg(not(feature = "multi-instance"))]
             drop(captured);
             if let Some(target) = selected {
+                #[cfg(feature = "inference-routing")]
+                ctx.insert_accounted_extension(
+                    Arc::new(target.context),
+                    crate::gateway::scheduling::payload::compact_dto,
+                );
+                #[cfg(not(feature = "inference-routing"))]
                 ctx.insert_extension(Arc::new(target.context));
                 ctx.set_model(target.model());
                 if let Some(effort) = target.effort() {
@@ -3209,6 +3294,12 @@ impl ModelSelector for PolicyRuntime {
                 }
                 mark_predictive_single_target(&route_projection, ctx);
             }
+            #[cfg(feature = "inference-routing")]
+            ctx.insert_accounted_extension(
+                Arc::new(correlated),
+                crate::trajectory::correlation::CorrelatedRequest::scheduling_retained_bytes,
+            );
+            #[cfg(not(feature = "inference-routing"))]
             ctx.insert_extension(Arc::new(correlated));
             return Ok(());
         }
@@ -3251,6 +3342,12 @@ impl ModelSelector for PolicyRuntime {
         #[cfg(not(feature = "multi-instance"))]
         drop(captured);
         if let Some(target) = selected {
+            #[cfg(feature = "inference-routing")]
+            ctx.insert_accounted_extension(
+                Arc::new(target.context),
+                crate::gateway::scheduling::payload::compact_dto,
+            );
+            #[cfg(not(feature = "inference-routing"))]
             ctx.insert_extension(Arc::new(target.context));
             ctx.set_model(target.model());
             if let Some(effort) = target.effort() {
@@ -3265,6 +3362,7 @@ impl ModelSelector for PolicyRuntime {
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 async fn begin_guarded_trajectory(
     trajectory: &PolicyTrajectory,
     ctx: &PipelineContext,
@@ -3329,6 +3427,7 @@ async fn begin_guarded_trajectory(
         })
 }
 
+#[cfg(feature = "semantic-routing")]
 fn apply_guarded_continuation(
     router: &PolicyTableRouter,
     decision: &mut crate::policy_table_router::PolicyDecision,
@@ -3357,6 +3456,7 @@ fn apply_guarded_continuation(
     Ok(())
 }
 
+#[cfg(feature = "semantic-routing")]
 fn pinned_continuation_effort(
     ctx: &PipelineContext,
 ) -> Option<Option<bitrouter_ai::types::ReasoningEffort>> {
@@ -3367,16 +3467,22 @@ fn pinned_continuation_effort(
     })
 }
 
+#[cfg(feature = "semantic-routing")]
 fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
     if PredictiveRouteProjection::parse_key(route_projection).is_some() {
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(Arc::new(PredictiveSingleTargetDispatch), |_| Ok(64));
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }
 
+#[cfg(feature = "semantic-routing")]
 fn trajectory_request_started_at(ctx: &PipelineContext) -> Result<String> {
     trajectory_request_started_at_elapsed(chrono::Utc::now(), ctx.request_duration_ms())
 }
 
+#[cfg(feature = "semantic-routing")]
 fn trajectory_request_started_at_elapsed(
     observed_at: chrono::DateTime<chrono::Utc>,
     elapsed_ms: u64,
@@ -3390,6 +3496,7 @@ fn trajectory_request_started_at_elapsed(
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg(feature = "semantic-routing")]
 pub struct PolicyRuntimeStatus {
     pub path: Option<PathBuf>,
     pub digest: Option<String>,
@@ -3397,7 +3504,7 @@ pub struct PolicyRuntimeStatus {
     pub mode: PolicyRuntimeMode,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 mod tests {
     use super::*;
 

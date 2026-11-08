@@ -161,6 +161,30 @@ pub(crate) struct OwnedCredential {
     pub(crate) credential: Credential,
 }
 
+#[cfg(feature = "inference-routing")]
+impl TenantExecution {
+    pub(crate) fn scheduling_deadline(&self) -> Option<tokio::time::Instant> {
+        self.submission.deadline.instant()
+    }
+    pub(crate) fn scheduling_cancellation(
+        &self,
+    ) -> crate::gateway::error::Result<tokio_util::sync::CancellationToken> {
+        self.receipt_owner().map(|owner| owner.cancelled.clone())
+    }
+    pub(crate) fn scheduling_tenant(&self) -> &str {
+        self.submission.tenant.as_str()
+    }
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::scheduling::payload::compact_dto;
+        // Authority/service/route Arcs remain under their existing shared owner
+        // budgets. Charge invocation-local defaults, ordered input and identity.
+        compact_dto(&self.submission.configuration_defaults)?
+            .checked_add(compact_dto(&self.submission.binding.selection)?)
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>() as u64 + 4096))
+            .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)
+    }
+}
+
 impl Service {
     fn submission_deadline(&self) -> deadline::Deadline {
         deadline::Deadline::Submission(deadline::after(std::time::Duration::from_secs(

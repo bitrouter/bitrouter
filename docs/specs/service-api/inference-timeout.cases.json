@@ -1,0 +1,14 @@
+[
+  {"values": [], "valid": true},
+  {"values": ["1"], "valid": true},
+  {"values": ["3600000"], "valid": true},
+  {"values": ["0"], "valid": false},
+  {"values": ["3600001"], "valid": false},
+  {"values": ["4294967296"], "valid": false},
+  {"values": [""], "valid": false},
+  {"values": ["+1"], "valid": false},
+  {"values": ["1.5"], "valid": false},
+  {"values": ["1,2"], "valid": false},
+  {"values": [" 1"], "valid": false},
+  {"values": ["10", "20"], "valid": false}
+]

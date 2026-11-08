@@ -39,7 +39,13 @@ impl Fixture {
             source_revision: Some("0123456789abcdef".to_owned()),
             target: target.to_owned(),
             features: if matches!(profile, PackageProfile::GatewayShared) {
-                vec!["db-postgres".into(), "multi-instance".into()]
+                vec![
+                    "db-postgres".into(),
+                    "multi-instance".into(),
+                    "semantic-routing".into(),
+                ]
+            } else if matches!(profile, PackageProfile::Gateway) {
+                vec!["semantic-routing".into()]
             } else {
                 Vec::new()
             },
@@ -184,10 +190,14 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
             build_dir.to_str().context("test path must be UTF-8")?,
         ];
         match profile {
-            PackageProfile::Gateway => expected.push("--no-default-features"),
-            PackageProfile::GatewayShared => {
-                expected.extend(["--no-default-features", "--features", "multi-instance"])
+            PackageProfile::Gateway => {
+                expected.extend(["--no-default-features", "--features", "semantic-routing"])
             }
+            PackageProfile::GatewayShared => expected.extend([
+                "--no-default-features",
+                "--features",
+                "multi-instance,semantic-routing",
+            ]),
             PackageProfile::Full => {}
         }
         ensure!(args == expected);

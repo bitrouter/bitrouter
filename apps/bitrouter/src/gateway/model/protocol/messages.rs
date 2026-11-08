@@ -10,6 +10,23 @@
 //! - #416: mixed text + tool_use blocks keep their order and never 502.
 //! - #422: inbound `ping` events are ignored, not treated as errors.
 
+#[cfg(feature = "inference-routing")]
+pub(crate) fn prefix_projection(
+    prompt: &bitrouter_ai::types::Prompt,
+    key: &[u8; 32],
+    tenant: &[u8; 32],
+    cap: usize,
+) -> Option<std::sync::Arc<crate::gateway::scheduling::prefix::projection::Projection>> {
+    crate::gateway::scheduling::prefix::projection::build(
+        prompt,
+        key,
+        tenant,
+        cap,
+        b"messages.semantic-input.v1",
+        1,
+    )
+}
+
 use crate::gateway::model::conversion::ReportAdmission;
 use crate::gateway::model::protocol::values::{
     extra_value_for_protocol, extras_for_protocol, render_tool_result_output, synthesize_source_id,

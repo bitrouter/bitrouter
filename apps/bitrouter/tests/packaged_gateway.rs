@@ -442,7 +442,8 @@ async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
     let artifact: ArtifactIdentity = serde_json::from_value(identity.json()?)?;
     verify_package(&gateway_binary, &artifact)?;
     ensure!(
-        artifact.profile == DistributionProfile::Gateway && artifact.features.is_empty(),
+        artifact.profile == DistributionProfile::Gateway
+            && artifact.features == ["semantic-routing"],
         "supply the official minimum-gateway artifact"
     );
     ensure!(

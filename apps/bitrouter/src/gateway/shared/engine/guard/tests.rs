@@ -37,6 +37,7 @@ use crate::trajectory::{
     types::{RequestStatus, TrajectoryEventKind},
 };
 
+#[cfg(feature = "semantic-routing")]
 mod handoff;
 mod snapshot;
 

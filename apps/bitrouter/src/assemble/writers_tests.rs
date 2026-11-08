@@ -76,6 +76,7 @@ fn assert_writer_mode(pipeline: &Pipeline, shared: bool) {
         TypeId::of::<super::MeteringRecorder>(),
         TypeId::of::<super::PolicySettlementRecorder>(),
         TypeId::of::<crate::gateway::observability::binding::CanonicalRequestBinding>(),
+        #[cfg(feature = "semantic-routing")]
         TypeId::of::<crate::gateway::routing::blocks::runtime::BlockPolicyRouter>(),
         TypeId::of::<crate::gateway::observability::requests::GatewayRequestTracker>(),
         TypeId::of::<crate::gateway::metering::judge::JudgeCosts>(),
@@ -162,7 +163,7 @@ async fn local_assembly_keeps_durable_hooks_and_metering() -> Result<()> {
     ])
 }
 
-#[cfg(feature = "multi-instance")]
+#[cfg(all(feature = "multi-instance", feature = "semantic-routing"))]
 mod shared {
     use super::super::Config;
     use super::super::shared_writers::{DiscardPending, RequestScope, validate_policies};

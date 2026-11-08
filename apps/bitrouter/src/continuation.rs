@@ -2173,6 +2173,7 @@ pub(crate) enum ContinuationAdjustment {
 }
 
 impl ContinuationAdjustment {
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub(crate) fn pinned_effort_override(
         &self,
     ) -> Option<Option<bitrouter_ai::types::ReasoningEffort>> {
@@ -2375,6 +2376,9 @@ impl RouteHook for ContinuationRuntime {
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(());
         }
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(Arc::new(RequireContinuationAuthority), |_| Ok(64));
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(Arc::new(RequireContinuationAuthority));
         let Some(previous_response_id) = ctx
             .require_generation_prompt()?

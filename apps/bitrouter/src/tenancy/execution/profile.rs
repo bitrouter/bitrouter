@@ -3,22 +3,30 @@
 
 use std::sync::{Arc, atomic::Ordering};
 
+#[cfg(feature = "semantic-routing")]
+use crate::gateway::pipeline::{
+    context::StreamContext,
+    hooks::{ObserveHook, Phase, RequestOutcome},
+};
 use async_trait::async_trait;
-use bitrouter_ai::types::{OperationScope, StreamPart};
+use bitrouter_ai::types::OperationScope;
+#[cfg(feature = "semantic-routing")]
+use bitrouter_ai::types::StreamPart;
 
 use super::TenantExecution;
 use crate::gateway::{
     error::Result,
     pipeline::{
         builder::PipelineBuilder,
-        context::{PipelineContext, StreamContext},
+        context::PipelineContext,
         execution::Pipeline,
-        hooks::{HookDecision, ObserveHook, Phase, PreRequestHook, RequestOutcome},
+        hooks::{HookDecision, PreRequestHook},
     },
 };
 
 struct Entry(Arc<TenantExecution>);
 
+#[cfg(feature = "semantic-routing")]
 struct PolicyCompletion {
     pending: crate::gateway::observability::decision::PendingEvalDecisionStore,
     #[cfg(feature = "core")]
@@ -26,6 +34,7 @@ struct PolicyCompletion {
 }
 
 #[async_trait]
+#[cfg(feature = "semantic-routing")]
 impl ObserveHook for PolicyCompletion {
     async fn after_phase(&self, phase: Phase, _ctx: &PipelineContext) {
         #[cfg(feature = "core")]
@@ -126,6 +135,10 @@ impl TenantExecution {
 
     pub(crate) fn pipeline(self: &Arc<Self>) -> Result<Arc<Pipeline>> {
         let mut builder = PipelineBuilder::new();
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = self.service.scheduler.get() {
+            builder.scheduling_runtime(scheduler.clone(), false);
+        }
         builder
             .owned_drain()
             .served_operations(OperationScope::Both)
@@ -162,6 +175,7 @@ impl TenantExecution {
         if let Some(policy) = &self.continuation {
             builder.native_private_context(policy.clone());
         }
+        #[cfg(feature = "semantic-routing")]
         if let Some(policy) = self.route.policy() {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));

@@ -1,6 +1,6 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
+Status: **beta, specification revision 1.0.0-beta.4**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
 referenced `policy-lock.yaml`. These are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
@@ -34,7 +34,7 @@ universal null value. Opaque `plugins` entries are not evidence that the host
 implements or activates the named plugin. In-memory derived registry records
 are not local YAML fields.
 
-The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`,
+The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`, `inference_routing`,
 `chat`, `upstream`, `database`, `gateway_state`, `eval`, `trajectory`,
 `acp_recording`, `continuation`, `providers`, `models`, `routers`, `checkers`,
 `presets`, `variants`, `plugins`, `mcp`, `mcp_servers`, `skills`, `server_tools`,
@@ -363,21 +363,23 @@ implementation ownership are documented in the
   compatible configuration and store/key backup, without deleting new evidence
   or revocation metadata to satisfy an older reader.
 
-## Proposed inference routing configuration
+## Inference routing configuration
 
-Status: **proposed, unimplemented, pending review**. This section defines the
-future `Config.inference_routing: InferenceRoutingConfig` field. Current binaries
-reject that top-level key, including `enabled: false`. The published beta.3
-format and generated application schema have not changed.
+Status: **beta.4 configuration and local scheduling implemented, default disabled**.
+Feature-on builds accept explicit activation; feature-off builds reject it before
+provider work. Disabled startup allocates no scheduling worker, reservation or
+prefix index. Enabled scheduling supports ordinary complete generation roots
+(Chat Completions, Messages and Responses) in local gateway mode. Managed native
+roots, shared gateway scheduling and server-tool loops fail closed.
 
-The [proposed field schema](inference-routing.proposed.schema.json) is the
-single field catalog for this addition. The [example](examples/inference-routing.proposed.json)
-is the field value, not a runnable full configuration. The
-[compatibility cases](cases/inference-routing.proposed.json) distinguish schema
-validity from semantic validity. The future application DTO belongs in
-`config::inference_routing`; its consumer is assembly of the process scheduler
-and tenant pipeline injection described in the [gateway boundary](../../development/gateway.md#proposed-provider-scheduling-boundary).
-No SDK or AI configuration DTO is introduced.
+The [generated application schema](../../../dist/schema/bitrouter.config.schema.json)
+is the single field catalog, derived from `config::inference_routing`.
+The [example](examples/inference-routing.json) is a disabled field value for
+staging destinations; enable only after mapping every eligible target exactly. The
+[compatibility cases](cases/inference-routing.json) distinguish schema shape,
+semantic constraints and current runtime acceptance. Assembly and config-backed
+routing validate these settings before opening execution resources. No SDK or
+AI configuration DTO is introduced.
 
 ### Decoding and validation contract
 
@@ -386,17 +388,20 @@ Rust DTO names are `InferenceRoutingConfig`, `QueueConfig`, `LimitConfig`,
 `PrefixAffinity` variants serialized in snake case. All objects reject unknown
 fields. Integers are checked `u32` values; byte calculations promote to checked
 `u64`/platform size before allocation. Defaults are exactly the schema defaults,
-including recursively defaulted nested objects. No compiled placeholder DTO is
-introduced before its startup validator and assembly consumer exist.
+including recursively defaulted nested objects. Text length bounds count Unicode
+scalars, matching JSON Schema; resource budgets count retained UTF-8 bytes.
+The startup validator consumes these DTOs before resource allocation.
 
 Omission of the root field, `{}`, and `{enabled: false}` mean disabled in the
-future reader. Null is rejected everywhere, including optional account names;
+reader. Null is rejected everywhere, including optional account names;
 omitting `account` means the target has no account label. Zero, fractions,
 negative numbers and values outside the schema bounds are rejected even when
 disabled. Unknown enum variants are errors. NaN/infinity are never scores or
 configuration values; policy weights are bounded integers.
 
-After defaults, validation MUST enforce:
+Implemented validation checks numeric ranges, relative budgets, destination
+identity uniqueness and endpoint shape even while disabled. The scheduler also
+enforces the following runtime binding and allocation rules:
 
 - Per-tenant queue counts/bytes do not exceed their global limits; wait timeout
   does not exceed request timeout. Uncertainty count does not exceed max active.
@@ -458,18 +463,19 @@ durable unknown receipts, and makes no global/physical capacity guarantee.
 | Reader / change | Required behavior |
 | --- | --- |
 | Current reader, old document | Existing behavior unchanged |
-| Current reader, new key even disabled | Strict top-level rejection; strip the whole key before downgrade |
-| Future reader, old document / omitted field | Disabled; no scheduler tasks or index |
-| Future reader, empty field object | Disabled with schema defaults |
-| Future reader, explicit null / unknown field | Reject before activation |
-| Future reader, enabled but feature absent | Reject startup, reload and artifact preflight |
-| Future reader, semantic policy but semantic feature absent | Reject before auxiliary inference |
+| Pre-beta.4 reader, new key even disabled | Strict top-level rejection; strip the whole key before downgrade |
+| Beta.4 reader, old document / omitted field | Disabled; no scheduler tasks or index |
+| Beta.4 reader, empty field object | Disabled with schema defaults |
+| Beta.4 reader, explicit null / unknown field | Reject before activation |
+| Beta.4 reader, enabled | Require inference-routing and valid local destination bindings; reject feature-off/shared configurations |
+| Beta.4 reader, semantic policy but semantic feature absent | Reject before auxiliary inference |
 | Valid hot policy update | Publish one generation; old work retains binding |
-| Any restart-required change mixed with hot changes | Refuse whole reload; keep old generation |
-| Downgrade | Drain owned work, preserve receipts, remove proposed field, use compatible stored formats |
+| Restart-required change mixed with hot changes | Refuse whole reload; keep old generation |
+| Downgrade | Drain owned work, preserve receipts, remove `inference_routing`, use compatible stored formats |
 
-When implemented, derive these DTOs into the existing application schema and
-move the proposed cases into the existing Rust configuration test suite.
-Do not continue maintaining two field catalogs. Update shipped skills and
-artifact manifests in the same behavior-changing implementation, not before
-the CLI accepts the field.
+Removing the field restores old-reader parsing; it does not downgrade stored
+receipts. Gateway-only builds omit automatic semantic policy defaults and reject
+explicit policy bindings, `policy.path`, adaptive policy mode and `decision_model`
+without `semantic-routing`. Static model/router/check bindings remain supported.
+The Core feature retains its existing policy capability through a dependency on
+`semantic-routing`; neither routing feature enables Core, Harness or transports.

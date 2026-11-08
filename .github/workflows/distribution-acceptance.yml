@@ -27,6 +27,9 @@ jobs:
       fail-fast: false
       matrix:
         features:
+        - semantic-routing
+        - inference-routing
+        - semantic-routing,inference-routing
         - ''
         - http2
         - core
@@ -128,6 +131,14 @@ jobs:
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test http2_ingress --jobs 2 -- --test-threads=2
+    - name: verify independent routing compositions
+      if: matrix.features == '' || matrix.features == 'semantic-routing' || matrix.features == 'inference-routing' || matrix.features == 'semantic-routing,inference-routing'
+      env:
+        PROFILE_FEATURES: ${{ matrix.features }}
+        BITROUTER_TEST_PREBUILT_ONLY: '1'
+      run: |
+        cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --jobs 2 --example routing_topology_fixture
+        cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test routing_composition --jobs 2 -- --test-threads=2
     - uses: taiki-e/install-action@nextest
       if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness' || matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
     - name: verify transport bounds and connection ownership
@@ -315,7 +326,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
         cargo build --locked -p bitrouter --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
-        cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
+        cargo build --locked -p bitrouter --no-default-features --features semantic-routing --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
         cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"

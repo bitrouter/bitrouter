@@ -1,4 +1,5 @@
 #[cfg(any(feature = "core", feature = "multi-instance"))]
+#[cfg(any(test, feature = "semantic-routing"))]
 pub(crate) mod headroom;
 
 use std::collections::{BTreeMap, BTreeSet};

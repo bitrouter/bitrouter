@@ -61,6 +61,7 @@ impl SharedAdmission {
         self.custody.record_pipeline_outcome(successful_terminal);
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) async fn begin_guarded(
         &self,
         protocol: &bitrouter_ai::types::ApiProtocol,
@@ -96,6 +97,7 @@ impl SharedAdmission {
             })
     }
 
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn retain_policy(
         &self,
         name: &str,

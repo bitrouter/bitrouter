@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Distribution selected by the application's effective Cargo capabilities.
+/// `Gateway` retains semantic routing without native execution or transports.
+/// A build with no optional capabilities is `Custom`.
 /// `GatewayShared` is the headless gateway with PostgreSQL shared-mode capability.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

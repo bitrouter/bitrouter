@@ -99,6 +99,7 @@ pub(in crate::gateway::shared) async fn exercise(first: &Store, second: &Store) 
     Box::pin(cancelled_finish_requeues(first, second)).await?;
     Box::pin(uncertain_admission_probe(first, second)).await?;
     Box::pin(probe_reads_after_wait(first, second)).await?;
+    #[cfg(feature = "semantic-routing")]
     Box::pin(partial_projection_survives_cancelled_finish(first, second)).await?;
     Ok(())
 }
@@ -323,6 +324,7 @@ async fn probe_reads_after_wait(first: &Store, second: &Store) -> Result<()> {
 
 /// A selected policy survives cache removal, a changed-contract duplicate and a
 /// cancelled finalization, even though no provider attempt was ever prepared.
+#[cfg(feature = "semantic-routing")]
 async fn partial_projection_survives_cancelled_finish(first: &Store, second: &Store) -> Result<()> {
     for variant in ["cost", "unavailable"] {
         Box::pin(partial_projection_variant(first, second, variant)).await?;
@@ -330,6 +332,7 @@ async fn partial_projection_survives_cancelled_finish(first: &Store, second: &St
     Ok(())
 }
 
+#[cfg(feature = "semantic-routing")]
 async fn partial_projection_variant(first: &Store, second: &Store, variant: &str) -> Result<()> {
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};

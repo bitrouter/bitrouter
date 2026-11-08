@@ -33,7 +33,7 @@ fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
         ),
         (
             vec!["harness", "core", "mcp", "harness"],
-            vec!["core", "harness", "mcp"],
+            vec!["core", "harness", "mcp", "semantic-routing"],
         ),
     ] {
         let selected = selection(MANIFEST, &roots)?;
@@ -44,7 +44,10 @@ fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
     }
     let gateway = selection(MANIFEST, &[])?;
     assert!(gateway.features.is_empty());
-    assert_eq!(gateway.profile, "Gateway");
+    assert_eq!(gateway.profile, "Custom");
+    let semantic = selection(MANIFEST, &["semantic-routing"])?;
+    assert_eq!(semantic.features, ["semantic-routing"]);
+    assert_eq!(semantic.profile, "Gateway");
     Ok(())
 }
 
@@ -129,11 +132,14 @@ fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Resul
     use bitrouter_ai::artifact::{ArtifactIdentity, DistributionProfile};
 
     for roots in [
-        vec!["multi-instance"],
-        vec!["db-postgres", "multi-instance"],
+        vec!["multi-instance", "semantic-routing"],
+        vec!["db-postgres", "multi-instance", "semantic-routing"],
     ] {
         let selected = selection(MANIFEST, &roots)?;
-        assert_eq!(selected.features, ["db-postgres", "multi-instance"]);
+        assert_eq!(
+            selected.features,
+            ["db-postgres", "multi-instance", "semantic-routing"]
+        );
         assert_eq!(selected.profile, "GatewayShared");
         assert_eq!(selected.wire_profile, "gateway-shared");
         let built = metadata(&roots)?;
@@ -152,6 +158,7 @@ fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Resul
     }
     for roots in [
         vec!["db-postgres"],
+        vec!["multi-instance"],
         vec!["multi-instance", "core"],
         vec!["multi-instance", "otel"],
         vec!["multi-instance", "db-mysql"],

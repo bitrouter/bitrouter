@@ -168,6 +168,37 @@ fn embedding_caller(ctx: &PipelineContext) -> bool {
         })
 }
 
+fn emit_model_authentication(
+    ctx: &mut PipelineContext,
+    authenticated: Authenticated,
+    principal: ApiPrincipalEstablished,
+) {
+    #[cfg(feature = "inference-routing")]
+    {
+        ctx.emit_accounted(authenticated, |value| {
+            let mut weight = crate::gateway::scheduling::payload::Weight::new();
+            weight.add(std::mem::size_of::<Authenticated>() + 64)?;
+            weight.string(&value.api_key_id)?;
+            weight.string(&value.user_id)?;
+            if let Some(policy) = &value.policy_id {
+                weight.string(policy)?;
+            }
+            Ok(weight.total())
+        });
+        ctx.emit_accounted(principal, |value| {
+            let mut weight = crate::gateway::scheduling::payload::Weight::new();
+            weight.add(std::mem::size_of::<ApiPrincipalEstablished>() + 64)?;
+            weight.string(&value.route_scope_id)?;
+            Ok(weight.total())
+        });
+    }
+    #[cfg(not(feature = "inference-routing"))]
+    {
+        ctx.emit(authenticated);
+        ctx.emit(principal);
+    }
+}
+
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
@@ -242,14 +273,17 @@ impl PreRequestHook for AuthHook {
                 &plugin_id(),
                 serde_json::json!({"api_key_id": caller.api_key_id(), "user_id": caller.user_id(), "policy_id": null}),
             );
-            ctx.emit(Authenticated {
-                api_key_id: caller.api_key_id().to_string(),
-                user_id: caller.user_id().to_string(),
-                policy_id: None,
-            });
-            ctx.emit(ApiPrincipalEstablished {
-                route_scope_id: format!("native:{}", caller.api_key_id()),
-            });
+            emit_model_authentication(
+                ctx,
+                Authenticated {
+                    api_key_id: caller.api_key_id().to_string(),
+                    user_id: caller.user_id().to_string(),
+                    policy_id: None,
+                },
+                ApiPrincipalEstablished {
+                    route_scope_id: format!("native:{}", caller.api_key_id()),
+                },
+            );
             return Ok(HookDecision::Allow);
         }
         match self.authenticate(ctx.headers(), ctx.caller()).await? {
@@ -271,12 +305,15 @@ impl PreRequestHook for AuthHook {
                         "policy_id": record.policy_id,
                     }),
                 );
-                ctx.emit(Authenticated {
-                    api_key_id: record.id,
-                    user_id: record.user_id,
-                    policy_id: record.policy_id,
-                });
-                ctx.emit(ApiPrincipalEstablished { route_scope_id });
+                emit_model_authentication(
+                    ctx,
+                    Authenticated {
+                        api_key_id: record.id,
+                        user_id: record.user_id,
+                        policy_id: record.policy_id,
+                    },
+                    ApiPrincipalEstablished { route_scope_id },
+                );
                 Ok(HookDecision::Allow)
             }
         }

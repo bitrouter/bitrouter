@@ -1,14 +1,16 @@
 //! Mutations join the caller's authority/receipt transaction; errors require rollback.
 
 use super::*;
+#[cfg(any(test, feature = "semantic-routing"))]
+use crate::trajectory::types::BeginRequest;
 use crate::trajectory::types::{
-    BeginRequest, OutboxWrite, RequestStatus, Settlement, TrajectoryEventKind, canonical_digest,
-    validate_event,
+    OutboxWrite, RequestStatus, Settlement, TrajectoryEventKind, canonical_digest, validate_event,
 };
 
 impl SharedTrajectory {
     /// Raw start persistence. Guarded exact retries must reconstruct their
     /// original decision separately; this helper only accepts a Started retry.
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub async fn begin_in(
         &self,
         tx: &DatabaseTransaction,
@@ -99,6 +101,7 @@ impl SharedTrajectory {
     }
 
     /// Route intent and its optional guard activation form one semantic batch.
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub async fn append_route_in(
         &self,
         tx: &DatabaseTransaction,

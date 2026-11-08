@@ -47,10 +47,15 @@ async fn envelope_actual_canonical_only_predecessor_refuses_all_transports_witho
     let binding = original
         .clone()
         .with_generation_defaults_envelope(&values)?;
-    let mut versions = vec![HttpVersion::Http1Only];
-    if server.http2 {
-        versions.push(HttpVersion::Http2PriorKnowledge);
-    }
+    let versions = vec![HttpVersion::Http1Only];
+    #[cfg(feature = "http2")]
+    let versions = {
+        let mut versions = versions;
+        if server.http2 {
+            versions.push(HttpVersion::Http2PriorKnowledge);
+        }
+        versions
+    };
     for version in versions {
         let client = GatewayClient::with_options(
             &server.endpoint,

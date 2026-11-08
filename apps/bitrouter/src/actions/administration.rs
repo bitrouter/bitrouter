@@ -22,7 +22,9 @@ use anyhow::Result;
 
 use crate::daemon::ObserveStatusProvider;
 use crate::paths::ConfigSource;
-use crate::policy_lock::{LoadedPolicyLock, PolicyRuntime};
+use crate::policy_lock::LoadedPolicyLock;
+#[cfg(feature = "semantic-routing")]
+use crate::policy_lock::PolicyRuntime;
 
 pub(crate) trait ObserveReportRuntime: Sized {
     fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self;
@@ -143,11 +145,23 @@ impl PolicyReportRuntime for PolicyReport {
 pub struct Administration {
     pub source: ConfigSource,
     pub routing: Arc<ConfigRoutingTable>,
+    #[cfg(feature = "semantic-routing")]
     pub policy: Arc<PolicyRuntime>,
     pub observe: Arc<dyn ObserveStatusProvider>,
 }
 
 impl Administration {
+    /// Report only policy state actually attached to this serving process.
+    pub fn active_policy(&self) -> PolicyReport {
+        #[cfg(feature = "semantic-routing")]
+        {
+            self.policy.administration_snapshot()
+        }
+        #[cfg(not(feature = "semantic-routing"))]
+        {
+            PolicyReport::from_loaded(&self.routing.snapshot_config(), None, PolicyView::Active)
+        }
+    }
     pub fn providers(&self) -> ProvidersReport {
         providers(&self.routing.snapshot_config(), "live")
     }
@@ -163,7 +177,7 @@ impl Administration {
     pub async fn policy(&self, input: PolicyInput) -> Result<PolicyReport> {
         input.validate()?;
         let report = match input.view {
-            PolicyView::Active => self.policy.administration_snapshot(),
+            PolicyView::Active => self.active_policy(),
             PolicyView::Disk => disk_policy(&self.source).await?,
         };
         report.selected(input.name.as_deref())
@@ -240,6 +254,23 @@ pub fn agents(config: &Config, source: &str) -> AgentsReport {
     }
 }
 
+pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
+    [
+        ("native", "native_activation"),
+        (
+            "supervised_acp",
+            "local_prompt_instructions_when_negotiated",
+        ),
+        ("supervised_acp_mcp_origin", "unsupported"),
+        ("native_launcher", "unsupported"),
+        ("inference_only", "unsupported"),
+        ("transparent_or_standalone_acp", "unsupported"),
+    ]
+    .into_iter()
+    .map(|(path, mode)| (path.into(), mode.into()))
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,7 +299,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 mod snapshot_tests {
     use super::*;
 
@@ -329,21 +360,4 @@ mod snapshot_tests {
         assert_eq!(active_after.digest, disk.digest);
         Ok(())
     }
-}
-
-pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
-    [
-        ("native", "native_activation"),
-        (
-            "supervised_acp",
-            "local_prompt_instructions_when_negotiated",
-        ),
-        ("supervised_acp_mcp_origin", "unsupported"),
-        ("native_launcher", "unsupported"),
-        ("inference_only", "unsupported"),
-        ("transparent_or_standalone_acp", "unsupported"),
-    ]
-    .into_iter()
-    .map(|(path, mode)| (path.into(), mode.into()))
-    .collect()
 }

@@ -46,6 +46,49 @@ pub struct CorrelatedRequest {
     pub evidence: CorrelationEvidence,
 }
 
+#[cfg(all(feature = "inference-routing", feature = "semantic-routing"))]
+impl CorrelatedRequest {
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::{
+            error::BitrouterError,
+            scheduling::payload::{Weight, compact_dto},
+        };
+        let mut weight = Weight::new();
+        weight.add(std::mem::size_of::<Self>() + 64)?;
+        for value in [
+            &self.request_id,
+            &self.episode_id,
+            &self.evidence.full_input_digest,
+        ] {
+            weight.string(value)?;
+        }
+        if let Some(parent) = &self.evidence.native_parent_id {
+            weight.string(parent)?;
+        }
+        weight.add(
+            self.evidence
+                .ancestor_prefix_digests
+                .capacity()
+                .checked_mul(std::mem::size_of::<String>())
+                .ok_or(BitrouterError::UpstreamUnavailable)?,
+        )?;
+        for digest in &self.evidence.ancestor_prefix_digests {
+            weight.string(digest)?;
+        }
+        weight.add(
+            self.prior_events
+                .capacity()
+                .checked_mul(std::mem::size_of::<TrajectoryEvent>())
+                .ok_or(BitrouterError::UpstreamUnavailable)?,
+        )?;
+        // Fresh storage DTOs contain no prompt or arbitrary JSON; their typed
+        // evidence, strings and nested containers are measured without copies.
+        compact_dto(&self.prior_events)?
+            .checked_add(weight.total())
+            .ok_or(BitrouterError::UpstreamUnavailable)
+    }
+}
+
 pub struct TrajectoryRuntime {
     store: TrajectoryStore,
     canonicalizer: Canonicalizer,
@@ -96,6 +139,7 @@ impl TrajectoryRuntime {
         .map(|(correlated, _)| correlated)
     }
 
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub(crate) async fn begin_guarded_request(
         &self,
         owner_user_id: &str,

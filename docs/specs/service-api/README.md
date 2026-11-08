@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
+Status: **beta, specification revision 1.0.0-beta.4**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -37,6 +37,41 @@ Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
 formats retain their existing meanings and eight-attempt bound. The new store
 format prevents an older binary from opening upgraded authority data.
+
+### Ordinary inference time budget
+
+Revision beta.4 adds the optional `x-bitrouter-timeout-ms` request header to
+ordinary complete generation endpoints. Its single value MUST contain only ASCII
+decimal digits representing 1 through 3,600,000 milliseconds. Empty, duplicate,
+comma-joined, signed, fractional, zero or out-of-range values fail before provider
+work. Absence preserves existing timeouts. See the executable
+[compatibility cases](inference-timeout.cases.json).
+
+The budget begins at pipeline entry and bounds preparation, queue/fallback wait,
+provider execution and the returned stream. It can only shorten a configured
+scheduler or inherited execution deadline. Managed tenant/native execution does
+not accept this header; its existing authenticated deadline contract applies.
+A timeout is not evidence that an upstream stopped or was unbilled. Nonstreaming
+accepted execution still settles after a client disconnect. Stream cancellation
+and sent-request timeouts retain conservative uncertain ownership.
+
+An operator MAY explicitly configure a gateway target with
+`headers: {x-bitrouter-timeout-ms: {passthrough: true}}`. Immediately before that
+hop, the executor replaces the header with the remaining local budget, rounded
+down to milliseconds (minimum one). It MUST NOT restart the original budget on
+fallback. Generic header precedence remains: an explicit inbound value wins over
+the configured default; absent inbound input uses the default, clamped by a local
+remaining deadline when that default is a valid timeout. Without a local deadline
+the default is forwarded unchanged. Static (`passthrough: false`) rules retain
+their existing behavior; timeout-specific default validation is not added. Ordinary providers receive no deadline header by default. No tenant,
+authority, scheduler generation, prefix digest or reservation metadata is relayed.
+The header grants no authority. Each gateway authenticates its own caller.
+
+Old clients omitting the header retain existing behavior. An old server may
+ignore it, so independently updated peers MUST NOT infer downstream enforcement
+from a successful response. Deployments requiring a transitive deadline use
+compatible gateways and retain an outer deadline. JSON/SSE bodies and the existing
+error vocabulary remain unchanged; no SDK DTO or JSON discriminator is added.
 
 ### Offline recovery evidence v2
 
@@ -759,9 +794,10 @@ define required fields, nullability, versions and semantic constraints. All
 reads other than discovery require `Bitrouter-Installation-Id`; protected
 responses use `Cache-Control: no-store`.
 
-#### Proposed provider scheduler composition
+#### Provider scheduler composition
 
-Status: proposed implementation integration; no wire revision or new endpoint.
+Status: operator-host composition implemented; serving-scheduler public activation
+remains gated. No wire revision or new endpoint.
 A trusted operator host may fetch the existing candidate manifest, rank a fixed
 model's compatible candidates, and submit the existing explicit ordered v2
 selection using separately authorized inference credentials. All existing
@@ -775,7 +811,7 @@ Unknown outcomes retain existing receipt and fallback fences. This composition
 does not introduce request idempotency or physical capacity commitments.
 Internal module behavior and proposed host configuration are owned by the
 [gateway boundary](../../development/gateway.md#proposed-provider-scheduling-boundary)
-and [configuration contract](../configuration/README.md#proposed-inference-routing-configuration).
+and [configuration contract](../configuration/README.md#inference-routing-configuration).
 
 #### Discovery, selection and authority
 

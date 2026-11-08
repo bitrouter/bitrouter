@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use bitrouter_ai::types::ReasoningEffort;
 
+#[cfg(any(test, feature = "semantic-routing"))]
 pub(crate) fn route_decision_measurement(
     logging_action_tier: impl Into<String>,
     logging_action_model: impl Into<String>,

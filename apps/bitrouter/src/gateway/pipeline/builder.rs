@@ -34,6 +34,10 @@ use bitrouter_ai::types::OperationScope;
 /// `&mut self` and returns `&mut Self`, so it composes both inside the
 /// `App::builder().language_model(|lm| ...)` closure and in `Plugin::install`.
 pub struct PipelineBuilder {
+    #[cfg(feature = "inference-routing")]
+    scheduler: Option<Arc<crate::gateway::scheduling::runtime::Runtime>>,
+    #[cfg(feature = "inference-routing")]
+    owns_scheduler: bool,
     pre_resolution_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
     router_preparation_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
     pre_request_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
@@ -69,9 +73,36 @@ struct HookRequirement {
 }
 
 impl PipelineBuilder {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_runtime(
+        &mut self,
+        scheduler: Arc<crate::gateway::scheduling::runtime::Runtime>,
+        owner: bool,
+    ) -> &mut Self {
+        self.scheduler = Some(scheduler);
+        self.owns_scheduler = owner;
+        self
+    }
+
+    #[cfg(all(test, feature = "inference-routing"))]
+    pub(crate) fn scheduler(
+        &mut self,
+        scheduler: Arc<crate::gateway::scheduling::Scheduler>,
+        owner: bool,
+    ) -> &mut Self {
+        self.scheduling_runtime(
+            crate::gateway::scheduling::runtime::Runtime::fixed(scheduler),
+            owner,
+        )
+    }
+
     /// A fresh builder with default keepalive interval.
     pub fn new() -> Self {
         Self {
+            #[cfg(feature = "inference-routing")]
+            scheduler: None,
+            #[cfg(feature = "inference-routing")]
+            owns_scheduler: false,
             pre_resolution_hooks: Vec::new(),
             router_preparation_hooks: Vec::new(),
             pre_request_hooks: Vec::new(),
@@ -413,6 +444,13 @@ impl PipelineBuilder {
     /// Finalise into a [`Pipeline`]. Fails if the routing table or executor is
     /// missing.
     pub fn build(self) -> Result<Pipeline> {
+        if !cfg!(feature = "semantic-routing")
+            && (!self.model_selectors.is_empty() || self.decision_model.is_some())
+        {
+            return Err(BitrouterError::bad_request(
+                "model selectors and decision_model require the semantic-routing feature",
+            ));
+        }
         for operation in [ModelOperation::Generation, ModelOperation::Decisions] {
             if self
                 .model_selectors
@@ -486,6 +524,10 @@ impl PipelineBuilder {
             .unwrap_or_else(|| Arc::new(DefaultFallbackPolicy));
 
         Ok(Pipeline {
+            #[cfg(feature = "inference-routing")]
+            scheduler: self.scheduler,
+            #[cfg(feature = "inference-routing")]
+            owns_scheduler: self.owns_scheduler,
             pre_resolution_hooks: self.pre_resolution_hooks,
             router_preparation_hooks: self.router_preparation_hooks,
             pre_request_hooks: self.pre_request_hooks,

@@ -111,6 +111,8 @@ type CapacityBindTest =
 
 #[derive(Clone)]
 pub(crate) struct Service {
+    #[cfg(feature = "inference-routing")]
+    scheduler: Arc<std::sync::OnceLock<Arc<crate::gateway::scheduling::runtime::Runtime>>>,
     startup: Option<Arc<origin::StartupOwner>>,
     db: DatabaseConnection,
     authority: Arc<authority::live::Authority>,
@@ -162,6 +164,29 @@ pub(crate) struct Service {
 }
 
 impl Service {
+    #[cfg(feature = "inference-routing")]
+    #[cfg(test)]
+    pub(crate) fn with_scheduler(
+        self,
+        scheduler: Option<Arc<crate::gateway::scheduling::Scheduler>>,
+    ) -> anyhow::Result<Self> {
+        self.with_scheduling_runtime(
+            scheduler.map(crate::gateway::scheduling::runtime::Runtime::fixed),
+        )
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn with_scheduling_runtime(
+        self,
+        scheduler: Option<Arc<crate::gateway::scheduling::runtime::Runtime>>,
+    ) -> anyhow::Result<Self> {
+        if let Some(scheduler) = scheduler {
+            self.scheduler
+                .set(scheduler)
+                .map_err(|_| anyhow::anyhow!("tenant scheduler already attached"))?;
+        }
+        Ok(self)
+    }
     pub(crate) fn storage_budget(&self) -> storage::Budget {
         storage::Budget::new(self.admission.clone(), self.cleanup.clone())
     }
@@ -529,6 +554,8 @@ impl Service {
             caches,
             admission,
             executor,
+            #[cfg(feature = "inference-routing")]
+            scheduler: Arc::default(),
             execution_settings: config.clone(),
             private_adapter,
             routing,
@@ -649,6 +676,10 @@ impl Service {
     /// unsuccessful shutdown instead of claiming all transactions settled.
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
         self.stop_dispatch()?;
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = self.scheduler.get() {
+            scheduler.close();
+        }
         self.admission.close();
         self.pipelines.close();
         #[cfg(all(feature = "core", feature = "harness"))]
@@ -722,6 +753,8 @@ impl Service {
             () = self.cleanup.quarantined() => Err(anyhow::anyhow!("tenant transaction cleanup is unconfirmed; owner retained")),
             result = draining => {
                 result?;
+                #[cfg(feature = "inference-routing")]
+                if let Some(scheduler) = self.scheduler.get() { scheduler.shutdown().await?; }
                 self.cleanup.ensure_clean()
             }
         }

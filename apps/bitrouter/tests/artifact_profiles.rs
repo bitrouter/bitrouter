@@ -2,7 +2,7 @@
 //!
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
-//! no application features. This test never builds or substitutes an artifact.
+//! only `semantic-routing`. This test never builds or substitutes an artifact.
 //! The historical-data transition test additionally requires
 //! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
 //! Gateway transitions use a core-enabled test harness for publication fixtures
@@ -571,8 +571,8 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         "gateway artifact: {gateway:?}"
     );
     ensure!(
-        gateway.features.is_empty(),
-        "gateway must have no application features: {gateway:?}"
+        gateway.features == ["semantic-routing"],
+        "gateway must retain semantic routing only: {gateway:?}"
     );
     ensure!(
         full.features.iter().any(|feature| feature == "core")

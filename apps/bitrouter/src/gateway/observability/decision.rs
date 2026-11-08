@@ -24,6 +24,10 @@ pub struct EvalInvocation {
 }
 
 impl EvalInvocation {
+    #[cfg(all(feature = "inference-routing", feature = "semantic-routing"))]
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        Ok((std::mem::size_of::<Self>() + self.owner_user_id.capacity() + 64) as u64)
+    }
     pub fn new(owner_user_id: impl Into<String>) -> Self {
         Self {
             token: Uuid::new_v4(),
@@ -536,7 +540,7 @@ impl PendingEvalDecisionStore {
         entries.len()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     pub(crate) fn get(
         &self,
         invocation: &EvalInvocation,
@@ -545,7 +549,7 @@ impl PendingEvalDecisionStore {
         self.peek(invocation, owner_user_id)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "semantic-routing"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.len_for_test() == 0
     }

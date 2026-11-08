@@ -3,10 +3,12 @@
 mod admission;
 mod attempts;
 mod finalization;
+#[cfg(any(test, feature = "semantic-routing"))]
 pub(super) mod guard;
 mod lease;
 pub(super) mod management;
 #[cfg(test)]
+#[cfg(feature = "semantic-routing")]
 mod observation_tests;
 mod outbox;
 mod projection;

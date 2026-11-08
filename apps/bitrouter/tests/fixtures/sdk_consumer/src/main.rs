@@ -134,7 +134,7 @@ async fn acceptance() -> Result<()> {
     let artifact = capabilities
         .artifact
         .context("missing packaged build identity")?;
-    ensure!(artifact.profile == DistributionProfile::Gateway && artifact.features.is_empty());
+    ensure!(artifact.profile == DistributionProfile::Gateway && artifact.features == ["semantic-routing"]);
     ensure!(
         artifact
             .source_revision

@@ -100,6 +100,7 @@ impl OnlineWorkflowState {
 
     /// Build serving state directly from the shared assessment. Harness and
     /// protocol hints are retained in observed diagnostics only.
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn from_assessment(
         headers: &HeaderMap,
         prompt: &Prompt,
@@ -163,6 +164,7 @@ impl OnlineWorkflowState {
 
     /// Apply the shared semantic contract. Missing evidence abstains; it does
     /// not silently reuse the offline deterministic scorecard as serving policy.
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn with_assessment(
         mut self,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,

@@ -2,6 +2,7 @@
 //!
 //! This is private durable data, never a public pipeline event or caller input.
 
+#[cfg(feature = "semantic-routing")]
 mod policy;
 pub(super) mod projection;
 mod response;
@@ -140,6 +141,7 @@ pub(super) struct Inputs {
 
 impl Inputs {
     /// Guard writes must use the contract admitted before policy selection.
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub fn check_guard_policy(&self, name: &str, digest: &str) -> Result<()> {
         self.validate()?;
         ensure!(

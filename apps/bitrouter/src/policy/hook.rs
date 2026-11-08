@@ -135,6 +135,17 @@ impl PreRequestHook for PolicyHook {
         };
         let result = self.evaluate(ctx, &binding.model).await?;
         if matches!(&result, HookDecision::Allow) {
+            #[cfg(feature = "inference-routing")]
+            ctx.insert_accounted_extension(Arc::new(binding), |binding| {
+                let mut weight = crate::gateway::scheduling::payload::Weight::new();
+                weight.add(std::mem::size_of::<FrozenPolicyBinding>() + 64)?;
+                weight.string(&binding.model)?;
+                if let Some(policy) = &binding.policy_id {
+                    weight.string(policy)?;
+                }
+                Ok(weight.total())
+            });
+            #[cfg(not(feature = "inference-routing"))]
             ctx.insert_extension(Arc::new(binding));
         }
         Ok(result)

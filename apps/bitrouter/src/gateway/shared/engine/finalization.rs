@@ -8,17 +8,20 @@ use bitrouter_ai::gateway::execution::{
 use sea_orm::{DatabaseTransaction, IsolationLevel};
 use sha2::{Digest, Sha256};
 
+#[cfg(any(test, feature = "semantic-routing"))]
+use super::validate_id;
 use crate::metering::shared::evidence::validate_outcome;
 
 use super::{
     Attempt, Engine, EpisodeFence, Execution, Outbox, Rejection, Resource, Tenant,
-    TrajectoryBinding, attempts::replace_attempt, validate_id,
+    TrajectoryBinding, attempts::replace_attempt,
 };
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
 impl Engine {
     /// Called within the trajectory start transaction, after choosing its epoch.
     /// The same transaction must protect the episode fence before its guard.
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub async fn bind_trajectory(
         &self,
         tx: &DatabaseTransaction,

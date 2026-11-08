@@ -184,6 +184,21 @@ impl Drop for SendGuard {
 impl PreRequestHook for Profile {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
         self.attached_execution(ctx)?;
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(Arc::new(self.clone()), |profile| {
+            if profile
+                .0
+                .active
+                .lock()
+                .map_err(|_| BitrouterError::UpstreamUnavailable)?
+                .is_some()
+            {
+                return Err(BitrouterError::UpstreamUnavailable);
+            }
+            // Shared authority/rate state stays with the existing runtime.
+            Ok((std::mem::size_of::<Inner>() + std::mem::size_of::<Profile>() + 128) as u64)
+        });
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(Arc::new(self.clone()));
         Ok(HookDecision::Allow)
     }
