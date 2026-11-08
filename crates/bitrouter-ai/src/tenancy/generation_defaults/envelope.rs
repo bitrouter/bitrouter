@@ -98,60 +98,68 @@ impl Validate for GenerationDefaultsEnvelopeV1 {
             self.schema_version == 1,
             "generation defaults envelope version",
         )?;
-        if let Some(canonical) = &self.canonical {
-            canonical.validate()?;
-        }
-        for key in self.supplemental.keys() {
-            require(
-                !matches!(
-                    key.as_str(),
-                    "model"
-                        | "messages"
-                        | "stream"
-                        | "temperature"
-                        | "top_p"
-                        | "max_tokens"
-                        | "reasoning_effort"
-                        | "top_k"
-                        | "seed"
-                        | "stop"
-                        | "presence_penalty"
-                        | "frequency_penalty"
-                        | BODY_MEMBER
-                        | ENVELOPE_BODY_MEMBER
-                ),
-                "reserved supplemental parameter",
-            )?;
-        }
-        // Reserve the enclosing request, envelope and supplemental objects.
-        // serde_json's default recursion budget rejects the 128th container.
-        // Check programmatic Values before recursive hashing/serialization.
-        fn depth(value: &Value, parents: usize) -> Result<(), ValidationError> {
-            match value {
-                Value::Array(values) => {
-                    require(parents + 1 < 128, "generation defaults nesting")?;
-                    for value in values {
-                        depth(value, parents + 1)?;
-                    }
-                }
-                Value::Object(values) => {
-                    require(parents + 1 < 128, "generation defaults nesting")?;
-                    for value in values.values() {
-                        depth(value, parents + 1)?;
-                    }
-                }
-                _ => {}
-            }
-            Ok(())
-        }
-        for value in self.supplemental.values() {
-            depth(value, 3)?;
-        }
+        validate_parts(self.canonical.as_ref(), &self.supplemental)?;
         bytes(self, MAX_DEFAULTS_BYTES)
     }
 }
 
-struct Sorted<'a>(&'a Value);
+pub(super) fn validate_parts(
+    canonical: Option<&super::CanonicalGenerationDefaultsV1>,
+    supplemental: &BTreeMap<String, Value>,
+) -> Result<(), ValidationError> {
+    if let Some(canonical) = canonical {
+        canonical.validate()?;
+    }
+    for key in supplemental.keys() {
+        require(
+            !matches!(
+                key.as_str(),
+                "model"
+                    | "messages"
+                    | "stream"
+                    | "temperature"
+                    | "top_p"
+                    | "max_tokens"
+                    | "reasoning_effort"
+                    | "top_k"
+                    | "seed"
+                    | "stop"
+                    | "presence_penalty"
+                    | "frequency_penalty"
+                    | BODY_MEMBER
+                    | ENVELOPE_BODY_MEMBER
+            ),
+            "reserved supplemental parameter",
+        )?;
+    }
+    // Reserve the enclosing request, envelope and supplemental objects.
+    // serde_json's default recursion budget rejects the 128th container.
+    // Check programmatic Values before recursive hashing/serialization.
+    fn depth(value: &Value, parents: usize) -> Result<(), ValidationError> {
+        match value {
+            Value::Array(values) => {
+                require(parents + 1 < 128, "generation defaults nesting")?;
+                for value in values {
+                    depth(value, parents + 1)?;
+                }
+            }
+            Value::Object(values) => {
+                require(parents + 1 < 128, "generation defaults nesting")?;
+                for value in values.values() {
+                    depth(value, parents + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    for value in supplemental.values() {
+        depth(value, 3)?;
+    }
+    Ok(())
+}
+
+pub(super) struct Sorted<'a>(pub(super) &'a Value);
 impl Serialize for Sorted<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self.0 {

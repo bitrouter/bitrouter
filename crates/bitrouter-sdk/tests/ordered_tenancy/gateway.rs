@@ -13,6 +13,8 @@ use futures_util::StreamExt;
 mod defaults;
 #[path = "gateway/envelope.rs"]
 mod envelope;
+#[path = "gateway/envelope_v2.rs"]
+mod envelope_v2;
 
 fn request(protocol: usize, stream: bool) -> Value {
     match protocol {

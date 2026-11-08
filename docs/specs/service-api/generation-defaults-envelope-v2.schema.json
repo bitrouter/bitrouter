@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GenerationDefaultsEnvelopeV2",
+  "description": "Request-local defaults applied after caller protocol parsing.\n\nCaller-owned extras suppress same-name defaults on every outbound protocol.\nSupplemental parameters use the existing store, parallel-tool-call and Chat\nstream-options promotion rules; all other values remain opaque provider JSON.\nThis object grants no routing, credential or continuation authority.\nVersion two additionally chooses whether absent generation values receive\nconfiguration defaults. It never deletes caller or canonical values.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Format, exactly two.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 2,
+      "maximum": 2
+    },
+    "canonical": {
+      "description": "The unchanged canonical defaults contract; present null is invalid.",
+      "$ref": "#/$defs/CanonicalGenerationDefaultsV1"
+    },
+    "supplemental": {
+      "description": "Protocol-independent defaults, including null and malformed special values.\nProtected request controls, canonical names and the two transport member\nnames are reserved. Nested names are unrestricted opaque data.",
+      "type": "object",
+      "additionalProperties": true,
+      "propertyNames": {
+        "not": {
+          "enum": [
+            "model",
+            "messages",
+            "stream",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "reasoning_effort",
+            "top_k",
+            "seed",
+            "stop",
+            "presence_penalty",
+            "frequency_penalty",
+            "bitrouter_generation_defaults",
+            "bitrouter_generation_defaults_envelope"
+          ]
+        }
+      }
+    },
+    "configuration_defaults": {
+      "description": "Required selection of the retained configuration default layer.",
+      "$ref": "#/$defs/ConfigurationDefaults"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "supplemental",
+    "configuration_defaults"
+  ],
+  "$defs": {
+    "CanonicalGenerationDefaultsV1": {
+      "description": "Canonical preset defaults for one ordered request, without arbitrary fields.\n\nTyped caller values (including zero) win. Typed null becomes None and permits\na default; an empty stop vector also permits a default. A source-owned opaque\nextra with a competing canonical name blocks promotion without itself being\npromoted across protocols. Unsupported outbound fields keep their existing\nadapter behavior. Configuration defaults remain a separate retained object.",
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "description": "Format, exactly one.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 1,
+          "maximum": 1
+        },
+        "temperature": {
+          "description": "Finite temperature; absence supplies no default.",
+          "type": "number",
+          "format": "double"
+        },
+        "top_p": {
+          "description": "Finite nucleus-sampling value.",
+          "type": "number",
+          "format": "double"
+        },
+        "max_tokens": {
+          "description": "Output-token default, including zero.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "reasoning_effort": {
+          "description": "Existing canonical effort level; this is not a policy treatment.",
+          "$ref": "#/$defs/ReasoningEffort"
+        },
+        "top_k": {
+          "description": "Top-k default, rendered only by supporting protocol adapters.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "seed": {
+          "description": "Signed deterministic-sampling seed, including zero.",
+          "type": "integer",
+          "format": "int64",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "stop": {
+          "description": "Stop sequences. A single input string normalizes to a one-element vector.",
+          "$ref": "#/$defs/StopInput"
+        },
+        "presence_penalty": {
+          "description": "Finite presence-penalty default.",
+          "type": "number",
+          "format": "double"
+        },
+        "frequency_penalty": {
+          "description": "Finite frequency-penalty default.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "StopInput": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "ConfigurationDefaults": {
+      "description": "Selection of the configuration generation-default layer for one ordered call.\nNeither choice changes execution budgets, capability checks or policy locks.",
+      "oneOf": [
+        {
+          "description": "Fill missing temperature and output tokens from retained configuration.",
+          "type": "string",
+          "const": "apply"
+        },
+        {
+          "description": "Leave missing values absent until an existing later rule or renderer fills them.",
+          "type": "string",
+          "const": "preserve_absence"
+        }
+      ]
+    }
+  }
+}

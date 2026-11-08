@@ -67,7 +67,7 @@ pub(crate) async fn dispatch(
     {
         return Failure::from(ErrorCode::InvalidRequest).into_response();
     }
-    let submission = match service.submission(&parts.headers).await {
+    let mut submission = match service.submission(&parts.headers).await {
         Ok(submission) => submission,
         Err(error) => return error.into_response(),
     };

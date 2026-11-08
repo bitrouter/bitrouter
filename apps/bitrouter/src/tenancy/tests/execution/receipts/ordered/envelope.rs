@@ -4,6 +4,7 @@ use bitrouter_ai::tenancy::generation_defaults::{
     BODY_MEMBER, ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelopeV1,
 };
 
+pub(super) mod absence;
 mod edge_cases;
 mod precedence;
 #[cfg(unix)]
