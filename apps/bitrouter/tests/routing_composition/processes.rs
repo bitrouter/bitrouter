@@ -129,11 +129,50 @@ fn save(path: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn capabilities(binary: &Path) -> Result<Value> {
+    let output = Command::new(binary).arg("capabilities").output()?;
+    ensure!(
+        output.status.success(),
+        "capabilities: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+#[tokio::test]
+#[ignore = "requires separately prebuilt semantic-only and inference-only gateway fixtures"]
+async fn heterogeneous_gateways_keep_model_constraints_deadline_and_retry_ownership() -> Result<()>
+{
+    let selected = |variable: &str| -> Result<PathBuf> {
+        let path =
+            std::env::var_os(variable).with_context(|| format!("required fixture: {variable}"))?;
+        let path = PathBuf::from(path).canonicalize()?;
+        ensure!(path.is_file(), "fixture is not a file: {}", path.display());
+        Ok(path)
+    };
+    let user = selected("BITROUTER_TEST_SEMANTIC_GATEWAY_BINARY")?;
+    let serving = selected("BITROUTER_TEST_INFERENCE_GATEWAY_BINARY")?;
+    ensure!(
+        user != serving,
+        "heterogeneous roles require distinct binaries"
+    );
+    ensure!(
+        capabilities(&user)?
+            == json!({"semantic":true,"inference":false,"core":false,"harness":false}),
+        "user gateway must be semantic-only"
+    );
+    ensure!(
+        capabilities(&serving)?
+            == json!({"semantic":false,"inference":true,"core":false,"harness":false}),
+        "serving gateway must be inference-only"
+    );
+    topology(&user, &serving, true, true, true).await
+}
+
 #[tokio::test]
 async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownership() -> Result<()> {
     let binary = binary()?;
-    let capabilities: Value =
-        serde_json::from_slice(&Command::new(&binary).arg("capabilities").output()?.stdout)?;
+    let capabilities = capabilities(&binary)?;
     ensure!(capabilities["semantic"] == cfg!(feature = "semantic-routing"));
     ensure!(capabilities["inference"] == cfg!(feature = "inference-routing"));
     if !cfg!(feature = "core") {
@@ -142,6 +181,23 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
     if !cfg!(feature = "harness") {
         ensure!(capabilities["harness"] == false);
     }
+    topology(
+        &binary,
+        &binary,
+        cfg!(feature = "semantic-routing"),
+        cfg!(feature = "inference-routing"),
+        false,
+    )
+    .await
+}
+
+async fn topology(
+    user_binary: &Path,
+    serving_binary: &Path,
+    semantic: bool,
+    inference: bool,
+    authenticated: bool,
+) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let provider_address = address()?;
     let serving_address = address()?;
@@ -154,20 +210,22 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
     for name in ["a", "b"] {
         serving["providers"][name] = json!({"api_base": endpoint,"api_key": format!("fixture-{name}"),"api_protocol":[{"*":"chat_completions"}],"models":[{"id":"selected"}]});
     }
-    if cfg!(feature = "inference-routing") {
+    serving["server"]["skip_auth"] = json!(!authenticated);
+    if inference {
         serving["inference_routing"] = json!({"enabled":true,"limits":{"max_active":2,"max_uncertain":2},"queue":{"wait_timeout_ms":1000,"request_timeout_ms":5000},"destinations":[
             {"id":"a","provider":"a","model":"selected","endpoint":endpoint,"max_active":1},
             {"id":"b","provider":"b","model":"selected","endpoint":endpoint,"max_active":1}
         ]});
     }
     save(&serving_path, &serving)?;
-    let selection = if cfg!(feature = "semantic-routing") {
+    let selection = if semantic {
         json!({"kind":"policy","policy":"fixture","base_model":"base"})
     } else {
         json!({"kind":"model","model":"selected"})
     };
     let mut user = json!({"inherit_defaults":false,"registry":{"enabled":false},"server":{"skip_auth":true},"database":{"url":format!("sqlite://{}?mode=rwc", directory.path().join("user.db").display())},"providers":{"serving":{"api_base":format!("http://{serving_address}/v1"),"api_key":"gateway-only","api_protocol":[{"*":"chat_completions"}],"models":[{"id":"selected"}],"headers":{"x-bitrouter-timeout-ms":{"passthrough":true}}}},"routers":{"selected":{"selection":selection}}});
-    if cfg!(feature = "semantic-routing") {
+    user["server"]["skip_auth"] = json!(!authenticated);
+    if semantic {
         let mut lock: bitrouter::policy_lock::PolicyLock = serde_saphyr::from_str(
             "lockfileVersion: 4\npolicies:\n  fixture:\n    tiers:\n      strong: {model: selected, context: evidence}\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n",
         )?;
@@ -176,13 +234,12 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
         std::fs::write(&path, bitrouter::policy_lock::deterministic_yaml(&lock)?)?;
         user["policy"] = json!({"path":path});
     }
-    save(&user_path, &user)?;
     let client = reqwest::Client::builder()
         .no_proxy()
         .timeout(Duration::from_secs(10))
         .build()?;
     let mut provider = spawn(
-        &binary,
+        serving_binary,
         "provider",
         &provider_address,
         &journal_path,
@@ -190,15 +247,24 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
     )?;
     ready(&mut provider, &provider_address, &client).await?;
     let mut serving = spawn(
-        &binary,
+        serving_binary,
         "gateway",
         &serving_address,
         &serving_path,
         &directory.path().join("serving"),
     )?;
     ready(&mut serving, &serving_address, &client).await?;
+    let serving_key = if authenticated {
+        Some(std::fs::read_to_string(serving_path.with_extension("key"))?)
+    } else {
+        None
+    };
+    if let Some(key) = &serving_key {
+        user["providers"]["serving"]["api_key"] = json!(key);
+    }
+    save(&user_path, &user)?;
     let mut user = spawn(
-        &binary,
+        user_binary,
         "gateway",
         &user_address,
         &user_path,
@@ -207,6 +273,41 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
     ready(&mut user, &user_address, &client).await?;
     let url = format!("http://{user_address}/v1/chat/completions");
     let request = |text: &str, stream: bool| json!({"model":"bitrouter/selected","messages":[{"role":"user","content":text}],"stream":stream,"temperature":0.3,"max_tokens":32,"stop":["stop-here"]});
+    let mut headers = reqwest::header::HeaderMap::new();
+    let user_key = if authenticated {
+        let key = std::fs::read_to_string(user_path.with_extension("key"))?;
+        for address in [&user_address, &serving_address] {
+            let response = client
+                .post(format!("http://{address}/v1/chat/completions"))
+                .json(&request("anonymous", false))
+                .send()
+                .await?;
+            ensure!(response.status() == reqwest::StatusCode::UNAUTHORIZED);
+        }
+        let response = client
+            .post(format!("http://{serving_address}/v1/chat/completions"))
+            .bearer_auth(&key)
+            .json(&request("wrong-hop", false))
+            .send()
+            .await?;
+        ensure!(response.status() == reqwest::StatusCode::UNAUTHORIZED);
+        ensure!(
+            journal(&journal_path)?.is_empty(),
+            "unauthenticated work reached provider"
+        );
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {key}").parse()?,
+        );
+        Some(key)
+    } else {
+        None
+    };
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .default_headers(headers)
+        .build()?;
     // Keep a real streaming request on A while the serving-side scheduler picks B.
     let held = client
         .post(&url)
@@ -310,7 +411,7 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
             .count()
             <= 2
     );
-    if cfg!(feature = "inference-routing") {
+    if inference {
         let held = requests
             .iter()
             .find(|v| text(v).as_deref() == Some("hold"))
@@ -339,6 +440,12 @@ async fn two_gateway_processes_keep_model_constraints_deadline_and_retry_ownersh
                 && request["body"]["stop"] == json!(["stop-here"])
         );
         let serialized = serde_json::to_string(&request)?;
+        for key in [&user_key, &serving_key].into_iter().flatten() {
+            ensure!(
+                !serialized.contains(key),
+                "gateway credential reached provider"
+            );
+        }
         for internal in [
             "x-bitrouter-timeout-ms",
             "tenant_weights",

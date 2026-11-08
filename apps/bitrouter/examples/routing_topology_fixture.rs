@@ -103,6 +103,24 @@ async fn main() -> Result<()> {
         anyhow::ensure!(mode == "gateway", "unknown fixture mode");
         let config = bitrouter::config::load(&path).await?;
         let assembled = bitrouter::assemble::build_app_with_path(&config, Some(&path)).await?;
+        if !config.server.skip_auth {
+            bitrouter::auth::db::upsert_user(&assembled.db, "topology-user").await?;
+            let key = bitrouter::auth::keys::generate();
+            bitrouter::auth::db::insert_api_key(
+                &assembled.db,
+                &bitrouter::auth::db::NewApiKey {
+                    id: "topology-key".into(),
+                    key_hash: key.hash,
+                    user_id: "topology-user".into(),
+                    spend_limit_micro_usd: None,
+                    rpm_limit: None,
+                    policy_id: None,
+                },
+            )
+            .await?;
+            // The parent reads this inside its private temporary directory; never log credentials.
+            std::fs::write(path.with_extension("key"), key.secret)?;
+        }
         let app = Arc::new(assembled.app);
         let journal = Journal(path.with_extension("ingress.jsonl"));
         app.serve_with_router_wrapper(listen, move |router| {

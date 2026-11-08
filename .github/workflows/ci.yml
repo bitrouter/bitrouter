@@ -623,6 +623,11 @@ jobs:
         retention-days: 7
     needs:
     - build-linux
+  routing-runtime:
+    needs:
+    - changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/routing-runtime.yml
   application-features:
     name: feature compile
     runs-on: ubuntu-latest
@@ -1071,6 +1076,7 @@ jobs:
     - test-capacity
     - database-backends
     - application-features
+    - routing-runtime
     - feature-isolation
     - sdk-public-api
     - dist

@@ -566,8 +566,9 @@ Run the same suite in every reduced build (no Core or Harness needed):
 
 ```sh
 for features in '' semantic-routing inference-routing semantic-routing,inference-routing; do
-  cargo test -p bitrouter --no-default-features --features "$features" --test routing_composition
+  bash .github/scripts/test-routing-runtime.sh "$features"
 done
+bash .github/scripts/test-routing-runtime.sh heterogeneous
 ```
 
 The test builds its matching Cargo fixture if none is prebuilt. CI can build the
@@ -575,6 +576,22 @@ example first and set `BITROUTER_TEST_EXAMPLES_DIR` and
 `BITROUTER_TEST_PREBUILT_ONLY=1`; the fixture's reported capabilities must match
 the test binary. Never reuse an all-feature fixture for a reduced-feature test.
 Children are isolated from ambient credentials, and killed and reaped on failure.
+The heterogeneous campaign separately builds and preserves a semantic-only user
+gateway and an inference-only serving gateway, asserting that both omit Core and
+Harness and that neither includes the other routing feature. Both gateways use
+independently minted virtual keys; anonymous and wrong-hop credentials must fail
+before provider work, and gateway credentials must not reach the provider.
+The campaign reuses the model/constraints, JSON/SSE, deadline, stream cancellation,
+retry and privacy assertions above. It is explicitly ignored in ordinary suites
+because it requires two separately built fixtures, then selected exactly and run
+by the script; missing binaries or an empty selection are errors. Its test-only
+inputs are `BITROUTER_TEST_SEMANTIC_GATEWAY_BINARY` and
+`BITROUTER_TEST_INFERENCE_GATEWAY_BINARY`.
+
+PR CI and distribution acceptance call the same `routing-runtime.yml` workflow
+for all four compositions and the heterogeneous campaign. PR runtime results are
+dependencies of the required aggregate check. Optional Cargo arguments after the
+script's mode select a local profile/configuration; no product timeouts change.
 This establishes local synthetic behavior, not provider savings or production
 performance. Effectiveness and release performance budgets above require their
 separate workload measurements.
