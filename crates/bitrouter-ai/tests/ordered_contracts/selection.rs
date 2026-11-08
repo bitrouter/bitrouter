@@ -8,11 +8,13 @@ pub(super) fn capabilities() -> Result<OrderedCapabilitiesV2, serde_json::Error>
     )
 }
 pub(super) fn manifest(count: u16) -> Result<CandidateManifestV1, serde_json::Error> {
-    serde_json::from_value(json!({"schema_version":1,"installation_id":"installation",
+    serde_json::from_value(
+        json!({"schema_version":1,"admission_mode":"legacy","runtime_observation":null,"installation_id":"installation",
         "tenant_id":"tenant","execution_revision":"revision","authority_revision":1,
         "route":reference("route"),"inbound_protocol":"messages",
         "candidates":(0..count).map(|index| json!({"candidate_index":index,
-            "target":target(),"credential":reference("credential")})).collect::<Vec<_>>()}))
+            "target":target(),"credential":reference("credential"),"admission_profile":null})).collect::<Vec<_>>()}),
+    )
 }
 
 #[test]

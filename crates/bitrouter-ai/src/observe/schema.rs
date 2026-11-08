@@ -49,7 +49,7 @@ use serde::Serialize;
 /// release bump, turning a guard that should be silent into routine noise. The
 /// crate version reaches the wire through the instrumentation scope instead
 /// (see [`SpanSchema::scope_version`]).
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 /// Attribute-key prefixes this schema owns outright. See [`ExtensionRegion`].
 const RESERVED_PREFIXES: &[&str] = &["bitrouter.", "gen_ai."];
@@ -352,6 +352,30 @@ const ROOT_CHAT_SPAN: SpanDef = SpanDef {
            ultimately served it.",
     attributes: &[
         AttrDef {
+            key: "bitrouter.installation_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Trusted tenant execution installation; absent for unbound calls.",
+        },
+        AttrDef {
+            key: "bitrouter.tenant_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Trusted tenant execution owner; absent for unbound calls.",
+        },
+        AttrDef {
+            key: "bitrouter.execution_revision",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Exact retained tenant configuration revision.",
+        },
+        AttrDef {
+            key: "bitrouter.candidate_index",
+            ty: AttrType::Int,
+            requirement: Requirement::Conditional,
+            note: "Original ordered root ordinal from the actual execution cursor, never target-name inference.",
+        },
+        AttrDef {
             key: "bitrouter.operation",
             ty: AttrType::String,
             requirement: Requirement::Required,
@@ -635,6 +659,66 @@ const HOP_CHAT_SPAN: SpanDef = SpanDef {
            the `single-generation` invariant. Distinguished from the root `chat` span by kind: \
            this one is CLIENT, the root is INTERNAL.",
     attributes: &[
+        AttrDef {
+            key: "bitrouter.installation_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Trusted tenant execution installation; absent for unbound calls.",
+        },
+        AttrDef {
+            key: "bitrouter.tenant_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Trusted tenant execution owner; absent for unbound calls.",
+        },
+        AttrDef {
+            key: "bitrouter.execution_revision",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Exact retained tenant configuration revision.",
+        },
+        AttrDef {
+            key: "bitrouter.request_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Native tenant execution identity, copied onto each bound hop.",
+        },
+        AttrDef {
+            key: "bitrouter.inbound_protocol",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Actual retained ingress protocol for a bound tenant call.",
+        },
+        AttrDef {
+            key: "bitrouter.candidate_index",
+            ty: AttrType::Int,
+            requirement: Requirement::Conditional,
+            note: "Original ordered root ordinal from the actual execution cursor, never target-name inference.",
+        },
+        AttrDef {
+            key: "bitrouter.attempt_id",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Physical attempt identity, only after the actual send gate arms.",
+        },
+        AttrDef {
+            key: "bitrouter.hop_outcome",
+            ty: AttrType::String,
+            requirement: Requirement::Conditional,
+            note: "Trusted closed terminal class: completed, http_rejection, transport_failure, timeout, protocol_invalid, local_rate_limited, local_circuit_blocked, request_budget_exhausted, authority_denied, capacity_denied, pre_dispatch_failure, caller_policy, caller_cancelled or unknown.",
+        },
+        AttrDef {
+            key: "http.response.status_code",
+            ty: AttrType::Int,
+            requirement: Requirement::Conditional,
+            note: "Actual observed provider HTTP status; never a gateway-rendered synthetic status.",
+        },
+        AttrDef {
+            key: "bitrouter.hop_duration_ms",
+            ty: AttrType::Int,
+            requirement: Requirement::Conditional,
+            note: "Monotonic reached-executor interval, excluding later financial I/O; omitted on signed-64-bit overflow.",
+        },
         AttrDef {
             key: "bitrouter.operation",
             ty: AttrType::String,

@@ -55,7 +55,8 @@ pub(super) fn compiled_with_operation(
         "public configuration digest mismatch"
     );
     ensure!(
-        revision.compiler_version == COMPILER_VERSION,
+        revision.compiler_version == COMPILER_VERSION
+            || revision.compiler_version == super::PROFILED_COMPILER_VERSION,
         "unsupported configuration compiler"
     );
     ensure!(
@@ -93,7 +94,7 @@ pub(super) fn compiled_with_operation(
         &resources.installation,
         &revision.tenant_id,
         &revision.revision_id,
-        COMPILER_VERSION,
+        revision.compiler_version.as_str(),
         document,
         &stored.dependencies,
     );
@@ -124,11 +125,12 @@ pub(super) fn compiled_with_operation(
                 .as_ref()
                 .context("configuration key unavailable")?;
             let bytes = key.open_bound("configuration", &binding, &sealed)?;
-            let envelope: Envelope = serde_json::from_slice(&bytes)?;
+            let mut envelope: Envelope = serde_json::from_slice(&bytes)?;
             ensure!(envelope.document == *document, "compiled document mismatch");
             ensure!(
                 envelope.artifacts.len() <= MAX_CLOSURE
-                    && envelope.routes.len() == document.routes.len(),
+                    && envelope.routes.len() <= document.routes.len()
+                    && (envelope.format == 4 || envelope.routes.len() == document.routes.len()),
                 "compiled envelope count mismatch"
             );
             let mut artifacts = HashMap::new();
@@ -155,6 +157,9 @@ pub(super) fn compiled_with_operation(
                     (
                         Definition::Route {
                             selector, policy, ..
+                        }
+                        | Definition::ProfiledRoute {
+                            selector, policy, ..
                         },
                         Some(route),
                     ) => {
@@ -166,7 +171,12 @@ pub(super) fn compiled_with_operation(
                         );
                         route_shape(route, &dependencies)?;
                     }
-                    (Definition::Policy { .. } | Definition::Checkpoint { .. }, None) => {}
+                    (
+                        Definition::Policy { .. }
+                        | Definition::Checkpoint { .. }
+                        | Definition::AdmissionProfile { .. },
+                        None,
+                    ) => {}
                     _ => anyhow::bail!("invalid compiled artifact kind or shape"),
                 }
             }
@@ -232,15 +242,43 @@ pub(super) fn compiled_with_operation(
                     crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
                 }
             }
-            let expected = compiler::configuration_routes(document, &envelope.artifacts)
-                .map_err(|_| anyhow::anyhow!("invalid retained route composition"))?;
-            ensure!(
-                envelope.routes == expected,
-                "compiled route composition mismatch"
-            );
+            let expected = if envelope.format == 4 {
+                compiler::configuration_routes_with_operation(
+                    document,
+                    &envelope.artifacts,
+                    operation,
+                )
+            } else {
+                compiler::configuration_routes(document, &envelope.artifacts)
+            }
+            .map_err(|_| anyhow::anyhow!("invalid retained route composition"))?;
+            if envelope.format == 4 {
+                // Compare against independently retained projections, never a
+                // clone of wire input. Full identities preserve ordinary root
+                // ordering and reject missing or extra profiled projections.
+                let ordinary = expected.iter().filter(|route| {
+                    !artifacts.get(&route.reference).is_some_and(|artifact| {
+                        matches!(artifact.definition, Definition::ProfiledRoute { .. })
+                    })
+                });
+                ensure!(
+                    envelope.routes.iter().eq(ordinary),
+                    "compact route composition mismatch"
+                );
+                envelope.routes = expected;
+            } else {
+                ensure!(
+                    envelope.routes == expected,
+                    "compiled route composition mismatch"
+                );
+            }
             envelope
         }
     };
+    ensure!(
+        (envelope.format == 4) == (revision.compiler_version == super::PROFILED_COMPILER_VERSION),
+        "admission configuration compiler mismatch"
+    );
     super::execution::validate_with_operation(envelope, operation)
 }
 

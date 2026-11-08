@@ -9,13 +9,17 @@ mod schema;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    admission::{
+        AdmissionMode, AvailabilityObservation, HealthObservation, RuntimeObservationV1,
+        validate_profile_reference,
+    },
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
     execution::Target,
     identity::{
-        AuthorityRevision, CorrelationId, InstallationId, InstanceId, RevisionId, TenantId,
+        AuthorityRevision, CorrelationId, Digest, InstallationId, InstanceId, RevisionId, TenantId,
     },
-    validation::{Validate, ValidationError, bytes, require, unique},
+    validation::{Validate, ValidationError, bytes, nullable, require, unique},
 };
 
 /// Maximum selected candidates and configured attempt ceiling.
@@ -46,11 +50,16 @@ pub struct OrderedCandidateSelectionV1 {
     /// Selection format, exactly one.
     #[serde(deserialize_with = "super::number::integer")]
     pub schema_version: u8,
+    /// Explicit enforcement mode; absence never selects a default.
+    pub admission_mode: AdmissionMode,
     /// Exact retained route revision.
     pub route: ResourceRef,
     /// Unique ordinals below 256, in the requested dispatch order, length 1–64.
     #[serde(deserialize_with = "indices")]
     pub candidate_indices: Vec<u16>,
+    /// Digest of opt-in canonical request defaults, omitted when unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_defaults_digest: Option<Digest>,
 }
 impl Validate for OrderedCandidateSelectionV1 {
     fn validate(&self) -> Result<(), ValidationError> {
@@ -70,9 +79,11 @@ impl OrderedCandidateSelectionV1 {
     ) -> Result<AcceptedSelectionV2, ValidationError> {
         self.validate()?;
         Ok(AcceptedSelectionV2 {
+            admission_mode: self.admission_mode,
             route: self.route.clone(),
             inbound_protocol,
             candidate_indices: self.candidate_indices.clone(),
+            generation_defaults_digest: self.generation_defaults_digest.clone(),
         })
     }
 }
@@ -81,6 +92,8 @@ impl OrderedCandidateSelectionV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AcceptedSelectionV2 {
+    /// Enforcement mode accepted without downgrade.
+    pub admission_mode: AdmissionMode,
     /// Exact retained route revision.
     pub route: ResourceRef,
     /// Actual ingress protocol, which qualifies the root ordinals.
@@ -88,6 +101,9 @@ pub struct AcceptedSelectionV2 {
     /// Accepted order; skipped candidates never become fabricated attempts.
     #[serde(deserialize_with = "indices")]
     pub candidate_indices: Vec<u16>,
+    /// Digest of opt-in canonical request defaults, omitted when unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_defaults_digest: Option<Digest>,
 }
 impl Validate for AcceptedSelectionV2 {
     fn validate(&self) -> Result<(), ValidationError> {
@@ -138,6 +154,9 @@ pub struct CandidateDescriptorV1 {
     pub target: Target,
     /// Exact retained upstream credential reference.
     pub credential: ResourceRef,
+    /// Exact pinned profile association, or explicit null for a legacy root.
+    #[serde(deserialize_with = "nullable")]
+    pub admission_profile: Option<ResourceRef>,
 }
 impl Validate for CandidateDescriptorV1 {
     fn validate(&self) -> Result<(), ValidationError> {
@@ -153,6 +172,9 @@ impl Validate for CandidateDescriptorV1 {
             self.target.credential_version == self.credential.revision_id,
             "candidate credential revision",
         )?;
+        if let Some(profile) = &self.admission_profile {
+            validate_profile_reference(profile)?;
+        }
         self.target.validate()
     }
 }
@@ -164,6 +186,8 @@ pub struct CandidateManifestV1 {
     /// Manifest format, exactly one.
     #[serde(deserialize_with = "super::number::integer")]
     pub schema_version: u8,
+    /// Enforcement required by the retained root.
+    pub admission_mode: AdmissionMode,
     /// Bound authority store.
     pub installation_id: InstallationId,
     /// Owning tenant.
@@ -179,6 +203,9 @@ pub struct CandidateManifestV1 {
     /// At most 256 entries in strictly increasing root-ordinal order.
     /// Sparse ordinals retain their original meaning; duplicate targets may occur.
     pub candidates: Vec<CandidateDescriptorV1>,
+    /// Advisory process-local facts; absent runtime data is explicit null.
+    #[serde(deserialize_with = "nullable")]
+    pub runtime_observation: Option<RuntimeObservationV1>,
 }
 impl Validate for CandidateManifestV1 {
     fn validate(&self) -> Result<(), ValidationError> {
@@ -200,7 +227,53 @@ impl Validate for CandidateManifestV1 {
         )?;
         for candidate in &self.candidates {
             candidate.validate()?;
+            require(
+                candidate.admission_profile.is_some()
+                    == (self.admission_mode == AdmissionMode::ProfiledV1),
+                "manifest admission mode",
+            )?;
             validate_tenant_reference(&candidate.credential, &self.tenant_id)?;
+        }
+        if let Some(observation) = &self.runtime_observation {
+            require(
+                self.admission_mode == AdmissionMode::ProfiledV1,
+                "legacy runtime observation",
+            )?;
+            require(
+                observation.candidates.len() == self.candidates.len(),
+                "observation candidate count",
+            )?;
+            for (descriptor, observed) in self.candidates.iter().zip(&observation.candidates) {
+                require(
+                    descriptor.candidate_index == observed.candidate_index,
+                    "observation ordinal order",
+                )?;
+                if observed.current_profile_revision.is_none() {
+                    require(
+                        observed.rate.is_none()
+                            && observed.observed_shared_count.is_none()
+                            && observed.health == HealthObservation::Unavailable
+                            && observed.availability == AvailabilityObservation::AuthorityDenied,
+                        "missing profile authority observation",
+                    )?;
+                }
+                if let Some(rate) = &observed.rate {
+                    require(
+                        rate.shared_count <= AuthorityRevision::MAX,
+                        "observed shared count",
+                    )?;
+                }
+                if let Some(count) = observed.observed_shared_count {
+                    require(count <= AuthorityRevision::MAX, "observed read-only count")?;
+                    require(
+                        observed
+                            .rate
+                            .as_ref()
+                            .is_none_or(|rate| rate.shared_count == count),
+                        "conflicting observed shared count",
+                    )?;
+                }
+            }
         }
         bytes(self, MAX_MANIFEST_BYTES)
     }
@@ -299,6 +372,23 @@ pub struct OrderedDispatchBindingV2 {
     pub receipt_mode: String,
     /// Transport encodes this value in the bounded candidate-selection header.
     pub selection: OrderedCandidateSelectionV1,
+}
+impl OrderedDispatchBindingV2 {
+    /// Bind canonical defaults before retaining this submission identity.
+    /// Supply the same defaults to the SDK's ordered gateway for this call.
+    ///
+    /// # Errors
+    /// Rejects invalid defaults, bindings, or a selection exceeding the existing
+    /// 4,096-byte encoded header budget. This never truncates a selection.
+    pub fn with_generation_defaults(
+        mut self,
+        defaults: &super::generation_defaults::CanonicalGenerationDefaultsV1,
+    ) -> Result<Self, ValidationError> {
+        self.selection.generation_defaults_digest = Some(defaults.digest()?);
+        self.validate()?;
+        bytes(&self.selection, MAX_SELECTION_HEADER_BYTES / 4 * 3)?;
+        Ok(self)
+    }
 }
 impl Validate for OrderedDispatchBindingV2 {
     fn validate(&self) -> Result<(), ValidationError> {

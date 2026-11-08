@@ -1558,7 +1558,7 @@ impl HttpExecutor {
                 .cloned();
             let mut routing_guard = None;
             let mut arm = || {
-                if tenancy::has_execution(ctx) {
+                if tenancy::legacy_routing(ctx) {
                     routing_guard = Some(crate::tenancy::routing::admit(ctx, target)?);
                 }
                 tenancy::admit_send(
@@ -1584,12 +1584,16 @@ impl HttpExecutor {
             {
                 attempts.dispatched(target.registry.is_some());
             }
-            let response = client
-                .send(request, &cancellation)
-                .await
-                .map_err(|error| scrubber.scrub_error(error.into()))?;
+            let response = client.send(request, &cancellation).await.map_err(|error| {
+                tenancy::transport_failed(ctx, &error);
+                scrubber.scrub_error(error.into())
+            })?;
             let status = response.status();
-            receipt::status(&mut tenant_attempt, status.as_u16())?;
+            receipt::status(
+                &mut tenant_attempt,
+                status.as_u16(),
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+            )?;
             if !status.is_success() {
                 crate::tenancy::routing::response_failed(
                     ctx,
@@ -2034,7 +2038,7 @@ impl Executor for HttpExecutor {
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
-                    let routing_guard = if tenancy::has_execution(ctx) {
+                    let routing_guard = if tenancy::legacy_routing(ctx) {
                         Some(crate::tenancy::routing::admit(ctx, target)?)
                     } else {
                         None
@@ -2053,14 +2057,21 @@ impl Executor for HttpExecutor {
                     client
                         .send(request, &tenancy::cancellation(ctx)?)
                         .await
-                        .map_err(|error| error_scrubber.scrub_error(error.into()))
+                        .map_err(|error| {
+                            tenancy::transport_failed(ctx, &error);
+                            error_scrubber.scrub_error(error.into())
+                        })
                 },
                 |response| Some(response.status().as_u16()),
             )
             .await?;
 
             let status = response.status();
-            receipt::status(&mut tenant_attempt, status.as_u16())?;
+            receipt::status(
+                &mut tenant_attempt,
+                status.as_u16(),
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+            )?;
             if !status.is_success() {
                 crate::tenancy::routing::response_failed(
                     ctx,

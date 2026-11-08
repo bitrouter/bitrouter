@@ -32,7 +32,7 @@ async fn scoped_key(
         .await?)
 }
 
-async fn narrow_binding(harness: &OrderedHarness, credentials: &[usize]) -> Result<()> {
+pub(super) async fn narrow_binding(harness: &OrderedHarness, credentials: &[usize]) -> Result<()> {
     let fixture = &harness.fixture;
     let binding = crate::tenancy::store::directory::binding_in(
         &fixture.db,

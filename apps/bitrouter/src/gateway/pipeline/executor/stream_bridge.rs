@@ -462,7 +462,7 @@ impl HttpExecutor {
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
-                    let routing_guard = if super::tenancy::has_execution(ctx) {
+                    let routing_guard = if super::tenancy::legacy_routing(ctx) {
                         Some(crate::tenancy::routing::admit(ctx, target)?)
                     } else {
                         None
@@ -481,14 +481,21 @@ impl HttpExecutor {
                     client
                         .send(request, &super::tenancy::cancellation(ctx)?)
                         .await
-                        .map_err(|error| error_scrubber.scrub_error(error.into()))
+                        .map_err(|error| {
+                            super::tenancy::transport_failed(ctx, &error);
+                            error_scrubber.scrub_error(error.into())
+                        })
                 },
                 |response| Some(response.status().as_u16()),
             )
             .await?;
 
             let status = response.status();
-            receipt::status(&mut tenant_attempt, status.as_u16())?;
+            receipt::status(
+                &mut tenant_attempt,
+                status.as_u16(),
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+            )?;
             if !status.is_success() {
                 crate::tenancy::routing::response_failed(
                     ctx,
@@ -546,6 +553,10 @@ impl HttpExecutor {
         let cancellation = super::tenancy::cancellation(ctx)?;
         response_body::check_length(&response, limit)?;
         let byte_stream = response_body::bounded(response.bytes_stream(), limit);
+        let operational = tenant_attempt
+            .as_ref()
+            .and_then(|permit| permit.operational())
+            .cloned();
 
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
@@ -640,6 +651,12 @@ impl HttpExecutor {
                             eventsource_stream::EventStreamError::Transport(error) => error,
                             other => stream_transport_error(false, &other),
                         };
+                        if let Some(hop) = &operational {
+                            if cancellation.is_cancelled() { hop.dropped(); }
+                            else if matches!(error, BitrouterError::UpstreamTimeout | BitrouterError::Upstream { .. }) {
+                                hop.transport_failed(matches!(error, BitrouterError::UpstreamTimeout));
+                            }
+                        }
                         drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                         return;
                     }

@@ -20,8 +20,15 @@ fn protocol(protocol: &ApiProtocol) -> Result<Protocol> {
     }
 }
 
-pub(super) fn status(permit: &mut Option<AttemptPermit>, status: u16) -> Result<()> {
+pub(super) fn status(
+    permit: &mut Option<AttemptPermit>,
+    status: u16,
+    retry_after: Option<u64>,
+) -> Result<()> {
     if let Some(permit) = permit {
+        if let Some(hop) = permit.operational() {
+            hop.headers(status, retry_after);
+        }
         permit.http_status(status).map_err(|_| unavailable())?;
     }
     Ok(())
@@ -146,6 +153,9 @@ fn event_usage<'a>(
 
 pub(super) fn complete(permit: &mut Option<AttemptPermit>, successful: bool) -> Result<()> {
     if let Some(permit) = permit {
+        if let Some(hop) = permit.operational() {
+            hop.terminal(successful);
+        }
         permit
             .validated_completion(successful)
             .map_err(|_| unavailable())?;

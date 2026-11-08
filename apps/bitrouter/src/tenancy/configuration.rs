@@ -37,6 +37,7 @@ pub(super) async fn prepare(
         now,
     )?;
     validate_profile(document)?;
+    state.resource_admission.configuration(&document.routes)?;
     let revision_id: RevisionId = uuid::Uuid::new_v4()
         .to_string()
         .try_into()
@@ -145,6 +146,9 @@ pub(super) fn apply(
         return Err(ErrorCode::RevisionConflict);
     }
     let revision = retained.revision.revision_id.clone();
+    state
+        .resource_admission
+        .configuration(&retained.revision.document.routes)?;
     let mut configuration = None;
     let changes = match command {
         Command::Configuration(..) => {

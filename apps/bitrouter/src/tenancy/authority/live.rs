@@ -192,6 +192,7 @@ pub(in crate::tenancy) enum DependencyIntent {
 
 struct State {
     header: AuthorityHeader,
+    admission: Arc<crate::tenancy::resources::admission::State>,
     publication: u64,
     views: Vec<Weak<Inner>>,
     reuse: Vec<reuse::Entry>,
@@ -218,6 +219,11 @@ impl ReadGuard<'_> {
     pub fn header(&self) -> &AuthorityHeader {
         &self.state.header
     }
+    pub fn snapshot(&self) -> Snapshot {
+        let mut snapshot = Snapshot::from_header(self.header());
+        snapshot.resource_admission = self.state.admission.clone();
+        snapshot
+    }
     pub fn publication(&self) -> u64 {
         self.state.publication
     }
@@ -230,7 +236,7 @@ impl ReadGuard<'_> {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        let view = lease
+        let mut view = lease
             .inner
             .view
             .lock()
@@ -238,7 +244,13 @@ impl ReadGuard<'_> {
         if view.publication != self.state.publication {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        check(&view)
+        let previous = std::mem::replace(
+            &mut view.facts.resource_admission,
+            self.state.admission.clone(),
+        );
+        let result = check(&view);
+        view.facts.resource_admission = previous;
+        result
     }
 }
 
@@ -252,6 +264,7 @@ pub(in crate::tenancy) struct Publication {
     owner: Arc<Authority>,
     expected: u64,
     header: AuthorityHeader,
+    admission: Option<Arc<crate::tenancy::resources::admission::State>>,
     views: Vec<Staged>,
     finished: bool,
 }
@@ -292,6 +305,7 @@ impl Authority {
             working_bytes,
             state: RwLock::new(State {
                 header,
+                admission: Arc::default(),
                 publication: 0,
                 views: Vec::new(),
                 reuse: Vec::new(),
@@ -376,6 +390,7 @@ impl Authority {
             return Err(ErrorCode::CapacityExceeded);
         }
         let mut bytes = extra;
+        memory::add(&mut bytes, state.admission.working_bytes()?)?;
         memory::add(&mut bytes, memory::reuse(state.reuse.capacity())?)?;
         for live in state.views.iter().filter_map(Weak::upgrade) {
             bytes = bytes
@@ -487,7 +502,10 @@ impl Authority {
         replacement: usize,
     ) -> Result<usize> {
         state.views.retain(|view| view.strong_count() > 0);
-        let mut bytes = state.registry_bytes()?;
+        let mut bytes = state
+            .registry_bytes()?
+            .checked_add(state.admission.working_bytes()?)
+            .ok_or(ErrorCode::CapacityExceeded)?;
         let mut found = false;
         for live in state.views.iter().filter_map(Weak::upgrade) {
             let charge = if Arc::ptr_eq(&live, &lease.inner) {
@@ -512,12 +530,40 @@ impl Authority {
         Ok(bytes)
     }
 
+    pub fn initialize_admission(
+        &self,
+        admission: crate::tenancy::resources::admission::State,
+    ) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        if state.publication != 0 || state.preparing || !state.views.is_empty() {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        if admission.working_bytes()? > self.working_bytes {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        state.admission = Arc::new(admission);
+        Ok(())
+    }
+
     /// Stage every live view before writing durable authority. No directory scan.
     pub fn prepare(
         self: &Arc<Self>,
         header: AuthorityHeader,
         changes: &[Change],
         oauth: Option<(&Metadata, &Metadata)>,
+    ) -> Result<Publication> {
+        self.prepare_with_admission(header, changes, oauth, None)
+    }
+
+    pub fn prepare_with_admission(
+        self: &Arc<Self>,
+        header: AuthorityHeader,
+        changes: &[Change],
+        oauth: Option<(&Metadata, &Metadata)>,
+        admission: Option<Arc<crate::tenancy::resources::admission::State>>,
     ) -> Result<Publication> {
         let mut state = self
             .state
@@ -532,11 +578,15 @@ impl Authority {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         forecast::unique(changes)?;
+        let admission_bytes = admission
+            .as_ref()
+            .unwrap_or(&state.admission)
+            .working_bytes()?;
         let (predicted, actual_registry, mut views) =
-            match self.reserve_publication(&mut state, changes, oauth) {
+            match self.reserve_publication(&mut state, changes, oauth, admission_bytes) {
                 Err(ErrorCode::CapacityExceeded) => {
                     state.clear_reuse()?;
-                    self.reserve_publication(&mut state, changes, oauth)?
+                    self.reserve_publication(&mut state, changes, oauth, admission_bytes)?
                 }
                 result => result?,
             };
@@ -577,6 +627,7 @@ impl Authority {
             owner: self.clone(),
             expected: state.publication,
             header,
+            admission,
             views,
             finished: false,
         })
@@ -587,6 +638,7 @@ impl Authority {
         state: &mut State,
         changes: &[Change],
         oauth: Option<(&Metadata, &Metadata)>,
+        admission_bytes: usize,
     ) -> Result<(usize, usize, Vec<Staged>)> {
         state.views.retain(|view| view.strong_count() > 0);
         let mut views = Vec::new();
@@ -596,7 +648,9 @@ impl Authority {
         let registry = memory::registry(state.views.capacity().max(views.capacity()))?
             .checked_add(memory::reuse(state.reuse.capacity())?)
             .ok_or(ErrorCode::CapacityExceeded)?;
-        let mut predicted = registry;
+        let mut predicted = registry
+            .checked_add(admission_bytes)
+            .ok_or(ErrorCode::CapacityExceeded)?;
         // Complete the aggregate preflight before cloning any payload, including
         // when a later view is the one that would exceed the working budget.
         for inner in state.views.iter().filter_map(Weak::upgrade) {
@@ -644,6 +698,9 @@ impl Publication {
             view.publish_header(&self.header, publication);
         }
         std::mem::swap(&mut state.header, &mut self.header);
+        if let Some(admission) = self.admission.take() {
+            state.admission = admission;
+        }
         state.publication = publication;
         state.preparing = false;
         self.finished = true;

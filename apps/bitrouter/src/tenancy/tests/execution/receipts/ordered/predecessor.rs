@@ -426,6 +426,8 @@ async fn qualify(
         correlation_id: "unsupported-v2".try_into()?,
         receipt_mode: "strict".into(),
         selection: OrderedCandidateSelectionV1 {
+            generation_defaults_digest: None,
+            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
             schema_version: 1,
             route: provisioned.route.clone(),
             candidate_indices: vec![1],
@@ -500,6 +502,7 @@ async fn qualify_transport(version: HttpVersion) -> Result<bool> {
         observed: Arc::new(Mutex::new(Vec::new())),
         held_provider: Arc::new(Mutex::new(None)),
         malformed: None,
+        controls: Arc::new(ProviderControls::default()),
     };
     let router = Router::new()
         .route("/v1/chat/completions", post(ordered_provider))

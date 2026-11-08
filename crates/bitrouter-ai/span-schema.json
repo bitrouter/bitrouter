@@ -1,5 +1,5 @@
 {
-  "schema_version": "2",
+  "schema_version": "3",
   "scope_name": "io.bitrouter.observe",
   "scope_version": "{rendering crate version}",
   "resource_attributes": [
@@ -62,6 +62,30 @@
       "parent": "The ingress SERVER span when one exists; otherwise the inbound W3C trace context; otherwise a trace root.",
       "note": "Full request lifetime, named for the model the caller asked for — not the model that ultimately served it.",
       "attributes": [
+        {
+          "key": "bitrouter.installation_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution installation; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.tenant_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution owner; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.execution_revision",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Exact retained tenant configuration revision."
+        },
+        {
+          "key": "bitrouter.candidate_index",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Original ordered root ordinal from the actual execution cursor, never target-name inference."
+        },
         {
           "key": "bitrouter.operation",
           "type": "string",
@@ -330,6 +354,30 @@
       "parent": "The ingress SERVER span when one exists; otherwise the inbound W3C trace context; otherwise a trace root.",
       "note": "Full native Decisions request lifetime; no first token, generated messages, or continuation is invented.",
       "attributes": [
+        {
+          "key": "bitrouter.installation_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution installation; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.tenant_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution owner; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.execution_revision",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Exact retained tenant configuration revision."
+        },
+        {
+          "key": "bitrouter.candidate_index",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Original ordered root ordinal from the actual execution cursor, never target-name inference."
+        },
         {
           "key": "bitrouter.operation",
           "type": "string",
@@ -626,6 +674,66 @@
       "note": "A plain HTTP client span for one upstream attempt — *not* a gen_ai generation. See the `single-generation` invariant. Distinguished from the root `chat` span by kind: this one is CLIENT, the root is INTERNAL.",
       "attributes": [
         {
+          "key": "bitrouter.installation_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution installation; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.tenant_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution owner; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.execution_revision",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Exact retained tenant configuration revision."
+        },
+        {
+          "key": "bitrouter.request_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native tenant execution identity, copied onto each bound hop."
+        },
+        {
+          "key": "bitrouter.inbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual retained ingress protocol for a bound tenant call."
+        },
+        {
+          "key": "bitrouter.candidate_index",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Original ordered root ordinal from the actual execution cursor, never target-name inference."
+        },
+        {
+          "key": "bitrouter.attempt_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Physical attempt identity, only after the actual send gate arms."
+        },
+        {
+          "key": "bitrouter.hop_outcome",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted closed terminal class: completed, http_rejection, transport_failure, timeout, protocol_invalid, local_rate_limited, local_circuit_blocked, request_budget_exhausted, authority_denied, capacity_denied, pre_dispatch_failure, caller_policy, caller_cancelled or unknown."
+        },
+        {
+          "key": "http.response.status_code",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Actual observed provider HTTP status; never a gateway-rendered synthetic status."
+        },
+        {
+          "key": "bitrouter.hop_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Monotonic reached-executor interval, excluding later financial I/O; omitted on signed-64-bit overflow."
+        },
+        {
           "key": "bitrouter.operation",
           "type": "string",
           "requirement": "required",
@@ -707,6 +815,66 @@
       "parent": "The root decisions span.",
       "note": "Plain HTTP client attempt; native usage is recorded once on the root model-call span.",
       "attributes": [
+        {
+          "key": "bitrouter.installation_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution installation; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.tenant_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted tenant execution owner; absent for unbound calls."
+        },
+        {
+          "key": "bitrouter.execution_revision",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Exact retained tenant configuration revision."
+        },
+        {
+          "key": "bitrouter.request_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Native tenant execution identity, copied onto each bound hop."
+        },
+        {
+          "key": "bitrouter.inbound_protocol",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Actual retained ingress protocol for a bound tenant call."
+        },
+        {
+          "key": "bitrouter.candidate_index",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Original ordered root ordinal from the actual execution cursor, never target-name inference."
+        },
+        {
+          "key": "bitrouter.attempt_id",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Physical attempt identity, only after the actual send gate arms."
+        },
+        {
+          "key": "bitrouter.hop_outcome",
+          "type": "string",
+          "requirement": "conditional",
+          "note": "Trusted closed terminal class: completed, http_rejection, transport_failure, timeout, protocol_invalid, local_rate_limited, local_circuit_blocked, request_budget_exhausted, authority_denied, capacity_denied, pre_dispatch_failure, caller_policy, caller_cancelled or unknown."
+        },
+        {
+          "key": "http.response.status_code",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Actual observed provider HTTP status; never a gateway-rendered synthetic status."
+        },
+        {
+          "key": "bitrouter.hop_duration_ms",
+          "type": "int",
+          "requirement": "conditional",
+          "note": "Monotonic reached-executor interval, excluding later financial I/O; omitted on signed-64-bit overflow."
+        },
         {
           "key": "bitrouter.operation",
           "type": "string",

@@ -481,6 +481,8 @@ fn delivery_handshake(
 }
 
 struct ObservedUpstreamStream {
+    execution: Option<std::sync::Weak<crate::tenancy::execution::TenantExecution>>,
+    operational: Option<Arc<crate::tenancy::operational::Hop>>,
     inner: StreamPartStream,
     hooks: Vec<Arc<dyn ObserveHook>>,
     request_id: String,
@@ -495,6 +497,23 @@ impl ObservedUpstreamStream {
             return;
         }
         self.terminal = true;
+        if let Some(hop) = &self.operational {
+            match outcome {
+                StreamHopOutcome::Failed(error) => {
+                    if let Some(execution) =
+                        self.execution.as_ref().and_then(std::sync::Weak::upgrade)
+                    {
+                        execution.operational_failed(error);
+                    } else {
+                        hop.dropped();
+                    }
+                }
+                StreamHopOutcome::Dropped => hop.dropped(),
+                // Only the protocol decoder, after terminal/EOF validation,
+                // can mark success; wrapper EOF alone proves no such fact.
+                StreamHopOutcome::Completed => {}
+            }
+        }
         let duration_ms =
             crate::gateway::pipeline::timing::elapsed_millis(self.provider_started_at);
         for hook in &self.hooks {
@@ -2827,7 +2846,7 @@ impl Pipeline {
         let mut errors = Vec::new();
         #[cfg(feature = "server-tools")]
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
-        for target in chain {
+        for (attempt_index, target) in chain.iter().enumerate() {
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
             }
@@ -2846,15 +2865,22 @@ impl Pipeline {
                 }
             }
             self.wait_before_fallback(errors.len()).await;
+            let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
+                Some(execution) => execution.reached_hop(attempt_index, target),
+                None => Ok(()),
+            };
             self.observe_hop_start(ctx, target).await;
-            let outcome = match input {
-                #[cfg(feature = "server-tools")]
-                ExecutionInput::Generation(prompt) => {
-                    self.executor.execute(target, prompt, ctx).await
-                }
-                ExecutionInput::Decisions(request) => {
-                    self.executor.execute_decisions(target, request, ctx).await
-                }
+            let outcome = match reached {
+                Err(error) => Err(error),
+                Ok(()) => match input {
+                    #[cfg(feature = "server-tools")]
+                    ExecutionInput::Generation(prompt) => {
+                        self.executor.execute(target, prompt, ctx).await
+                    }
+                    ExecutionInput::Decisions(request) => {
+                        self.executor.execute_decisions(target, request, ctx).await
+                    }
+                },
             }
             .and_then(|result| {
                 let matches = match input {
@@ -2993,6 +3019,10 @@ impl Pipeline {
             };
             self.wait_before_fallback(dispatched).await;
             dispatched += 1;
+            let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
+                Some(execution) => execution.reached_hop(attempt_index, target),
+                None => Ok(()),
+            };
             self.observe_hop_start(ctx, target).await;
             if let Some((control, _)) = attempt_control
                 && let Err(error) = control.before_attempt(ctx.request_id(), index).await
@@ -3012,25 +3042,29 @@ impl Pipeline {
             }
             let started = Instant::now();
             let mut stream_interruption = None;
-            let mut outcome = match attempt_control {
-                Some((control, _)) if control.observe_stream() => {
-                    let (outcome, interruption) = Box::pin(
-                        self.execute_native_stream_attempt(target, prompt, ctx, control, started),
-                    )
-                    .await;
-                    stream_interruption = interruption;
-                    outcome
-                }
-                Some((control, _)) => tokio::select! {
-                    // A prior cancellation must not poll a new executor future.
-                    // Accepted work may still have unknown provider-side usage.
-                    biased;
-                    _ = control.provider_cancelled() => Err(BitrouterError::internal(
-                        "managed provider execution cancelled by durable authority",
-                    )),
-                    outcome = self.executor.execute(target, prompt, ctx) => outcome,
+            let mut outcome = match reached {
+                Err(error) => Err(error),
+                Ok(()) => match attempt_control {
+                    Some((control, _)) if control.observe_stream() => {
+                        let (outcome, interruption) =
+                            Box::pin(self.execute_native_stream_attempt(
+                                target, prompt, ctx, control, started,
+                            ))
+                            .await;
+                        stream_interruption = interruption;
+                        outcome
+                    }
+                    Some((control, _)) => tokio::select! {
+                        // A prior cancellation must not poll a new executor future.
+                        // Accepted work may still have unknown provider-side usage.
+                        biased;
+                        _ = control.provider_cancelled() => Err(BitrouterError::internal(
+                            "managed provider execution cancelled by durable authority",
+                        )),
+                        outcome = self.executor.execute(target, prompt, ctx) => outcome,
+                    },
+                    None => self.executor.execute(target, prompt, ctx).await,
                 },
-                None => self.executor.execute(target, prompt, ctx).await,
             };
             outcome = outcome.and_then(|result| {
                 if result.result.generation().is_none() {
@@ -3273,7 +3307,7 @@ impl Pipeline {
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
-        for target in chain {
+        for (attempt_index, target) in chain.iter().enumerate() {
             if !self
                 .admit_candidate(
                     target,
@@ -3288,11 +3322,19 @@ impl Pipeline {
             }
             self.wait_before_fallback(errors.len()).await;
             let provider_started_at = Instant::now();
+            let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
+                Some(execution) => execution.reached_hop(attempt_index, target),
+                None => Ok(()),
+            };
             self.observe_hop_start(ctx, target).await;
-            let outcome = self
-                .executor
-                .execute_stream(target, ctx.require_generation_prompt()?, ctx)
-                .await;
+            let outcome = match reached {
+                Err(error) => Err(error),
+                Ok(()) => {
+                    self.executor
+                        .execute_stream(target, ctx.require_generation_prompt()?, ctx)
+                        .await
+                }
+            };
             match &outcome {
                 Ok(_) => {
                     self.observe_hop_end(ctx, target, HopOutcome::StreamStarted)
@@ -3309,6 +3351,12 @@ impl Pipeline {
                 Ok(stream) => {
                     ctx.set_successful_target(target.clone());
                     let stream = Box::pin(ObservedUpstreamStream {
+                        execution: ctx
+                            .extension::<crate::tenancy::execution::TenantExecution>()
+                            .map(|execution| Arc::downgrade(&execution)),
+                        operational: ctx
+                            .extension::<crate::tenancy::execution::TenantExecution>()
+                            .and_then(|execution| execution.current_hop()),
                         inner: stream,
                         hooks: applicable(&self.observe_hooks, ModelOperation::Generation),
                         request_id: ctx.request_id().to_string(),
@@ -3440,6 +3488,16 @@ impl Pipeline {
         {
             return FallbackDecision::Fail(err.clone());
         }
+        if let Some(allowed) = ctx
+            .extension::<crate::tenancy::execution::TenantExecution>()
+            .and_then(|execution| execution.operational_fallback())
+        {
+            return if allowed {
+                FallbackDecision::TryNext
+            } else {
+                FallbackDecision::Fail(err.clone())
+            };
+        }
         #[cfg(feature = "multi-instance")]
         if let Some(admission) =
             ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
@@ -3557,6 +3615,11 @@ impl Pipeline {
         target: &RoutingTarget,
         outcome: HopOutcome<'_>,
     ) {
+        if let HopOutcome::Failed(error) = outcome
+            && let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
+        {
+            execution.operational_failed(error);
+        }
         observe_hop_end_with(&self.observe_hooks, ctx, target, outcome).await;
     }
 

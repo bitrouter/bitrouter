@@ -87,7 +87,10 @@ fn contract_crate_keeps_its_dependency_boundary() -> Result<(), Box<dyn std::err
     // harness dependencies do not grant production runtime ownership.
     // The isolated Cargo dependency-tree gate also checks transitive dependencies.
     fn check(name: &str, declaration: &toml::Value, development: bool) {
-        let contract = matches!(name, "serde" | "serde_json" | "thiserror" | "schemars");
+        let contract = matches!(
+            name,
+            "serde" | "serde_json" | "thiserror" | "schemars" | "sha2"
+        );
         let binding = matches!(name, "axum" | "futures-core" | "futures-util");
         let fixture = development && matches!(name, "tokio" | "http-body-util" | "tower" | "toml");
         assert!(

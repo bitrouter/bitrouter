@@ -119,7 +119,7 @@ impl Service {
         if !matches!(caller, Caller::Installation(_)) {
             return Err(ErrorCode::Forbidden.into());
         }
-        let _read = self.read_permit()?;
+        let read = self.read_permit()?;
         let before = self.current()?;
         before
             .principal(caller, chrono::Utc::now())
@@ -136,16 +136,52 @@ impl Service {
             .resources
             .open_execution(&stored)
             .map_err(|_| self.unavailable())?;
-        let manifest = view
+        let mut manifest = view
             .candidate_manifest(reference, inbound, before.revision)
             .map_err(Failure::from)?;
-        let after = self.current()?;
-        after
-            .principal(caller, chrono::Utc::now())
-            .map_err(Failure::from)?;
-        if after.revision != before.revision || stored.authority_revision > after.revision {
-            return Err(ErrorCode::RevisionConflict.into());
+        if manifest.admission_mode != bitrouter_ai::tenancy::admission::AdmissionMode::ProfiledV1 {
+            if self.current()?.revision != before.revision
+                || stored.authority_revision > before.revision
+            {
+                return Err(ErrorCode::RevisionConflict.into());
+            }
+            return Ok(manifest);
         }
+        drop(read);
+        let authenticated = self
+            .authority_read(super::actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
+        self.admitted_authority_read(|| {
+            let mut dependencies = vec![reference.clone()];
+            for candidate in &manifest.candidates {
+                for dependency in
+                    std::iter::once(&candidate.credential).chain(candidate.admission_profile.iter())
+                {
+                    if !dependencies.contains(dependency) {
+                        dependencies.push(dependency.clone());
+                    }
+                }
+            }
+            Ok(super::actor::AuthoritySubject::Extend {
+                caller: caller.clone(),
+                lease: authenticated.lease.clone(),
+                dependencies,
+                intent: super::authority::live::DependencyIntent::Owner,
+            })
+        })
+        .await?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&authenticated.lease, |view| {
+                let after = view.facts();
+                after.principal(caller, chrono::Utc::now())?;
+                if after.revision != before.revision || stored.authority_revision > after.revision {
+                    return Err(ErrorCode::RevisionConflict);
+                }
+                self.observe_manifest(after, &mut manifest)
+            })
+            .map_err(Failure::from)?;
         Ok(manifest)
     }
 }

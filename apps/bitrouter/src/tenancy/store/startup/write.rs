@@ -50,7 +50,10 @@ pub(super) async fn upgrade_format_in(
     let header = &validated.header;
     let query = Query::update()
         .table(Alias::new(Table::Header.name()))
-        .value(Alias::new("schema_version"), 2_i32)
+        .value(
+            Alias::new("schema_version"),
+            super::super::super::AUTHORITY_SCHEMA_VERSION,
+        )
         .and_where(Expr::col(Alias::new("singleton")).eq(1_i32))
         .and_where(Expr::col(Alias::new("schema_version")).eq(validated.format.number()))
         .and_where(Expr::col(Alias::new("installation_id")).eq(header.installation.as_str()))

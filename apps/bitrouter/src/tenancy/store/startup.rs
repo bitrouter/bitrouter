@@ -28,6 +28,7 @@ pub(in crate::tenancy) const LEGACY_SAFETY_OPERATIONS: u64 = 512;
 pub(in crate::tenancy) enum Format {
     V1,
     V2,
+    V3,
 }
 
 impl Format {
@@ -35,6 +36,7 @@ impl Format {
         match self {
             Self::V1 => 1,
             Self::V2 => 2,
+            Self::V3 => 3,
         }
     }
 }
@@ -81,6 +83,7 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
     let format = match row.try_get::<i32>("", "schema_version")? {
         1 => Format::V1,
         2 => Format::V2,
+        3 => Format::V3,
         _ => anyhow::bail!("unsupported authority store format"),
     };
     let created_at = super::string(row, "created_at")?;

@@ -33,6 +33,8 @@ fn identity(installation: &InstallationId, id: &str, count: usize) -> Result<Ide
         revision: "revision".try_into()?,
         ordered: Some((
             AcceptedSelectionV2 {
+                generation_defaults_digest: None,
+                admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
                 route: ResourceRef {
                     owner_kind: OwnerKind::Tenant,
                     owner_id: "tenant".try_into()?,
@@ -106,6 +108,67 @@ async fn persist_intent(db: &DatabaseConnection, intent: &Intent) -> Result<()> 
     let tx = db.begin().await?;
     insert(&tx, intent).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+#[test]
+fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<()> {
+    use bitrouter_ai::tenancy::admission::AdmissionMode;
+    use serde_json::json;
+    for (count, expected) in [(1, 1826), (8, 1854), (9, 1860), (64, 2082)] {
+        let selected = AcceptedSelectionV2 {
+            generation_defaults_digest: None,
+            admission_mode: AdmissionMode::ProfiledV1,
+            route: ResourceRef {
+                owner_kind: OwnerKind::OperatorPool,
+                owner_id: "o".repeat(128).try_into()?,
+                resource_kind: ResourceKind::Route,
+                resource_id: "r".repeat(128).try_into()?,
+                revision_id: "v".repeat(128).try_into()?,
+            },
+            inbound_protocol: GenerationProtocol::ChatCompletions,
+            candidate_indices: (0..count)
+                .map(|index| u16::try_from(255 - index))
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        let budget = EvidenceBudgetV2::for_attempts(count)?;
+        let intent: Intent = serde_json::from_value(
+            json!({"schema_version":2,"installation":"i".repeat(128),
+            "tenant":"t".repeat(128),"principal":"p".repeat(128),"execution":"e".repeat(128),
+            "correlation":"c".repeat(128),"revision":"r".repeat(128),"selection":selected,"attempt_limit":64,
+            "evidence_bytes":budget.max_bytes,"frame_bytes":budget.max_frame_bytes,"reserved_bytes":budget.reserved_bytes,
+            "frames":budget.max_frames,"origin":{"acquisition":"00000000-0000-0000-0000-000000000000","instance":"n".repeat(128)},
+            "admitted_at":"2026-11-02T00:00:00Z"}),
+        )?;
+        intent.validate()?;
+        ensure!(serde_json::to_vec(&intent)?.len() == expected && expected < MAX_BYTES);
+        let mut extended = intent.clone();
+        extended.selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
+        extended.validate()?;
+        ensure!(serde_json::to_vec(&extended)?.len() == expected + 96 && expected + 96 < MAX_BYTES);
+        let Terminal::V2(unknown) = extended.unknown()? else {
+            anyhow::bail!("format")
+        };
+        ensure!(extended.matches(&unknown.receipt) && !intent.matches(&unknown.receipt));
+        unknown
+            .evidence
+            .document
+            .validate_against(&unknown.receipt)?;
+        let Terminal::V2(terminal) = intent.unknown()? else {
+            anyhow::bail!("format");
+        };
+        ensure!(intent.matches(&terminal.receipt));
+        let mut changed = terminal.receipt.clone();
+        changed.accepted_selection.admission_mode = AdmissionMode::Legacy;
+        ensure!(!intent.matches(&changed));
+        let mut oversized = serde_json::to_value(intent)?;
+        oversized["admitted_at"] = json!(format!("2026-11-02T00:00:00.{}Z", "0".repeat(MAX_BYTES)));
+        ensure!(
+            serde_json::from_value::<Intent>(oversized)?
+                .validate()
+                .is_err()
+        );
+    }
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 //! Admitted-value lookup proof, without retaining Service in the actor job.
-use super::{Permission, Snapshot, Submission, TenantExecution, authorize_route};
+use super::{Permission, Snapshot, Submission, TenantExecution, authorize_effect};
 use crate::tenancy::{continuation::http::codec::Owner, transaction::Proof};
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use std::sync::{Arc, Weak};
@@ -60,7 +60,7 @@ impl Access {
         {
             return Err(ErrorCode::Forbidden);
         }
-        authorize_route(state, &self.submission, self.route.dependencies())
+        authorize_effect(state, &self.submission, &self.route)
     }
 }
 impl TenantExecution {
