@@ -776,7 +776,7 @@ move types speculatively or add HTTP dependencies to the renderer.
 | `crates/bitrouter-mcp/src/actions/mod.rs` | Add explicit remote action exposure metadata and amend `Reach` comments; no remote runtime or app dependency. |
 | `crates/bitrouter-orchestrator/src/acp/client.rs` | Only necessary transport-facing reliability/subscription and capability adjustments; keep ACP behavior centralized. |
 | `crates/bitrouter-orchestrator/src/acp/controller.rs` | Preserve default transparent local behavior. Add a narrow policy hook only if the app transport boundary cannot enforce before forwarding. Keep HTTP/auth/context policy outside the protocol controller. |
-| `crates/bitrouter-sdk/src/config/mod.rs` | Serializable control config consumed by the app; validate deployment/auth/path policy in app code. |
+| `apps/bitrouter/src/config/mod.rs` | Serializable control config consumed by the app; validate deployment/auth/path policy in app code. |
 | `crates/bitrouter-tui/src/machine.rs` and renderer modules | Plain connection-status/remote-location data and display; no networking, daemon ports, DB, async runtime, or app dependency. |
 
 ### 10.1 ACTIONS integration
