@@ -9,11 +9,14 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::{
     tenancy::{
-        admission::AdmissionProfileV1,
+        admission::HealthProfileV1,
+        admission_v2::AdmissionProfileV2,
         authority::{ResourceKey, ResourceKind},
         configuration::ResourceRef,
+        identity::{OwnerId, ResourceId},
         operation::ErrorCode,
         resources::Definition as PublicDefinition,
+        validation::Validate,
     },
     types::ApiProtocol,
 };
@@ -30,6 +33,10 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+pub(in crate::tenancy) mod profile;
+
+use profile::{Profile, View};
+
 // Limit the feature's retained operational facts, independent of the directory
 // and ordinary resource catalog. One conservative allowance covers each retained
 // profile/route identity, its compact rules, lifecycle facts and map capacity.
@@ -39,8 +46,9 @@ const FACT_BYTES: usize = 4096;
 /// Shared authenticated admission metadata, published under the authority gate.
 #[derive(Clone, Default)]
 pub(in crate::tenancy) struct State {
-    profiles: HashMap<ResourceRef, AdmissionProfileV1>,
+    profiles: HashMap<ResourceRef, Profile>,
     lifecycle: lifecycle::State,
+    group_rules: HashMap<(OwnerId, ResourceId), HealthProfileV1>,
     policy_keys: HashSet<ResourceKey>,
     protected_keys: HashSet<ResourceKey>,
     profiled_routes: HashSet<ResourceRef>,
@@ -72,7 +80,7 @@ impl State {
     pub(in crate::tenancy) fn current_profile(
         &self,
         pinned: &ResourceRef,
-    ) -> Option<(ResourceRef, &AdmissionProfileV1)> {
+    ) -> Option<(ResourceRef, &Profile)> {
         if !self.profiles.contains_key(pinned) || self.lifecycle.revoked(pinned) {
             return None;
         }
@@ -101,10 +109,7 @@ impl State {
         Ok(())
     }
 
-    pub(in crate::tenancy) fn profile(
-        &self,
-        reference: &ResourceRef,
-    ) -> Option<&AdmissionProfileV1> {
+    pub(in crate::tenancy) fn profile(&self, reference: &ResourceRef) -> Option<&Profile> {
         self.profiles.get(reference)
     }
 
@@ -115,13 +120,7 @@ impl State {
     ) -> std::result::Result<(), ErrorCode> {
         match definition {
             PublicDefinition::AdmissionProfile { profile } => {
-                if self.policy_keys.contains(key)
-                    || self.profiles.iter().any(|(reference, previous)| {
-                        reference.key() == *key && !previous.permits_rotation_to(profile)
-                    })
-                {
-                    return Err(ErrorCode::InvalidRequest);
-                }
+                self.validate_profile(key, View::Local(profile))?;
             }
             PublicDefinition::Policy { .. }
                 if self
@@ -136,6 +135,67 @@ impl State {
         Ok(())
     }
 
+    pub(in crate::tenancy) fn validate_shared_put(
+        &self,
+        key: &ResourceKey,
+        profile: &AdmissionProfileV2,
+    ) -> std::result::Result<(), ErrorCode> {
+        self.validate_profile(key, View::Shared(profile))
+    }
+
+    fn validate_profile(
+        &self,
+        key: &ResourceKey,
+        profile: View<'_>,
+    ) -> std::result::Result<(), ErrorCode> {
+        match profile {
+            View::Local(profile) => profile.validate(),
+            View::Shared(profile) => profile.validate(),
+        }
+        .map_err(|_| ErrorCode::InvalidRequest)?;
+        if self.policy_keys.contains(key)
+            || self.profiles.iter().any(|(reference, previous)| {
+                reference.key() == *key && !previous.permits_rotation_to(profile)
+            })
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        if let View::Shared(profile) = profile
+            && let (Some(group), Some(rules)) = (&profile.health_group_id, &profile.health)
+            && self
+                .group_rules
+                .get(&(key.owner_id.clone(), group.clone()))
+                .is_some_and(|previous| previous != rules)
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        Ok(())
+    }
+
+    fn record_profile(&mut self, reference: &ResourceRef, profile: View<'_>) {
+        let retained = match profile {
+            View::Local(profile) => Profile::Local(profile.clone()),
+            View::Shared(profile) => {
+                if let (Some(group), Some(rules)) = (&profile.health_group_id, &profile.health) {
+                    // Retained history is never removed on revocation or rotation.
+                    self.group_rules
+                        .entry((reference.owner_id.clone(), group.clone()))
+                        .or_insert_with(|| rules.clone());
+                }
+                Profile::Shared(profile.clone())
+            }
+        };
+        self.profiles.insert(reference.clone(), retained);
+    }
+
+    pub(in crate::tenancy) fn apply_shared_put(
+        &mut self,
+        reference: &ResourceRef,
+        profile: &AdmissionProfileV2,
+    ) {
+        self.record_profile(reference, View::Shared(profile));
+    }
+
     pub(in crate::tenancy) fn apply_put(
         &mut self,
         reference: &ResourceRef,
@@ -143,7 +203,7 @@ impl State {
     ) {
         match definition {
             PublicDefinition::AdmissionProfile { profile } => {
-                self.profiles.insert(reference.clone(), profile.clone());
+                self.record_profile(reference, View::Local(profile));
             }
             PublicDefinition::ProfiledRoute { .. } => {
                 self.protected_keys.insert(reference.key());
@@ -160,17 +220,16 @@ impl State {
         let reference = &artifact.reference;
         match &artifact.definition {
             Definition::AdmissionProfile { profile } => {
-                ensure!(
-                    !self.policy_keys.contains(&reference.key()),
-                    "admission profile key changes type"
-                );
-                for (previous, rules) in &self.profiles {
-                    ensure!(
-                        previous.key() != reference.key() || rules.permits_rotation_to(profile),
-                        "admission profile immutable rules changed"
-                    );
-                }
-                self.profiles.insert(reference.clone(), profile.clone());
+                self.validate_profile(&reference.key(), View::Local(profile))
+                    .map_err(|_| anyhow::anyhow!("admission profile immutable rules changed"))?;
+                self.record_profile(reference, View::Local(profile));
+            }
+            Definition::AdmissionProfileV2 { profile } => {
+                self.validate_profile(&reference.key(), View::Shared(profile))
+                    .map_err(|_| {
+                        anyhow::anyhow!("admission profile or shared group immutable rules changed")
+                    })?;
+                self.record_profile(reference, View::Shared(profile));
             }
             Definition::Policy { .. } => {
                 ensure!(
@@ -257,6 +316,12 @@ fn ensure_admission_capacity(state: &State, budget: usize) -> Result<()> {
 }
 
 pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
+    // A retained closure must be internally consistent even when read without
+    // a live catalog. The writer additionally checks all historical members.
+    let mut profiles = State::default();
+    for artifact in artifacts {
+        profiles.insert(artifact)?;
+    }
     for artifact in artifacts {
         let Definition::ProfiledRoute {
             policy,
@@ -320,7 +385,7 @@ pub(super) fn validate_graph(artifacts: &[Artifact]) -> Result<()> {
                     .find(|item| item.reference == attachment.profile)
                     .context("missing pinned admission profile")?;
                 ensure!(
-                    matches!(profile.definition, Definition::AdmissionProfile { .. }),
+                    profile.definition.is_admission_profile(),
                     "admission association references another policy type"
                 );
                 super::execution::qualify_profiled_target(&target.target)?;

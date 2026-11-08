@@ -111,7 +111,7 @@ pub(super) fn decode_with_operation(
                     },
                 );
             }
-            Definition::AdmissionProfile { .. } => {}
+            Definition::AdmissionProfile { .. } | Definition::AdmissionProfileV2 { .. } => {}
             Definition::Policy { document, name, .. } => {
                 policies.insert(
                     reference,

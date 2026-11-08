@@ -7,10 +7,55 @@ use bitrouter_ai::tenancy::{
     identity::{InstallationId, TenantId},
     operation::OperationResult,
     resources::{ResourceCapabilities, ResourcePut, ResourceRevoke, ResourceStatus},
+    resources_v2::{ResourceCapabilitiesV2, ResourcePutV2},
 };
 use reqwest::Method;
 
 impl TenancyClient {
+    /// Discover explicit shared-health profile provisioning without changing v1 discovery.
+    ///
+    /// # Errors
+    /// Returns authentication, unsupported contract, installation or transport errors.
+    pub async fn resource_capabilities_v2(
+        &self,
+        installation: &InstallationId,
+    ) -> Result<ResourceCapabilitiesV2> {
+        let result: ResourceCapabilitiesV2 = self
+            .get("tenancy/resource-capabilities/v2", Some(installation))
+            .await?;
+        if &result.installation_id != installation {
+            return Err(Error::Response("resource capability installation mismatch"));
+        }
+        Ok(result)
+    }
+
+    /// Provision a shared-health member with explicit managed-head CAS.
+    ///
+    /// # Errors
+    /// Returns validation, authorization, CAS or uncertain-operation errors.
+    /// Never retries as v1 or removes an unsupported health-group binding.
+    pub async fn put_resource_v2(
+        &self,
+        tenant: &TenantId,
+        input: &ResourcePutV2,
+    ) -> Result<OperationResult> {
+        let result = self
+            .mutate(
+                Method::POST,
+                &format!("tenants/{tenant}/resources"),
+                &input.installation_id,
+                &input.operation_id,
+                input,
+            )
+            .await?;
+        transport::operation_result(
+            result,
+            &input.operation_id,
+            Some(input.key.resource_id.as_str()),
+            None,
+        )
+    }
+
     /// Discover the independently versioned dynamic resource contract.
     ///
     /// # Errors

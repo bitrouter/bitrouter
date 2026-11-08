@@ -803,6 +803,9 @@ jobs:
               'pub enum bitrouter_ai::stream::ProtocolEnd'
               'pub struct bitrouter_ai::tenancy::resources::ResourcePut'
               'pub struct bitrouter_ai::tenancy::admission::AdmissionProfileV1'
+              'pub struct bitrouter_ai::tenancy::admission_v2::AdmissionProfileV2'
+              'pub struct bitrouter_ai::tenancy::resources_v2::ResourcePutV2'
+              'pub struct bitrouter_ai::tenancy::resources_v2::ResourceCapabilitiesV2'
               'pub struct bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1'
               'pub struct bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1'
               'pub struct bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2'
@@ -844,6 +847,8 @@ jobs:
               "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_generation_defaults_envelope"
               "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_generation_defaults_envelope_v2"
               'bitrouter_sdk::tenancy::TenancyClient::put_resource'
+              'bitrouter_sdk::tenancy::TenancyClient::put_resource_v2'
+              'bitrouter_sdk::tenancy::TenancyClient::resource_capabilities_v2'
               'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
               'bitrouter_sdk::gateway::GatewayClient::stream_responses'
