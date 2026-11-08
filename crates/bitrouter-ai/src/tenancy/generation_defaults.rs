@@ -11,11 +11,52 @@ use super::{
 };
 use crate::types::ReasoningEffort;
 
+mod envelope;
+
 /// Reserved ordered request member, removed before protocol conversion.
 pub const BODY_MEMBER: &str = "bitrouter_generation_defaults";
+/// Reserved ordered member for canonical and supplemental request-local defaults.
+pub const ENVELOPE_BODY_MEMBER: &str = "bitrouter_generation_defaults_envelope";
 /// The existing tenant ingress ceiling applies to the entire request body.
 /// This individual value cannot be larger; enclosing request bytes count too.
 pub const MAX_DEFAULTS_BYTES: usize = 16 * 1024 * 1024;
+
+/// Request-local defaults applied after caller protocol parsing.
+///
+/// Caller-owned extras suppress same-name defaults on every outbound protocol.
+/// Supplemental parameters use the existing store, parallel-tool-call and Chat
+/// stream-options promotion rules; all other values remain opaque provider JSON.
+/// This object grants no routing, credential or continuation authority.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDefaultsEnvelopeV1 {
+    /// Format, exactly one.
+    #[serde(deserialize_with = "super::number::integer")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1)))]
+    pub schema_version: u8,
+    /// The unchanged canonical defaults contract; present null is invalid.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "CanonicalGenerationDefaultsV1"))]
+    pub canonical: Option<CanonicalGenerationDefaultsV1>,
+    /// Protocol-independent defaults, including null and malformed special values.
+    /// Protected request controls, canonical names and the two transport member
+    /// names are reserved. Nested names are unrestricted opaque data.
+    #[serde(deserialize_with = "envelope::supplemental")]
+    #[cfg_attr(feature = "schema", schemars(extend("propertyNames" = serde_json::json!({"not":{"enum":["model","messages","stream","temperature","top_p","max_tokens","reasoning_effort","top_k","seed","stop","presence_penalty","frequency_penalty",BODY_MEMBER,ENVELOPE_BODY_MEMBER]}}))))]
+    pub supplemental: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+impl std::fmt::Debug for GenerationDefaultsEnvelopeV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerationDefaultsEnvelopeV1")
+            .finish_non_exhaustive()
+    }
+}
 
 /// Canonical preset defaults for one ordered request, without arbitrary fields.
 ///

@@ -161,10 +161,14 @@ impl Error {
     }
 }
 
+enum Defaults {
+    Canonical(bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1),
+    Envelope(bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1),
+}
+
 /// One trusted submission, borrowing the gateway pool without mutating defaults.
 pub struct TenantGateway<'a> {
-    generation_defaults:
-        Option<bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1>,
+    generation_defaults: Option<Defaults>,
     client: &'a GatewayClient,
     headers: HeaderMap,
 }
@@ -379,7 +383,7 @@ impl TenantGateway<'_> {
             .post(url)
             .headers(self.headers.clone())
             .header(header::ACCEPT, accept);
-        let builder = if let Some(defaults) = &self.generation_defaults {
+        let builder = if let Some(Defaults::Canonical(defaults)) = &self.generation_defaults {
             let mut value = serde_json::to_value(request)
                 .map_err(|_| Error::Request("invalid request encoding"))?;
             let object = value
@@ -402,6 +406,10 @@ impl TenantGateway<'_> {
             builder
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(body)
+        } else if let Some(Defaults::Envelope(defaults)) = &self.generation_defaults {
+            builder
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(ordered::envelope_body(request, defaults)?)
         } else {
             builder.json(request)
         };
@@ -448,6 +456,11 @@ impl TenantGateway<'_> {
 fn reject_stream_shadow(
     extra: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<(), Error> {
+    if extra.contains_key(bitrouter_ai::tenancy::generation_defaults::ENVELOPE_BODY_MEMBER) {
+        return Err(Error::Request(
+            "defaults envelopes require the ordered attachment API",
+        ));
+    }
     if extra.contains_key("stream") {
         return Err(Error::Request(
             "extensions must not override the typed stream field",
