@@ -38,6 +38,7 @@ mod defaults;
 mod envelope;
 mod native_controls;
 mod predecessor;
+mod private_adapter;
 mod profiled;
 
 #[derive(Clone)]
@@ -243,13 +244,13 @@ impl OrderedHarness {
         native_controls: bool,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
-        Self::with_runtime_options(
+        Self::with_fixture_options(
             count,
             limit,
             malformed,
             defaults,
             profiles,
-            (native_controls, CapacityConfig::default()),
+            (native_controls, None, CapacityConfig::default()),
             edit,
         )
         .await
@@ -264,25 +265,29 @@ impl OrderedHarness {
         capacity: CapacityConfig,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
-        Self::with_runtime_options(
+        Self::with_fixture_options(
             count,
             limit,
             malformed,
             defaults,
             profiles,
-            (false, capacity),
+            (false, None, capacity),
             edit,
         )
         .await
     }
 
-    async fn with_runtime_options(
+    async fn with_fixture_options(
         count: usize,
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
         profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
-        (native_controls, capacity): (bool, CapacityConfig),
+        (native_controls, adapter, capacity): (
+            bool,
+            Option<Arc<private_adapter::FixtureAdapter>>,
+            CapacityConfig,
+        ),
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
         let directory = tempfile::tempdir()?;
@@ -299,16 +304,24 @@ impl OrderedHarness {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let held_provider = Arc::new(Mutex::new(None));
         let controls = Arc::new(ProviderControls::default());
-        let provider = Router::new()
+        let state = Provider {
+            observed: observed.clone(),
+            held_provider: held_provider.clone(),
+            malformed,
+            controls: controls.clone(),
+        };
+        let mut provider = Router::new()
             .route("/v1/chat/completions", post(ordered_provider))
             .route("/v1/messages", post(ordered_provider))
             .route("/v1/responses", post(ordered_provider))
-            .with_state(Provider {
-                observed: observed.clone(),
-                held_provider: held_provider.clone(),
-                malformed,
-                controls: controls.clone(),
-            });
+            .with_state(state.clone());
+        if let Some(adapter) = &adapter {
+            provider = provider.merge(
+                Router::new()
+                    .route("/adapter/v1/chat/completions", post(private_adapter::serve))
+                    .with_state((state, adapter.clone())),
+            );
+        }
         let provider = AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, provider).await
         }));
@@ -334,7 +347,15 @@ impl OrderedHarness {
             let provider = format!("provider-{index}");
             let model = format!("model-{index}");
             let credential = reference(ResourceKind::Credential, &format!("static-slot-{index}"))?;
-            providers.insert(provider.clone(), json!({"api_base":base, "api_protocol":[{"*":"chat_completions"}], "models":[{"id":model}]}));
+            let api_base = if adapter
+                .as_ref()
+                .is_some_and(|adapter| adapter.ordinal == index)
+            {
+                base.replace("/v1", "/adapter/v1")
+            } else {
+                base.clone()
+            };
+            providers.insert(provider.clone(), json!({"api_base":api_base, "api_protocol":[{"*":"chat_completions"}], "models":[{"id":model}]}));
             endpoints.push(json!({"provider":provider, "service_id":model}));
             definitions.push(json!({"reference":credential,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}}));
             credentials
@@ -421,6 +442,17 @@ impl OrderedHarness {
         .await?;
         fixture.service.execution_settings.ordered_attempt_limit = limit;
         fixture.service.execution_settings.ordered_native_controls = native_controls;
+        if adapter.is_some() {
+            let endpoint = base
+                .replace("/v1", "/adapter/v1/chat/completions")
+                .parse()?;
+            fixture.service.private_adapter = Some(Arc::new(
+                crate::tenancy::execution::private_adapter::Peer::for_test(
+                    endpoint,
+                    private_adapter::KEY,
+                )?,
+            ));
+        }
         let revision = if profiles.is_some() {
             profiled::draft_profiles(&fixture, &route).await?
         } else {

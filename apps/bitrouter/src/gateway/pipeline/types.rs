@@ -270,6 +270,8 @@ fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
             | "traceparent"
             | "tracestate"
             | "x-bitrouter-request-id"
+            | bitrouter_ai::tenancy::private_adapter::ATTEMPT_HEADER
+            | bitrouter_ai::tenancy::private_adapter::OUTCOME_HEADER
     )
 }
 

@@ -7,6 +7,73 @@ use bitrouter_ai::control::ControlScope;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Operator-only pairing for private ordered generation adapters.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateAdapterConfig {
+    /// Stable peer identifier used in signed attempt claims.
+    pub audience: String,
+    /// Exact generation URLs at one HTTPS origin.
+    pub endpoints: Vec<String>,
+    /// Environment variable holding an unpadded base64url 32-byte peer key.
+    pub key_env: String,
+}
+
+impl PrivateAdapterConfig {
+    pub(crate) fn checked_endpoints(&self) -> Result<Vec<url::Url>> {
+        ensure!(
+            (1..=128).contains(&self.audience.len())
+                && self.audience.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                }),
+            "invalid tenancy private adapter audience"
+        );
+        ensure!(
+            valid_env_name(&self.key_env),
+            "invalid tenancy private adapter key environment name"
+        );
+        ensure!(
+            (1..=8).contains(&self.endpoints.len()),
+            "tenancy private adapter requires one to eight endpoints"
+        );
+        let mut endpoints: Vec<url::Url> = Vec::with_capacity(self.endpoints.len());
+        for value in &self.endpoints {
+            let url = url::Url::parse(value)
+                .map_err(|_| anyhow::anyhow!("invalid tenancy private adapter endpoint"))?;
+            ensure!(
+                value.len() <= 512
+                    && url.as_str() == value
+                    && url.host().is_some()
+                    && url.scheme() == "https"
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && url.path() != "/"
+                    && !value.bytes().any(|byte| byte.is_ascii_whitespace()),
+                "tenancy private adapter requires an exact HTTPS endpoint"
+            );
+            ensure!(
+                endpoints
+                    .first()
+                    .is_none_or(|first| first.origin() == url.origin())
+                    && !endpoints.contains(&url),
+                "tenancy private adapter endpoints must be unique at one origin"
+            );
+            endpoints.push(url);
+        }
+        Ok(endpoints)
+    }
+}
+
+fn valid_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+}
+
 /// Local authority is independent of external login and commercial policy.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -23,6 +90,8 @@ pub struct TenancyConfig {
     /// Provider state may be shared by principals using the same upstream account;
     /// this policy does not establish historical tenant ownership of opaque IDs.
     pub ordered_native_controls: bool,
+    /// Optional private adapter reached through an ordered, profiled route.
+    pub private_adapter: Option<PrivateAdapterConfig>,
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
@@ -60,6 +129,7 @@ impl Default for TenancyConfig {
             capacity: capacity::CapacityConfig::default(),
             ordered_attempt_limit: 8,
             ordered_native_controls: false,
+            private_adapter: None,
             resource_import: None,
             learning_registrations: None,
             wrapping_key_env: None,
@@ -80,6 +150,13 @@ impl TenancyConfig {
     pub fn validate(&self, config: &super::Config) -> Result<()> {
         self.capacity.validate()?;
         self.validate_lifetime()?;
+        if let Some(adapter) = &self.private_adapter {
+            ensure!(
+                self.enabled,
+                "tenancy private adapter requires tenancy.enabled"
+            );
+            adapter.checked_endpoints()?;
+        }
         ensure!(
             self.resource_origins.len() <= 256,
             "too many tenancy resource origins"
@@ -132,13 +209,7 @@ impl TenancyConfig {
         }
         if let Some(name) = &self.wrapping_key_env {
             ensure!(
-                !name.is_empty()
-                    && name.len() <= 128
-                    && name.bytes().enumerate().all(|(index, byte)| {
-                        byte == b'_'
-                            || byte.is_ascii_alphabetic()
-                            || (index > 0 && byte.is_ascii_digit())
-                    }),
+                valid_env_name(name),
                 "invalid tenancy wrapping key environment name"
             );
         }
@@ -227,6 +298,44 @@ impl TenancyConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_adapter_requires_exact_https_urls_at_one_origin() -> anyhow::Result<()> {
+        let mut adapter = super::PrivateAdapterConfig {
+            audience: "test-peer".into(),
+            endpoints: vec![
+                "https://adapter.example/v1/chat/completions".into(),
+                "https://adapter.example/v1/messages".into(),
+            ],
+            key_env: "ADAPTER_TEST_KEY".into(),
+        };
+        assert_eq!(adapter.checked_endpoints()?.len(), 2);
+        for endpoint in [
+            "http://127.0.0.1/v1/messages",
+            "https://other.example/v1/messages",
+            "https://adapter.example:443/v1/messages",
+            "https://user@adapter.example/v1/messages",
+            "https://adapter.example/v1/messages?q=1",
+            "https://adapter.example/v1/messages#extra",
+            "https://adapter.example/v1/chat/completions",
+        ] {
+            adapter.endpoints[1] = endpoint.into();
+            assert!(adapter.checked_endpoints().is_err());
+        }
+        assert!(super::TenancyConfig::default().private_adapter.is_none());
+        let settings = super::TenancyConfig {
+            private_adapter: Some(adapter),
+            ..Default::default()
+        };
+        let Err(error) = settings.validate(&crate::config::Config::default()) else {
+            anyhow::bail!("pairing outside the owning tenancy service was accepted");
+        };
+        assert_eq!(
+            error.to_string(),
+            "tenancy private adapter requires tenancy.enabled"
+        );
+        Ok(())
+    }
+
     #[test]
     fn native_control_policy_requires_an_explicit_boolean_and_defaults_off() -> anyhow::Result<()> {
         let ordinary: super::TenancyConfig = serde_json::from_value(serde_json::json!({}))?;

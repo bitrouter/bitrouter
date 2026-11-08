@@ -143,6 +143,7 @@ pub(crate) struct Service {
     obligation_due: Arc<std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     execution_settings: crate::config::tenancy::TenancyConfig,
+    private_adapter: Option<Arc<execution::private_adapter::Peer>>,
     routing: Arc<routing::state::Runtime>,
     operational: Arc<operational::state::Runtime>,
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
@@ -397,11 +398,18 @@ impl Service {
         config.capacity.validate()?;
         let capacity = &config.capacity;
         tracing::info!(?capacity, "tenant runtime budgets selected");
+        let read_timeout = Duration::from_secs(config.stream_idle_timeout_secs);
+        let private_adapter = config
+            .private_adapter
+            .as_ref()
+            .map(|adapter| execution::private_adapter::Peer::load(adapter, read_timeout))
+            .transpose()?
+            .map(Arc::new);
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
         let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::new(
             crate::gateway::model::client::HttpTimeouts {
-                read: Duration::from_secs(config.stream_idle_timeout_secs),
+                read: read_timeout,
                 ..Default::default()
             },
         )?);
@@ -522,6 +530,7 @@ impl Service {
             admission,
             executor,
             execution_settings: config.clone(),
+            private_adapter,
             routing,
             operational: Arc::default(),
             #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]

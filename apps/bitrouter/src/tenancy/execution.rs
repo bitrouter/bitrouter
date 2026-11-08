@@ -56,6 +56,7 @@ mod native;
 mod native_controls;
 mod oauth;
 mod operational;
+pub(crate) mod private_adapter;
 mod profile;
 pub(crate) const BLOCK_LINK_HEADER: &str = "bitrouter-capture-link";
 pub(crate) const SELECTION_HEADER: &str = "bitrouter-candidate-selection";

@@ -210,6 +210,18 @@ impl Hop {
         );
     }
 
+    pub(super) fn adapter_incomplete(&self, refused: bool) {
+        self.finish(
+            if refused {
+                Outcome::AuthorityDenied
+            } else {
+                Outcome::Unknown
+            },
+            HealthOutcome::Neutral,
+            true,
+        );
+    }
+
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub(crate) fn observation(&self) -> Option<Observation> {
         let inner = self.inner.lock().ok()?;
