@@ -42,6 +42,9 @@ impl Service {
                 crate::tenancy::authority::live::DependencyIntent::Owner,
             )
             .await?;
+        if identity.binding.selection.is_some() {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
         let (credential_scope, binding_scope) = self
             .with_dispatch_authority(&identity, |state| {
                 let effective = state.effective(&identity.caller, &identity.tenant, Utc::now())?;

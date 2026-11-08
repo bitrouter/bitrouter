@@ -304,76 +304,82 @@ impl ExecutionUsageEvidenceV1 {
                 "absent evidence cannot assert observations",
             )?;
         }
-        for attempt in &self.attempts {
-            if let Some(target) = &attempt.target {
-                target.validate()?;
-            }
-            require(
-                !attempt.terminal_observed
-                    || matches!(attempt.outcome, Outcome::Completed | Outcome::Failed),
-                "usage terminal outcome",
-            )?;
-            require(
-                self.frames
-                    .iter()
-                    .filter(|f| f.attempt_id == attempt.attempt_id)
-                    .count()
-                    <= MAX_ATTEMPT_FRAMES,
-                "attempt frame bound",
-            )?;
-        }
-        for (index, frame) in self.frames.iter().enumerate() {
-            require(
-                frame.sequence == index as u64
-                    && self
-                        .attempts
-                        .iter()
-                        .any(|a| a.attempt_id == frame.attempt_id),
-                "usage frame identity/order",
-            )?;
-            unique(
-                &frame
-                    .quantities
-                    .iter()
-                    .map(|q| q.dimension)
-                    .collect::<Vec<_>>(),
-                0,
-                MAX_QUANTITIES,
-            )?;
-            require(
-                frame
-                    .quantities
-                    .iter()
-                    .all(|q| q.value.is_none_or(|v| v <= AuthorityRevision::MAX)),
-                "quantity range",
-            )?;
-            require(
-                frame.invalid || frame.quantities.iter().all(|q| q.value.is_some()),
-                "invalid quantity marker",
-            )?;
-            let source_matches = matches!(
-                (frame.protocol, frame.source),
-                (_, Source::Json | Source::HttpError)
-                    | (Protocol::ChatCompletions, Source::ChatChunk)
-                    | (Protocol::Responses, Source::ResponseTerminal)
-                    | (
-                        Protocol::Messages,
-                        Source::MessageStart | Source::MessageDelta
-                    )
-            );
-            require(source_matches, "usage source protocol")?;
-            require(
-                frame.semantics
-                    == if frame.protocol == Protocol::Decisions {
-                        Semantics::Unknown
-                    } else {
-                        Semantics::Snapshot
-                    },
-                "extractor semantics",
-            )?;
-        }
-        Ok(())
+        validate_observations(&self.attempts, &self.frames)
     }
+}
+
+// Shared extractor facts; version-specific attempt/frame/byte bounds stay at callers.
+pub(super) fn validate_observations(
+    attempts: &[AttemptEvidence],
+    frames: &[Frame],
+) -> Result<(), ValidationError> {
+    for attempt in attempts {
+        if let Some(target) = &attempt.target {
+            target.validate()?;
+        }
+        require(
+            !attempt.terminal_observed
+                || matches!(attempt.outcome, Outcome::Completed | Outcome::Failed),
+            "usage terminal outcome",
+        )?;
+        require(
+            frames
+                .iter()
+                .filter(|f| f.attempt_id == attempt.attempt_id)
+                .count()
+                <= MAX_ATTEMPT_FRAMES,
+            "attempt frame bound",
+        )?;
+    }
+    for (index, frame) in frames.iter().enumerate() {
+        require(
+            frame.sequence == index as u64
+                && attempts.iter().any(|a| a.attempt_id == frame.attempt_id),
+            "usage frame identity/order",
+        )?;
+        unique(
+            &frame
+                .quantities
+                .iter()
+                .map(|q| q.dimension)
+                .collect::<Vec<_>>(),
+            0,
+            MAX_QUANTITIES,
+        )?;
+        require(
+            frame
+                .quantities
+                .iter()
+                .all(|q| q.value.is_none_or(|v| v <= AuthorityRevision::MAX)),
+            "quantity range",
+        )?;
+        require(
+            frame.invalid || frame.quantities.iter().all(|q| q.value.is_some()),
+            "invalid quantity marker",
+        )?;
+        let source_matches = matches!(
+            (frame.protocol, frame.source),
+            (_, Source::Json | Source::HttpError)
+                | (Protocol::ChatCompletions, Source::ChatChunk)
+                | (Protocol::Responses, Source::ResponseTerminal)
+                | (
+                    Protocol::Messages,
+                    Source::MessageStart | Source::MessageDelta
+                )
+        );
+        require(source_matches, "usage source protocol")?;
+        require(
+            frame.semantics
+                == if frame.protocol == Protocol::Decisions {
+                    Semantics::Unknown
+                } else {
+                    Semantics::Snapshot
+                },
+            "extractor semantics",
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Separate discovery prevents widening the frozen tenancy capabilities DTO.

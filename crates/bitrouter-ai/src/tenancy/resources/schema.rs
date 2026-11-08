@@ -3,7 +3,7 @@
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use std::{borrow::Cow, marker::PhantomData};
 
-pub(super) struct RequiredNullable<T>(PhantomData<T>);
+pub(in crate::tenancy) struct RequiredNullable<T>(PhantomData<T>);
 
 impl<T: JsonSchema> JsonSchema for RequiredNullable<T> {
     fn schema_name() -> Cow<'static, str> {

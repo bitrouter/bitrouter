@@ -41,6 +41,8 @@ mod ingress_socket;
 pub(in crate::tenancy::tests::execution) mod latency;
 mod lifecycle;
 mod lifetime;
+#[cfg(unix)]
+mod ordered;
 mod reads;
 mod soft_stop;
 mod terminal;

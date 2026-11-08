@@ -55,6 +55,8 @@ mod m20240101_000042_receipt_archive;
 mod m20240101_000043_unknown_obligations;
 pub(crate) mod m20240101_000044_capacity_upgrade;
 
+pub(crate) mod m20240101_000045_ordered_receipts;
+
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 /// Read-only compatibility gate for the retired SQLite receipt reader.
@@ -62,6 +64,14 @@ pub(crate) async fn validate_receipt_archive(
     db: &impl sea_orm::ConnectionTrait,
 ) -> Result<(), sea_orm::DbErr> {
     m20240101_000035_execution_receipts::validate_archive(db).await
+}
+
+/// Compare the receipt table with the capacity-only predecessor's exact DDL.
+#[cfg(test)]
+pub(crate) async fn validate_capacity_receipt_shape(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000042_receipt_archive::catalog::validate_capacity_receipt_shape(db).await
 }
 
 /// Exact legacy or complete indexed SQLite OAuth/obligation storage profile.
@@ -128,6 +138,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000042_receipt_archive::Migration),
             Box::new(m20240101_000043_unknown_obligations::Migration),
             Box::new(m20240101_000044_capacity_upgrade::Migration),
+            Box::new(m20240101_000045_ordered_receipts::Migration),
         ]
     }
 }

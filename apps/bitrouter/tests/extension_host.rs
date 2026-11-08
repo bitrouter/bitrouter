@@ -284,9 +284,9 @@ async fn mount_upstream(upstream: &MockServer) {
 #[tokio::test]
 async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Result<()> {
     let home = temporary_home()?;
-    let (inference, control) = addresses()?;
     let upstream = MockServer::start().await;
     mount_upstream(&upstream).await;
+    let (inference, control) = addresses()?;
     write_config(home.path(), inference, control, &upstream.uri(), "rules-v1")?;
     let mut host = Host::spawn(home.path(), "normal")?;
     host.ready(home.path(), inference, control).await?;
@@ -500,9 +500,9 @@ async fn cli(home: &Path, command: &str) -> Result<std::process::Output> {
 #[tokio::test]
 async fn official_cli_uses_shared_host_without_extension_registrations() -> Result<()> {
     let home = temporary_home()?;
-    let (inference, control) = addresses()?;
     let upstream = MockServer::start().await;
     mount_upstream(&upstream).await;
+    let (inference, control) = addresses()?;
     write_config(home.path(), inference, control, &upstream.uri(), "rules-v1")?;
     let config_path = home.path().join("bitrouter.yaml");
     let config = std::fs::read_to_string(&config_path)?;

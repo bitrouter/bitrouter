@@ -20,6 +20,29 @@ currency, provider tariff, discount, or billing calculation is involved. Publish
 catalog prices never supply this field. An absent weight sorts after known
 weights; ties preserve the retained order.
 
+Explicit [ordered dispatch v2](../specs/service-api/README.md#ordered-static-dispatch-v2)
+uses a request-local view of one retained protocol root. Public ordinals map to
+that root's persisted positions, independently of internal candidate deduplication.
+The view keeps the charged revision pin and only the selected credential
+dependencies. It bypasses sorting and weighted permutation; per-hop authority,
+RPM, health and existing fallback gates still run. V1 routing is unchanged.
+
+Only admitted ordered executions allocate extended attempt slots and proportional
+usage capture. Their durable intent is acknowledged before the pipeline can
+send. The final send gate checks that acknowledgement again; journal arming
+enforces a strictly increasing subsequence of selected ordinals and refuses a
+send after unresolved or completed work. Neither a manifest nor a cached view
+is a grant or a substitute for these gates.
+
+Admission constructs the ordered intent before registering its cleanup owner,
+then transfers it to the writer before awaiting acknowledgement. Cancellation
+joins that intent outside the writer before queuing the terminal receipt; a
+completion cannot overtake its own intent through the priority queue. A queued
+submission that expires before any SQL begins retains the same cancelled
+identity under the existing cleanup budget, while its caller stays rejected.
+Caller timeout alone does not classify storage failure. Unconfirmed writes and
+cleanup deadlines retain the existing fail-closed admission fences.
+
 Provider `rate_limits` reuse the existing longest-match pattern selection. The
 matched pattern identifies a shared provider bucket; model
 `rate_limits.requests_per_minute` additionally limits the exact model. Both RPM
@@ -94,8 +117,11 @@ not add work to the normal admission path.
 
 Receipt custody remains the first fallback gate. The routing profile also denies
 fallback for timeouts, invalid responses, cancellation, and other unknown
-execution outcomes. Known local RPM/circuit refusals may reach the existing
-fallback policy before a receipt is armed. Every subsequent candidate must still
+execution outcomes. A local RPM refusal follows the existing local rate-limit
+terminal policy: HTTP 429, numeric `Retry-After: 61`, no upstream source header
+and no provider attempt. Circuit-open refusals retain their existing fallback
+policy before a receipt is armed. An actual provider 429 keeps its explicit
+upstream provenance and fallback policy. Every subsequent candidate must still
 be in the authorized retained set and pass current authority and receipt fences.
 An executor-internal OAuth continuation must close the prior routing observation
 with its explicit response before another send; the observation callback never

@@ -92,8 +92,12 @@ pub(super) async fn validate(
     ensure!(row.len() == 1, "target identity cardinality");
     let row = &row[0];
     ensure!(
+        row.try_get::<i64, _>("schema_version")?
+            == i64::from(crate::tenancy::AUTHORITY_SCHEMA_VERSION),
+        "current authority store format required"
+    );
+    ensure!(
         row.try_get::<i64, _>("singleton")? == 1
-            && matches!(row.try_get::<i64, _>("schema_version")?, 1 | 2)
             && row.try_get::<i64, _>("operation_ids")? == operations.len() as i64
             && row.try_get::<i64, _>("safety_operation_ids")? == 0
             && !row.try_get::<bool, _>("saturated")?

@@ -23,9 +23,11 @@ mod terminal_tests;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::tenancy) mod format;
+
 const TABLE: &str = "tenancy_execution_receipts";
-const MAX_RECEIPT: usize = 1024 * 1024;
-const MAX_DISPOSITION: usize = 1024;
+pub(super) const MAX_RECEIPT: usize = 1024 * 1024;
+pub(super) const MAX_DISPOSITION: usize = 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,13 +42,13 @@ pub(in crate::tenancy) struct Disposition {
 // or forcing unrelated receipt producers to fabricate observation evidence.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredDisposition {
-    dispatch: DispatchState,
-    statuses: Vec<Option<u16>>,
+pub(super) struct StoredDisposition {
+    pub(super) dispatch: DispatchState,
+    pub(super) statuses: Vec<Option<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    auxiliary_digest: Option<String>,
+    pub(super) auxiliary_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    usage_evidence_digest: Option<String>,
+    pub(super) usage_evidence_digest: Option<String>,
 }
 impl From<Disposition> for StoredDisposition {
     fn from(value: Disposition) -> Self {
@@ -213,8 +215,14 @@ impl Candidate {
 }
 
 fn digest(json: &str, disposition: &str) -> String {
+    digest_for(format::Format::V1, json, disposition)
+}
+pub(super) fn digest_for(format: format::Format, json: &str, disposition: &str) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"bitrouter.receipt.immutable.v1");
+    hash.update(match format {
+        format::Format::V1 => b"bitrouter.receipt.immutable.v1",
+        format::Format::V2 => b"bitrouter.receipt.immutable.v2",
+    });
     for part in [json, disposition] {
         hash.update((part.len() as u64).to_be_bytes());
         hash.update(part.as_bytes());
@@ -267,12 +275,32 @@ async fn bounded_row(
     budget: Option<&archive::Charge<'_>>,
 ) -> Result<Option<QueryResult>> {
     let backend = db.get_database_backend();
+    // Migration 43 backfills obligations using the pre-ordered schema, while
+    // normal readers and migration 45 must verify the real format column.
+    let format = if backend != DatabaseBackend::Sqlite {
+        "receipt_format"
+    } else {
+        if let Some(charge) = budget {
+            charge(1, 256)?;
+        }
+        let ordered = db.query_one(sea_orm::Statement::from_string(backend,
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='tenancy_dispatch_intents' LIMIT 1"
+        )).await?.is_some();
+        if ordered {
+            "CASE WHEN typeof(receipt_format)='integer' THEN receipt_format ELSE NULL END"
+        } else {
+            "1"
+        }
+    };
+    query.expr_as(Expr::cust(format), Alias::new("receipt_format"));
+
     // Callers supply an exact receipt key. Charged SQLite reads combine both
     // scalar probes; other readers retain the original oversized-row probe.
     let combined = backend == DatabaseBackend::Sqlite && budget.is_some();
     if !combined {
         let oversized = query
             .clone()
+            .clear_selects()
             .expr(Expr::val(1))
             .and_where(Expr::cust(oversized(backend)))
             .limit(1)
@@ -400,6 +428,10 @@ fn decode(
         json.len() <= MAX_RECEIPT && private.len() <= MAX_DISPOSITION,
         "receipt byte bound"
     );
+    ensure!(
+        row.try_get::<i32>("", "receipt_format")? == 1,
+        "receipt format mismatch"
+    );
     let candidate = Candidate::from_parts(
         serde_json::from_str(&json)?,
         serde_json::from_str(&private)?,
@@ -435,6 +467,7 @@ fn decode(
     Ok(candidate)
 }
 
+#[cfg(test)]
 pub(in crate::tenancy) async fn lookup(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
@@ -592,12 +625,140 @@ pub(in crate::tenancy) async fn insert(
     Ok(changed)
 }
 
+struct Row<'a> {
+    facts: format::Facts<'a>,
+    format: format::Format,
+    json: &'a str,
+    private: &'a str,
+    digest: &'a str,
+}
+async fn insert_bytes(tx: &DatabaseTransaction, value: Row<'_>) -> Result<bool> {
+    let r = &value.facts;
+    let fields: Vec<(&str, sea_orm::Value)> = vec![
+        ("installation_id", r.installation.as_str().into()),
+        ("tenant_id", r.tenant.as_str().into()),
+        ("execution_id", r.execution.as_str().into()),
+        ("principal_id", r.principal.as_str().into()),
+        ("correlation_id", r.correlation.as_str().into()),
+        ("receipt_format", value.format.number().into()),
+        ("receipt_json", value.json.into()),
+        ("content_digest", value.digest.into()),
+        ("disposition_json", value.private.into()),
+        (
+            "byte_count",
+            i64::try_from(value.json.len() + value.private.len())?.into(),
+        ),
+        ("unknown_outcome", (r.state == ReceiptState::Unknown).into()),
+        ("recorded_at", r.recorded_at.as_str().into()),
+    ];
+    let mut query = Query::insert();
+    query
+        .into_table(Alias::new(TABLE))
+        .columns(fields.iter().map(|(name, _)| Alias::new(*name)))
+        .values(fields.into_iter().map(|(_, value)| value.into()))?;
+    let backend = tx.get_database_backend();
+    if backend != DatabaseBackend::MySql {
+        query.on_conflict(OnConflict::new().do_nothing().to_owned());
+    }
+    let changed = match tx.execute(backend.build(&query)).await {
+        Ok(result) => {
+            ensure!(result.rows_affected() <= 1, "receipt insert count");
+            result.rows_affected() == 1
+        }
+        Err(error)
+            if backend == DatabaseBackend::MySql
+                && matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+        {
+            false
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let saved = row(tx, point(r.installation, r.tenant, r.execution))
+        .await?
+        .context("receipt physical collision")?;
+    ensure!(
+        saved.try_get::<String>("", "receipt_json")? == value.json
+            && saved.try_get::<String>("", "disposition_json")? == value.private
+            && saved.try_get::<String>("", "content_digest")? == value.digest
+            && saved.try_get::<i32>("", "receipt_format")? == value.format.number(),
+        "immutable receipt conflict"
+    );
+    validate_facts(&saved, r, value.json.len() + value.private.len())?;
+    Ok(changed)
+}
+fn validate_facts(row: &QueryResult, facts: &format::Facts<'_>, bytes: usize) -> Result<()> {
+    for (column, value) in [
+        ("installation_id", facts.installation.as_str()),
+        ("tenant_id", facts.tenant.as_str()),
+        ("execution_id", facts.execution.as_str()),
+        ("principal_id", facts.principal.as_str()),
+        ("correlation_id", facts.correlation.as_str()),
+        ("recorded_at", facts.recorded_at.as_str()),
+    ] {
+        ensure!(
+            row.try_get::<String>("", column)? == value,
+            "receipt projection mismatch"
+        );
+    }
+    ensure!(
+        row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
+            && row.try_get::<bool>("", "unknown_outcome")?
+                == (facts.state == ReceiptState::Unknown),
+        "receipt accounting projection mismatch"
+    );
+    Ok(())
+}
+pub(super) fn validate_projection(row: &QueryResult, terminal: &format::Terminal) -> Result<()> {
+    ensure!(
+        row.try_get::<String>("", "content_digest")? == terminal.digest()
+            && row.try_get::<i32>("", "receipt_format")? == terminal.format().number(),
+        "receipt integrity mismatch"
+    );
+    validate_facts(row, &terminal.facts(), usize::try_from(terminal.bytes())?)
+}
+pub(in crate::tenancy) async fn insert_terminal(
+    tx: &DatabaseTransaction,
+    terminal: &format::Terminal,
+) -> Result<bool> {
+    match terminal {
+        format::Terminal::V1(candidate) => insert(tx, candidate).await,
+        format::Terminal::V2(candidate) => {
+            let changed = insert_bytes(
+                tx,
+                Row {
+                    facts: terminal.facts(),
+                    format: terminal.format(),
+                    json: terminal.json(),
+                    private: terminal.private_json(),
+                    digest: terminal.digest(),
+                },
+            )
+            .await?;
+            super::usage_evidence::storage::insert_v2(tx, candidate, changed).await?;
+            super::ordered::intent::retire(tx, candidate, changed).await?;
+            Ok(changed)
+        }
+    }
+}
+pub(in crate::tenancy) async fn lookup_terminal(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+) -> Result<Option<format::Terminal>> {
+    load::terminal(db, installation, tenant, id, None, false).await
+}
+
 /// Pending writes, not validated evidence or custody. Finalize after all side-writes.
 #[must_use = "terminal writes require final reconciliation before commit"]
 pub(in crate::tenancy) struct TerminalWrite<'a> {
     tx: &'a DatabaseTransaction,
-    expected: &'a Candidate,
+    expected: ExpectedTerminal<'a>,
     inserted: bool,
+}
+enum ExpectedTerminal<'a> {
+    Legacy(&'a Candidate),
+    Ordered(&'a super::ordered::CandidateV2),
 }
 impl TerminalWrite<'_> {
     pub(in crate::tenancy) fn inserted(&self) -> bool {
@@ -607,20 +768,48 @@ impl TerminalWrite<'_> {
         self,
         charge: &archive::Charge<'_>,
     ) -> Result<obligations::Change> {
-        if self.inserted && self.tx.get_database_backend() == DatabaseBackend::Sqlite {
-            return obligations::reconcile_completion(self.tx, self.expected, charge).await;
+        if self.inserted
+            && self.tx.get_database_backend() == DatabaseBackend::Sqlite
+            && let ExpectedTerminal::Legacy(candidate) = self.expected
+        {
+            return obligations::reconcile_completion(self.tx, candidate, charge).await;
         }
-        let receipt = &self.expected.receipt;
+        let (installation, tenant, execution) = match self.expected {
+            ExpectedTerminal::Legacy(c) => (
+                &c.receipt.installation_id,
+                &c.receipt.tenant_id,
+                &c.receipt.execution_id,
+            ),
+            ExpectedTerminal::Ordered(c) => (
+                &c.receipt.installation_id,
+                &c.receipt.tenant_id,
+                &c.receipt.execution_id,
+            ),
+        };
         obligations::reconcile(
             self.tx,
-            &receipt.installation_id,
+            installation,
             &obligations::Key {
-                tenant: receipt.tenant_id.clone(),
-                execution: receipt.execution_id.clone(),
+                tenant: tenant.clone(),
+                execution: execution.clone(),
             },
             charge,
         )
         .await
+    }
+}
+
+pub(in crate::tenancy) async fn stage_dispatch_terminal<'a>(
+    tx: &'a DatabaseTransaction,
+    terminal: &'a format::Terminal,
+) -> Result<TerminalWrite<'a>> {
+    match terminal {
+        format::Terminal::V1(candidate) => stage_terminal(tx, candidate).await,
+        format::Terminal::V2(candidate) => Ok(TerminalWrite {
+            tx,
+            expected: ExpectedTerminal::Ordered(candidate),
+            inserted: insert_terminal(tx, terminal).await?,
+        }),
     }
 }
 
@@ -652,7 +841,7 @@ pub(in crate::tenancy) async fn stage_terminal<'a>(
     };
     Ok(TerminalWrite {
         tx,
-        expected: candidate,
+        expected: ExpectedTerminal::Legacy(candidate),
         inserted,
     })
 }

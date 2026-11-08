@@ -52,7 +52,11 @@ pub(in crate::tenancy::receipts) async fn scan(
     installation: &InstallationId,
     mut visit: impl FnMut(&Candidate) -> Result<()>,
 ) -> Result<()> {
-    scan_locations(db, installation, |candidate, _| visit(candidate)).await
+    scan_locations(db, installation, |candidate, _| match candidate {
+        format::Terminal::V1(candidate) => visit(candidate),
+        format::Terminal::V2(_) => Ok(()),
+    })
+    .await
 }
 
 fn key_page(
@@ -111,7 +115,7 @@ fn key_page(
 async fn scan_locations(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
-    mut visit: impl FnMut(&Candidate, Option<u64>) -> Result<()>,
+    mut visit: impl FnMut(&format::Terminal, Option<u64>) -> Result<()>,
 ) -> Result<()> {
     preflight(db, installation).await?;
     let backend = db.get_database_backend();
@@ -132,7 +136,7 @@ async fn scan_locations(
                     "receipt inventory key order"
                 );
             }
-            let candidate = lookup_candidate(db, installation, &tenant, &id)
+            let candidate = lookup_terminal(db, installation, &tenant, &id)
                 .await?
                 .context("receipt inventory row disappeared")?;
             let archived = if backend == DatabaseBackend::Sqlite
@@ -172,6 +176,9 @@ pub(super) async fn load(
             .checked_add(canonical)
             .context("receipt inventory byte overflow")?;
         if let Some(stored) = archived {
+            let format::Terminal::V1(candidate) = candidate else {
+                anyhow::bail!("ordered receipt storage kind");
+            };
             archive::known(candidate)?;
             inventory.history_rows = inventory
                 .history_rows

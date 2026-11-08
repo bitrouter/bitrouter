@@ -138,7 +138,7 @@ async fn installation(db: &impl ConnectionTrait, state: &Snapshot) -> Result<()>
         vec![
             ("singleton", 1_i32.into()),
             ("installation_id", state.installation.as_str().into()),
-            ("schema_version", 2_i32.into()),
+            ("schema_version", super::AUTHORITY_SCHEMA_VERSION.into()),
             (
                 "authority_revision",
                 i64::try_from(state.revision.get())?.into(),

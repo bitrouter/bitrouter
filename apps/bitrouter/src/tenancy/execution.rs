@@ -15,9 +15,11 @@ use bitrouter_ai::{
         authority::{GrantScope, OwnerKind, Permission, ResourceKind},
         configuration::ResourceRef,
         identity::{
-            AttemptId, CredentialId, ExecutionId, InstallationId, PrincipalId, RevisionId, TenantId,
+            AttemptId, CorrelationId, CredentialId, ExecutionId, InstallationId, InstanceId,
+            PrincipalId, RevisionId, TenantId,
         },
         operation::{DispatchBinding, DispatchState, ErrorCode},
+        ordered::{OrderedCandidateSelectionV1, OrderedDispatchBindingV2},
         validation::Validate,
     },
     types::ApiProtocol,
@@ -53,6 +55,7 @@ mod native;
 mod oauth;
 mod profile;
 pub(crate) const BLOCK_LINK_HEADER: &str = "bitrouter-capture-link";
+pub(crate) const SELECTION_HEADER: &str = "bitrouter-candidate-selection";
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
 #[cfg(test)]
@@ -68,7 +71,7 @@ pub(crate) struct Submission {
     tenant: TenantId,
     principal: PrincipalId,
     credential: CredentialId,
-    binding: DispatchBinding,
+    binding: DispatchIdentity,
     deadline: deadline::Deadline,
     cancelled: tokio_util::sync::CancellationToken,
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -77,7 +80,27 @@ pub(crate) struct Submission {
     block: Option<Arc<super::capture::Binding>>,
 }
 
+/// Validated version-independent identity, separated from frozen public DTOs.
+#[derive(Clone)]
+struct DispatchIdentity {
+    installation_id: InstallationId,
+    instance_id: InstanceId,
+    capability_revision: RevisionId,
+    execution_revision: RevisionId,
+    correlation_id: CorrelationId,
+    selection: Option<OrderedCandidateSelectionV1>,
+}
+
 impl Submission {
+    pub(crate) fn validate_http_input(
+        &self,
+        input: &crate::gateway::pipeline::types::PipelineInput,
+    ) -> Result<(), Failure> {
+        if self.binding.selection.is_some() {
+            ordered_prompt(input.generation_prompt()).map_err(Failure::from)?;
+        }
+        Ok(())
+    }
     #[cfg(test)]
     pub(in crate::tenancy) fn narrow_deadline_for_test(
         mut self,
@@ -185,6 +208,7 @@ impl Service {
         guard.check(&submission.authority, |view| {
             let state = view.facts();
             if !self.dispatch_ready(state)
+                || (submission.binding.selection.is_some() && !self.ordered_dispatch_ready(state))
                 || submission.binding.installation_id != state.installation
                 || submission.binding.instance_id != self.instance
                 || submission.binding.capability_revision != self.capability_revision(state)?
@@ -292,6 +316,16 @@ impl Service {
         preparation: super::authority::live::DependencyIntent,
     ) -> Result<Submission, Failure> {
         let binding = dispatch_binding(headers)?;
+        if let Some(selection) = &binding.selection {
+            if selection.candidate_indices.len()
+                > usize::from(self.execution_settings.ordered_attempt_limit)
+            {
+                return Err(ErrorCode::CapacityExceeded.into());
+            }
+            if headers.contains_key(BLOCK_LINK_HEADER) {
+                return Err(ErrorCode::CapabilityMismatch.into());
+            }
+        }
         if headers.contains_key("x-api-key")
             || headers.contains_key("bitrouter-tenant-id")
             || headers.contains_key("bitrouter-principal-id")
@@ -368,8 +402,16 @@ impl Service {
         raw_model: &str,
         inbound: &ApiProtocol,
     ) -> Result<Arc<TenantExecution>, Failure> {
+        let selection = submission.binding.selection.clone();
         self.admit_selected_execution(submission, false, |revision| {
-            revision.select(raw_model, inbound)
+            if let Some(selection) = selection {
+                if raw_model != selection.route.resource_id.as_str() {
+                    return Err(ErrorCode::InvalidRequest);
+                }
+                revision.select_ordered(&selection.route, inbound, &selection.candidate_indices)
+            } else {
+                revision.select(raw_model, inbound)
+            }
         })
         .await
     }
@@ -379,6 +421,9 @@ impl Service {
         submission: Submission,
         raw_model: &str,
     ) -> Result<Arc<TenantExecution>, Failure> {
+        if submission.binding.selection.is_some() {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
         self.admit_selected_execution(submission, false, |revision| {
             revision.select_native(raw_model, bitrouter_ai::types::ModelOperation::Generation)
         })
@@ -400,8 +445,9 @@ impl Service {
         self.prepare_submission(&submission, route.dependencies(), submission.preparation)
             .await?;
         submission.preparation = super::authority::live::DependencyIntent::Owner;
-        self.with_dispatch_authority(&submission, |state| {
-            authorize_route(state, &submission, route.dependencies())
+        self.with_dispatch_view(&submission, |view| {
+            authorize_route(view.facts(), &submission, route.dependencies())?;
+            self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
         let mut limits = revision.document().limits.clone();
@@ -436,7 +482,11 @@ impl Service {
             .acquire_until(&submission.tenant, &limits, submission.deadline())
             .await
             .map_err(Failure::from)?;
-        self.finish_admission(
+        let intent_slot = route
+            .is_ordered()
+            .then(|| self.reserve_ordered_intent())
+            .transpose()?;
+        let execution = self.finish_admission(
             submission,
             route,
             lease,
@@ -444,7 +494,29 @@ impl Service {
             learning,
             #[cfg(all(feature = "core", feature = "harness"))]
             false,
-        )
+        )?;
+        self.prepare_ordered_intent(&execution, intent_slot).await?;
+        execution.revalidate().map_err(Failure::from)?;
+        Ok(execution)
+    }
+
+    fn require_static_ordered_credentials(
+        &self,
+        view: &super::authority::live::View,
+        route: &RetainedRoute,
+    ) -> Result<(), ErrorCode> {
+        if route.is_ordered() {
+            for reference in route
+                .dependencies()
+                .iter()
+                .filter(|reference| reference.resource_kind == ResourceKind::Credential)
+            {
+                if view.oauth(reference)?.is_some() {
+                    return Err(ErrorCode::CapabilityMismatch);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn finish_admission(
@@ -457,8 +529,9 @@ impl Service {
     ) -> Result<Arc<TenantExecution>, Failure> {
         // Waiting for capacity never extends a token/binding lifetime. The
         // exact submitted revision remains pinned even after activation changes.
-        self.with_dispatch_authority(&submission, |state| {
-            authorize_route(state, &submission, route.dependencies())
+        self.with_dispatch_view(&submission, |view| {
+            authorize_route(view.facts(), &submission, route.dependencies())?;
+            self.require_static_ordered_credentials(view, &route)
         })
         .map_err(Failure::from)?;
         submission.deadline = submission
@@ -469,14 +542,18 @@ impl Service {
             .try_into()
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
         lease.bind_execution(&id).map_err(Failure::from)?;
-        let continuation = self.native_continuation.clone().map(|crypto| {
-            Arc::new(continuation::Policy::new(
-                crypto,
-                &submission,
-                &id,
-                route.clone(),
-            ))
-        });
+        let continuation = self
+            .native_continuation
+            .clone()
+            .filter(|_| !route.is_ordered())
+            .map(|crypto| {
+                Arc::new(continuation::Policy::new(
+                    crypto,
+                    &submission,
+                    &id,
+                    route.clone(),
+                ))
+            });
         let execution = Arc::new(TenantExecution {
             #[cfg(all(feature = "core", feature = "harness"))]
             experiment: std::sync::OnceLock::new(),
@@ -503,7 +580,10 @@ impl Service {
         });
         execution
             .journal
-            .set(super::receipts::journal::Journal::new(&execution))
+            .set(
+                super::receipts::journal::Journal::new(&execution)
+                    .map_err(|_| Failure::from(ErrorCode::CapabilityMismatch))?,
+            )
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
         let receipt = super::receipts::owner::Owner::new(
             super::receipts::owner::Identity {
@@ -513,6 +593,11 @@ impl Service {
                 execution: execution.id.clone(),
                 correlation: execution.submission.binding.correlation_id.clone(),
                 revision: execution.submission.binding.execution_revision.clone(),
+                ordered: execution
+                    .route
+                    .accepted_selection()
+                    .map_err(Failure::from)?
+                    .map(|selection| (selection, self.execution_settings.ordered_attempt_limit)),
             },
             execution.journal().map_err(Failure::from)?.clone(),
             self.completions.clone(),
@@ -527,6 +612,20 @@ impl Service {
                     .timing(&execution.submission.binding.correlation_id),
             ),
         );
+        if receipt.identity.ordered.is_some() {
+            let stamp = self
+                .startup
+                .as_ref()
+                .ok_or_else(|| Failure::from(ErrorCode::CapabilityMismatch))?
+                .bootstrap_stamp(&self.cleanup)
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+            let intent = super::receipts::ordered::intent::Intent::new(&receipt.identity, stamp)
+                .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+            receipt
+                .intent
+                .set(Arc::new(intent))
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        }
         let ticket = self
             .pipelines
             .admit(receipt.clone())
@@ -813,6 +912,14 @@ impl TenantExecution {
         oauth: Option<&super::oauth::ModelStamp>,
         counted: Option<&str>,
     ) -> Result<AttemptId, ErrorCode> {
+        if self.route.is_ordered()
+            && !self
+                .receipt
+                .get()
+                .is_some_and(|owner| owner.intent_ready.load(Ordering::Acquire))
+        {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
         let actual = super::receipts::journal::TargetStamp::for_execution(self, target)
             .map_err(super::receipts::journal_error)?;
         if !actual.matches(authenticated) {
@@ -914,7 +1021,7 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>,
     Ok(value)
 }
 
-fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchBinding, Failure> {
+fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
     let mut document = serde_json::Map::new();
     for name in [
         "Bitrouter-Tenancy-Version",
@@ -929,10 +1036,88 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchBinding, Failure> {
             one_header(headers, name)?.ok_or_else(|| Failure::from(ErrorCode::InvalidRequest))?;
         document.insert(name.into(), value.into());
     }
-    let binding: DispatchBinding = serde_json::from_value(document.into())
-        .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    binding
-        .validate()
-        .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    Ok(binding)
+    match document
+        .get("Bitrouter-Tenancy-Version")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("1") => {
+            if headers.contains_key(SELECTION_HEADER) {
+                return Err(ErrorCode::InvalidRequest.into());
+            }
+            let binding: DispatchBinding = serde_json::from_value(document.into())
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            binding
+                .validate()
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            Ok(DispatchIdentity {
+                installation_id: binding.installation_id,
+                instance_id: binding.instance_id,
+                capability_revision: binding.capability_revision,
+                execution_revision: binding.execution_revision,
+                correlation_id: binding.correlation_id,
+                selection: None,
+            })
+        }
+        Some("2") => {
+            use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+            // RFC 4648 sections 3.5 and 5: canonical URL-safe alphabet, with
+            // padding explicitly omitted by this header's wire contract.
+            // https://www.rfc-editor.org/rfc/rfc4648.html#section-5
+            let encoded = one_header(headers, SELECTION_HEADER)?
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= bitrouter_ai::tenancy::ordered::MAX_SELECTION_HEADER_BYTES
+                })
+                .ok_or_else(|| Failure::from(ErrorCode::InvalidRequest))?;
+            let bytes = URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
+                return Err(ErrorCode::InvalidRequest.into());
+            }
+            let selection: OrderedCandidateSelectionV1 = serde_json::from_slice(&bytes)
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            selection
+                .validate()
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            document.insert(
+                "selection".into(),
+                serde_json::to_value(selection)
+                    .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?,
+            );
+            let binding: OrderedDispatchBindingV2 = serde_json::from_value(document.into())
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            binding
+                .validate()
+                .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+            Ok(DispatchIdentity {
+                installation_id: binding.installation_id,
+                instance_id: binding.instance_id,
+                capability_revision: binding.capability_revision,
+                execution_revision: binding.execution_revision,
+                correlation_id: binding.correlation_id,
+                selection: Some(binding.selection),
+            })
+        }
+        _ => Err(ErrorCode::InvalidRequest.into()),
+    }
+}
+
+fn ordered_prompt(prompt: Option<&bitrouter_ai::types::Prompt>) -> Result<(), ErrorCode> {
+    let prompt = prompt.ok_or(ErrorCode::CapabilityMismatch)?;
+    if [
+        "previous_response_id",
+        "conversation",
+        "context_management",
+        "cachedContent",
+    ]
+    .iter()
+    .any(|field| {
+        [&prompt.params.extra, &prompt.params.supplemental_extra]
+            .iter()
+            .any(|values| values.get(*field).is_some_and(|value| !value.is_null()))
+    }) {
+        return Err(ErrorCode::CapabilityMismatch);
+    }
+    Ok(())
 }

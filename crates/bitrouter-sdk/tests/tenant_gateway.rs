@@ -28,6 +28,9 @@ use serde_json::{Value, json};
 #[path = "transport_protocol/server.rs"]
 mod server;
 
+#[path = "tenant_gateway/metadata.rs"]
+mod metadata;
+
 type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
 const BUDGET: Duration = Duration::from_secs(5);
 
@@ -936,6 +939,8 @@ async fn chunked_json_is_bounded_and_mid_body_transport_loss_keeps_identity() ->
         let bounded = Response::builder()
             .header("content-type", "application/json")
             .header("x-bitrouter-request-id", "execution-1")
+            .header("retry-after", "12")
+            .header("x-bitrouter-error-source", "upstream")
             .body(HttpBody::from_stream(futures_util::stream::iter(chunks)))?;
         let broken = async_stream::stream! {
             yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"data: {\"id\":\"p\",\"object\":\"chat.completion.chunk\",\"model\":\"route\",\"choices\":[]}\n\n"));
@@ -945,6 +950,8 @@ async fn chunked_json_is_bounded_and_mid_body_transport_loss_keeps_identity() ->
         let broken = Response::builder()
             .header("content-type", "text/event-stream")
             .header("x-bitrouter-request-id", "execution-1")
+            .header("retry-after", "12")
+            .header("x-bitrouter-error-source", "upstream")
             .body(HttpBody::from_stream(broken))?;
         let server = server::serve(wire, vec![Some(bounded), Some(broken)]).await?;
         let client = GatewayClient::with_options(
@@ -959,15 +966,17 @@ async fn chunked_json_is_bounded_and_mid_body_transport_loss_keeps_identity() ->
             },
         )?;
         let bound = binding("correlation")?;
+        let failed = failure(
+            client
+                .tenant("token", &bound)?
+                .chat_reply(&chat(false)?)
+                .await,
+        )?;
+        assert_eq!(failed.problem, Some(Problem::Limit));
+        assert_eq!(failed.metadata.retry_after_seconds, Some(12));
         assert_eq!(
-            failure(
-                client
-                    .tenant("token", &bound)?
-                    .chat_reply(&chat(false)?)
-                    .await
-            )?
-            .problem,
-            Some(Problem::Limit)
+            failed.metadata.error_source,
+            Some(bitrouter_sdk::gateway::tenancy::ErrorSource::Upstream)
         );
         let Body::Stream(stream) = client
             .tenant("token", &bound)?
@@ -979,6 +988,11 @@ async fn chunked_json_is_bounded_and_mid_body_transport_loss_keeps_identity() ->
         };
         let failed = stream_failure(stream).await?;
         assert_eq!(failed.problem, Some(Problem::Transport));
+        assert_eq!(failed.metadata.retry_after_seconds, Some(12));
+        assert_eq!(
+            failed.metadata.error_source,
+            Some(bitrouter_sdk::gateway::tenancy::ErrorSource::Upstream)
+        );
         assert_eq!(
             failed.metadata.execution_id.as_ref().map(|id| id.as_str()),
             Some("execution-1")

@@ -51,6 +51,17 @@ use serde::{Serialize, de::DeserializeOwned};
 use super::{GatewayClient, execution::media_type};
 use crate::{error::Error as SdkError, stream::Protocol, transport};
 
+mod metadata;
+pub mod ordered;
+
+/// An explicitly recognized service error origin, not dispatch or retry evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorSource {
+    /// The service explicitly identified an upstream error.
+    Upstream,
+}
+
 /// Validated tenant response metadata. No raw headers or control URLs escape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
@@ -59,6 +70,13 @@ pub struct Metadata {
     /// Tenant execution identity from `x-bitrouter-request-id`, not correlation.
     /// Missing on preadmission failures; never inferred from provider output.
     pub execution_id: Option<ExecutionId>,
+    /// Optional service delay in seconds, bounded by `u64` and 20 decimal digits.
+    /// Core normalizes provider HTTP dates to seconds. Other representations fail
+    /// metadata validation; this value never authorizes or schedules a retry.
+    pub retry_after_seconds: Option<u64>,
+    /// Explicit recognized `x-bitrouter-error-source`, never inferred from status
+    /// or body text. Absence does not establish a local origin.
+    pub error_source: Option<ErrorSource>,
 }
 
 /// A response with its identity retained before streaming or after JSON decoding.
@@ -85,7 +103,7 @@ pub type EventStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Error>
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Problem {
-    /// Missing, duplicate, malformed, or inconsistent execution metadata.
+    /// Missing, duplicate, malformed, or inconsistent response metadata.
     Metadata,
     /// A success status other than 200, including 202, is not model output.
     Status,
@@ -104,7 +122,7 @@ pub enum Problem {
 /// A response failure, retaining only safe metadata and typed public errors.
 #[derive(Debug)]
 pub struct Failure {
-    /// HTTP status and any validated tenant execution identity.
+    /// HTTP status, validated tenant execution identity and transport metadata.
     pub metadata: Metadata,
     /// Validated tenancy error, including when no execution ID is known.
     pub tenancy_error: Option<TenancyError>,
@@ -169,22 +187,7 @@ impl GatewayClient {
         binding
             .validate()
             .map_err(|_| Error::Request("invalid strict dispatch binding"))?;
-        // RFC 6750 b64token: padding is permitted only at the end.
-        // https://www.rfc-editor.org/rfc/rfc6750#section-2.1
-        let bare = credential.trim_end_matches('=');
-        if !(1..=4096).contains(&credential.len())
-            || bare.is_empty()
-            || !bare
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b))
-        {
-            return Err(Error::Request("invalid Bearer credential"));
-        }
-        let mut token = HeaderValue::from_str(&format!("Bearer {credential}"))
-            .map_err(|_| Error::Request("invalid Bearer credential"))?;
-        token.set_sensitive(true);
-        let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, token);
+        let mut headers = bearer_headers(credential)?;
         for (name, value) in [
             (
                 "bitrouter-tenancy-version",
@@ -217,6 +220,26 @@ impl GatewayClient {
             headers,
         })
     }
+}
+
+fn bearer_headers(credential: &str) -> Result<HeaderMap, Error> {
+    // RFC 6750 b64token: padding is permitted only at the end.
+    // https://www.rfc-editor.org/rfc/rfc6750#section-2.1
+    let bare = credential.trim_end_matches('=');
+    if !(1..=4096).contains(&credential.len())
+        || bare.is_empty()
+        || !bare
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b))
+    {
+        return Err(Error::Request("invalid Bearer credential"));
+    }
+    let mut token = HeaderValue::from_str(&format!("Bearer {credential}"))
+        .map_err(|_| Error::Request("invalid Bearer credential"))?;
+    token.set_sensitive(true);
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, token);
+    Ok(headers)
 }
 
 impl TenantGateway<'_> {
@@ -347,10 +370,15 @@ impl TenantGateway<'_> {
             .map_err(|_| Error::Transport)?;
         let status = response.status().as_u16();
         let identity = execution_id(response.headers());
-        let metadata_problem = identity.is_err().then_some(Problem::Metadata);
+        let retry_after = metadata::retry_after_seconds(response.headers());
+        let error_source = metadata::error_source(response.headers());
+        let metadata_problem = (identity.is_err() || retry_after.is_err() || error_source.is_err())
+            .then_some(Problem::Metadata);
         let metadata = Metadata {
             status,
             execution_id: identity.ok().flatten(),
+            retry_after_seconds: retry_after.ok().flatten(),
+            error_source: error_source.ok().flatten(),
         };
         if status != 200 {
             return Err(read_failure(

@@ -4,6 +4,7 @@
 mod block_cost;
 mod compact;
 mod native_v1;
+mod ordered;
 mod retained;
 mod target;
 mod weight;
@@ -231,6 +232,7 @@ impl RetainedExecutionRevision {
         Ok(RetainedRoute {
             data: data.clone(),
             selection: RouteSelection::Wire(inbound.clone()),
+            ordered: None,
             generation_defaults: self.document.generation_defaults.clone(),
             _revision: None,
         })
@@ -265,6 +267,7 @@ impl RetainedExecutionRevision {
         Ok(RetainedRoute {
             data: data.clone(),
             selection: RouteSelection::Native(operation),
+            ordered: None,
             generation_defaults: self.document.generation_defaults.clone(),
             _revision: None,
         })
@@ -342,6 +345,7 @@ impl RouteSelection {
 pub(crate) struct RetainedRoute {
     data: Arc<RouteData>,
     selection: RouteSelection,
+    ordered: Option<ordered::Selection>,
     generation_defaults: GenerationDefaults,
     _revision: Option<CachePin<RetainedExecutionRevision>>,
 }
@@ -619,6 +623,7 @@ impl RetainedRoute {
         Ok(Arc::new(Self {
             data: choice.route.clone(),
             selection: RouteSelection::Native(ModelOperation::Decisions),
+            ordered: None,
             generation_defaults: self.generation_defaults.clone(),
             _revision: Some(revision.clone()),
         }))
@@ -793,7 +798,9 @@ impl RetainedRoute {
         &self.data.reference
     }
     pub(crate) fn dependencies(&self) -> &[ResourceRef] {
-        &self.data.dependencies
+        self.ordered
+            .as_ref()
+            .map_or(&self.data.dependencies, |selection| &selection.dependencies)
     }
     pub(crate) fn policy(&self) -> Option<&RetainedPolicy> {
         self.data.policy.as_ref()
@@ -901,29 +908,35 @@ impl RetainedRoute {
     }
 
     fn selected_chains(&self) -> impl Iterator<Item = (&str, &[usize])> {
+        let ordered = self
+            .ordered
+            .as_ref()
+            .map(|selection| (self.data.selector.as_str(), selection.candidates.as_slice()));
         let wire = self
             .data
             .chains
             .iter()
+            .filter(|_| self.ordered.is_none())
             .filter_map(|chain| match &self.selection {
                 RouteSelection::Wire(inbound) if chain.inbound == *inbound => {
                     Some((chain.selector.as_str(), chain.candidates.as_slice()))
                 }
                 _ => None,
             });
-        let native =
-            self.data
-                .native
-                .chains()
-                .into_iter()
-                .flatten()
-                .filter_map(|chain| match &self.selection {
-                    RouteSelection::Native(operation) if chain.operation == *operation => {
-                        Some((chain.selector.as_str(), chain.candidates.as_slice()))
-                    }
-                    _ => None,
-                });
-        wire.chain(native)
+        let native = self
+            .data
+            .native
+            .chains()
+            .into_iter()
+            .flatten()
+            .filter(|_| self.ordered.is_none())
+            .filter_map(|chain| match &self.selection {
+                RouteSelection::Native(operation) if chain.operation == *operation => {
+                    Some((chain.selector.as_str(), chain.candidates.as_slice()))
+                }
+                _ => None,
+            });
+        ordered.into_iter().chain(wire).chain(native)
     }
 
     fn selector<'a>(&'a self, model: &'a str, raw: bool) -> GatewayResult<&'a str> {

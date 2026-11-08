@@ -8,6 +8,7 @@ pub(in crate::tenancy) mod auxiliary_store;
 pub(in crate::tenancy) mod capacity;
 pub(crate) mod evidence;
 pub(crate) mod journal;
+pub(in crate::tenancy) mod ordered;
 pub(crate) mod output;
 pub(crate) mod owner;
 pub(in crate::tenancy) mod read;

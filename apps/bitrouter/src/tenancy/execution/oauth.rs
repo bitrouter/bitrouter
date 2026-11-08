@@ -24,6 +24,9 @@ impl TenantExecution {
             let state = view.facts();
             authorize_route(state, &self.submission, self.route.dependencies())?;
             let profile = view.oauth(&reference)?.cloned();
+            if self.route.is_ordered() && profile.is_some() {
+                return Err(ErrorCode::CapabilityMismatch);
+            }
             if let Some(metadata) = &profile {
                 self.route.require_oauth_messages(target)?;
                 if metadata.profile.provider != target.provider_name

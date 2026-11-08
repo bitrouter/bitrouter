@@ -1,7 +1,7 @@
 //! One immutable terminal obligation. Waiters never own its durable transaction.
 use super::{
     journal::Journal,
-    store::{Candidate, Disposition},
+    store::{Candidate, Disposition, format::Terminal},
 };
 use crate::tenancy::{actor::Job, admission::Lease, transaction::Proof};
 use bitrouter_ai::tenancy::{
@@ -19,16 +19,17 @@ pub(in crate::tenancy) struct Identity {
     pub execution: ExecutionId,
     pub correlation: CorrelationId,
     pub revision: RevisionId,
+    pub ordered: Option<(bitrouter_ai::tenancy::ordered::AcceptedSelectionV2, u8)>,
 }
 
 enum Phase {
     Open,
     Queued(Outcome),
-    Prepared(Arc<Candidate>),
-    Durable(Arc<Candidate>),
+    Prepared(Arc<Terminal>),
+    Durable(Arc<Terminal>),
     Failed {
         code: ErrorCode,
-        candidate: Option<Arc<Candidate>>,
+        candidate: Option<Arc<Terminal>>,
         retryable: bool,
     },
 }
@@ -36,7 +37,9 @@ enum Phase {
 pub(crate) struct Owner {
     #[cfg(all(feature = "core", feature = "harness"))]
     learning: std::sync::OnceLock<Arc<crate::tenancy::learning::owner::Owner>>,
-    identity: Identity,
+    pub(in crate::tenancy) identity: Identity,
+    pub(in crate::tenancy) intent: std::sync::OnceLock<Arc<super::ordered::intent::Intent>>,
+    pub(in crate::tenancy) intent_ready: std::sync::atomic::AtomicBool,
     pub(in crate::tenancy) observation: crate::telemetry::receipt_latency::Timing,
     // Retain the exact encrypted replacement independently of adapter/future
     // lifetime, including a confirmed rollback whose bounded reconciliation
@@ -140,7 +143,10 @@ impl Owner {
             .lock()
             .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         match &*phase {
-            Phase::Durable(candidate) => Ok(candidate.clone()),
+            Phase::Durable(candidate) => candidate
+                .v1()
+                .cloned()
+                .map_err(|_| ErrorCode::CapabilityMismatch),
             _ => Err(ErrorCode::AuthorityUnavailable),
         }
     }
@@ -175,6 +181,8 @@ impl Owner {
             #[cfg(all(feature = "core", feature = "harness"))]
             learning: std::sync::OnceLock::new(),
             identity,
+            intent: std::sync::OnceLock::new(),
+            intent_ready: std::sync::atomic::AtomicBool::new(false),
             observation,
             oauth_replacement: std::sync::OnceLock::new(),
             oauth_acknowledged: std::sync::atomic::AtomicBool::new(false),
@@ -505,6 +513,7 @@ impl Owner {
             self.cancel();
         }
         self.start_cleanup();
+        self.wait_ordered_intent().await?;
         self.close_auxiliary().await?;
         self.begin(outcome, false)?;
         self.wait_bounded(true).await
@@ -523,10 +532,53 @@ impl Owner {
             return self.wait(false).await;
         }
         self.start_cleanup();
+        self.wait_ordered_intent().await?;
         self.close_auxiliary().await?;
         self.begin(fallback, true)?;
         self.wait_bounded(false).await
     }
+
+    /// Intent completion and receipt completion share an actor with separate
+    /// queues. Join intent custody here, outside that actor, so cancellation
+    /// cannot enqueue a higher-priority terminal before its identity is durable.
+    async fn wait_ordered_intent(&self) -> Result<(), ErrorCode> {
+        if self.identity.ordered.is_none() {
+            return Ok(());
+        }
+        let settled = async {
+            loop {
+                let notified = self.changed.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if let Some(code) = self.failure() {
+                    return Err(code);
+                }
+                if self.intent_ready.load(std::sync::atomic::Ordering::Acquire) {
+                    return Ok(());
+                }
+                notified.await;
+            }
+        };
+        match tokio::time::timeout_at(self.cleanup_deadline(), settled).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.fail(ErrorCode::StorageUnavailable);
+                Err(ErrorCode::StorageUnavailable)
+            }
+        }
+    }
+
+    pub(in crate::tenancy) fn intent_committed(&self) {
+        self.intent_ready
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.changed.notify_waiters();
+    }
+
+    #[cfg(test)]
+    pub(in crate::tenancy) fn cleanup_started_for_test(&self) -> bool {
+        self.cleanup.lock().is_ok_and(|deadline| deadline.is_some())
+    }
+
     async fn close_auxiliary(&self) -> Result<(), ErrorCode> {
         let close = async {
             tokio::select! {
@@ -603,7 +655,7 @@ impl Owner {
             notified.await;
         }
     }
-    pub(in crate::tenancy) async fn prepare(&self) -> anyhow::Result<Arc<Candidate>> {
+    pub(in crate::tenancy) async fn prepare(&self) -> anyhow::Result<Arc<Terminal>> {
         let proposed = {
             let state = self
                 .phase
@@ -663,33 +715,93 @@ impl Owner {
         } else {
             ReceiptState::Incomplete
         };
-        let receipt = ExecutionReceipt {
-            installation_id: self.identity.installation.clone(),
-            tenant_id: self.identity.tenant.clone(),
-            principal_id: self.identity.principal.clone(),
-            execution_id: self.identity.execution.clone(),
-            correlation_id: self.identity.correlation.clone(),
-            execution_revision: self.identity.revision.clone(),
-            state,
-            outcome,
-            attempts: frozen.attempts,
-            usage: frozen.usage,
-            recorded_at: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                .try_into()?,
-        };
-        let candidate = Arc::new(
-            Candidate::new(
+        let terminal = if let Some((selection, attempt_limit)) = &self.identity.ordered {
+            anyhow::ensure!(auxiliary.is_empty(), "ordered receipt auxiliary work");
+            anyhow::ensure!(
+                self.intent_ready.load(std::sync::atomic::Ordering::Acquire),
+                "ordered intent not committed"
+            );
+            anyhow::ensure!(
+                frozen.attempts.len() == frozen.candidate_ordinals.len()
+                    && frozen.attempts.len() == frozen.http_statuses.len(),
+                "ordered attempt facts count"
+            );
+            let attempts = frozen
+                .attempts
+                .into_iter()
+                .zip(frozen.candidate_ordinals)
+                .zip(&frozen.http_statuses)
+                .map(|((attempt, ordinal), status)| {
+                    Ok(bitrouter_ai::tenancy::execution_v2::AttemptV2 {
+                        attempt_id: attempt.attempt_id,
+                        candidate_index: ordinal
+                            .ok_or_else(|| anyhow::anyhow!("ordered attempt missing ordinal"))?,
+                        target: attempt.target,
+                        outcome: attempt.outcome,
+                        observed_http_status: *status,
+                        usage: attempt.usage,
+                        native_usage: attempt.native_usage,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let receipt = bitrouter_ai::tenancy::execution_v2::ExecutionReceiptV2 {
+                schema_version: 2,
+                installation_id: self.identity.installation.clone(),
+                tenant_id: self.identity.tenant.clone(),
+                principal_id: self.identity.principal.clone(),
+                execution_id: self.identity.execution.clone(),
+                correlation_id: self.identity.correlation.clone(),
+                execution_revision: self.identity.revision.clone(),
+                accepted_selection: selection.clone(),
+                attempt_limit: *attempt_limit,
+                state,
+                outcome: if unknown { Outcome::Unknown } else { outcome },
+                attempts,
+                usage: frozen.usage,
+                recorded_at: chrono::Utc::now()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                    .try_into()?,
+            };
+            let document = frozen.usage_evidence.document_v2(&receipt);
+            Terminal::V2(Arc::new(super::ordered::CandidateV2::new(
                 receipt,
                 Disposition {
                     dispatch: frozen.dispatch,
                     statuses: frozen.http_statuses,
                     auxiliary_digest: None,
                 },
-            )?
-            .with_usage_evidence(frozen.usage_evidence)?
-            .with_auxiliary(auxiliary)?,
-        );
+                document,
+            )?))
+        } else {
+            let receipt = ExecutionReceipt {
+                installation_id: self.identity.installation.clone(),
+                tenant_id: self.identity.tenant.clone(),
+                principal_id: self.identity.principal.clone(),
+                execution_id: self.identity.execution.clone(),
+                correlation_id: self.identity.correlation.clone(),
+                execution_revision: self.identity.revision.clone(),
+                state,
+                outcome,
+                attempts: frozen.attempts,
+                usage: frozen.usage,
+                recorded_at: chrono::Utc::now()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                    .try_into()?,
+            };
+            Terminal::V1(Arc::new(
+                Candidate::new(
+                    receipt,
+                    Disposition {
+                        dispatch: frozen.dispatch,
+                        statuses: frozen.http_statuses,
+                        auxiliary_digest: None,
+                    },
+                )?
+                .with_usage_evidence(frozen.usage_evidence)?
+                .with_auxiliary(auxiliary)?,
+            ))
+        };
+        let candidate = Arc::new(terminal);
         let mut phase = self
             .phase
             .lock()
@@ -703,7 +815,7 @@ impl Owner {
     }
     pub(in crate::tenancy) fn committed(
         &self,
-        candidate: Arc<Candidate>,
+        candidate: Arc<Terminal>,
         inserted: bool,
     ) -> Result<(), ErrorCode> {
         let mut phase = self
@@ -723,8 +835,8 @@ impl Owner {
         if inserted {
             let unknown = if candidate.unknown() || candidate.auxiliary_unknown() {
                 Some((
-                    candidate.receipt.execution_id.clone(),
-                    chrono::DateTime::parse_from_rfc3339(candidate.receipt.recorded_at.as_str())
+                    candidate.facts().execution.clone(),
+                    chrono::DateTime::parse_from_rfc3339(candidate.facts().recorded_at.as_str())
                         .map_err(|_| ErrorCode::StorageUnavailable)?
                         .with_timezone(&chrono::Utc),
                 ))
@@ -742,9 +854,14 @@ impl Owner {
             lease.confirm_receipt(0, None)?;
         }
         *phase = Phase::Durable(candidate.clone());
-        let publication = self.observation.publication(&candidate.receipt);
+        let publication = match candidate.as_ref() {
+            Terminal::V1(c) => Some(self.observation.publication(&c.receipt)),
+            Terminal::V2(_) => None,
+        };
         drop(phase);
-        publication.record();
+        if let Some(publication) = publication {
+            publication.record();
+        }
         self.changed.notify_waiters();
         Ok(())
     }

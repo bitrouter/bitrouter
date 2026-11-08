@@ -166,6 +166,41 @@ fn bounds_are_sticky_and_keep_a_prefix_across_attempts() -> Result<()> {
     ensure!(global.frames.len() == MAX_FRAMES && global.dropped == 288);
     Ok(())
 }
+
+#[test]
+fn ordered_capture_scales_only_with_the_accepted_selection() -> Result<()> {
+    ensure!(Snapshot::ordered(0).is_err());
+    ensure!(Snapshot::ordered(65).is_err());
+    for count in [1, 8, 9, 64] {
+        let mut capture = Snapshot::ordered(count)?;
+        let budget = EvidenceBudgetV2::for_attempts(count)?;
+        let retained = budget.max_frames.min(count * MAX_ATTEMPT_FRAMES);
+        for sequence in 0..retained {
+            capture.observe(
+                &format!("attempt-{}", sequence % count).try_into()?,
+                Protocol::Messages,
+                Source::MessageDelta,
+                &json!({"output_tokens":sequence}),
+            );
+        }
+        ensure!(capture.frames.len() == retained && capture.dropped == 0);
+        ensure!(serde_json::to_vec(&capture.frames)?.len() <= budget.max_frame_bytes);
+        capture.observe(
+            &"attempt-0".try_into()?,
+            Protocol::Messages,
+            Source::MessageDelta,
+            &json!({"output_tokens":1}),
+        );
+        capture.observe(
+            &"attempt-1".try_into()?,
+            Protocol::Messages,
+            Source::MessageDelta,
+            &json!({"output_tokens":2}),
+        );
+        ensure!(capture.frames.len() == retained && capture.dropped == 2);
+    }
+    Ok(())
+}
 #[tokio::test]
 async fn atomic_failure_replay_deletion_and_inventory_corruption() -> Result<()> {
     let db = open().await?;
