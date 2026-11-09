@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+pub mod attempt;
 pub mod control;
 #[cfg(feature = "core")]
 pub mod core;
