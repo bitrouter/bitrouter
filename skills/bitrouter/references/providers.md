@@ -1,6 +1,6 @@
 # Providers & routing
 
-How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitrouter.yaml`. Reflects the v1 schema in `crates/bitrouter-sdk/src/config/mod.rs` — fields and strategies not listed here do not exist.
+How to configure `providers:`, `models:`, `mcp_servers:`, and `agents:` in `bitrouter.yaml`. Reflects the v1 schema in `apps/bitrouter/src/config/mod.rs` — fields and strategies not listed here do not exist.
 
 Credential priority for a selected account is: an explicit per-call key override,
 then the selected stored credential, then an application-permitted environment
@@ -270,7 +270,7 @@ providers:
 
 ## Virtual models
 
-The top-level `models:` block defines named models that don't map 1:1 to a single provider. The full schema is broader than this skill covers — see `crates/bitrouter-sdk/src/config/mod.rs::VirtualModel`. The pattern that 90% of users want is a simple alias:
+The top-level `models:` block defines named models that don't map 1:1 to a single provider. The full schema is broader than this skill covers — see `apps/bitrouter/src/config/mod.rs::VirtualModel`. The pattern that 90% of users want is a simple alias:
 
 ```yaml
 models:

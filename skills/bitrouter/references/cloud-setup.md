@@ -116,10 +116,14 @@ Inference credential precedence is explicit: when a target carries a key populat
 ```python
 client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
 client.chat.completions.create(
-    model="bitrouter/gpt-4o",      # served via the user's cloud subscription
+    model="bitrouter:openai/gpt-5.6-sol",  # pin the signed-in hosted provider
     messages=[{"role": "user", "content": "hi"}],
 )
 ```
+
+`bitrouter:<catalog-model-id>` pins a local request to the signed-in hosted
+provider. Use the unpinned catalog ID, such as `openai/gpt-5.6-sol`, when the
+normal local route-selection order should choose among all configured providers.
 
 Cloud and BYOK coexist — providers with `${PROVIDER_API_KEY}` in the environment stay configured alongside the cloud provider.
 

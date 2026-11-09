@@ -14,7 +14,7 @@ deferred (§2). The design was pressure-tested against the current tree
 (2026-07-15); the load-bearing constraint below comes from that review.
 
 **Load-bearing constraint — the wizard writes no config.** `Config`
-(`crates/bitrouter-sdk/src/config/mod.rs`) is `Deserialize`-only; there is no
+(`apps/bitrouter/src/config/mod.rs`) is `Deserialize`-only; there is no
 serializer and no comment-preserving YAML editor, and the only config write in
 the tree is the `STARTER_CONFIG` string template (`apps/bitrouter/src/commands.rs`).
 So the only durable state onboarding produces is **credentials** (which already

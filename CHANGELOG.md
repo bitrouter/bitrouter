@@ -562,8 +562,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upstreams publishing the same URI cannot shadow one another. BitRouter is a
   skills server and gateway, never a host: no daemon path installs skills, and
   gateway-sourced content never touches a filesystem skill-discovery path.
-  Caveats are documented in `skills/bitrouter/references/mcp-server.md` — the
-  gateway is not a security boundary, and remote catalogs are daemon-scoped
+  The gateway is not a security boundary, and remote catalogs are daemon-scoped
   rather than caller-scoped.
 
 - **Breaking (behaviour):** aggregate `resources/read` (`POST /mcp`) no longer
