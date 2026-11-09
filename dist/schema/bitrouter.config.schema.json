@@ -1532,6 +1532,14 @@
           "description": "Stable peer identifier used in signed attempt claims.",
           "type": "string"
         },
+        "ca_certificates_file": {
+          "default": null,
+          "description": "Optional local PEM CA bundle for this peer only, loaded at startup.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "endpoints": {
           "description": "Exact generation URLs at one HTTPS origin.",
           "items": {

@@ -127,7 +127,9 @@ rejected before dispatch rather than truncated.
 
 Operators can pair an internal generation adapter at startup through
 `tenancy.private_adapter`. Use exact HTTPS generation URLs at one origin and
-a dedicated 32-byte key from the named environment variable. A paired
+a dedicated 32-byte key from the named environment variable. For a private CA,
+set `tenancy.private_adapter.ca_certificates_file` to its PEM bundle. Core
+loads it at startup for that peer only, with normal TLS verification. A paired
 endpoint requires a profiled ordered generation request and a peer that
 authenticates and consumes each attempt before sending it upstream. See the
 [configuration contract](../../../docs/specs/configuration/README.md#private-generation-adapter).
