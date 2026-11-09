@@ -74,6 +74,9 @@ enum RegistryCommand {
         /// Write canonical and provider YAML updates. Otherwise, print a dry-run report.
         #[arg(long)]
         write: bool,
+        /// Stage missing canonical references as explicit repair proposals for review.
+        #[arg(long)]
+        propose_identity_repairs: bool,
         /// Write a machine-readable JSON sync and publication audit report.
         #[arg(long)]
         report: Option<PathBuf>,
@@ -108,9 +111,11 @@ async fn run(cli: Cli) -> Result<()> {
             RegistryCommand::Audit { report, previous } => {
                 registry::audit(&root, report.as_deref(), &previous).await
             }
-            RegistryCommand::Sync { write, report } => {
-                registry::sync(&root, write, report.as_deref()).await
-            }
+            RegistryCommand::Sync {
+                write,
+                propose_identity_repairs,
+                report,
+            } => registry::sync(&root, write, propose_identity_repairs, report.as_deref()).await,
         },
         Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {

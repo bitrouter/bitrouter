@@ -63,11 +63,13 @@ The independent identity audit still reads the complete unfiltered listing.
 Missing required secrets fail the run, while an independently validated public
 feed can still produce a reviewable proposal after the global audit passes.
 The workflow uploads the exact public identity response and JSON report.
-When the identity audit reports missing IDs, the sync summary lists the affected
-provider offers and curated IDs for review. Use the attached evidence to decide
-whether to unbind an offer, retire a recommendation, or migrate a verified
-same-model rename. The sync run continues to fail until its candidate passes
-admission.
+Trusted sync selects `--propose-identity-repairs` to stage explicit unbindings
+and recommendation removals for IDs absent from the run's complete identity
+snapshot. The JSON report, run summary and draft PR list each proposed repair.
+Native offers and historical ledger evidence are retained. Review these changes
+or supply verified same-model migration evidence before merging. The complete
+repaired candidate must pass admission and artifact validation. Ordinary sync
+without this flag rejects missing references.
 Manual runs check out the selected commit, so a contributor can validate a
 configuration fix on its branch before merging. Only runs selected from `main`
 update `automation/registry-sync` and propose catalog changes; branch runs
@@ -80,8 +82,8 @@ audit.
 
 The v1 migration retained every native provider offer. Delisted canonical
 bindings are explicitly unbound in provider source; historical correspondence
-remains in `model-identities.yaml`. These are reviewed source changes, not an
-automatic sync rule. When OpenRouter changes a canonical ID, verify the same-model
+remains in `model-identities.yaml`. Explicit repair proposals require review
+before merging. When OpenRouter changes a canonical ID, verify the same-model
 correspondence, move the ledger binding and provider `canonical_id` together,
 and preserve the native `provider_model_id`. Absence from the canonical list
 alone does not establish that the native offer is withdrawn. Azure now requires an

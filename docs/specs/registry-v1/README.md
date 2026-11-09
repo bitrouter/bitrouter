@@ -1291,8 +1291,9 @@ The workflow MUST perform these stages in order:
    mappings. Report unreferenced historical IDs separately; they may remain in
    the source ledger but cannot justify an absent ID in the public document.
    Unbound native offers remain valid and are explicitly counted, not mislabeled
-   as verified canonical IDs. Do not clear existing IDs automatically to make
-   the audit pass or infer provider withdrawal from OpenRouter absence.
+   as verified canonical IDs. Ordinary sync MUST NOT clear existing IDs to make
+   the audit pass. The explicit review-proposal mode below can stage removals
+   before this gate. OpenRouter absence never establishes provider withdrawal.
 5. Only after a passing audit, run structural validation, deterministic build,
    and stale-dist checks, then commit/propose the complete source transaction and public document.
    Bind the audit to a digest of the complete candidate inputs and the final
@@ -1309,13 +1310,35 @@ the public response as a workflow audit artifact for reproduction; never store
 request credentials. Reports distinguish `canonical_id_not_found`,
 `canonical_binding_conflict`, and `canonical_source_unavailable`.
 
+An explicitly selected review-proposal mode may stage removal of references
+absent from that run's validated complete identity snapshot. Existing sources
+MUST first pass offline identity and structural validation. A proposal can
+unbind an offer or remove a curated recommendation, including before its
+rolling retention deadline. It MUST preserve native offers, lifecycle,
+interfaces, prices and historical ledger evidence. It MUST NOT guess a
+replacement ID or resolve conflicting bindings. Record every staged removal
+in `identity_repairs`, with `kind` (`unbind_offer` or
+`remove_recommendation`), `canonical_id`, and `reason`
+(`canonical_id_not_found`). Offer repairs also include `provider` and
+`provider_model_id`. The enclosing audit supplies the observation time, source
+URL and response digest. Apply the complete audit, deterministic build and
+transaction checks to the repaired candidate before proposing it.
+
+Candidates containing identity repairs MUST be submitted as draft PRs for human
+review. Convert an existing ready sync PR to draft before pushing such changes.
+The run may stage source and generated artifacts on its proposal branch, but
+cannot update the consumer stream. Maintainers review each explicit removal or
+provide verified migration evidence before merging. Ordinary sync and final
+publication retain strict admission. An unavailable/incomplete snapshot or an
+unresolved conflict cannot authorize a repair proposal.
+
 Any invalid referenced ID or unavailable/incomplete identity snapshot fails the
 global publication gate and the final workflow status. Preserve the last valid
 published document, source bindings, and provider inventory; retain the failure
 report and staged proposals for review without updating the publishable sync PR.
 A missing ID requires reviewed correction, a verified migration to a current ID,
 or removal of the public binding while retaining the native offer and historical
-evidence. No automatic deletion, guessed remapping, or historical-ID exemption
+evidence. No provider inventory deletion, guessed remapping, or historical-ID exemption
 is allowed. An ordinary provider-feed failure may still permit unrelated valid
 updates; failure of this global audit permits no candidate publication.
 
@@ -1334,7 +1357,7 @@ explicitly bound to feed environment names. For example:
   env:
     EXAMPLE_REGISTRY_API_KEY: ${{ secrets.EXAMPLE_REGISTRY_API_KEY }}
     OPENROUTER_REGISTRY_API_KEY: ${{ secrets.OPENROUTER_REGISTRY_API_KEY }}
-  run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.json
+  run: cargo run -p dist-helper -- registry sync --write --propose-identity-repairs --report target/registry-sync.json
 ```
 
 This is a configuration example, not a request to create a secret. Adding a
