@@ -45467,6 +45467,30 @@
         "weight": 1
       },
       {
+        "api_base": "https://api.uberllm.dev/v1",
+        "auth": {
+          "env": "UBERLLM_API_KEY",
+          "kind": "bearer"
+        },
+        "weight": 1,
+        "billing": "usage",
+        "community": true,
+        "display_name": "UberLLM",
+        "doc_url": "https://uberllm.dev/docs/quickstart",
+        "kind": "aggregator",
+        "metadata": {
+          "headquarters": "US",
+          "name": "UberLLM",
+          "privacy_policy_url": "https://uberllm.dev/privacy",
+          "slug": "uberllm",
+          "terms_of_service_url": "https://uberllm.dev/terms"
+        },
+        "models": [],
+        "name": "uberllm",
+        "status": "active",
+        "submitted_at": "2026-11-10T00:00:00Z"
+      },
+      {
         "api_base": "https://api.x.ai/v1",
         "auth": {
           "env": "XAI_API_KEY",

@@ -1,0 +1,62 @@
+{
+  "api_base": "https://api.uberllm.dev/v1",
+  "auth": {
+    "env": "UBERLLM_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://api.uberllm.dev/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/display_name": "/name",
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
+  "billing": "usage",
+  "community": true,
+  "display_name": "UberLLM",
+  "doc_url": "https://uberllm.dev/docs/quickstart",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "US",
+    "name": "UberLLM",
+    "privacy_policy_url": "https://uberllm.dev/privacy",
+    "slug": "uberllm",
+    "terms_of_service_url": "https://uberllm.dev/terms"
+  },
+  "models": [],
+  "name": "uberllm",
+  "status": "active",
+  "submitted_at": "2026-11-10T00:00:00Z",
+  "weight": 1
+}
