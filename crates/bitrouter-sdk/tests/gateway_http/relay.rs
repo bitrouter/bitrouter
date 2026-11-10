@@ -14,6 +14,41 @@ fn chat_request(stream: bool) -> TestResult<ChatRequest> {
 }
 
 #[tokio::test]
+async fn background_replay_uses_the_market_base_and_preserves_the_cursor() -> TestResult {
+    let server = serve(vec![
+        Reply::sse("data: [DONE]\n\n"),
+        Reply::sse("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"),
+    ])
+    .await?;
+    let client = GatewayClient::new(&format!("{}/market", server.url), Some("buyer"))?;
+    let id = "a7ca5730-7ca2-48ae-ad66-ad7ca88a582f";
+    assert!(
+        client
+            .resume_background_chat("invalid", None)
+            .await
+            .is_err()
+    );
+    client.resume_background_chat(id, Some(0)).await?;
+    client.resume_background_messages(id, None).await?;
+    let captured = server.records.lock().await;
+    assert_eq!(captured.len(), 2);
+    assert_eq!(
+        captured[0].target,
+        format!("/market/v1/requests/{id}/events?after=0")
+    );
+    assert_eq!(
+        captured[1].target,
+        format!("/market/v1/requests/{id}/events")
+    );
+    assert!(
+        captured
+            .iter()
+            .all(|r| r.method == "GET" && r.credential.as_deref() == Some("Bearer buyer"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn relay_retains_done_and_only_allowlisted_metadata() -> TestResult {
     let mut reply = Reply::sse(
         "id: frame-1\ndata: {\"id\":\"r\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[],\"usage\":null,\"extension\":null}\n\ndata: [DONE]\n\n",

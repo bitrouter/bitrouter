@@ -170,7 +170,7 @@ impl GatewayClient {
         ]))
     }
 
-    /// Replay committed native Chat events from a BitRouter background request.
+    /// Replay committed native Chat events using the market base URL (e.g. `/market`).
     ///
     /// # Errors
     /// Returns an error for an invalid request ID or a failed replay connection.
@@ -187,7 +187,7 @@ impl GatewayClient {
         .await
     }
 
-    /// Replay committed native Messages events from a BitRouter background request.
+    /// Replay committed native Messages events using the market base URL (e.g. `/market`).
     ///
     /// # Errors
     /// Returns an error for an invalid request ID or a failed replay connection.
@@ -211,7 +211,7 @@ impl GatewayClient {
     ) -> Result<reqwest::RequestBuilder> {
         let request_id = uuid::Uuid::parse_str(request_id)
             .map_err(|_| Error::Request("invalid background request ID"))?;
-        let path = format!("v1/market/flex/requests/{request_id}/events");
+        let path = format!("v1/requests/{request_id}/events");
         let request = self.http.get(self.url(&path)?);
         Ok(match after {
             Some(cursor) => request.query(&[("after", cursor)]),
