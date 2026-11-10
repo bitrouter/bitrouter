@@ -50,7 +50,7 @@ jobs:
           XAI_REGISTRY_API_KEY: ${{ secrets.XAI_REGISTRY_API_KEY }}
           XIAOMI_REGISTRY_API_KEY: ${{ secrets.XIAOMI_REGISTRY_API_KEY }}
           ZAI_REGISTRY_API_KEY: ${{ secrets.ZAI_REGISTRY_API_KEY }}
-        run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.json
+        run: cargo run -p dist-helper -- registry sync --write --propose-identity-repairs --report target/registry-sync.json
 
       - name: Preserve public evidence and sanitized diagnostics
         if: always()
@@ -73,22 +73,22 @@ jobs:
           fi
 
       - name: Summarize canonical identity repairs for review
-        if: always() && steps.gate.outputs.passed == 'false'
+        if: always()
         run: |
           if [ -f target/registry-sync.json ]; then
             jq -r '
-              select(.audit.outcome == "invalid_ids")
-              | [.audit.mismatches[] | select(.code == "canonical_id_not_found")] as $missing
-              | select($missing | length > 0)
+              (.identity_repairs // []) as $repairs
+              | [.audit.mismatches[]? | select(.code == "canonical_id_not_found")] as $missing
+              | select(($repairs | length) + ($missing | length) > 0)
               | "### Canonical identity review\n",
                 "Review the missing references below against the attached public catalog.",
-                "For a verified same-model rename, migrate the binding and ledger together.",
-                "Otherwise, consider unbinding the provider offer while retaining its native ID, lifecycle and historical evidence.",
-                "Curated IDs require a separate retirement or migration decision.\n",
+                "Repair candidates require human review before merging. Verify any replacement identity separately.\n",
+                ($repairs[] | "- Proposed \(.kind | @json) for \(.canonical_id | @json)"
+                  + if has("provider") then " at provider \(.provider | @json), native ID \(.provider_model_id | @json)" else "" end),
                 ($missing[] | if has("provider") then
-                  "- Provider \(.provider | @json), native ID \(.provider_model_id | @json)"
+                  "- Unresolved provider \(.provider | @json), native ID \(.provider_model_id | @json)"
                 else
-                  "- Curated ID \(.canonical_id | @json)"
+                  "- Unresolved curated ID \(.canonical_id | @json)"
                 end)
             ' target/registry-sync.json >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -111,7 +111,29 @@ jobs:
             echo "registry source and artifacts are unchanged"
             exit 0
           fi
-          jq -r '"Refresh Registry v1 from explicitly configured provider feeds.\n\nIdentity audit: " + .audit.outcome + "\n\nRequired feed outcomes:\n" + ([.feeds[] | "- " + .provider + "/" + .feed + ": " + .outcome] | join("\n")) + "\n\nThe complete JSON report and public identity response are attached to the workflow run."' target/registry-sync.json > "$RUNNER_TEMP/registry-sync-pr.md"
+          jq -r '
+            "Refresh Registry v1 from explicitly configured provider feeds.\n\nIdentity audit: " + .audit.outcome
+            + "\n\nIdentity repair proposals requiring human review:\n"
+            + ([.identity_repairs[] | "- " + (.kind | @json) + " for " + (.canonical_id | @json)
+                + if has("provider") then " at provider " + (.provider | @json) + ", native ID " + (.provider_model_id | @json) else "" end] | join("\n"))
+            + "\n\nRepairs retain native offers and ledger history. Verify any same-model replacement separately."
+            + "\n\nRequired feed outcomes:\n"
+            + ([.feeds[] | "- " + .provider + "/" + .feed + ": " + .outcome] | join("\n"))
+            + "\n\nThe complete JSON report and public identity response are attached to the workflow run."
+          ' target/registry-sync.json > "$RUNNER_TEMP/registry-sync-pr.md"
+          title="chore: sync registry catalog"
+          draft_args=()
+          pr="$(gh pr list --head "$BRANCH" --json number,isDraft --jq '.[0] // {}')"
+          pr_number="$(jq -r '.number // empty' <<< "$pr")"
+          if jq -e '.identity_repairs | length > 0' target/registry-sync.json > /dev/null; then
+            title="chore: review registry identity repairs"
+            draft_args=(--draft)
+            # Convert before pushing repairs onto a previously ready PR.
+            # https://cli.github.com/manual/gh_pr_ready
+            if [ -n "$pr_number" ] && [ "$(jq -r '.isDraft' <<< "$pr")" = false ]; then
+              gh pr ready "$pr_number" --undo
+            fi
+          fi
           git config user.name "bitrouter-automation[bot]"
           git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
           git add registry dist/registry apps/bitrouter/registry-dist
@@ -122,11 +144,10 @@ jobs:
           else
             git push origin "HEAD:$BRANCH"
           fi
-          pr_number="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number // empty')"
           if [ -n "$pr_number" ]; then
-            gh pr edit "$pr_number" --title "chore: sync registry catalog" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
+            gh pr edit "$pr_number" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
           else
-            gh pr create --base main --head "$BRANCH" --title "chore: sync registry catalog" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md" "${draft_args[@]}"
           fi
 
       - name: Report required feed or global admission failures

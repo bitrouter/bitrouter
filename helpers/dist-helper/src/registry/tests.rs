@@ -90,6 +90,159 @@ fn global_identity_gate_scans_unchanged_inactive_and_noncurated_bindings() -> Re
     );
     Ok(())
 }
+
+#[test]
+fn identity_repair_candidate_is_explicit_preserves_native_data_and_passes_admission() -> Result<()>
+{
+    let root = fixture()?;
+    let original = Sources::load(root.path())?;
+    let before = original.digest()?;
+    let mut candidate = original.clone();
+    let provider_path = root.path().join("registry/providers/test.yaml");
+    let missing = "org/model:free";
+    candidate
+        .files
+        .get_mut(&provider_path)
+        .context("provider")?["models"][0]["canonical_id"] = json!(missing);
+    candidate
+        .files
+        .get_mut(&candidate.identities)
+        .context("ledger")?[0]["canonical_id"] = json!(missing);
+    candidate
+        .files
+        .get_mut(&root.path().join("registry/models/org.yaml"))
+        .context("models")?[0]["id"] = json!(missing);
+    let ledger = candidate.files[&candidate.identities].clone();
+    let provider = candidate.files[&provider_path].clone();
+    // A similar current ID is evidence of neither a rename nor a paid/free alias.
+    let snapshot = json!({"data":[{"id":"org/model"}],"total_count":1,"links":{"next":null}});
+    let ids = identity_ids(&snapshot)?;
+    let prior = candidate.document()?;
+    assert!(
+        validate_bindings(&prior, &ledger, Some(&ids)).is_err(),
+        "default admission must still reject missing references"
+    );
+    let repairs = identity_repairs::stage(&mut candidate, &snapshot)?;
+    assert_eq!(
+        repairs,
+        vec![
+            json!({"kind":"remove_recommendation","canonical_id":missing,"reason":"canonical_id_not_found"}),
+            json!({"kind":"unbind_offer","provider":"test","provider_model_id":"Native/A","canonical_id":missing,"reason":"canonical_id_not_found"})
+        ]
+    );
+    let mut expected = provider;
+    expected["models"][0]
+        .as_object_mut()
+        .context("offer")?
+        .remove("canonical_id");
+    assert_eq!(candidate.files[&provider_path], expected);
+    assert_eq!(candidate.files[&candidate.identities], ledger);
+    assert_eq!(Sources::load(root.path())?.digest()?, before);
+    let document = candidate.document()?;
+    assert!(document.models().is_empty());
+    validate_bindings(&document, &ledger, Some(&ids))?;
+    assert!(identity_repairs::stage(&mut candidate, &snapshot)?.is_empty());
+    materialize_bindings(
+        candidate
+            .files
+            .get_mut(&provider_path)
+            .context("provider")?,
+        &ledger,
+        &ids,
+    )?;
+    assert_eq!(candidate.files[&provider_path], expected);
+    let outputs = build_outputs(root.path(), &candidate)?;
+    candidate.publish(&original, &outputs)?;
+    let reloaded = Sources::load(root.path())?;
+    assert_eq!(reloaded.digest()?, candidate.digest()?);
+    validate_bindings(&reloaded.document()?, &ledger, Some(&ids))?;
+    build(root.path(), true)?;
+
+    // A later return restores the exact reviewed binding, never a guessed ID.
+    materialize_bindings(
+        candidate
+            .files
+            .get_mut(&provider_path)
+            .context("provider")?,
+        &ledger,
+        &[missing.to_owned()].into(),
+    )?;
+    assert_eq!(
+        candidate.files[&provider_path]["models"][0]["canonical_id"],
+        missing
+    );
+    Ok(())
+}
+
+#[test]
+fn identity_repairs_require_complete_evidence_and_valid_existing_bindings() -> Result<()> {
+    let root = fixture()?;
+    let mut candidate = Sources::load(root.path())?;
+    let before = candidate.digest()?;
+    for snapshot in [
+        json!({"data":[]}),
+        json!({"data":[{"id":"org/model"}],"total_count":2}),
+        json!({"data":[{"id":"org/model"}],"links":{"next":"https://example.com/next"}}),
+        json!({"data":[{"id":"org/model"},{"id":"org/model"}]}),
+    ] {
+        assert!(identity_repairs::stage(&mut candidate, &snapshot).is_err());
+        assert_eq!(candidate.digest()?, before);
+    }
+    let snapshot = json!({"data":[{"id":"org/model"}]});
+    assert!(identity_repairs::stage(&mut candidate, &snapshot)?.is_empty());
+    assert_eq!(candidate.digest()?, before);
+    let provider_path = root.path().join("registry/providers/test.yaml");
+    candidate
+        .files
+        .get_mut(&provider_path)
+        .context("provider")?["models"][0]["canonical_id"] = json!("org/unverified");
+    let conflicting = candidate.digest()?;
+    assert!(identity_repairs::stage(&mut candidate, &snapshot).is_err());
+    assert_eq!(candidate.digest()?, conflicting);
+    Ok(())
+}
+
+#[test]
+fn identity_repairs_include_noncurated_inactive_offers_and_leave_current_bindings() -> Result<()> {
+    let root = fixture()?;
+    let mut candidate = Sources::load(root.path())?;
+    let provider_path = root.path().join("registry/providers/test.yaml");
+    let existing = candidate.files[&provider_path]["models"][0].clone();
+    let mut inactive = existing.clone();
+    inactive["provider_model_id"] = json!("Native/Inactive");
+    inactive["canonical_id"] = json!("org/inactive");
+    inactive["status"] = json!("withdrawn");
+    candidate
+        .files
+        .get_mut(&provider_path)
+        .context("provider")?["models"]
+        .as_array_mut()
+        .context("models")?
+        .push(inactive.clone());
+    let mut identity = candidate.files[&candidate.identities][0].clone();
+    identity["canonical_id"] = json!("org/inactive");
+    identity["bindings"][0]["provider_model_id"] = json!("Native/Inactive");
+    candidate
+        .files
+        .get_mut(&candidate.identities)
+        .context("ledger")?
+        .as_array_mut()
+        .context("entries")?
+        .push(identity);
+    let repairs = identity_repairs::stage(&mut candidate, &json!({"data":[{"id":"org/model"}]}))?;
+    assert_eq!(repairs.len(), 1);
+    assert_eq!(repairs[0]["provider_model_id"], "Native/Inactive");
+    inactive
+        .as_object_mut()
+        .context("inactive")?
+        .remove("canonical_id");
+    assert_eq!(
+        candidate.files[&provider_path]["models"],
+        json!([existing, inactive])
+    );
+    assert_eq!(candidate.document()?.models().len(), 1);
+    Ok(())
+}
 #[test]
 fn source_directory_swap_and_crash_recovery_keep_complete_transactions() -> Result<()> {
     let root = fixture()?;

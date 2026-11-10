@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 mod agents;
 mod discovery;
+mod identity_repairs;
 
 fn ordered_source(value: &Value) -> Value {
     let mut value = value.clone();
@@ -675,7 +676,12 @@ fn identity_request(manifest: &Value) -> Result<&Value> {
     Ok(request)
 }
 
-pub async fn sync(root: &Path, write: bool, report_path: Option<&Path>) -> Result<()> {
+pub async fn sync(
+    root: &Path,
+    write: bool,
+    propose_identity_repairs: bool,
+    report_path: Option<&Path>,
+) -> Result<()> {
     fs::create_dir_all(root.join("target"))?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -698,7 +704,7 @@ pub async fn sync(root: &Path, write: bool, report_path: Option<&Path>) -> Resul
     let transport = feed::Transport::new([])?;
     let now = Utc::now();
     let label = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let mut report = json!({"run":label,"mode":if write {"write"} else {"dry_run"},"feeds":[],"audit":{"outcome":"unavailable"}});
+    let mut report = json!({"run":label,"mode":if write {"write"} else {"dry_run"},"feeds":[],"identity_repairs":[],"audit":{"outcome":"unavailable"}});
     let result=async {
         if original.files[&original.manifest]["as_of"].as_str().and_then(timestamp).is_none_or(|prior|now<prior) {bail!("publication as_of must not move backward");}
         let request=identity_request(&candidate.files[&candidate.manifest])?;
@@ -708,6 +714,9 @@ pub async fn sync(root: &Path, write: bool, report_path: Option<&Path>) -> Resul
         fs::create_dir_all(root.join("target"))?;
         atomic_write(&root.join("target/registry-identity-response.json"),&fetched.bytes)?;
         report["audit"]=json!({"outcome":"staged","source_url":"https://openrouter.ai/api/v1/models?output_modalities=all","fetched_at":label,"response_sha256":hex::encode(Sha256::digest(&fetched.bytes)),"run":label});
+        if propose_identity_repairs {
+            report["identity_repairs"] = json!(identity_repairs::stage(&mut candidate, &snapshot)?);
+        }
         let provider_paths=candidate.records("providers").map(|(p,_)|p.clone()).collect::<Vec<_>>();
         let mut failed=false;
         for path in provider_paths {
