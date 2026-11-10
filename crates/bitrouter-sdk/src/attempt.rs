@@ -72,7 +72,9 @@ impl MessagesTransport {
     ///
     /// # Errors
     /// Returns an error for an invalid endpoint, key, or HTTP configuration.
-    pub fn new(mut endpoint: reqwest::Url, key: &str) -> Result<Self> {
+    pub fn new(endpoint: &str, key: &str) -> Result<Self> {
+        let mut endpoint = reqwest::Url::parse(endpoint)
+            .map_err(|_| Error::Options("invalid native Messages endpoint"))?;
         if !matches!(endpoint.scheme(), "http" | "https")
             || endpoint.host().is_none()
             || !endpoint.username().is_empty()
