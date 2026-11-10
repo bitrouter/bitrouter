@@ -50,19 +50,20 @@ impl RunningFixture {
             bitrouter::reload::load_configuration_baseline(&ConfigSource::File(source.clone()))
                 .await?;
         let assembled = bitrouter::build_app_with_path(baseline.config(), Some(&source)).await?;
-        let reloader = Arc::new(
-            AppReloader::new(
-                assembled.policy_store.clone(),
-                assembled.routing_table.clone(),
-                assembled.upstream_executor.clone(),
-                ReloadSource::File(source.clone()),
-            )
-            .with_startup_configuration(baseline)
-            .with_policy_runtime(assembled.policy_runtime.clone()),
-        );
+        let reloader = AppReloader::new(
+            assembled.policy_store.clone(),
+            assembled.routing_table.clone(),
+            assembled.upstream_executor.clone(),
+            ReloadSource::File(source.clone()),
+        )
+        .with_startup_configuration(baseline);
+        #[cfg(feature = "semantic-routing")]
+        let reloader = reloader.with_policy_runtime(assembled.policy_runtime.clone());
+        let reloader = Arc::new(reloader);
         let administration = Administration {
             source: ConfigSource::File(source.clone()),
             routing: assembled.routing_table.clone(),
+            #[cfg(feature = "semantic-routing")]
             policy: assembled.policy_runtime.clone(),
             observe: assembled.observe.clone(),
         };

@@ -65,6 +65,20 @@ struct AttemptSettlement {
     observed_usage_origin: Option<UsageOrigin>,
 }
 
+#[cfg(feature = "inference-routing")]
+impl JudgeAttemptObserved {
+    fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::{error::BitrouterError, scheduling::payload::Weight};
+        let mut weight = Weight::new();
+        weight.add(std::mem::size_of::<Self>() + 64)?;
+        weight.string(&self.request_id)?;
+        weight.string(&self.owner)?;
+        crate::gateway::observability::requests::scheduling_hops(&self.hops)?
+            .checked_add(weight.total())
+            .ok_or(BitrouterError::UpstreamUnavailable)
+    }
+}
+
 impl PipelineEvent for JudgeAttemptObserved {
     fn event_name(&self) -> &'static str {
         "evolution.judge_attempt_observed"
@@ -155,11 +169,15 @@ impl JudgeCosts {
         }
         .await;
         let attempt = write.finish(tx, result).await?;
-        ctx.emit(JudgeAttemptObserved {
+        let observed = JudgeAttemptObserved {
             request_id: attempt.request_id,
             owner: binding.owner,
             hops: Arc::new(Mutex::new(Vec::new())),
-        });
+        };
+        #[cfg(feature = "inference-routing")]
+        ctx.emit_accounted(observed, JudgeAttemptObserved::scheduling_retained_bytes);
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.emit(observed);
         Ok(())
     }
 

@@ -361,6 +361,7 @@ async fn serve_with_options(
         let administration = crate::actions::administration::Administration {
             source: source.clone(),
             routing: assembled.routing_table.clone(),
+            #[cfg(feature = "semantic-routing")]
             policy: assembled.policy_runtime.clone(),
             observe: observe_provider.clone(),
         };
@@ -372,8 +373,9 @@ async fn serve_with_options(
             assembled.upstream_executor,
             reload_source,
         )
-        .with_startup_configuration(startup_configuration)
-        .with_policy_runtime(assembled.policy_runtime);
+        .with_startup_configuration(startup_configuration);
+        #[cfg(feature = "semantic-routing")]
+        let reloader = reloader.with_policy_runtime(assembled.policy_runtime);
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
             .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
             .server_instance_id;

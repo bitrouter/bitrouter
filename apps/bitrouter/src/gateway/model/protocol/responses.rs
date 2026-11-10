@@ -15,6 +15,23 @@
 //! - #434: function-call stream items map `item_id` back to `call_id`, and
 //!   argument deltas are not duplicated.
 
+#[cfg(feature = "inference-routing")]
+pub(crate) fn prefix_projection(
+    prompt: &bitrouter_ai::types::Prompt,
+    key: &[u8; 32],
+    tenant: &[u8; 32],
+    cap: usize,
+) -> Option<std::sync::Arc<crate::gateway::scheduling::prefix::projection::Projection>> {
+    crate::gateway::scheduling::prefix::projection::build(
+        prompt,
+        key,
+        tenant,
+        cap,
+        b"responses.semantic-input.v1",
+        2,
+    )
+}
+
 use crate::gateway::model::conversion::ReportAdmission;
 use crate::gateway::model::protocol::values::{
     data_from_url, data_to_url, extra_value_for_protocol, extras_for_protocol,

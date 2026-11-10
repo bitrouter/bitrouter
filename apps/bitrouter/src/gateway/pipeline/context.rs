@@ -97,7 +97,11 @@ static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 /// [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads on the hot path
 /// without re-parsing.
 #[derive(Clone, Default)]
-struct Extensions(http::Extensions);
+struct Extensions(
+    http::Extensions,
+    #[cfg(feature = "inference-routing")]
+    Option<HashMap<std::any::TypeId, Option<crate::gateway::scheduling::payload::Tracked>>>,
+);
 
 /// A request-local native provider continuation resolved by a route hook.
 /// The executor validates the exact target snapshot before substituting the
@@ -198,6 +202,10 @@ impl ProviderContinuation {
 impl Extensions {
     fn insert<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
         self.0.insert(value);
+        #[cfg(feature = "inference-routing")]
+        if let Some(accounting) = &mut self.1 {
+            accounting.insert(std::any::TypeId::of::<T>(), None);
+        }
     }
 
     fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
@@ -219,6 +227,10 @@ fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
 /// downstream, each stage appends, downstream may read everything upstream
 /// wrote but never mutate it.
 pub struct PipelineContext {
+    #[cfg(feature = "inference-routing")]
+    scheduling_attempt: Mutex<Option<crate::gateway::scheduling::Observation>>,
+    #[cfg(feature = "inference-routing")]
+    scheduling_started_at: tokio::time::Instant,
     // ===== original request (Stage 0, read-only) =====
     request_id: String,
     original_model: String,
@@ -289,9 +301,190 @@ pub struct PipelineContext {
 }
 
 impl PipelineContext {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn insert_accounted_extension<T: Send + Sync + 'static>(
+        &mut self,
+        value: Arc<T>,
+        measure: impl Fn(&T) -> Result<u64> + Send + Sync + 'static,
+    ) {
+        if self.extensions.1.is_some() {
+            self.extensions.0.insert(value.clone());
+            if let Some(accounting) = &mut self.extensions.1 {
+                accounting.insert(
+                    std::any::TypeId::of::<T>(),
+                    Some(crate::gateway::scheduling::payload::tracked(value, measure)),
+                );
+            }
+        } else {
+            self.extensions.insert(value);
+        }
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn emit_accounted<E: PipelineEvent>(
+        &mut self,
+        event: E,
+        measure: fn(&E) -> Result<u64>,
+    ) {
+        if self.extensions.1.is_some() {
+            self.events.emit_accounted(event, measure);
+        } else {
+            self.events.emit(event);
+        }
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_accounted_bytes(&self) -> Result<u64> {
+        let accounting = self
+            .extensions
+            .1
+            .as_ref()
+            .ok_or(BitrouterError::UpstreamUnavailable)?;
+        if accounting.len() != self.extensions.0.len() {
+            return Err(BitrouterError::bad_request(
+                "scheduled queue cannot retain an unaccounted ingress extension",
+            ));
+        }
+        let mut bytes = (accounting.capacity() * 256) as u64;
+        for value in accounting.values() {
+            let measure = value.as_ref().ok_or_else(|| {
+                BitrouterError::bad_request(
+                    "scheduled queue cannot retain an unaccounted extension",
+                )
+            })?;
+            bytes = bytes
+                .checked_add(measure()?)
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        let mut outbound = self
+            .outbound_trace_headers
+            .lock()
+            .map_err(|_| BitrouterError::UpstreamUnavailable)?;
+        if let Some(headers) = outbound.as_mut() {
+            bytes = bytes
+                .checked_add(crate::gateway::scheduling::payload::headers(headers)?)
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
+        drop(outbound);
+        bytes
+            .checked_add(self.events.scheduling_bytes()?)
+            .ok_or(BitrouterError::UpstreamUnavailable)
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn enable_scheduling_accounting(&mut self) {
+        if self.extensions.1.is_some() {
+            return;
+        }
+        self.extensions.1 = Some(HashMap::new());
+        if let Some(execution) = self.extension::<crate::tenancy::execution::TenantExecution>() {
+            self.insert_accounted_extension(
+                execution,
+                crate::tenancy::execution::TenantExecution::scheduling_retained_bytes,
+            );
+        }
+        if let Some(registration) =
+            self.extension::<crate::tenancy::execution::lifecycle::Registration>()
+        {
+            self.insert_accounted_extension(registration, |_| {
+                Ok(
+                    (std::mem::size_of::<crate::tenancy::execution::lifecycle::Registration>()
+                        + 256) as u64,
+                )
+            });
+        }
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn prepare_scheduling_payload(&mut self) -> Result<u64> {
+        use crate::gateway::scheduling::payload::Weight;
+        let mut prompt = Weight::new();
+        if self.execution_result.is_some() {
+            return Err(BitrouterError::bad_request(
+                "completed context cannot enter scheduling queue",
+            ));
+        }
+        let PipelineInput::Generation(value) = &mut self.input else {
+            return Err(BitrouterError::bad_request("unsupported queued input"));
+        };
+        prompt.prompt(value)?;
+        // The execution future may own a second compact Prompt clone. Count
+        // both conservatively; no extra payload is cloned by queue admission.
+        let mut weight = Weight::new();
+        weight.add(
+            usize::try_from(
+                prompt
+                    .total()
+                    .checked_mul(2)
+                    .ok_or(BitrouterError::UpstreamUnavailable)?,
+            )
+            .map_err(|_| BitrouterError::UpstreamUnavailable)?,
+        )?;
+        weight.add(std::mem::size_of::<Self>())?;
+        for value in [&self.request_id, &self.original_model, &self.model] {
+            weight.string(value)?;
+        }
+        if let Some(ApiProtocol::Custom(name)) = &self.inbound_protocol {
+            weight.string(name)?;
+        }
+        if let Some(chain) = &self.route_chain {
+            weight.add(
+                usize::try_from(crate::gateway::scheduling::payload::targets(chain)?)
+                    .map_err(|_| BitrouterError::UpstreamUnavailable)?,
+            )?;
+        }
+        weight.add(self.caller.scheduling_retained_bytes())?;
+        if let Some(identity) = &self.router_identity {
+            weight.add(
+                usize::try_from(crate::gateway::scheduling::payload::compact_dto(identity)?)
+                    .map_err(|_| BitrouterError::UpstreamUnavailable)?,
+            )?;
+        }
+        weight.add(
+            self.metadata.capacity()
+                * (std::mem::size_of::<(PluginId, serde_json::Value)>() * 2 + 32),
+        )?;
+        for (key, value) in &mut self.metadata {
+            weight.add(key.as_str().len())?;
+            weight.json(value)?;
+        }
+        weight.add(
+            usize::try_from(crate::gateway::scheduling::payload::headers(
+                &mut self.headers,
+            )?)
+            .map_err(|_| BitrouterError::UpstreamUnavailable)?,
+        )?;
+        Ok(weight.total())
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_started_at(&self) -> tokio::time::Instant {
+        self.scheduling_started_at
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn set_scheduling_attempt(&self, observer: crate::gateway::scheduling::Observation) {
+        *self
+            .scheduling_attempt
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(observer);
+    }
+
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_attempt(&self) -> Option<crate::gateway::scheduling::Observation> {
+        self.scheduling_attempt
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
     /// Build a fresh context from an inbound request.
     pub fn new(req: PipelineRequest) -> Self {
         Self {
+            #[cfg(feature = "inference-routing")]
+            scheduling_attempt: Mutex::new(None),
+            #[cfg(feature = "inference-routing")]
+            scheduling_started_at: tokio::time::Instant::now(),
             request_id: req.request_id,
             original_model: req.original_model,
             model: req.model,
@@ -318,7 +511,11 @@ impl PipelineContext {
             stream_assistant_turn_commitment: None,
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
-            extensions: Extensions(req.extensions),
+            extensions: Extensions(
+                req.extensions,
+                #[cfg(feature = "inference-routing")]
+                None,
+            ),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
         }
@@ -331,6 +528,10 @@ impl PipelineContext {
     #[cfg(feature = "server-tools")]
     pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
         Self {
+            #[cfg(feature = "inference-routing")]
+            scheduling_attempt: Mutex::new(None),
+            #[cfg(feature = "inference-routing")]
+            scheduling_started_at: self.scheduling_started_at,
             request_id: self.request_id.clone(),
             original_model: self.original_model.clone(),
             model: self.model.clone(),

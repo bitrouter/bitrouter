@@ -13,6 +13,7 @@
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
 
+#[cfg(feature = "semantic-routing")]
 use crate::actions::administration::PolicyReportRuntime;
 use bitrouter_ai::control::reload::{
     AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadConsistency, ReloadFailure,
@@ -468,6 +469,12 @@ fn restart_required_fields(
     if current.decision_model != candidate.decision_model {
         fields.insert("decision_model".to_string());
     }
+    if current
+        .inference_routing
+        .restart_required(&candidate.inference_routing)
+    {
+        fields.insert("inference_routing".to_string());
+    }
     if current.control != candidate.control {
         fields.insert("control".to_string());
     }
@@ -722,6 +729,20 @@ fn collect_unclassified_schema_paths(
 
     if let Some(all_of) = all_of {
         for part in all_of {
+            // Conditional validation does not declare another object shape.
+            // The enclosing DTO's properties still classify every known and
+            // unknown field; visiting this constraint as an empty object would
+            // incorrectly mark every declared field as unclassified.
+            if has_direct_object_shape
+                && part.get("if").is_some()
+                && part.as_object().is_some_and(|object| {
+                    object
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "if" | "then" | "else"))
+                })
+            {
+                continue;
+            }
             collect_unclassified_schema_paths(
                 value,
                 part,
@@ -1076,6 +1097,7 @@ fn fixed_top_level_field(name: &str) -> &'static str {
     match name {
         "server" => "server",
         "control" => "control",
+        "inference_routing" => "inference_routing",
         "tenancy" => "tenancy",
         "chat" => "chat",
         "upstream" => "upstream",
@@ -1141,6 +1163,7 @@ fn fixed_restart_field(path: &str) -> String {
         | "control"
         | "tenancy"
         | "decision_model"
+        | "inference_routing"
         | "chat"
         | "database.url"
         | "eval"
@@ -1404,6 +1427,7 @@ pub struct AppReloader {
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
+    #[cfg(feature = "semantic-routing")]
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// Owns admission for local IPC, SIGHUP, and guarded remote reloads. The
     /// routing table's own lock is narrower and cannot protect preparation or
@@ -1811,6 +1835,7 @@ struct PreparedReload {
     baseline: ConfigurationBaseline,
     config: crate::config::Config,
     timeout_clients: crate::gateway::pipeline::executor::PreparedProviderTimeouts,
+    #[cfg(feature = "semantic-routing")]
     named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
 }
@@ -1992,6 +2017,7 @@ impl AppReloader {
             running_baseline: Mutex::new(None),
             environment_revision: AtomicU64::new(0),
             upstream_executor,
+            #[cfg(feature = "semantic-routing")]
             policy_runtime: None,
             coordinator: ReloadCoordinator::new(),
             source,
@@ -2019,12 +2045,14 @@ impl AppReloader {
     }
 
     #[cfg(test)]
+    #[cfg(feature = "semantic-routing")]
     fn with_test_apply_failure(mut self, participant: ReloadParticipant) -> Self {
         self.test_apply_failure = Some(participant);
         self
     }
 
     #[cfg(test)]
+    #[cfg(feature = "semantic-routing")]
     fn with_test_pause_after_prepare(mut self, pause: Arc<TestPreparationPause>) -> Self {
         self.test_pause_after_prepare = Some(pause);
         self
@@ -2142,6 +2170,7 @@ impl AppReloader {
         if !restart_required.is_empty() {
             return Err(PreparationError::restart_required(restart_required));
         }
+        #[cfg(feature = "semantic-routing")]
         let named_policy_runtime = match &self.policy_runtime {
             Some(runtime) => {
                 let path = match &self.source {
@@ -2185,6 +2214,7 @@ impl AppReloader {
             baseline,
             config,
             timeout_clients,
+            #[cfg(feature = "semantic-routing")]
             named_policy_runtime,
             access_policy_store,
         })
@@ -2320,6 +2350,7 @@ impl AppReloader {
                 reload_failure("fault_injected", "named policy runtime update failed"),
             );
         } else {
+            #[cfg(feature = "semantic-routing")]
             match (self.policy_runtime.as_ref(), prepared.named_policy_runtime) {
                 (Some(runtime), Some(prepared_runtime)) => {
                     runtime.commit(prepared_runtime);
@@ -2327,6 +2358,8 @@ impl AppReloader {
                 }
                 _ => report.participant_unchanged(ReloadParticipant::NamedPolicyRuntime),
             }
+            #[cfg(not(feature = "semantic-routing"))]
+            report.participant_unchanged(ReloadParticipant::NamedPolicyRuntime);
         }
         reservation.update_progress(&report);
 
@@ -2405,41 +2438,50 @@ impl AppReloader {
         &self,
         baseline: &ConfigurationBaseline,
     ) -> AuxiliaryConfigState {
-        let Some(runtime) = &self.policy_runtime else {
-            return AuxiliaryConfigState::NotConfigured;
-        };
-        let path = match &baseline.loaded_source {
-            crate::paths::ConfigSource::File(path) => Some(path.as_path()),
-            crate::paths::ConfigSource::Default { .. } => None,
-        };
-        let loaded = match crate::policy_lock::load_for_config(&baseline.config, path).await {
-            Ok(loaded) => loaded,
-            Err(_) => {
-                let Some(policy_path) = crate::policy_lock::resolve_path(&baseline.config, path)
-                else {
-                    return AuxiliaryConfigState::Invalid;
-                };
-                return match tokio::fs::read_to_string(policy_path).await {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        AuxiliaryConfigState::Missing
-                    }
-                    Err(_) => AuxiliaryConfigState::Unavailable,
-                    Ok(_) => AuxiliaryConfigState::Invalid,
-                };
-            }
-        };
-        let active = runtime.administration_snapshot();
-        let disk = bitrouter_ai::control::administration::PolicyReport::from_loaded(
-            &baseline.config,
-            loaded.as_ref(),
-            bitrouter_ai::control::administration::PolicyView::Disk,
-        );
-        if active.availability == "not_configured" && disk.availability == "not_configured" {
+        #[cfg(not(feature = "semantic-routing"))]
+        {
+            let _ = baseline;
             AuxiliaryConfigState::NotConfigured
-        } else if active.availability == disk.availability && active.digest == disk.digest {
-            AuxiliaryConfigState::InSync
-        } else {
-            AuxiliaryConfigState::ReloadRequired
+        }
+        #[cfg(feature = "semantic-routing")]
+        {
+            let Some(runtime) = &self.policy_runtime else {
+                return AuxiliaryConfigState::NotConfigured;
+            };
+            let path = match &baseline.loaded_source {
+                crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+                crate::paths::ConfigSource::Default { .. } => None,
+            };
+            let loaded = match crate::policy_lock::load_for_config(&baseline.config, path).await {
+                Ok(loaded) => loaded,
+                Err(_) => {
+                    let Some(policy_path) =
+                        crate::policy_lock::resolve_path(&baseline.config, path)
+                    else {
+                        return AuxiliaryConfigState::Invalid;
+                    };
+                    return match tokio::fs::read_to_string(policy_path).await {
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            AuxiliaryConfigState::Missing
+                        }
+                        Err(_) => AuxiliaryConfigState::Unavailable,
+                        Ok(_) => AuxiliaryConfigState::Invalid,
+                    };
+                }
+            };
+            let active = runtime.administration_snapshot();
+            let disk = bitrouter_ai::control::administration::PolicyReport::from_loaded(
+                &baseline.config,
+                loaded.as_ref(),
+                bitrouter_ai::control::administration::PolicyView::Disk,
+            );
+            if active.availability == "not_configured" && disk.availability == "not_configured" {
+                AuxiliaryConfigState::NotConfigured
+            } else if active.availability == disk.availability && active.digest == disk.digest {
+                AuxiliaryConfigState::InSync
+            } else {
+                AuxiliaryConfigState::ReloadRequired
+            }
         }
     }
 
@@ -2614,6 +2656,7 @@ impl AppReloader {
     }
 
     /// Attach the app's named routing-policy registry to the same reload fanout.
+    #[cfg(feature = "semantic-routing")]
     pub fn with_policy_runtime(mut self, runtime: Arc<crate::policy_lock::PolicyRuntime>) -> Self {
         self.policy_runtime = Some(runtime);
         self
@@ -2671,11 +2714,23 @@ mod tests {
     use crate::config::routing_table::ConfigRoutingTable;
     use crate::gateway::model::client::HttpTimeouts;
     use crate::gateway::pipeline::context::PipelineContext;
-    use crate::gateway::pipeline::executor::{Executor, HttpExecutor};
+    use crate::gateway::pipeline::executor::Executor;
+    use crate::gateway::pipeline::executor::HttpExecutor;
     use crate::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn conditional_validation_preserves_known_shape_and_unknown_field_fence() {
+        let mut value = serde_json::json!({"inference_routing":{"enabled":false,"policy":"load_aware","tenant_weights":{"tenant":2}}});
+        assert!(unclassified_config_paths(&value).is_empty());
+        value["inference_routing"]["future"] = serde_json::json!(true);
+        assert_eq!(
+            unclassified_config_paths(&value),
+            BTreeSet::from(["inference_routing.future".into()])
+        );
+    }
 
     #[test]
     fn capacity_reload_compares_effective_startup_budgets() -> anyhow::Result<()> {
@@ -2760,6 +2815,7 @@ providers:
         }
     }
 
+    #[cfg(feature = "semantic-routing")]
     struct FaultFixture {
         _home: tempfile::TempDir,
         reloader: Arc<AppReloader>,
@@ -2773,6 +2829,7 @@ providers:
         access_policy_dir: std::path::PathBuf,
     }
 
+    #[cfg(feature = "semantic-routing")]
     fn coordinated_config_yaml(model: &str, read_secs: u64) -> String {
         format!(
             r#"inherit_defaults: false
@@ -2802,6 +2859,7 @@ presets:
         )
     }
 
+    #[cfg(feature = "semantic-routing")]
     fn coordinated_policy_lock_yaml(model: &str) -> String {
         format!(
             r#"lockfileVersion: 4
@@ -2822,10 +2880,12 @@ policies:
         )
     }
 
+    #[cfg(feature = "semantic-routing")]
     async fn fault_fixture(failure: ReloadParticipant) -> anyhow::Result<FaultFixture> {
         coordinated_fixture(Some(failure), None).await
     }
 
+    #[cfg(feature = "semantic-routing")]
     async fn coordinated_fixture(
         failure: Option<ReloadParticipant>,
         pause: Option<Arc<TestPreparationPause>>,
@@ -2982,6 +3042,7 @@ policies:
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
         use crate::config::PolicyRuntimeMode;
         use crate::policy_lock::PolicyRuntime;
@@ -3066,6 +3127,7 @@ policies:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn fault_boundaries_report_each_participant_and_preserve_active_policy_truth()
     -> anyhow::Result<()> {
         for failed_participant in reload_participants() {
@@ -3176,6 +3238,7 @@ policies:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn later_preparation_failure_keeps_the_mixed_cause_in_configuration_state()
     -> anyhow::Result<()> {
         let fixture = fault_fixture(ReloadParticipant::NamedPolicyRuntime).await?;
@@ -3211,6 +3274,7 @@ policies:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn prepared_inputs_are_not_re_read_after_source_changes() -> anyhow::Result<()> {
         let pause = Arc::new(TestPreparationPause::new());
         let fixture = coordinated_fixture(None, Some(pause.clone())).await?;
@@ -3271,6 +3335,7 @@ policies:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn local_and_sighup_entrypoints_cannot_overtake_remote_reload() -> anyhow::Result<()> {
         let pause = Arc::new(TestPreparationPause::new());
         let fixture = coordinated_fixture(None, Some(pause.clone())).await?;
@@ -3592,6 +3657,7 @@ presets:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn auxiliary_source_drift_and_invalidity_prevent_in_sync() -> anyhow::Result<()> {
         let fixture = coordinated_fixture(None, None).await?;
         fixture.reloader.reload().await?;
@@ -3895,6 +3961,7 @@ presets:
     }
 
     #[tokio::test]
+    #[cfg(feature = "semantic-routing")]
     async fn local_reload_rejects_router_changes_before_mutating_the_live_table()
     -> anyhow::Result<()> {
         let (path, dir) = temp_config_path();

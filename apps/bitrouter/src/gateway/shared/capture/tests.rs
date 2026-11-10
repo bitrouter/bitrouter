@@ -127,6 +127,7 @@ fn requirements_retain_policy_authority_independent_of_core() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "semantic-routing")]
 mod extra_capture_contract {
     use super::*;
     use crate::gateway::observability::decision::{

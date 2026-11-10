@@ -1,9 +1,8 @@
 # Shared gateway distribution and process validation
 
 `dist-helper package --profile gateway-shared` builds the official `bro` with
-`--no-default-features --features multi-instance`. Its effective application
-features are exactly `["db-postgres", "multi-instance"]`. No Cargo feature,
-dependency, or default changes are required to select this distribution.
+`--no-default-features --features multi-instance,semantic-routing`. Its effective application
+features are exactly `["db-postgres", "multi-instance", "semantic-routing"]`. The named gateway distributions retain semantic routing for compatibility.
 
 The archive root and filename are `bitrouter-gateway-shared-<target>` with a
 `.tar.gz` extension, or `.zip` on Windows. The adjacent `.sha256` checks
@@ -11,9 +10,8 @@ the downloaded bytes against the published checksum; `manifest.json` records
 the embedded identity, compilation profile, and binary digest. The profile
 spelling is `gateway-shared` in JSON, human output and archive names.
 
-The existing `gateway` profile still disables all optional application features;
-`full` still uses the manifest defaults. Additional capabilities combined with
-`multi-instance` are `custom`. Shared capability alone does not change startup
+The `gateway` profile selects only `semantic-routing`;
+`full` still uses the manifest defaults. Capabilities beyond that exact shared feature set are `custom`. Shared capability alone does not change startup
 mode: configuration must explicitly select shared authority. Local SQLite and
 the dependencies of existing local selections remain unchanged.
 
@@ -75,14 +73,14 @@ export BITROUTER_TEST_GATEWAY_BINARY="$PWD/target/shared-package/unpacked/bitrou
 "$BITROUTER_TEST_GATEWAY_BINARY" --json build-info > target/shared-package/build-info.json
 jq -e --slurpfile actual target/shared-package/build-info.json \
   --arg revision "$BITROUTER_BUILD_REVISION" \
-  '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and .identity.source_revision == $revision' \
+  '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance", "semantic-routing"] and .identity.source_revision == $revision' \
   target/shared-package/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/manifest.json
 
 cargo test --locked -p dist-helper distribution::tests
 cargo test --locked -p bitrouter-ai --all-features --test artifact_contracts
-cargo test --locked -p bitrouter --no-default-features --features multi-instance \
+cargo test --locked -p bitrouter --no-default-features --features multi-instance,semantic-routing \
   --test artifact_build_metadata
-cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance \
+cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance,semantic-routing \
   --lib --run-ignored only --test-threads 2 \
   -E 'test(gateway::shared::runtime::process_tests::)'
 ```

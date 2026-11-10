@@ -454,8 +454,12 @@ and SSE APIs; it adds neither a TLS listener nor a gRPC server.
 
 The explicit no-default-features `gateway` and `gateway-shared` distributions
 remain HTTP/1-only. Their release identities and feature selections are
-unchanged: no optional application features for `gateway`, and exactly
-`db-postgres,multi-instance` for `gateway-shared`. Lean HTTP/2 builds are custom
+explicit: `semantic-routing` for `gateway`, and exactly
+`db-postgres,multi-instance,semantic-routing` for `gateway-shared`. A custom
+`--no-default-features` build excludes semantic execution. Independent
+`inference-routing` compiles no native Core, Harness or transports. Local
+scheduling is explicitly enabled with `inference_routing.enabled`; its state
+and capacity pools remain process-local. Lean HTTP/2 builds are custom
 profiles:
 
 ```sh

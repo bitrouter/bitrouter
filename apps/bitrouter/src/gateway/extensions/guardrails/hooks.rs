@@ -109,6 +109,11 @@ impl DepositRulesHook {
 #[async_trait]
 impl PreRequestHook for DepositRulesHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(self.rules.clone(), |_| {
+            Ok(std::mem::size_of::<Arc<RuleSet>>() as u64)
+        });
+        #[cfg(not(feature = "inference-routing"))]
         ctx.insert_extension(self.rules.clone());
         Ok(HookDecision::Allow)
     }

@@ -166,11 +166,15 @@ pub(super) fn complete(permit: &mut Option<AttemptPermit>, successful: bool) -> 
 pub(super) fn batch(
     permit: &Option<AttemptPermit>,
     parts: &[StreamPart],
-    mut terminal: bool,
+    terminal: bool,
 ) -> Result<()> {
     if permit.is_none() {
         return Ok(());
     }
+    validate_batch(parts, terminal)
+}
+
+pub(super) fn validate_batch(parts: &[StreamPart], mut terminal: bool) -> Result<()> {
     for part in parts {
         if terminal && !matches!(part, StreamPart::Usage { .. }) {
             return Err(BitrouterError::UpstreamInvalidResponse {

@@ -6,7 +6,9 @@
 //! as decoded row shapes for the existing pure trajectory validators.
 
 mod delivery;
+#[cfg(any(test, feature = "semantic-routing"))]
 mod guard;
+#[cfg(any(test, feature = "semantic-routing"))]
 mod lookups;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -21,7 +23,9 @@ use sea_orm::{
 use super::store::{self, episode_entity, event_entity, outbox_entity, request_entity};
 #[cfg(test)]
 use super::types::KeyedDigest;
-use super::types::{PendingOutbox, StoredEpisode, StoredRequest, TrajectoryEvent};
+#[cfg(any(test, feature = "semantic-routing"))]
+use super::types::StoredEpisode;
+use super::types::{PendingOutbox, StoredRequest, TrajectoryEvent};
 
 pub(crate) const MAX_HISTORY_EVENTS: usize = 4096;
 pub(crate) const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
@@ -35,6 +39,7 @@ pub(crate) struct SharedTrajectory {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "semantic-routing"))]
 pub(crate) enum PrefixMatch {
     #[cfg(test)]
     Missing,
@@ -69,6 +74,7 @@ impl SharedTrajectory {
             .transpose()
     }
 
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub async fn episode_in(
         &self,
         tx: &DatabaseTransaction,

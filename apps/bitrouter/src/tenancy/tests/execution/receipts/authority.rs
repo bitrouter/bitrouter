@@ -129,12 +129,96 @@ pub(super) async fn provision_resources(
 
 #[tokio::test]
 async fn credential_read_wait_then_revoke_cannot_arm_and_no_send_receipt_drains() -> Result<()> {
+    revoke_before_send(false).await
+}
+
+#[cfg(feature = "inference-routing")]
+#[tokio::test]
+async fn scheduling_revoke_after_booking_rolls_back_unsent_work() -> Result<()> {
+    revoke_before_send(true).await
+}
+
+#[cfg(feature = "inference-routing")]
+#[tokio::test]
+async fn scheduling_revocation_completes_while_queued_and_blocks_the_later_grant() -> Result<()> {
     let harness = Harness::new(
         "chat_completions",
         StatusCode::OK,
         json_response("chat_completions", full_usage("chat_completions"))?,
     )
     .await?;
+    let scheduler = harness.install_scheduler()?;
+    let config: crate::config::Config = serde_json::from_value(json!({"inherit_defaults":false,
+        "providers":{"mock":{"api_base":harness.provider_base,"api_key":"fixture",
+        "models":[{"id":"model-a"}],"api_protocol":[{"*":"chat_completions"}]}}}))?;
+    let target = crate::config::routing_table::resolve_route_chain(
+        &config,
+        "mock:model-a",
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
+    )?
+    .pop()
+    .context("target")?;
+    let prompt: bitrouter_ai::types::Prompt =
+        serde_json::from_value(json!({"model":"model-a","messages":[],"stream":false}))?;
+    let (shape, work) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+    let blocker = scheduler.book(
+        scheduler.candidate(&target, 0)?,
+        &target,
+        work,
+        shape,
+        tokio::time::Instant::now() + Duration::from_secs(60),
+    )?;
+    let checked = async {
+        let request = harness.send(&Harness::client(false)?);
+        let task = AbortOnDropHandle::new(tokio::spawn(async move { request.send().await }));
+        tokio::time::timeout(TIMEOUT, async {
+            while scheduler.inspect_queue().queued != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        tokio::time::timeout(
+            TIMEOUT,
+            harness.fixture.service.execute(
+                harness.fixture.operator.clone(),
+                revoke(&harness.fixture, &harness.credential)?,
+            ),
+        )
+        .await?
+        .map_err(failure)?;
+        ensure!(harness.calls.load(Ordering::SeqCst) == 0 && !task.is_finished());
+        drop(blocker);
+        let response = tokio::time::timeout(TIMEOUT, task).await???;
+        ensure!(response.status() == StatusCode::UNAUTHORIZED);
+        let id = execution_id(&response)?;
+        let _ = response.bytes().await?;
+        drain(&harness.fixture).await?;
+        no_attempt(
+            &read_one(&harness.fixture, harness.fixture.operator.clone(), &id).await?,
+            &id,
+        )?;
+        ensure!(harness.calls.load(Ordering::SeqCst) == 0 && scheduler.inspect_queue().bytes == 0);
+        ensure!(scheduler.inspect(shape)[0].work == 0);
+        Ok(())
+    }
+    .await;
+    finish(&harness, checked).await
+}
+
+async fn revoke_before_send(scheduled: bool) -> Result<()> {
+    let _ = scheduled;
+    let harness = Harness::new(
+        "chat_completions",
+        StatusCode::OK,
+        json_response("chat_completions", full_usage("chat_completions"))?,
+    )
+    .await?;
+    #[cfg(feature = "inference-routing")]
+    let scheduler = if scheduled {
+        Some(harness.install_scheduler()?)
+    } else {
+        None
+    };
     let gate = harness
         .fixture
         .service
@@ -151,6 +235,13 @@ async fn credential_read_wait_then_revoke_cannot_arm_and_no_send_receipt_drains(
             .context("actual credential read did not report admission")?
             .clone();
         ensure!(harness.calls.load(Ordering::SeqCst) == 0 && !task.is_finished());
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = &scheduler {
+            let prompt: bitrouter_ai::types::Prompt =
+                serde_json::from_value(json!({"model":"model-a","messages":[],"stream":false}))?;
+            let (shape, _) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+            ensure!(scheduler.inspect(shape)[0].active == 1);
+        }
         harness
             .fixture
             .service
@@ -171,6 +262,14 @@ async fn credential_read_wait_then_revoke_cannot_arm_and_no_send_receipt_drains(
         let page = page_as(&harness.fixture, harness.fixture.operator.clone()).await?;
         ensure!(page.execution_ids == vec![id] && !page.multiple_executions);
         ensure!(harness.calls.load(Ordering::SeqCst) == 0);
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = &scheduler {
+            let prompt: bitrouter_ai::types::Prompt =
+                serde_json::from_value(json!({"model":"model-a","messages":[],"stream":false}))?;
+            let (shape, _) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+            let view = scheduler.inspect(shape);
+            ensure!(view[0].work == 0 && view[0].uncertain == 0 && view[0].counters.unsent == 1);
+        }
         Ok(())
     }
     .await;

@@ -18,6 +18,8 @@ env:
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_TEST_DEBUG: '0'
 jobs:
+  routing-runtime:
+    uses: ./.github/workflows/routing-runtime.yml
   application-features:
     name: application-features (${{ matrix.features }})
     runs-on: ubuntu-latest
@@ -27,6 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         features:
+        - semantic-routing
+        - inference-routing
+        - semantic-routing,inference-routing
         - ''
         - http2
         - core
@@ -315,7 +320,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
         cargo build --locked -p bitrouter --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
-        cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
+        cargo build --locked -p bitrouter --no-default-features --features semantic-routing --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
         cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
         cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"

@@ -42,6 +42,43 @@ impl PipelineEvent for GatewayRequestObserved {
     }
 }
 
+#[cfg(feature = "inference-routing")]
+impl GatewayRequestObserved {
+    fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::scheduling::payload::compact_dto;
+        let retained = scheduling_hops(&self.hops)?;
+        compact_dto(&self.request)?
+            .checked_add(retained)
+            .ok_or(BitrouterError::UpstreamUnavailable)
+    }
+}
+
+#[cfg(feature = "inference-routing")]
+pub(crate) fn scheduling_hops(
+    hops: &Mutex<Vec<ExecutionHop>>,
+) -> crate::gateway::error::Result<u64> {
+    use crate::gateway::scheduling::payload::Weight;
+    let hops = hops
+        .lock()
+        .map_err(|_| BitrouterError::UpstreamUnavailable)?;
+    let mut weight = Weight::new();
+    weight.add(
+        hops.capacity()
+            .checked_mul(std::mem::size_of::<ExecutionHop>())
+            .and_then(|bytes| bytes.checked_add(128))
+            .ok_or(BitrouterError::UpstreamUnavailable)?,
+    )?;
+    for hop in hops.iter() {
+        for value in [&hop.provider, &hop.model, &hop.protocol, &hop.status] {
+            weight.string(value)?;
+        }
+        for value in [&hop.account, &hop.error_code].into_iter().flatten() {
+            weight.string(value)?;
+        }
+    }
+    Ok(weight.total())
+}
+
 /// Request evidence independent of optional policy learning and capture workers.
 #[derive(Clone)]
 pub struct GatewayRequestTracker {
@@ -197,10 +234,14 @@ impl GatewayRequestTracker {
         };
         // Insert before routing/evolution work: even a failed admission or an
         // unresolved session must remain visible to the accounting boundary.
-        ctx.emit(GatewayRequestObserved {
+        let event = GatewayRequestObserved {
             request: observed,
             hops: Arc::new(Mutex::new(Vec::new())),
-        });
+        };
+        #[cfg(feature = "inference-routing")]
+        ctx.emit_accounted(event, GatewayRequestObserved::scheduling_retained_bytes);
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.emit(event);
         Ok(())
     }
 }
@@ -345,5 +386,5 @@ impl SettlementRecorder for GatewayRequestTracker {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "semantic-routing"))]
 mod tests;

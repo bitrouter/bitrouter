@@ -18,6 +18,7 @@ mod contention_tests;
 
 pub(super) enum TenantLock {
     Shared,
+    #[cfg(any(test, feature = "semantic-routing"))]
     Exclusive,
 }
 
@@ -516,6 +517,7 @@ impl Engine {
                     .lock_shared(tx, Kind::Tenant, &principal.tenant)
                     .await?
             }
+            #[cfg(any(test, feature = "semantic-routing"))]
             TenantLock::Exclusive => {
                 self.store()
                     .lock(tx, Kind::Tenant, &principal.tenant)

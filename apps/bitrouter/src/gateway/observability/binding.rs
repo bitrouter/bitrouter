@@ -13,6 +13,7 @@ use crate::gateway::metering::replay::CanonicalRequestReplayRejected;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
 use crate::gateway::pipeline::types::RoutingTarget;
+#[cfg(feature = "semantic-routing")]
 use crate::policy_lock::{PolicyRoutingSnapshot, PolicyRuntime};
 use crate::storage::capture::sessions;
 use crate::storage::evolution::EvolutionStore;
@@ -23,10 +24,31 @@ use crate::storage::session_identity::SessionIdentity;
 /// This is application-local context, not a public protocol or live core handle.
 pub(crate) struct CanonicalSelection {
     pub(crate) routing_generation: u64,
+    #[cfg(feature = "semantic-routing")]
     pub(crate) policies: PolicyRoutingSnapshot,
     pub(crate) intent: Option<RouteIntent>,
     pub(crate) dispatch_route: String,
     pub(crate) route_guard_reason: Option<String>,
+}
+
+#[cfg(feature = "inference-routing")]
+impl CanonicalSelection {
+    pub(crate) fn scheduling_retained_bytes(&self) -> crate::gateway::error::Result<u64> {
+        // A queued request can keep an old policy generation alive after reload.
+        let bytes = crate::gateway::scheduling::payload::compact_dto(&self.intent)?;
+        #[cfg(feature = "semantic-routing")]
+        let bytes = bytes
+            .checked_add(self.policies.scheduling_retained_bytes()?)
+            .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+        bytes
+            .checked_add(
+                (std::mem::size_of::<Self>()
+                    + self.dispatch_route.capacity()
+                    + self.route_guard_reason.as_ref().map_or(0, String::capacity))
+                    as u64,
+            )
+            .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +72,7 @@ struct AdmissionFence {
 pub(crate) struct CanonicalRequestBinding {
     db: DatabaseConnection,
     routing: Arc<ConfigRoutingTable>,
+    #[cfg(feature = "semantic-routing")]
     policies: Arc<PolicyRuntime>,
     storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
 }
@@ -58,11 +81,12 @@ impl CanonicalRequestBinding {
     pub(crate) fn new(
         db: DatabaseConnection,
         routing: Arc<ConfigRoutingTable>,
-        policies: Arc<PolicyRuntime>,
+        #[cfg(feature = "semantic-routing")] policies: Arc<PolicyRuntime>,
     ) -> Self {
         Self {
             db,
             routing,
+            #[cfg(feature = "semantic-routing")]
             policies,
             storage_budget: None,
         }
@@ -89,6 +113,7 @@ impl CanonicalRequestBinding {
         let selection = ctx.extension::<CanonicalSelection>().unwrap_or_else(|| {
             Arc::new(CanonicalSelection {
                 routing_generation: self.routing.generation(),
+                #[cfg(feature = "semantic-routing")]
                 policies: self.policies.routing_snapshot(),
                 intent: None,
                 dispatch_route: ctx.model().to_owned(),
@@ -158,10 +183,28 @@ impl CanonicalRequestBinding {
             persisted.attempt_id == request.attempt_id,
             "canonical request ID has already been dispatched or interrupted"
         );
-        ctx.insert_extension(Arc::new(AdmissionFence {
+        let fence = Arc::new(AdmissionFence {
             identity,
             selection: selection.clone(),
-        }));
+        });
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(fence, |fence| {
+            let mut bytes = crate::gateway::scheduling::payload::compact_dto(&fence.identity)?;
+            bytes = bytes
+                .checked_add(std::mem::size_of::<AdmissionFence>() as u64)
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+            bytes
+                .checked_add(fence.selection.scheduling_retained_bytes()?)
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)
+        });
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.insert_extension(fence);
+        #[cfg(feature = "inference-routing")]
+        ctx.emit_accounted(
+            CanonicalRequestBound { request },
+            crate::gateway::scheduling::payload::compact_dto,
+        );
+        #[cfg(not(feature = "inference-routing"))]
         ctx.emit(CanonicalRequestBound { request });
         ctx.set_model(selection.dispatch_route.clone());
         Ok(())
@@ -172,11 +215,14 @@ impl CanonicalRequestBinding {
             return Ok(());
         };
         let check = async {
+            #[cfg(feature = "semantic-routing")]
             ensure!(
-                self.routing.generation() == fence.selection.routing_generation
-                    && self
-                        .policies
-                        .matches_routing_snapshot(&fence.selection.policies),
+                self.policies
+                    .matches_routing_snapshot(&fence.selection.policies),
+                "routing reloaded after canonical admission"
+            );
+            ensure!(
+                self.routing.generation() == fence.selection.routing_generation,
                 "routing reloaded after canonical admission"
             );
             let session = sessions::Entity::find_by_id(fence.identity.key()?)

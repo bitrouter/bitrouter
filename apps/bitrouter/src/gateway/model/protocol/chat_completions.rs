@@ -6,6 +6,23 @@
 //! Chat Completions is treated as the canonical "hub" shape — it maps most
 //! directly onto the internal representation.
 
+#[cfg(feature = "inference-routing")]
+pub(crate) fn prefix_projection(
+    prompt: &bitrouter_ai::types::Prompt,
+    key: &[u8; 32],
+    tenant: &[u8; 32],
+    cap: usize,
+) -> Option<std::sync::Arc<crate::gateway::scheduling::prefix::projection::Projection>> {
+    crate::gateway::scheduling::prefix::projection::build(
+        prompt,
+        key,
+        tenant,
+        cap,
+        b"chat_completions.semantic-input.v1",
+        0,
+    )
+}
+
 use crate::gateway::model::conversion::ReportAdmission;
 use crate::gateway::model::protocol::values::{
     data_from_url, data_to_url, extras_for_protocol, parse_untyped_tool_result,
@@ -1618,12 +1635,26 @@ struct ChatStreamDecoder {
     /// then `[DONE]`. Hold the terminal until the sentinel/EOF so the trailing
     /// authoritative usage remains reachable by the pipeline.
     pending_finish: Option<FinishReason>,
+    strict_terminal_order: bool,
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats the top-level `id`; we surface it only once.
     response_started_emitted: bool,
 }
 
+impl ChatStreamDecoder {
+    fn terminal_order_error() -> ModelError {
+        ModelError::InvalidResponse {
+            message: "Chat stream emitted content or a duplicate terminal after termination".into(),
+            usage: None,
+        }
+    }
+}
+
 impl StreamDecoder for ChatStreamDecoder {
+    fn enforce_terminal_order(&mut self) {
+        self.strict_terminal_order = true;
+    }
+
     fn pending_terminal(&self) -> Option<StreamPart> {
         self.pending_finish
             .clone()
@@ -1631,12 +1662,19 @@ impl StreamDecoder for ChatStreamDecoder {
     }
 
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
+        let had_terminal = self.pending_finish.is_some() || self.done;
         let data = event.data.trim();
         let named_error = event.event.as_deref() == Some("error");
+        if self.strict_terminal_order && had_terminal && named_error {
+            return Err(Self::terminal_order_error());
+        }
         if data.is_empty() && !named_error {
             return Ok(Vec::new());
         }
         if data == "[DONE]" && !named_error {
+            if self.strict_terminal_order && self.done {
+                return Err(Self::terminal_order_error());
+            }
             self.done = true;
             return Ok(self
                 .pending_finish
@@ -1663,6 +1701,9 @@ impl StreamDecoder for ChatStreamDecoder {
         // `error` object or the error fields directly.
         let error = chunk.get("error").filter(|value| !value.is_null());
         if error.is_some() || named_error {
+            if self.strict_terminal_order && had_terminal {
+                return Err(Self::terminal_order_error());
+            }
             let status = error
                 .and_then(|value| value.get("status").or_else(|| value.get("statusCode")))
                 .or_else(|| chunk.get("status").or_else(|| chunk.get("statusCode")))
@@ -1773,6 +1814,9 @@ impl StreamDecoder for ChatStreamDecoder {
                 .and_then(|f| f.as_str())
                 .and_then(parse_finish_reason)
             {
+                if self.strict_terminal_order && had_terminal {
+                    return Err(Self::terminal_order_error());
+                }
                 if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
                     parts.push(StreamPart::Usage { usage });
                 }
@@ -1781,6 +1825,14 @@ impl StreamDecoder for ChatStreamDecoder {
         } else if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
             // Some providers send a trailing usage-only chunk.
             parts.push(StreamPart::Usage { usage });
+        }
+        if self.strict_terminal_order
+            && had_terminal
+            && parts
+                .iter()
+                .any(|part| !matches!(part, StreamPart::Usage { .. }))
+        {
+            return Err(Self::terminal_order_error());
         }
         Ok(parts)
     }

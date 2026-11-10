@@ -623,6 +623,11 @@ jobs:
         retention-days: 7
     needs:
     - build-linux
+  routing-runtime:
+    needs:
+    - changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/routing-runtime.yml
   application-features:
     name: feature compile
     runs-on: ubuntu-latest
@@ -636,7 +641,7 @@ jobs:
     - name: Check isolated production feature closures
       shell: bash
       env:
-        FEATURES: '["", "http2", "core", "harness", "core,harness", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc", "harness,otel-http",
+        FEATURES: '["", "semantic-routing", "inference-routing", "semantic-routing,inference-routing", "http2", "core", "harness", "core,harness", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc", "harness,otel-http",
           "db-postgres", "multi-instance", "multi-instance,http2", "db-mysql", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
       run: |
         while IFS= read -r PROFILE_FEATURES; do
@@ -1071,6 +1076,7 @@ jobs:
     - test-capacity
     - database-backends
     - application-features
+    - routing-runtime
     - feature-isolation
     - sdk-public-api
     - dist

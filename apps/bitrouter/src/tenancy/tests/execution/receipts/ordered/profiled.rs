@@ -134,6 +134,87 @@ async fn manifest(
         .await?)
 }
 
+#[cfg(feature = "inference-routing")]
+#[tokio::test]
+async fn scheduling_wait_does_not_charge_profiled_rpm_before_the_first_grant() -> Result<()> {
+    let harness =
+        OrderedHarness::with_profiles(1, 8, None, Value::Null, Some(&[rules(1, false)?])).await?;
+    let scheduler = harness.install_scheduler()?;
+    let destination = harness
+        .scheduling_destinations
+        .first()
+        .context("destination")?;
+    let config: crate::config::Config = serde_json::from_value(json!({"inherit_defaults":false,
+        "providers":{destination.provider.clone():{"api_base":destination.endpoint,"api_key":"fixture",
+            "models":[{"id":destination.model}],"api_protocol":[{"*":"chat_completions"}]}}}))?;
+    let mut targets = crate::config::routing_table::resolve_route_chain(
+        &config,
+        &format!("{}:{}", destination.provider, destination.model),
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
+    )?;
+    let target = targets.pop().context("target")?;
+    let prompt: bitrouter_ai::types::Prompt =
+        serde_json::from_value(json!({"model":destination.model,"messages":[],"stream":false}))?;
+    let (shape, work) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+    let blocker = scheduler.book(
+        scheduler.candidate(&target, 0)?,
+        &target,
+        work,
+        shape,
+        tokio::time::Instant::now() + Duration::from_secs(60),
+    )?;
+    let binding = harness
+        .binding(vec![0], GenerationProtocol::ChatCompletions)
+        .await?;
+    let call = harness.invoke(
+        &binding,
+        GenerationProtocol::ChatCompletions,
+        false,
+        HttpVersion::Http1Only,
+    );
+    tokio::pin!(call);
+    tokio::select! {
+        result = &mut call => anyhow::bail!("request did not wait: {result:?}"),
+        result = tokio::time::timeout(TIMEOUT, async {
+            while scheduler.inspect_queue().queued != 1 { tokio::task::yield_now().await; }
+        }) => { result?; }
+    }
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    let observation = manifest(&harness)
+        .await?
+        .runtime_observation
+        .context("observation")?;
+    ensure!(
+        observation.candidates[0]
+            .rate
+            .as_ref()
+            .context("rate")?
+            .shared_count
+            == 0
+    );
+    ensure!(harness.observed()?.is_empty());
+    drop(blocker);
+    let id = tokio::time::timeout(TIMEOUT, call).await??;
+    ensure!(harness.receipt(&id).await?.outcome == Outcome::Completed);
+    let observation = manifest(&harness)
+        .await?
+        .runtime_observation
+        .context("observation")?;
+    ensure!(
+        observation.candidates[0]
+            .rate
+            .as_ref()
+            .context("rate")?
+            .shared_count
+            == 1
+    );
+    ensure!(harness.observed()? == ["model-0"]);
+    harness.fixture.service.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn profiled_exact_orders_charge_only_actual_reached_hops_and_retain_ordinals() -> Result<()> {
     for count in [1_u16, 8, 9, 64] {

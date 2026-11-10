@@ -88,7 +88,7 @@ fn exercise_judge(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Result<
     ensure!(full_identity.profile == DistributionProfile::Full);
     ensure!(
         minimum_identity.profile == DistributionProfile::Gateway
-            && minimum_identity.features.is_empty()
+            && minimum_identity.features == ["semantic-routing"]
     );
     ensure!(
         full_identity.source_revision.is_some()

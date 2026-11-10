@@ -90,6 +90,8 @@ async fn provider(
         .into_response()
 }
 struct Harness {
+    #[cfg(feature = "inference-routing")]
+    provider_base: String,
     fixture: Fixture,
     revision: ConfigurationRevision,
     credential: CredentialIssued,
@@ -105,6 +107,25 @@ struct Harness {
     _gateway: AbortOnDropHandle<std::io::Result<()>>,
 }
 impl Harness {
+    #[cfg(feature = "inference-routing")]
+    fn install_scheduler(&self) -> Result<Arc<crate::gateway::scheduling::Scheduler>> {
+        use crate::config::inference_routing::{DestinationConfig, InferenceRoutingConfig};
+        let mut config = InferenceRoutingConfig::default();
+        config.destinations.push(DestinationConfig {
+            id: "receipt".into(),
+            provider: "mock".into(),
+            model: "model-a".into(),
+            endpoint: self.provider_base.clone(),
+            account: None,
+            max_active: 1,
+        });
+        let scheduler = crate::gateway::scheduling::Scheduler::new(&config, 1)?;
+        self.fixture
+            .service
+            .clone()
+            .with_scheduler(Some(scheduler.clone()))?;
+        Ok(scheduler)
+    }
     async fn new(protocol: &str, status: StatusCode, body: Value) -> Result<Self> {
         Self::with_reply(protocol, status, serde_json::to_string(&body)?, false, None).await
     }
@@ -239,6 +260,8 @@ impl Harness {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}/v1", listener.local_addr()?);
+        #[cfg(feature = "inference-routing")]
+        let provider_base = base.clone();
         let (received, receive) = mpsc::channel(16);
         let calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new().route(path, post(provider)).with_state(Reply {
@@ -358,6 +381,8 @@ impl Harness {
                 async move { axum::serve(listener, router).await },
             ));
         Ok(Self {
+            #[cfg(feature = "inference-routing")]
+            provider_base,
             fixture,
             revision,
             credential,

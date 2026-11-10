@@ -766,6 +766,11 @@ impl AppBuilder {
     /// and an executor).
     pub fn build(mut self) -> Result<App> {
         if let Some(runtime) = &self.decision_model {
+            if !cfg!(feature = "semantic-routing") {
+                return Err(crate::gateway::error::BitrouterError::bad_request(
+                    "decision_model requires the semantic-routing feature",
+                ));
+            }
             if runtime.model.trim().is_empty() {
                 return Err(crate::gateway::error::BitrouterError::bad_request(
                     "decision model is empty",

@@ -106,8 +106,8 @@ jobs:
           root="$PACKAGE_OUTPUT/unpacked/bitrouter-$PACKAGE_DISTRIBUTION-$PACKAGE_TARGET"
           candidate="$root/bro$suffix"
           "$candidate" --json build-info > "$PACKAGE_OUTPUT/build-info.json"
-          features='[]'
-          if [[ "$PACKAGE_DISTRIBUTION" == 'gateway-shared' ]]; then features='["db-postgres","multi-instance"]'; fi
+          features='["semantic-routing"]'
+          if [[ "$PACKAGE_DISTRIBUTION" == 'gateway-shared' ]]; then features='["db-postgres","multi-instance","semantic-routing"]'; fi
           jq -e --arg profile "$PACKAGE_DISTRIBUTION" --arg target "$PACKAGE_TARGET" \
             --arg revision "$BITROUTER_BUILD_REVISION" --argjson features "$features" \
             '.profile == $profile and .target == $target and .source_revision == $revision and .features == $features' \
@@ -212,7 +212,7 @@ jobs:
           "$candidate" --json build-info > build-info.json
           jq -e --slurpfile actual build-info.json \
             --arg revision "$BITROUTER_BUILD_REVISION" \
-            '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and .identity.source_revision == $revision' \
+            '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance", "semantic-routing"] and .identity.source_revision == $revision' \
             unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/manifest.json
           printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$candidate" >> "$GITHUB_ENV"
       - name: Validate shared distribution contracts and updater boundaries
@@ -220,15 +220,15 @@ jobs:
         run: |
           cargo test --locked -p dist-helper distribution::tests
           cargo test --locked -p bitrouter-ai --all-features --test artifact_contracts
-          cargo test --locked -p bitrouter --no-default-features --features multi-instance --test artifact_build_metadata
-          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance --lib --test-threads 2 \
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,semantic-routing --test artifact_build_metadata
+          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance,semantic-routing --lib --test-threads 2 \
             -E 'test(update::tests::) | test(/^upgrade::tests::/) | test(output::reports::artifact::tests::)'
       - name: Run actual shared PostgreSQL process campaigns against the archive
         shell: bash
         run: |
           # The test executable may compile, but the child bro always comes from
           # the archive above; no workspace debug binary is substituted.
-          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance \
+          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance,semantic-routing \
             --lib --run-ignored only --test-threads 2 \
             -E 'test(gateway::shared::runtime::process_tests::)'
       - name: Run shared PostgreSQL authority and persistence regressions

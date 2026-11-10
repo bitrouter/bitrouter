@@ -128,6 +128,7 @@ impl Engine {
     /// reads are immutable; taking an execution/outbox lock here would reverse
     /// finalization's execution -> episode order. The outer transaction owns
     /// rollback/retry, and an unresolved member rejects the new guard decision.
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub(in crate::gateway::shared::engine) async fn catch_up_in(
         &self,
         tx: &DatabaseTransaction,

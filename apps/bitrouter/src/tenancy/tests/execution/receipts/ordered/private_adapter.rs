@@ -169,6 +169,63 @@ async fn setup(ordinal: usize, reply: Reply) -> Result<(OrderedHarness, Arc<Fixt
 
 const CHAT: GenerationProtocol = GenerationProtocol::ChatCompletions;
 
+#[cfg(feature = "inference-routing")]
+#[tokio::test]
+async fn scheduling_missing_adapter_proof_keeps_uncertainty_and_original_order() -> Result<()> {
+    for stream in [false, true] {
+        let (harness, adapter) = setup(1, Reply::Missing).await?;
+        let scheduler = harness.install_scheduler()?;
+        let binding = harness.binding(vec![1, 0], CHAT).await?;
+        ensure!(
+            harness
+                .invoke(&binding, CHAT, stream, HttpVersion::Http1Only)
+                .await
+                .is_err()
+        );
+        ensure!(harness.observed()? == ["model-1"]);
+        let id = adapter
+            .proofs
+            .lock()
+            .map_err(|_| anyhow::anyhow!("proofs"))?
+            .first()
+            .context("actual claim")?
+            .execution_id
+            .clone();
+        let receipt = harness.receipt(&id).await?;
+        ensure!(receipt.state == ReceiptState::Unknown && receipt.attempts.len() == 1);
+        let prompt: bitrouter_ai::types::Prompt =
+            serde_json::from_value(json!({"model":"model-1","messages":[],"stream":stream}))?;
+        let (shape, _) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+        let view = scheduler.inspect(shape);
+        ensure!(view[1].uncertain == 1 && view[1].counters.rejected == 0 && view[0].work == 0);
+        harness.fixture.service.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "inference-routing")]
+#[tokio::test]
+async fn scheduling_verified_rejection_releases_only_its_original_pool() -> Result<()> {
+    for stream in [false, true] {
+        let (harness, _) = setup(1, Reply::Signed).await?;
+        let scheduler = harness.install_scheduler()?;
+        let binding = harness.binding(vec![1, 0], CHAT).await?;
+        harness
+            .invoke(&binding, CHAT, stream, HttpVersion::Http1Only)
+            .await?;
+        ensure!(harness.observed()? == ["model-1", "model-0"]);
+        let prompt: bitrouter_ai::types::Prompt =
+            serde_json::from_value(json!({"model":"model-1","messages":[],"stream":stream}))?;
+        let (shape, _) = crate::gateway::scheduling::observation::Shape::from_prompt(&prompt)?;
+        let view = scheduler.inspect(shape);
+        ensure!(
+            view[1].counters.rejected == 1 && view[1].work == 0 && view[0].counters.completed == 1
+        );
+        harness.fixture.service.shutdown().await?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn signed_adapter_rejection_advances_original_order_and_regular_target_gets_no_claim()
 -> Result<()> {

@@ -523,6 +523,7 @@ impl RetainedPolicy {
             .map_err(|_| ErrorCode::CapabilityMismatch)
     }
 
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub(crate) fn reference(&self) -> &ResourceRef {
         &self.reference
     }
@@ -836,6 +837,7 @@ impl RetainedRoute {
             .as_ref()
             .map_or(&self.data.dependencies, |selection| &selection.dependencies)
     }
+    #[cfg(any(test, feature = "semantic-routing"))]
     pub(crate) fn policy(&self) -> Option<&RetainedPolicy> {
         self.data.policy.as_ref()
     }

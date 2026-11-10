@@ -142,6 +142,20 @@ impl ConfigRoutingTable {
             .clone()
     }
 
+    /// Skip cloning destination/configuration storage on the per-request fast path.
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn inference_snapshot(
+        &self,
+        previous: Option<u64>,
+    ) -> Option<(u64, super::inference_routing::InferenceRoutingConfig)> {
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let generation = self.generation.load(Ordering::Acquire);
+        (previous != Some(generation)).then(|| (generation, config.inference_routing.clone()))
+    }
+
     /// Capture configuration and its process-local generation together. App
     /// controllers can validate dependencies before selection, then fence a
     /// reload before dispatch without serializing credentials into a digest.

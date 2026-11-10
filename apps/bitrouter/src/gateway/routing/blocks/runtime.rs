@@ -143,19 +143,31 @@ impl BlockPolicyRouter {
             dispatch_route = ctx.model().to_owned();
             route_guard_reason = Some("candidate_request_capability_unverified".into());
         }
-        ctx.insert_extension(Arc::new(AdmissionFence {
+        let fence = Arc::new(AdmissionFence {
             identity,
             control: intent
                 .as_ref()
                 .map(|i| (i.control_generation, i.mode_epoch)),
-        }));
-        ctx.insert_extension(Arc::new(CanonicalSelection {
+        });
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(fence, |fence| {
+            crate::gateway::scheduling::payload::compact_dto(&fence.identity)?
+                .checked_add(std::mem::size_of::<AdmissionFence>() as u64)
+                .ok_or(BitrouterError::UpstreamUnavailable)
+        });
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.insert_extension(fence);
+        let selection = Arc::new(CanonicalSelection {
             routing_generation,
             policies,
             intent,
             dispatch_route,
             route_guard_reason,
-        }));
+        });
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(selection, CanonicalSelection::scheduling_retained_bytes);
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.insert_extension(selection);
         Ok(())
     }
 }

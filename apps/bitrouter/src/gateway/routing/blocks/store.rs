@@ -111,6 +111,7 @@ pub struct BlockPolicyStore {
 }
 
 impl BlockPolicyStore {
+    #[cfg(feature = "semantic-routing")]
     pub(crate) fn with_storage_budget(
         mut self,
         budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,

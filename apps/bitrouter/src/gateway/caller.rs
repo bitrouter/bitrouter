@@ -62,6 +62,12 @@ pub fn launch_tag(authorization: Option<&str>) -> Option<String> {
 }
 
 impl CallerContext {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn scheduling_retained_bytes(&self) -> usize {
+        self.api_key_id.capacity()
+            + self.user_id.capacity()
+            + self.launch_id.as_ref().map_or(0, String::capacity)
+    }
     /// Construct a caller context from authenticated identity.
     pub fn new(api_key_id: impl Into<String>, user_id: impl Into<String>) -> Self {
         Self {

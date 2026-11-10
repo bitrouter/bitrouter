@@ -356,10 +356,16 @@ impl RouteHook for CaptureTariffs {
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
         if !ctx.has_event::<RegistryPhysicalAttempts>() {
-            ctx.emit(RegistryPhysicalAttempts {
+            let attempts = RegistryPhysicalAttempts {
                 require_known: self.require_known,
                 ..Default::default()
+            };
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(attempts, |_| {
+                Ok((std::mem::size_of::<RegistryPhysicalAttempts>() + 64) as u64)
             });
+            #[cfg(not(feature = "inference-routing"))]
+            ctx.emit(attempts);
         }
         let snapshots = chain
             .iter()
@@ -403,10 +409,17 @@ impl RouteHook for CaptureTariffs {
             } else {
                 None
             };
-            ctx.emit(UsagePricingSnapshot {
+            let usage = UsagePricingSnapshot {
                 target: snapshot.target.clone(),
                 pricing,
-            });
+            };
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(usage, crate::gateway::scheduling::payload::compact_dto);
+            #[cfg(not(feature = "inference-routing"))]
+            ctx.emit(usage);
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(snapshot, crate::gateway::scheduling::payload::compact_dto);
+            #[cfg(not(feature = "inference-routing"))]
             ctx.emit(snapshot);
         }
         Ok(())

@@ -581,6 +581,10 @@ pub struct Pipeline {
     pub(crate) routing_table: Arc<dyn RoutingTable>,
     pub(crate) fallback_policy: Arc<dyn FallbackPolicy>,
     pub(crate) executor: Arc<dyn Executor>,
+    #[cfg(feature = "inference-routing")]
+    pub(crate) scheduler: Option<Arc<crate::gateway::scheduling::runtime::Runtime>>,
+    #[cfg(feature = "inference-routing")]
+    pub(crate) owns_scheduler: bool,
     /// When set, non-streaming execution runs through the server-side tool loop
     /// (`server_tools`): router tools are injected, the model's calls to them
     /// are executed by BitRouter, and the upstream is re-called until the model
@@ -716,6 +720,7 @@ impl Pipeline {
     /// Call this from the HTTP server's graceful-shutdown path so a SIGTERM
     /// during heavy streaming traffic doesn't drop receipts.
     /// Returns the number of tasks drained.
+    /// This is a reusable settlement barrier; it does not stop provider scheduling.
     ///
     /// Race note: any new `StreamSettlementGuard::drop` *after* this method
     /// has swapped the JoinSet lands on a fresh empty set and is not awaited
@@ -748,6 +753,8 @@ impl Pipeline {
     /// unresolved durable ownership cannot be mistaken for a clean exit. It is
     /// safe to retry after an error: detached work remains drained while each
     /// finalizer re-enters its retained reconciliation evidence.
+    /// An allocated scheduler is closed and joined. Before first activation,
+    /// the absent-scheduler behavior remains a reusable, error-returning barrier.
     ///
     /// Shared generations reject this local-only contract: their lifecycle
     /// must retain task handles and apply one deadline to all resource owners.
@@ -757,9 +764,32 @@ impl Pipeline {
                 "pipeline requires its owned lifecycle drain",
             ));
         }
+        #[cfg(feature = "inference-routing")]
+        self.close_owned_scheduler();
         let drained = self.drain_detached_work().await;
         self.drain_required_finalizers().await?;
+        #[cfg(feature = "inference-routing")]
+        self.join_owned_scheduler().await?;
         Ok(drained)
+    }
+
+    #[cfg(feature = "inference-routing")]
+    fn close_owned_scheduler(&self) {
+        if self.owns_scheduler
+            && let Some(scheduler) = &self.scheduler
+        {
+            let _ = scheduler.close_existing_pool();
+        }
+    }
+
+    #[cfg(feature = "inference-routing")]
+    async fn join_owned_scheduler(&self) -> Result<()> {
+        if self.owns_scheduler
+            && let Some(scheduler) = &self.scheduler
+        {
+            scheduler.shutdown_existing_pool().await?;
+        }
+        Ok(())
     }
 
     async fn drain_detached_work(&self) -> usize {
@@ -786,8 +816,12 @@ impl Pipeline {
         let tasks = self.owned_tasks().ok_or_else(|| {
             BitrouterError::internal("execution pipeline has no owned task lifecycle")
         })?;
+        #[cfg(feature = "inference-routing")]
+        self.close_owned_scheduler();
         let summary = tasks.drain().await?;
         self.drain_required_finalizers().await?;
+        #[cfg(feature = "inference-routing")]
+        self.join_owned_scheduler().await?;
         // A finalizer drain may have registered compensation. Join it too and
         // preserve any late-registration failure instead of trusting a stale
         // summary collected before the finalizer was awaited.
@@ -1857,6 +1891,59 @@ impl Pipeline {
 
     async fn prepare_entry(
         &self,
+        mut req: PipelineRequest,
+        streamed: bool,
+        control: Option<Arc<dyn NativeExecutionControl>>,
+    ) -> Result<PreparedEntry> {
+        let incoming = super::deadline::parse(&req.headers)?;
+        if incoming.is_some()
+            && (control.is_some()
+                || req.input.operation() != ModelOperation::Generation
+                || req
+                    .extensions
+                    .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+                    .is_some()
+                || req.input.generation_prompt().is_some_and(|prompt| {
+                    super::native_continuation::has_continuation(prompt)
+                        || prompt.params.extra.contains_key("previous_response_id")
+                        || prompt
+                            .params
+                            .supplemental_extra
+                            .contains_key("previous_response_id")
+                }))
+        {
+            return Err(BitrouterError::bad_request(
+                "relative timeout headers require ordinary complete generation",
+            ));
+        }
+        let deadline = incoming.map(|deadline| deadline.0);
+        #[cfg(feature = "inference-routing")]
+        let deadline = if let Some(snapshot) = self
+            .scheduler
+            .as_ref()
+            .map(|runtime| runtime.snapshot())
+            .transpose()?
+            .flatten()
+        {
+            let local = tokio::time::Instant::now() + snapshot.request_timeout;
+            req.extensions.insert(snapshot);
+            Some(deadline.map_or(local, |at| at.min(local)))
+        } else {
+            deadline
+        };
+        if let Some(at) = deadline {
+            req.extensions
+                .insert(Arc::new(super::deadline::Deadline(at)));
+            tokio::time::timeout_at(at, self.prepare_entry_inner(req, streamed, control))
+                .await
+                .map_err(|_| BitrouterError::UpstreamTimeout)?
+        } else {
+            self.prepare_entry_inner(req, streamed, control).await
+        }
+    }
+
+    async fn prepare_entry_inner(
+        &self,
         req: PipelineRequest,
         streamed: bool,
         control: Option<Arc<dyn NativeExecutionControl>>,
@@ -1884,6 +1971,21 @@ impl Pipeline {
             ));
         }
         let mut ctx = PipelineContext::new(req);
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = ctx.extension::<crate::gateway::scheduling::Scheduler>() {
+            ctx.enable_scheduling_accounting();
+            ctx.insert_accounted_extension(scheduler, |value| Ok(value.retained_bytes()));
+            if let Some(deadline) = ctx.extension::<super::deadline::Deadline>() {
+                ctx.insert_accounted_extension(deadline, |_| Ok(64));
+            }
+            crate::gateway::scheduling::bridge::validate_root(&ctx, selection.is_some())?;
+            #[cfg(feature = "server-tools")]
+            if self.server_tool_loop.is_some() {
+                return Err(BitrouterError::bad_request(
+                    "scheduled server-tool loops are unsupported",
+                ));
+            }
+        }
         if let Some(registration) =
             ctx.extension::<crate::tenancy::execution::lifecycle::Registration>()
         {
@@ -2013,9 +2115,13 @@ impl Pipeline {
         self.run_request_checks(ctx, &binding.request_checks, None)
             .await
             .map_err(EntryPreparationFailure::request_check)?;
-        ctx.insert_extension(Arc::new(FrozenRequestChecks(
-            binding.request_checks.clone(),
-        )));
+        let frozen_checks = Arc::new(FrozenRequestChecks(binding.request_checks.clone()));
+        #[cfg(feature = "inference-routing")]
+        ctx.insert_accounted_extension(frozen_checks, |value| {
+            crate::gateway::scheduling::payload::compact_dto(&value.0)
+        });
+        #[cfg(not(feature = "inference-routing"))]
+        ctx.insert_extension(frozen_checks);
         self.observe_after(Phase::PreRequest, ctx).await;
 
         self.resolve_route(ctx, binding, selection, manual_effort)
@@ -2111,6 +2217,9 @@ impl Pipeline {
             // post-session value used for this resolution.
             identity.original_selector = ctx.original_model().to_owned();
             ctx.set_router_identity(identity.clone());
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(identity, crate::gateway::scheduling::payload::compact_dto);
+            #[cfg(not(feature = "inference-routing"))]
             ctx.emit(identity);
         } else if !resolution.request_checks.is_empty() {
             return Err(BitrouterError::internal(
@@ -2157,6 +2266,11 @@ impl Pipeline {
         binding: &ResolvedRequestBinding,
     ) -> Result<()> {
         let operation = ctx.operation();
+        if !cfg!(feature = "semantic-routing") && binding.resolution.policy.is_some() {
+            return Err(BitrouterError::bad_request(
+                "configured model policy requires the semantic-routing feature",
+            ));
+        }
         if operation == ModelOperation::Decisions && !binding.resolution.overrides.is_empty() {
             return Err(BitrouterError::bad_request(
                 "configured generation defaults do not support Decisions",
@@ -2465,8 +2579,16 @@ impl Pipeline {
                     .await
                 }
             };
+            #[cfg(feature = "inference-routing")]
+            let mut prepared = prepared;
             prepared.validate_for(ctx.require_generation_prompt()?)?;
             if let Some(receipt) = &prepared.receipt {
+                #[cfg(feature = "inference-routing")]
+                ctx.emit_accounted(
+                    receipt.clone(),
+                    crate::gateway::scheduling::payload::compact_dto,
+                );
+                #[cfg(not(feature = "inference-routing"))]
                 ctx.emit(receipt.clone());
                 #[cfg(feature = "multi-instance")]
                 if let Some(admission) =
@@ -2475,6 +2597,17 @@ impl Pipeline {
                     admission.retain_routing(ctx)?;
                 }
             }
+            #[cfg(feature = "inference-routing")]
+            if ctx
+                .extension::<crate::gateway::scheduling::Scheduler>()
+                .is_some()
+            {
+                let bytes = prepared.prepare_scheduling_payload()?;
+                ctx.insert_accounted_extension(Arc::new(prepared), move |_| Ok(bytes));
+            } else {
+                ctx.insert_extension(Arc::new(prepared));
+            }
+            #[cfg(not(feature = "inference-routing"))]
             ctx.insert_extension(Arc::new(prepared));
         }
         ctx.set_model(resolution.clean_model);
@@ -2607,6 +2740,12 @@ impl Pipeline {
                 native.control.commit_routing(&plan).await?;
             }
             ctx.apply_routing_prompt(plan.prompt.clone())?;
+            #[cfg(feature = "inference-routing")]
+            ctx.emit_accounted(
+                plan.selection.clone(),
+                crate::gateway::scheduling::payload::compact_dto,
+            );
+            #[cfg(not(feature = "inference-routing"))]
             ctx.emit(plan.selection.clone());
             #[cfg(feature = "multi-instance")]
             if let Some(admission) =
@@ -2614,6 +2753,12 @@ impl Pipeline {
             {
                 admission.retain_routing(ctx)?;
             }
+            #[cfg(feature = "inference-routing")]
+            ctx.insert_accounted_extension(
+                Arc::new(plan.selection),
+                crate::gateway::scheduling::payload::compact_dto,
+            );
+            #[cfg(not(feature = "inference-routing"))]
             ctx.insert_extension(Arc::new(plan.selection));
             routing_prompt = Some(plan.prompt);
         }
@@ -2747,6 +2892,37 @@ impl Pipeline {
             admission.retain_routing(ctx)?;
             admission.route_ready()?;
         }
+        self.prepare_dispatch(chain, ctx)
+    }
+
+    /// Scheduling handoff after model, prompt, membership and route checks are frozen.
+    /// The immediate path moves the exact existing sequence into execution. No queue,
+    /// reservation, worker or prefix state is allocated by a disabled request.
+    fn prepare_dispatch(
+        &self,
+        chain: Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> Result<Vec<RoutingTarget>> {
+        let _ = &ctx;
+        #[cfg(feature = "inference-routing")]
+        if let Some(scheduler) = ctx.extension::<crate::gateway::scheduling::Scheduler>() {
+            #[cfg(feature = "server-tools")]
+            if self.server_tool_loop.is_some() {
+                return Err(BitrouterError::bad_request(
+                    "scheduled server-tool loops are unsupported",
+                ));
+            }
+            for target in &chain {
+                self.executor
+                    .preflight_scheduling(target, ctx.require_generation_prompt()?)?;
+            }
+            let prompt = ctx.require_generation_prompt()?;
+            let eligible = chain.iter().map(|target| {
+                !matches!(self.executor.preflight(target, prompt, prompt.stream).and_then(|report| report.require_admitted().map_err(BitrouterError::from)),
+                    Err(BitrouterError::Incompatible { report }) if !report.is_output_failure())
+            }).collect();
+            scheduler.prepare(&chain, ctx, eligible)?;
+        }
         Ok(chain)
     }
 
@@ -2837,6 +3013,17 @@ impl Pipeline {
         (outcome, stream_interruption)
     }
 
+    async fn execute_generation_attempt(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        let execution = self.executor.execute(target, prompt, ctx);
+        let execution = super::deadline::bounded(ctx, execution);
+        execution.await
+    }
+
     async fn execute_with_fallback(
         &self,
         chain: &[RoutingTarget],
@@ -2846,36 +3033,65 @@ impl Pipeline {
         let mut errors = Vec::new();
         #[cfg(feature = "server-tools")]
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
-        for (attempt_index, target) in chain.iter().enumerate() {
+        for position in 0..chain.len() {
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            #[cfg(not(feature = "inference-routing"))]
+            let (attempt_index, adaptive) = (position, false);
+            let target = &chain[attempt_index];
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
             }
-            match input {
-                #[cfg(feature = "server-tools")]
-                ExecutionInput::Generation(prompt) => {
-                    if !self
-                        .admit_candidate(target, prompt, false, ctx, &mut excluded)
-                        .await?
-                    {
-                        continue;
+            if !adaptive {
+                match input {
+                    #[cfg(feature = "server-tools")]
+                    ExecutionInput::Generation(prompt) => {
+                        if !self
+                            .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                            .await?
+                        {
+                            continue;
+                        }
+                    }
+                    ExecutionInput::Decisions(request) => {
+                        self.executor.preflight_decisions(target, request)?;
                     }
                 }
-                ExecutionInput::Decisions(request) => {
-                    self.executor.preflight_decisions(target, request)?;
+            }
+            self.wait_before_fallback(errors.len(), ctx).await?;
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, scheduling) =
+                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+            #[cfg(feature = "inference-routing")]
+            let target = &chain[attempt_index];
+            if adaptive {
+                match input {
+                    #[cfg(feature = "server-tools")]
+                    ExecutionInput::Generation(prompt) => {
+                        if !self
+                            .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                            .await?
+                        {
+                            continue;
+                        }
+                    }
+                    ExecutionInput::Decisions(request) => {
+                        self.executor.preflight_decisions(target, request)?;
+                    }
                 }
             }
-            self.wait_before_fallback(errors.len()).await;
+
             let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
-            self.observe_hop_start(ctx, target).await;
+            self.notify_hop_start(ctx, target).await?;
             let outcome = match reached {
                 Err(error) => Err(error),
                 Ok(()) => match input {
                     #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(prompt) => {
-                        self.executor.execute(target, prompt, ctx).await
+                        self.execute_generation_attempt(target, prompt, ctx).await
                     }
                     ExecutionInput::Decisions(request) => {
                         self.executor.execute_decisions(target, request, ctx).await
@@ -2914,14 +3130,16 @@ impl Pipeline {
                 }
                 Ok(result)
             });
+            #[cfg(feature = "inference-routing")]
+            crate::gateway::scheduling::bridge::finish_attempt(scheduling, &outcome);
             match &outcome {
                 Ok(result) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::Generated(result))
+                        .await?;
                 }
                 Err(e) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await?;
                 }
             }
             match outcome {
@@ -2972,15 +3190,21 @@ impl Pipeline {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         let mut dispatched = 0;
-        for (attempt_index, target) in chain.iter().enumerate() {
+        for position in 0..chain.len() {
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            #[cfg(not(feature = "inference-routing"))]
+            let (attempt_index, adaptive) = (position, false);
+            let target = &chain[attempt_index];
             let index = u32::try_from(attempt_index)
                 .map_err(|_| BitrouterError::internal("provider attempt index exhausted"))?;
             if control.is_some_and(|(_, _, admission)| !admission.route_indices.contains(&index)) {
                 continue;
             }
-            if !self
-                .admit_candidate(target, prompt, false, ctx, &mut excluded)
-                .await?
+            if !adaptive
+                && !self
+                    .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                    .await?
             {
                 continue;
             }
@@ -3017,18 +3241,33 @@ impl Pipeline {
                 }
                 None => None,
             };
-            self.wait_before_fallback(dispatched).await;
+            self.wait_before_fallback(dispatched, ctx).await?;
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, scheduling) =
+                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+            #[cfg(feature = "inference-routing")]
+            let target = &chain[attempt_index];
+            if adaptive
+                && !self
+                    .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                    .await?
+            {
+                continue;
+            }
+            #[cfg(feature = "inference-routing")]
+            let index = u32::try_from(attempt_index)
+                .map_err(|_| BitrouterError::internal("provider attempt index exhausted"))?;
             dispatched += 1;
             let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
-            self.observe_hop_start(ctx, target).await;
+            self.notify_hop_start(ctx, target).await?;
             if let Some((control, _)) = attempt_control
                 && let Err(error) = control.before_attempt(ctx.request_id(), index).await
             {
-                self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
-                    .await;
+                self.notify_hop_end(ctx, target, HopOutcome::Failed(&error))
+                    .await?;
                 return Err(error);
             }
             let private_context =
@@ -3061,11 +3300,13 @@ impl Pipeline {
                         _ = control.provider_cancelled() => Err(BitrouterError::internal(
                             "managed provider execution cancelled by durable authority",
                         )),
-                        outcome = self.executor.execute(target, prompt, ctx) => outcome,
+                        outcome = self.execute_generation_attempt(target, prompt, ctx) => outcome,
                     },
-                    None => self.executor.execute(target, prompt, ctx).await,
+                    None => self.execute_generation_attempt(target, prompt, ctx).await,
                 },
             };
+            #[cfg(feature = "inference-routing")]
+            crate::gateway::scheduling::bridge::finish_attempt(scheduling, &outcome);
             outcome = outcome.and_then(|result| {
                 if result.result.generation().is_none() {
                     return Err(BitrouterError::UpstreamInvalidResponse {
@@ -3205,12 +3446,12 @@ impl Pipeline {
             }
             match &outcome {
                 Ok(result) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::Generated(result))
+                        .await?;
                 }
                 Err(e) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await?;
                 }
             }
             if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
@@ -3307,48 +3548,83 @@ impl Pipeline {
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
-        for (attempt_index, target) in chain.iter().enumerate() {
-            if !self
-                .admit_candidate(
-                    target,
-                    ctx.require_generation_prompt()?,
-                    true,
-                    ctx,
-                    &mut excluded,
-                )
-                .await?
+        for position in 0..chain.len() {
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            #[cfg(not(feature = "inference-routing"))]
+            let (attempt_index, adaptive) = (position, false);
+            let target = &chain[attempt_index];
+            if !adaptive
+                && !self
+                    .admit_candidate(
+                        target,
+                        ctx.require_generation_prompt()?,
+                        true,
+                        ctx,
+                        &mut excluded,
+                    )
+                    .await?
             {
                 continue;
             }
-            self.wait_before_fallback(errors.len()).await;
+            self.wait_before_fallback(errors.len(), ctx).await?;
+            #[cfg(feature = "inference-routing")]
+            let (attempt_index, mut scheduling) =
+                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+            #[cfg(feature = "inference-routing")]
+            let target = &chain[attempt_index];
+            if adaptive
+                && !self
+                    .admit_candidate(
+                        target,
+                        ctx.require_generation_prompt()?,
+                        true,
+                        ctx,
+                        &mut excluded,
+                    )
+                    .await?
+            {
+                continue;
+            }
+
             let provider_started_at = Instant::now();
             let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
-            self.observe_hop_start(ctx, target).await;
+            self.notify_hop_start(ctx, target).await?;
             let outcome = match reached {
                 Err(error) => Err(error),
                 Ok(()) => {
-                    self.executor
-                        .execute_stream(target, ctx.require_generation_prompt()?, ctx)
-                        .await
+                    let execution =
+                        self.executor
+                            .execute_stream(target, ctx.require_generation_prompt()?, ctx);
+                    let execution = super::deadline::bounded(ctx, execution);
+                    execution.await
                 }
             };
+            #[cfg(feature = "inference-routing")]
+            if outcome.is_err() {
+                crate::gateway::scheduling::bridge::finish_attempt(scheduling.take(), &outcome);
+            }
             match &outcome {
                 Ok(_) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::StreamStarted)
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::StreamStarted)
+                        .await?;
                 }
                 Err(e) => {
-                    self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
-                        .await;
+                    self.notify_hop_end(ctx, target, HopOutcome::Failed(e))
+                        .await?;
                 }
             }
             match outcome {
                 // Once the stream starts, the SSE response is committed — no
                 // more fallback.
                 Ok(stream) => {
+                    #[cfg(feature = "inference-routing")]
+                    let stream =
+                        crate::gateway::scheduling::bridge::bind_stream(stream, scheduling.take());
+                    let stream = super::deadline::bind_stream(ctx, stream);
                     ctx.set_successful_target(target.clone());
                     let stream = Box::pin(ObservedUpstreamStream {
                         execution: ctx
@@ -3462,21 +3738,37 @@ impl Pipeline {
         }
     }
 
-    async fn wait_before_fallback(&self, attempt_index: usize) {
+    async fn wait_before_fallback(
+        &self,
+        attempt_index: usize,
+        ctx: &PipelineContext,
+    ) -> Result<()> {
         if attempt_index == 0 || self.fallback_backoff.is_empty() {
-            return;
+            return Ok(());
         }
         let schedule_index = (attempt_index - 1).min(self.fallback_backoff.len() - 1);
         let delay = self.fallback_backoff[schedule_index];
         if delay.is_zero() {
-            return;
+            return Ok(());
         }
         tracing::debug!(
             attempt = attempt_index + 1,
             delay_ms = delay.as_millis(),
             "waiting before retryable fallback candidate"
         );
-        tokio::time::sleep(delay).await;
+        #[cfg(feature = "inference-routing")]
+        if let Some(prepared) = ctx.extension::<crate::gateway::scheduling::bridge::Prepared>() {
+            tokio::time::timeout_at(prepared.deadline, tokio::time::sleep(delay))
+                .await
+                .map_err(|_| BitrouterError::UpstreamTimeout)?;
+            return Ok(());
+        }
+        let _ = ctx;
+        super::deadline::bounded(ctx, async {
+            tokio::time::sleep(delay).await;
+            Ok(())
+        })
+        .await
     }
 
     /// Decide fallback after an upstream failure. Any registered execution hook
@@ -3491,6 +3783,16 @@ impl Pipeline {
         err: &BitrouterError,
         target: &RoutingTarget,
     ) -> FallbackDecision {
+        if super::deadline::at(ctx).is_some_and(|at| tokio::time::Instant::now() >= at) {
+            return FallbackDecision::Fail(err.clone());
+        }
+        #[cfg(feature = "inference-routing")]
+        if ctx
+            .scheduling_attempt()
+            .is_some_and(|observer| observer.blocks_fallback())
+        {
+            return FallbackDecision::Fail(err.clone());
+        }
         if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
             && execution.receipt_blocks_fallback()
         {
@@ -3610,6 +3912,29 @@ impl Pipeline {
                 tracing::warn!(?phase, "ObserveHook::after_phase panicked; swallowed");
             }
         }
+    }
+
+    async fn notify_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) -> Result<()> {
+        let notify = async {
+            self.observe_hop_start(ctx, target).await;
+            Ok(())
+        };
+        let notify = super::deadline::bounded(ctx, notify);
+        notify.await
+    }
+
+    async fn notify_hop_end(
+        &self,
+        ctx: &PipelineContext,
+        target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) -> Result<()> {
+        let notify = async {
+            self.observe_hop_end(ctx, target, outcome).await;
+            Ok(())
+        };
+        let notify = super::deadline::bounded(ctx, notify);
+        notify.await
     }
 
     async fn observe_hop_start(&self, ctx: &PipelineContext, target: &RoutingTarget) {

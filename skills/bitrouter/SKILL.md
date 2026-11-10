@@ -171,41 +171,23 @@ See [shared gateway configuration](references/shared-gateway.md).
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
+| `references/inference-routing.md` | Optional local provider scheduling, hot reload and two-gateway forwarding |
 | `references/decision-native.md` | Explicit native context, evidence recall and the independent SDK routing boundary |
 
 ## Gotchas
 
 - Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.
-- **A Skill does not grant command execution.** If the host cannot run local
-  processes, explain that this local integration is unavailable; do not suggest
-  the removed OSS origin MCP server as a fallback.
+- **A Skill does not grant command execution.** If the host cannot run local processes, explain that this local integration is unavailable; do not suggest the removed OSS origin MCP server as a fallback.
 - Use `bro mcp list/show/add/edit/remove` for local upstream config; writes are saved_only and require explicit restart for startup bindings. Only `mcp check` connects. See [config editing](references/cli.md#mcp-configuration).
 - Use `bro skills list/show/read/write` for existing local directories, with `--workspace PATH`, `--global` or `--root PATH`; `init` scaffolds source. Install/update acquisition belongs to `npx skills`. Native tasks, `threads create` and supervised ACP runs require explicit `--skill project:ID|global:ID|mcp:SERVER:URI`; no automatic skill selection occurs. MCP sources retain independent permission, per-skill consent and verified Turn-bound reads. `skills explain` reads original native evidence without execution. Changed local files require a new Turn; no installed version is retained. ACP supports explicit local root instructions only. See [skills](references/cli.md#local-skill-directories).
-- MCP upstreams default to modern `server/discover` with rmcp's classified
-  legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream
-  must use the legacy `initialize` lifecycle.
-- `server.skip_auth: false` protects both model and MCP routes with the same
-  `brvk_` virtual-key validation. Static credentials under `mcp_servers` are
-  for BitRouter's upstream hop; they do not authenticate a downstream caller.
-- **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
-  `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
-  (no `/v1`) for the Anthropic SDK — same asymmetry locally.
-- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
-  everything else `providers login <id>`; there is no top-level `login`.
-- **Remote control is separate from inference and ACP.** `control.enabled: true`
-  starts a control API on `127.0.0.1:4358` with dedicated operator credentials
-  (legacy `BITROUTER_CONTROL_TOKEN` grants reads only). Keep it loopback-only behind a
-  private tunnel or TLS reverse proxy. `server.skip_auth` never disables this
-  authentication, changes under `control:` require a daemon restart, and the
-  control API does not run remote ACP sessions.
-- **Native task HTTP is opt-in and separately privileged.** `agent_api.enabled:
-  true` requires a loopback `listen`, `token_env`, and exact `workspaces`
-  allowlist. `server.skip_auth` never admits an HTTP task caller.
-- **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
-  accepts the native facets listed by `launch --help`.
-- **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage
-  with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
-- **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and
-  `fusion` retain compatibility behavior. See `references/cli.md` for details.
+- MCP upstreams default to modern `server/discover` with rmcp's classified legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream must use the legacy `initialize` lifecycle.
+- `server.skip_auth: false` protects both model and MCP routes with the same `brvk_` virtual-key validation. Static credentials under `mcp_servers` are for BitRouter's upstream hop; they do not authenticate a downstream caller.
+- **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted: `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai` (no `/v1`) for the Anthropic SDK — same asymmetry locally.
+- **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow), everything else `providers login <id>`; there is no top-level `login`.
+- **Remote control is separate from inference and ACP.** `control.enabled: true` starts a control API on `127.0.0.1:4358` with dedicated operator credentials (legacy `BITROUTER_CONTROL_TOKEN` grants reads only). Keep it loopback-only behind a private tunnel or TLS reverse proxy. `server.skip_auth` never disables this authentication, changes under `control:` require a daemon restart, and the control API does not run remote ACP sessions.
+- **Native task HTTP is opt-in and separately privileged.** `agent_api.enabled: true` requires a loopback `listen`, `token_env`, and exact `workspaces` allowlist. `server.skip_auth` never admits an HTTP task caller.
+- **`init --harness` only accepts `claude` and `codex`**; `launch <agent>` accepts the native facets listed by `launch --help`.
+- **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
+- **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and `fusion` retain compatibility behavior. See `references/cli.md` for details.
 
 Offline `tenancy offline map` records bounded M0 mapping claims against verified snapshot evidence; it does not backfill or authorize cutover. See `references/cli.md`.

@@ -15,6 +15,7 @@ use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
 use std::sync::Arc;
 
 mod ordered;
+#[cfg(feature = "semantic-routing")]
 mod policy;
 mod targets;
 

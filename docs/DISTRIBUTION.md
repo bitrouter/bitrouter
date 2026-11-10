@@ -32,7 +32,7 @@ Extract the archive into a dedicated version directory. It contains `bro`
 (`bro.exe` on Windows), `manifest.json`, the README and license.
 
 Run the extracted executable's `build-info` command. Its profile must be
-`gateway`, with an empty feature list, and its target and version must match the
+`gateway`, with exactly `["semantic-routing"]`, and its target and version must match the
 chosen release. The manifest records the compiled identity and binary hash.
 Run this executable directly with `serve --config <path>` or install it into the
 service's executable directory. Provide the service configuration and provider

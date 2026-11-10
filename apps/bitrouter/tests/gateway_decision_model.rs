@@ -1,4 +1,5 @@
 //! TypeSafe wire and failure contract; no live provider calls or quality claims.
+#![cfg(feature = "semantic-routing")]
 
 use std::time::Duration;
 

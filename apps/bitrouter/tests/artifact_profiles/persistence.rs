@@ -461,7 +461,9 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
     let gateway = identity(fixture, binaries[1])?;
     let harness = identity(fixture, binaries[2])?;
     ensure!(full.profile == DistributionProfile::Full);
-    ensure!(gateway.profile == DistributionProfile::Gateway && gateway.features.is_empty());
+    ensure!(
+        gateway.profile == DistributionProfile::Gateway && gateway.features == ["semantic-routing"]
+    );
     ensure!(
         harness.profile == DistributionProfile::Custom && harness.features == ["harness", "mcp"]
     );

@@ -62,10 +62,15 @@ async fn predecessor(variable: &str, revision: &str, supports_v1: bool) -> Resul
     let binding = original
         .clone()
         .with_generation_defaults_envelope_v2(&values)?;
-    let mut versions = vec![HttpVersion::Http1Only];
-    if server.http2 {
-        versions.push(HttpVersion::Http2PriorKnowledge);
-    }
+    let versions = vec![HttpVersion::Http1Only];
+    #[cfg(feature = "http2")]
+    let versions = {
+        let mut versions = versions;
+        if server.http2 {
+            versions.push(HttpVersion::Http2PriorKnowledge);
+        }
+        versions
+    };
     for version in versions {
         let client = GatewayClient::with_options(
             &server.endpoint,

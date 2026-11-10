@@ -240,7 +240,7 @@ fn start(
     let pid = fixture.start(binary)?;
     let report = fixture.status(binary, artifact, artifact, pid)?;
     fixture.health(&report)?;
-    if artifact.features.is_empty() {
+    if artifact.features == ["semantic-routing"] {
         ensure!(!bitrouter::client::agent_local::socket_path(&fixture.socket).exists());
     }
     Ok((pid, report.listen.context("listen address missing")?))
@@ -255,7 +255,9 @@ fn exercise(
     let full = super::persistence::identity(fixture, full_binary)?;
     let minimum = super::persistence::identity(fixture, minimum_binary)?;
     ensure!(full.profile == DistributionProfile::Full);
-    ensure!(minimum.profile == DistributionProfile::Gateway && minimum.features.is_empty());
+    ensure!(
+        minimum.profile == DistributionProfile::Gateway && minimum.features == ["semantic-routing"]
+    );
     ensure!(
         full.source_revision.is_some()
             && full.source_revision == minimum.source_revision
@@ -324,7 +326,7 @@ fn exercise(
                 == "adopted_baseline"
         );
         completed.push((session_id, session_id, facts));
-        if artifact.features.is_empty() {
+        if artifact.features == ["semantic-routing"] {
             let retained = dispatch(
                 fixture,
                 &upstream,

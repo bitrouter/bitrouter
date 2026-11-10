@@ -50,6 +50,9 @@ use crate::{
 };
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(feature = "inference-routing")]
+mod scheduling;
 const SSE: &str = concat!(
     "data: {\"id\":\"chatcmpl-lifetime\",\"object\":\"chat.completion.chunk\",\"model\":\"model-a\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
     "data: {\"id\":\"chatcmpl-lifetime\",\"object\":\"chat.completion.chunk\",\"model\":\"model-a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1,\"total_tokens\":5}}\n\n",

@@ -89,11 +89,11 @@ impl FeatureSelection {
                 .get_key_value("default")
                 .map(|(name, _)| name.as_str()),
         )?;
-        let (profile, wire_profile) = if features.is_empty() {
+        let (profile, wire_profile) = if features == ["semantic-routing"] {
             ("Gateway", "gateway")
         } else if features == defaults {
             ("Full", "full")
-        } else if features == ["db-postgres", "multi-instance"] {
+        } else if features == ["db-postgres", "multi-instance", "semantic-routing"] {
             // The named distribution is intentionally exact. Extra capability
             // selections remain custom, even when they include shared mode.
             ("GatewayShared", "gateway-shared")

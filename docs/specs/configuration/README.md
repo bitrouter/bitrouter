@@ -1,6 +1,6 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
+Status: **beta, specification revision 1.0.0-beta.4**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
 referenced `policy-lock.yaml`. These are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
@@ -34,7 +34,7 @@ universal null value. Opaque `plugins` entries are not evidence that the host
 implements or activates the named plugin. In-memory derived registry records
 are not local YAML fields.
 
-The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`,
+The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`, `inference_routing`,
 `chat`, `upstream`, `database`, `gateway_state`, `eval`, `trajectory`,
 `acp_recording`, `continuation`, `providers`, `models`, `routers`, `checkers`,
 `presets`, `variants`, `plugins`, `mcp`, `mcp_servers`, `skills`, `server_tools`,
@@ -362,3 +362,120 @@ implementation ownership are documented in the
 - Migration leaves immutable route revisions unchanged. Rollback uses a verified
   compatible configuration and store/key backup, without deleting new evidence
   or revocation metadata to satisfy an older reader.
+
+## Inference routing configuration
+
+Status: **beta.4 configuration and local scheduling implemented, default disabled**.
+Feature-on builds accept explicit activation; feature-off builds reject it before
+provider work. Disabled startup allocates no scheduling worker, reservation or
+prefix index. Enabled scheduling supports ordinary complete generation roots
+(Chat Completions, Messages and Responses) in local gateway mode. Managed native
+roots, shared gateway scheduling and server-tool loops fail closed.
+
+The [generated application schema](../../../dist/schema/bitrouter.config.schema.json)
+is the single field catalog, derived from `config::inference_routing`.
+The [example](examples/inference-routing.json) is a disabled field value for
+staging destinations; enable only after mapping every eligible target exactly. The
+[compatibility cases](cases/inference-routing.json) distinguish schema shape,
+semantic constraints and current runtime acceptance. Assembly and config-backed
+routing validate these settings before opening execution resources. No SDK or
+AI configuration DTO is introduced.
+
+### Decoding and validation contract
+
+Rust DTO names are `InferenceRoutingConfig`, `QueueConfig`, `LimitConfig`,
+`PrefixConfig` and `DestinationConfig`; `Policy` has `LoadAware` and
+`PrefixAffinity` variants serialized in snake case. All objects reject unknown
+fields. Integers are checked `u32` values; byte calculations promote to checked
+`u64`/platform size before allocation. Defaults are exactly the schema defaults,
+including recursively defaulted nested objects. Text length bounds count Unicode
+scalars, matching JSON Schema; resource budgets count retained UTF-8 bytes.
+The startup validator consumes these DTOs before resource allocation.
+
+Omission of the root field, `{}`, and `{enabled: false}` mean disabled in the
+reader. Null is rejected everywhere, including optional account names;
+omitting `account` means the target has no account label. Zero, fractions,
+negative numbers and values outside the schema bounds are rejected even when
+disabled. Unknown enum variants are errors. NaN/infinity are never scores or
+configuration values; policy weights are bounded integers.
+
+Implemented validation checks numeric ranges, relative budgets, destination
+identity uniqueness and endpoint shape even while disabled. The scheduler also
+enforces the following runtime binding and allocation rules:
+
+- Per-tenant queue counts/bytes do not exceed their global limits; wait timeout
+  does not exceed request timeout. Uncertainty count does not exceed max active.
+- Destination IDs and exact (provider, model, endpoint, account) tuples are
+  unique. Endpoints are absolute HTTP(S) URLs without userinfo, query or fragment,
+  and equal the configured target's endpoint string; no URL alias inference.
+  Existing provider/private-adapter restrictions can require HTTPS.
+- Every enabled destination resolves to at least one eligible configured target
+  in ordinary mode. In tenant mode startup validates shape; retained credentials
+  and route membership are resolved per request, never provisioned from YAML.
+  A new tenant route can use an existing exact destination tuple.
+- Destination max active is at most the global active limit. Enabled scheduling
+  requires nonempty destinations. A scheduled request with any otherwise eligible
+  destination lacking a mapping is refused before dispatch, rather than silently
+  narrowing its authorized fallback set.
+- State entry budget covers configured destinations and resident identities;
+  prefix projection cap fits the prefix byte budget. Allocation accounts key
+  strings, entries, samples and metadata before inserting; runtime exhaustion
+  backpressures/refuses, never evicts a live reservation.
+- Authenticated tenant weights match the deployment's canonical tenant IDs;
+  unknown IDs are dormant operator configuration, not newly authorized tenants.
+  Unconfigured tenants have weight one. Ordinary local unauthenticated requests
+  share one local flow; caller headers cannot create tenants.
+- Enabled scheduling requires the compiled `inference-routing` feature and the
+  local process profile. Shared `multi-instance` runtime activation is rejected;
+  compiling that feature together is allowed. No hard-global quota option exists.
+
+Defaults bound waiting payload to 64 MiB globally/8 MiB per flow, scheduler state
+to 32 MiB, and prefix state to 16 MiB. These are charged logical budgets, not an
+RSS prediction. Queue charging includes retained request data, owned copies and
+a 512-byte minimum per-entry charge; count/byte reservation precedes retention.
+Active request buffers remain under existing gateway limits; scheduler handles
+do not clone payloads. Defaults are engineering limits pending measurement.
+
+### Identity, reload and rollback
+
+Destination IDs name operator-controlled process-local concurrency pools shared
+by every mapped execution in that process. They do not name upstream replicas.
+Runtime quota/health keys remain the existing credential/profile keys; account
+labels never substitute for credential authority. Cache namespaces include
+tenant, exact credential resource/revision (or opaque local credential epoch),
+destination tuple, selected model identity, projection version and cache controls.
+Cross-tenant sharing and exported fingerprints are unavailable in this version.
+
+The root has a hot policy subset: `enabled`, `policy`, `tenant_weights`,
+queue timeouts and prefix TTL. Every successful reload publishes one immutable
+generation. Existing queued requests retain their policy, absolute deadline and
+candidate handles; new requests use the new generation. Live revocations always
+apply. TTL changes apply only to new evidence; expiry is never extended retroactively.
+Enabled-to-disabled reload stops new scheduler admissions while old work drains.
+
+Destination membership/IDs/endpoints, concurrency limits, queue capacities,
+state/index budgets and projection cap are restart-required. Reject the entire
+reload atomically if any restart-required field changed. Do not reset rate,
+health, concurrency or uncertainty state on a hot reload. A subsequent re-enable
+reuses the same draining process state. Restart starts affinity cold, retains
+durable unknown receipts, and makes no global/physical capacity guarantee.
+
+| Reader / change | Required behavior |
+| --- | --- |
+| Current reader, old document | Existing behavior unchanged |
+| Pre-beta.4 reader, new key even disabled | Strict top-level rejection; strip the whole key before downgrade |
+| Beta.4 reader, old document / omitted field | Disabled; no scheduler tasks or index |
+| Beta.4 reader, empty field object | Disabled with schema defaults |
+| Beta.4 reader, explicit null / unknown field | Reject before activation |
+| Beta.4 reader, enabled | Require inference-routing and valid local destination bindings; reject feature-off/shared configurations |
+| Beta.4 reader, semantic policy but semantic feature absent | Reject before auxiliary inference |
+| Valid hot policy update | Publish one generation; old work retains binding |
+| Restart-required change mixed with hot changes | Refuse whole reload; keep old generation |
+| Downgrade | Drain owned work, preserve receipts, remove `inference_routing`, use compatible stored formats |
+
+Removing the field restores old-reader parsing; it does not downgrade stored
+receipts. Gateway-only builds omit automatic semantic policy defaults and reject
+explicit policy bindings, `policy.path`, adaptive policy mode and `decision_model`
+without `semantic-routing`. Static model/router/check bindings remain supported.
+The Core feature retains its existing policy capability through a dependency on
+`semantic-routing`; neither routing feature enables Core, Harness or transports.

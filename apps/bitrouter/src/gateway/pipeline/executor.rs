@@ -37,6 +37,7 @@ use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 pub(crate) mod input_count;
 mod receipt;
 mod response_body;
+mod scheduling;
 mod shared;
 mod stream_bridge;
 pub(crate) mod tenancy;
@@ -100,6 +101,12 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    #[cfg(feature = "inference-routing")]
+    fn preflight_scheduling(&self, _target: &RoutingTarget, _prompt: &Prompt) -> Result<()> {
+        Err(BitrouterError::bad_request(
+            "executor does not support provider scheduling",
+        ))
+    }
     /// Complete a collected managed stream using protocol-native terminal
     /// evidence. This callback is local: it must perform no I/O or retry.
     /// The default preserves the canonical parts emitted by custom executors.
@@ -1700,6 +1707,13 @@ fn apply_provider_headers(
             continue;
         }
         request.headers_mut().remove(name);
+        if name.as_str() == super::deadline::HEADER
+            && rule.passthrough()
+            && let Some(value) = super::deadline::relay(ctx, rule.default())
+        {
+            request.headers_mut().insert(name.clone(), value);
+            continue;
+        }
         if rule.passthrough() {
             let inbound = ctx
                 .headers()
@@ -1785,6 +1799,22 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    #[cfg(feature = "inference-routing")]
+    fn preflight_scheduling(&self, target: &RoutingTarget, prompt: &Prompt) -> Result<()> {
+        if !matches!(
+            target.api_protocol,
+            ApiProtocol::ChatCompletions | ApiProtocol::Messages | ApiProtocol::Responses
+        ) || self.auth_applier(target).is_some()
+            || crate::gateway::providers::codex::requires_streaming(&target.model_target())
+            || crate::gateway::pipeline::native_continuation::has_continuation(prompt)
+        {
+            return Err(BitrouterError::bad_request(
+                "unsupported scheduled provider or continuation",
+            ));
+        }
+        Ok(())
+    }
+
     fn finish_native_stream(
         &self,
         target: &RoutingTarget,
@@ -1948,12 +1978,14 @@ impl Executor for HttpExecutor {
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
 
+        let scheduling = scheduling::Attempt::from_context(ctx);
         let (client, _) = self.client_for(
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
                 .is_some()
                 || shared::has_admission(ctx)
-                || tenancy::has_execution(ctx),
+                || tenancy::has_execution(ctx)
+                || scheduling.active(),
         );
 
         let initial_gate = native_work::gate_duration(ctx);
@@ -2061,7 +2093,7 @@ impl Executor for HttpExecutor {
                         guard.sent()?;
                     }
                     let response = admission
-                        .send(&client, request, ctx, &mut error_scrubber)
+                        .send(&client, request, target, ctx, &mut error_scrubber)
                         .await;
                     private_adapter = admission.adapter.is_some();
                     native_attempt = admission.attempt_id;
@@ -2109,6 +2141,7 @@ impl Executor for HttpExecutor {
             }
             receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
+                && !scheduling.active()
                 && !private_adapter
                 && !attempted_auth_refresh
                 && self
@@ -2135,10 +2168,11 @@ impl Executor for HttpExecutor {
         })?;
         receipt::json(&mut tenant_attempt, &target.api_protocol, &json)?;
         if target.api_protocol == ApiProtocol::Responses {
-            if (shared_attempt.is_shared() || tenant_attempt.is_some())
+            if (shared_attempt.is_shared() || tenant_attempt.is_some() || scheduling.active())
                 && let Some((failure, usage)) =
                     crate::gateway::model::protocol::responses::failed_terminal(&json)
             {
+                scheduling.completed(false, usage.as_ref());
                 receipt::complete(&mut tenant_attempt, false)?;
                 shared_attempt.complete(false, usage.as_ref()).await?;
                 return Err(error_scrubber.scrub_error(failure.into()));
@@ -2155,7 +2189,7 @@ impl Executor for HttpExecutor {
         let mut result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        if (shared_attempt.is_shared() || tenant_attempt.is_some())
+        if (shared_attempt.is_shared() || tenant_attempt.is_some() || scheduling.active())
             && result.finish_reason.is_none()
         {
             return Err(BitrouterError::UpstreamInvalidResponse {
@@ -2163,6 +2197,13 @@ impl Executor for HttpExecutor {
                 usage: result.usage.clone().map(Box::new),
             });
         }
+        scheduling.completed(
+            !matches!(
+                result.finish_reason,
+                Some(bitrouter_ai::types::FinishReason::Error(_))
+            ),
+            result.usage.as_ref(),
+        );
         receipt::complete(
             &mut tenant_attempt,
             !matches!(
@@ -2889,6 +2930,56 @@ mod beta_forward_tests {
         assert_eq!(request.headers()["user-agent"], "my-agent/1.0");
         assert_eq!(request.headers()["x-static-only"], "static");
         assert!(request.headers().get("x-rejected").is_none());
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gateway_timeout_passthrough_preserves_default_precedence() -> anyhow::Result<()> {
+        for (inbound, default, local, passthrough, expected) in [
+            (None, Some("1000"), None, true, Some("1000")),
+            (None, Some("1000"), Some(120_000), true, Some("1000")),
+            (None, Some("1000"), Some(200), true, Some("200")),
+            (Some("2000"), Some("1000"), Some(1800), true, Some("1800")),
+            (None, None, Some(200), true, Some("200")),
+            (None, None, None, true, None),
+            (Some("2000"), Some("1000"), Some(200), false, Some("1000")),
+            (None, Some("opaque"), Some(200), true, Some("opaque")),
+        ] {
+            let mut headers = http::HeaderMap::new();
+            if let Some(inbound) = inbound {
+                headers.insert(
+                    super::super::deadline::HEADER,
+                    http::HeaderValue::from_str(inbound)?,
+                );
+            }
+            let mut ctx = ctx_with_headers(headers);
+            if let Some(local) = local {
+                ctx.insert_extension(Arc::new(super::super::deadline::Deadline(
+                    tokio::time::Instant::now() + Duration::from_millis(local),
+                )));
+            }
+            let mut target = target(ApiProtocol::ChatCompletions);
+            target.headers = vec![
+                OutboundHeaderRule::new(super::super::deadline::HEADER, default, passthrough)?,
+                OutboundHeaderRule::new("x-unchanged", Some("default"), true)?,
+            ];
+            let mut request = fresh_request();
+            apply_provider_headers(&mut request, &target, &ctx, false);
+            anyhow::ensure!(
+                request
+                    .headers()
+                    .get(super::super::deadline::HEADER)
+                    .and_then(|value| value.to_str().ok())
+                    == expected
+            );
+            anyhow::ensure!(
+                request
+                    .headers()
+                    .get("x-unchanged")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("default")
+            );
+        }
         Ok(())
     }
 

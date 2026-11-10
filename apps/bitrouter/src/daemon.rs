@@ -1511,7 +1511,7 @@ async fn dispatch(
             let policy_report = services
                 .administration
                 .as_ref()
-                .map(|administration| administration.policy.administration_snapshot());
+                .map(|administration| administration.active_policy());
             let candidate_models = crate::actions::route::policy_candidate_models(
                 policy_report.as_ref(),
                 resolution.policy.as_deref(),
@@ -1594,7 +1594,7 @@ fn router_configuration_restart_required(
 async fn router_state(administration: &Option<Administration>) -> Option<RouterState> {
     let administration = administration.as_ref()?;
     let running = administration.routing.snapshot_config();
-    let policy_report = administration.policy.administration_snapshot();
+    let policy_report = administration.active_policy();
     let running_statuses = crate::actions::models::router_statuses(
         &running,
         crate::actions::models::PolicyReadiness::Known(&policy_report),

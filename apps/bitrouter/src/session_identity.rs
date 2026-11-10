@@ -382,10 +382,44 @@ impl PreRequestHook for SessionContextHook {
             route_lease,
         };
         let event = event_from_context(ctx.request_id(), &normalized);
-        ctx.insert_extension(Arc::new(normalized));
-        ctx.emit(event);
+        #[cfg(feature = "inference-routing")]
+        {
+            ctx.insert_accounted_extension(Arc::new(normalized), |value| {
+                scheduling_bytes(value, &value.evidence, &value.conflicts)
+            });
+            ctx.emit_accounted(event, |value| {
+                scheduling_bytes(value, &value.evidence, &value.conflicts)
+            });
+        }
+        #[cfg(not(feature = "inference-routing"))]
+        {
+            ctx.insert_extension(Arc::new(normalized));
+            ctx.emit(event);
+        }
         Ok(HookDecision::Allow)
     }
+}
+
+#[cfg(feature = "inference-routing")]
+fn scheduling_bytes<T: Serialize>(
+    value: &T,
+    evidence: &Vec<IdentityEvidence>,
+    conflicts: &Vec<IdentityConflict>,
+) -> crate::gateway::error::Result<u64> {
+    use crate::gateway::error::BitrouterError;
+    let spare = evidence
+        .capacity()
+        .checked_mul(std::mem::size_of::<IdentityEvidence>())
+        .and_then(|bytes| {
+            conflicts
+                .capacity()
+                .checked_mul(std::mem::size_of::<IdentityConflict>())
+                .and_then(|other| bytes.checked_add(other))
+        })
+        .ok_or(BitrouterError::UpstreamUnavailable)?;
+    crate::gateway::scheduling::payload::compact_dto(value)?
+        .checked_add(spare as u64)
+        .ok_or(BitrouterError::UpstreamUnavailable)
 }
 
 fn event_from_context(

@@ -391,12 +391,14 @@ impl HttpExecutor {
         let url = transport.endpoint_url(&target.model_target(), true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
+        let scheduling = super::scheduling::Attempt::from_context(ctx);
         let (client, _) = self.client_for(
             target,
             ctx.extension::<super::super::native::NativeManagedRequest>()
                 .is_some()
                 || super::shared::has_admission(ctx)
-                || super::tenancy::has_execution(ctx),
+                || super::tenancy::has_execution(ctx)
+                || scheduling.active(),
         );
 
         let mut http_source = if target.api_protocol == ApiProtocol::Responses {
@@ -481,7 +483,7 @@ impl HttpExecutor {
                         guard.sent()?;
                     }
                     let response = admission
-                        .send(&client, request, ctx, &mut error_scrubber)
+                        .send(&client, request, target, ctx, &mut error_scrubber)
                         .await;
                     private_adapter = admission.adapter.is_some();
                     native_attempt = admission.attempt_id;
@@ -529,6 +531,7 @@ impl HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
+                && !scheduling.active()
                 && !private_adapter
                 && !attempted_auth_refresh
                 && self
@@ -550,6 +553,9 @@ impl HttpExecutor {
         // Parse the upstream SSE byte stream into canonical stream parts via
         // the protocol's stateful decoder.
         let mut decoder = adapter.stream_decoder();
+        if scheduling.active() {
+            decoder.enforce_terminal_order();
+        }
         let protocol = adapter.protocol();
         let limit = response_body::limit(ctx);
         let cancellation = super::tenancy::cancellation(ctx)?;
@@ -563,6 +569,7 @@ impl HttpExecutor {
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
             let mut terminal = false;
+            let mut successful = true;
             // Shared delivery cannot expose a successful terminal before its
             // accounting fact commits. Retain only this one bounded part while
             // accepting a provider's trailing usage report and validating EOF.
@@ -588,6 +595,9 @@ impl HttpExecutor {
                         };
                         match decoder.decode(&sse) {
                             Ok(parts) => {
+                                if scheduling.active() && let Err(error) = receipt::validate_batch(&parts, held_terminal.is_some()) {
+                                    drop(tenant_attempt.take()); yield Err(error); return;
+                                }
                                 if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()).and_then(|()| receipt::event(&mut tenant_attempt, &protocol, &sse)) { drop(tenant_attempt.take()); yield Err(error); return; }
                                 if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
                                     drop(tenant_attempt.take()); yield Err(error);
@@ -609,9 +619,11 @@ impl HttpExecutor {
                                     return;
                                 }
                                 for p in parts {
+                                    scheduling.parts(std::slice::from_ref(&p));
+                                    if p.is_terminal() { successful &= receipt::successful(&p); }
                                     if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                                     terminal |= p.is_terminal();
-                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some() || scheduling.active()) && p.is_terminal() { held_terminal = Some(p); continue; }
                                     yield Ok(p);
                                 }
                             }
@@ -619,6 +631,9 @@ impl HttpExecutor {
                                 // Retain valid counts from this same event before
                                 // persisting its failure or yielding to a caller.
                                 let reported = error_event_usage(&protocol, &sse, &e);
+                                if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. }) {
+                                    scheduling.completed(false, reported.as_ref());
+                                }
                                 if let Some(usage) = &reported {
                                     shared_attempt.observe(&StreamPart::Usage { usage: usage.clone() });
                                 }
@@ -666,15 +681,20 @@ impl HttpExecutor {
             }
             match decoder.finish() {
                 Ok(parts) => {
+                    if scheduling.active() && let Err(error) = receipt::validate_batch(&parts, held_terminal.is_some()) {
+                        drop(tenant_attempt.take()); yield Err(error); return;
+                    }
                     if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()) { drop(tenant_attempt.take()); yield Err(error); return; }
                     if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
                         drop(tenant_attempt.take()); yield Err(error);
                         return;
                     }
                     for p in parts {
+                        scheduling.parts(std::slice::from_ref(&p));
+                        if p.is_terminal() { successful &= receipt::successful(&p); }
                         if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                         terminal |= p.is_terminal();
-                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some() || scheduling.active()) && p.is_terminal() { held_terminal = Some(p); continue; }
                         yield Ok(p);
                     }
                 }
@@ -687,6 +707,7 @@ impl HttpExecutor {
                 drop(tenant_attempt.take()); yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
                 return;
             }
+            scheduling.completed(successful, None);
             if let Some(part) = &held_terminal
                 && let Err(error) = receipt::complete(&mut tenant_attempt, receipt::successful(part))
             {

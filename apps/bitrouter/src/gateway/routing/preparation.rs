@@ -53,6 +53,35 @@ pub struct Prepared {
 }
 
 impl Prepared {
+    #[cfg(feature = "inference-routing")]
+    pub(crate) fn prepare_scheduling_payload(&mut self) -> crate::gateway::error::Result<u64> {
+        use crate::gateway::scheduling::payload::{Weight, compact_dto};
+        if self.previous.is_some() {
+            return Err(crate::gateway::error::BitrouterError::bad_request(
+                "scheduled native preparation history is unsupported",
+            ));
+        }
+        let mut bytes = Weight::new();
+        bytes.add(
+            std::mem::size_of::<Self>() + self.views.capacity() * std::mem::size_of::<View>(),
+        )?;
+        for View {
+            id,
+            prompt,
+            requires,
+        } in &mut self.views
+        {
+            bytes.string(id)?;
+            bytes.prompt(prompt)?;
+            bytes.add(requires.len() * 256)?;
+        }
+        bytes.add(self.capabilities.len() * 256)?;
+        bytes
+            .total()
+            .checked_add(compact_dto(&self.receipt)?)
+            .and_then(|n| n.checked_add(compact_dto(&self.policy).ok()?))
+            .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)
+    }
     /// Context candidates may change evidence messages only. Model and effort
     /// belong to the policy stage; tools, instructions and request controls stay
     /// bound to the checked source envelope.
@@ -89,13 +118,26 @@ impl Prepared {
             let input = Input::from_prompt(prompt, policy.max_request_bytes / 4);
             let request = assessment::request(&runtime.model, &input);
             let token = tokio_util::sync::CancellationToken::new();
-            let outcome = match serde_json::to_vec(&request) {
+            let outcome: Result<
+                crate::gateway::model::decision::types::DecisionResponse,
+                DecisionError,
+            > = match serde_json::to_vec(&request) {
                 Ok(bytes)
                     if bytes.len() <= policy.max_request_bytes
                         && policy.validate().is_ok()
                         && request.validate().is_ok() =>
                 {
-                    runtime.executor.execute(&request, &token).await
+                    #[cfg(feature = "semantic-routing")]
+                    {
+                        runtime.executor.execute(&request, &token).await
+                    }
+                    #[cfg(not(feature = "semantic-routing"))]
+                    {
+                        let _ = token;
+                        Err(DecisionError::invalid_request(
+                            "semantic assessment requires the semantic-routing feature",
+                        ))
+                    }
                 }
                 _ => Err(DecisionError::invalid_request(
                     "routing classifier request exceeds its admitted bound",
