@@ -170,6 +170,10 @@ tokio-tungstenite = "0.29"
 rmcp.workspace = true
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
 tokio = { workspace = true, features = ["full", "test-util"] }
+# Real private-adapter TLS tests use the same locked crates as registry tests.
+rcgen = "0.14"
+time = "0.3"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 wiremock = "0.6"
 futures.workspace = true
 tempfile.workspace = true

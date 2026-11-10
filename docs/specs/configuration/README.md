@@ -196,8 +196,18 @@ The optional startup-only `tenancy.private_adapter` pairs this installation
 with one operator-controlled adapter. It requires enabled tenancy and accepts
 an `audience`, one to eight exact `endpoints` at the same HTTPS origin, and a
 `key_env` naming an environment variable containing an unpadded base64url
-32-byte key. Omission disables pairing. Secrets stay in the environment and
-peer memory.
+32-byte key. Omitting `private_adapter` disables pairing. Secrets stay in the
+environment and peer memory.
+
+For a privately issued adapter certificate, set the optional
+`ca_certificates_file` to a local PEM bundle of one to eight CA certificates,
+at most 64 KiB. Relative paths resolve from the server working directory.
+Core reads the regular file once at startup; an unreadable, malformed, empty
+or oversized bundle fails startup. The roots are added to the platform roots
+for this adapter client only. Normal certificate chain, hostname and validity
+checks still apply. Omitting this field keeps the original platform trust
+behavior. Older Core readers reject the new field; omit it when rolling back
+and use an adapter certificate trusted by that reader's platform.
 
 Only actual generation sends using a static credential on profiled ordered
 routes to a configured URL receive a signed attempt claim. Provider-side input

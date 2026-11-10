@@ -17,6 +17,9 @@ pub struct PrivateAdapterConfig {
     pub endpoints: Vec<String>,
     /// Environment variable holding an unpadded base64url 32-byte peer key.
     pub key_env: String,
+    /// Optional local PEM CA bundle for this peer only, loaded at startup.
+    #[serde(default)]
+    pub ca_certificates_file: Option<PathBuf>,
 }
 
 impl PrivateAdapterConfig {
@@ -307,6 +310,7 @@ mod tests {
                 "https://adapter.example/v1/messages".into(),
             ],
             key_env: "ADAPTER_TEST_KEY".into(),
+            ca_certificates_file: None,
         };
         assert_eq!(adapter.checked_endpoints()?.len(), 2);
         for endpoint in [
@@ -332,6 +336,26 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "tenancy private adapter requires tenancy.enabled"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_adapter_ca_file_is_optional_without_accepting_unknown_keys() -> anyhow::Result<()> {
+        let original = "audience: test-peer\nendpoints: ['https://localhost:8443/generate']\nkey_env: ADAPTER_TEST_KEY\n";
+        let settings: super::PrivateAdapterConfig = serde_saphyr::from_str(original)?;
+        assert_eq!(settings.ca_certificates_file, None);
+        let with_ca = format!("{original}ca_certificates_file: local/adapter-ca.pem\n");
+        let settings: super::PrivateAdapterConfig = serde_saphyr::from_str(&with_ca)?;
+        assert_eq!(
+            settings.ca_certificates_file.as_deref(),
+            Some(std::path::Path::new("local/adapter-ca.pem"))
+        );
+        assert!(
+            serde_saphyr::from_str::<super::PrivateAdapterConfig>(&format!(
+                "{original}tls_verify: false\n"
+            ))
+            .is_err()
         );
         Ok(())
     }

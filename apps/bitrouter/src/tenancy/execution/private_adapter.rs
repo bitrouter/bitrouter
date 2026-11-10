@@ -1,7 +1,8 @@
 //! Attempt handoff to an explicitly paired operator destination.
 
-use std::sync::Arc;
+use std::{fs::OpenOptions, io::Read, path::Path, sync::Arc};
 
+use anyhow::{Context, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::tenancy::{
     configuration::ResourceRef,
@@ -13,7 +14,7 @@ use bitrouter_ai::tenancy::{
     },
 };
 use hmac::{Hmac, KeyInit, Mac};
-use reqwest::{Method, Request, Response, Url};
+use reqwest::{Certificate, Method, Request, Response, Url};
 use sha2::{Digest, Sha256};
 
 use super::TenantExecution;
@@ -25,6 +26,12 @@ use crate::{
         pipeline::types::RoutingTarget,
     },
 };
+
+#[cfg(test)]
+mod tests;
+
+const MAX_CA_BUNDLE_BYTES: u64 = 64 * 1024;
+const MAX_CA_CERTIFICATES: usize = 8;
 
 pub(in crate::tenancy) struct Peer {
     audience: String,
@@ -41,9 +48,14 @@ impl Peer {
             vec![endpoint],
             key,
             HttpTimeouts::default().read,
+            None,
         )
     }
 
+    /// Load the paired peer and its transport before the owning runtime starts.
+    ///
+    /// # Errors
+    /// Returns an error for invalid pairing configuration, key, CA bundle or transport.
     pub(in crate::tenancy) fn load(
         config: &PrivateAdapterConfig,
         read_timeout: std::time::Duration,
@@ -59,6 +71,7 @@ impl Peer {
             endpoints,
             key.try_into().map_err(|_| invalid())?,
             read_timeout,
+            config.ca_certificates_file.as_deref(),
         )
     }
 
@@ -67,17 +80,24 @@ impl Peer {
         endpoints: Vec<Url>,
         key: [u8; 32],
         read_timeout: std::time::Duration,
+        ca_certificates_file: Option<&Path>,
     ) -> anyhow::Result<Self> {
         let timeouts = HttpTimeouts::default();
-        let client = reqwest::Client::builder()
+        let builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .connect_timeout(timeouts.connect)
             .read_timeout(read_timeout)
             .pool_idle_timeout(timeouts.pool_idle)
-            .tcp_keepalive(timeouts.tcp_keepalive)
-            .build()?;
+            .tcp_keepalive(timeouts.tcp_keepalive);
+        let client = match ca_certificates_file {
+            Some(path) => builder
+                .tls_certs_merge(read_ca_bundle(path)?)
+                .build()
+                .context("failed to build tenancy private adapter client with configured CA")?,
+            None => builder.build()?,
+        };
         Ok(Self {
             audience,
             endpoints,
@@ -98,6 +118,79 @@ impl Peer {
         mac.update(domain);
         Ok(mac)
     }
+}
+
+fn read_ca_bundle(path: &Path) -> anyhow::Result<Vec<Certificate>> {
+    // Check before open as well as on the open file: a FIFO is not a CA bundle.
+    let metadata = path
+        .metadata()
+        .context("failed to inspect tenancy private adapter CA file")?;
+    ensure!(
+        metadata.is_file(),
+        "private adapter CA file must be regular"
+    );
+    ensure!(
+        metadata.len() <= MAX_CA_BUNDLE_BYTES,
+        "private adapter CA bundle exceeds 64 KiB"
+    );
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A replacement with a FIFO between the checks cannot block this open.
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = options
+        .open(path)
+        .context("failed to open tenancy private adapter CA file")?;
+    ensure!(
+        file.metadata()
+            .context("failed to inspect opened tenancy private adapter CA file")?
+            .is_file(),
+        "private adapter CA file must be regular"
+    );
+    let mut pem = Vec::new();
+    file.take(MAX_CA_BUNDLE_BYTES + 1)
+        .read_to_end(&mut pem)
+        .context("failed to read tenancy private adapter CA file")?;
+    ensure!(
+        pem.len() as u64 <= MAX_CA_BUNDLE_BYTES,
+        "private adapter CA bundle exceeds 64 KiB"
+    );
+
+    // The certificate decoder skips other PEM labels and text outside blocks.
+    // Bound and check the framing first; reqwest decodes the certificate bytes.
+    // The decoder treats both CR and LF as line boundaries.
+    let mut inside = false;
+    let mut count = 0;
+    for line in pem.split(|&byte| matches!(byte, b'\r' | b'\n')) {
+        match line {
+            b"-----BEGIN CERTIFICATE-----" if !inside => {
+                count += 1;
+                ensure!(
+                    count <= MAX_CA_CERTIFICATES,
+                    "too many private adapter CA certificates"
+                );
+                inside = true;
+            }
+            b"-----END CERTIFICATE-----" if inside => inside = false,
+            _ if inside && !line.trim_ascii_start().starts_with(b"-----") => {}
+            _ if !inside && line.trim_ascii().is_empty() => {}
+            _ => bail!("invalid private adapter CA bundle PEM framing"),
+        }
+    }
+    ensure!(
+        !inside && count > 0,
+        "private adapter CA bundle requires complete certificates"
+    );
+    let certificates = Certificate::from_pem_bundle(&pem)
+        .context("failed to decode tenancy private adapter CA bundle")?;
+    ensure!(
+        certificates.len() == count,
+        "invalid private adapter CA bundle"
+    );
+    Ok(certificates)
 }
 
 pub(crate) struct Exchange {
