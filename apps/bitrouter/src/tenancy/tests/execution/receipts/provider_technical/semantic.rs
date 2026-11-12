@@ -266,6 +266,7 @@ async fn real_provider_body_drop_after_first_semantic_keeps_prefix_without_termi
 struct HeldJsonHop;
 #[async_trait::async_trait]
 impl crate::gateway::pipeline::hooks::ObserveHook for HeldJsonHop {
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
     async fn after_phase(
         &self,
         _: crate::gateway::pipeline::hooks::Phase,

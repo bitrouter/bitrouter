@@ -918,10 +918,9 @@ impl Worker {
                     if result.is_ok()
                         && owner.durable()
                         && self.proof.disposition() != Disposition::Ambiguous
+                        && !draining
                     {
-                        if !draining {
-                            optional.offer(self, &owner);
-                        }
+                        optional.offer(self, &owner);
                     }
                     // The registry retains the immutable candidate and its reservation
                     // after a confirmed rollback; an ambiguous actor never releases either.

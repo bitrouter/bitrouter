@@ -162,10 +162,10 @@ impl Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        if !self.detached {
-            if let Some(operation) = &self.operation {
-                operation.finish(true);
-            }
+        if !self.detached
+            && let Some(operation) = &self.operation
+        {
+            operation.finish(true);
         }
     }
 }
