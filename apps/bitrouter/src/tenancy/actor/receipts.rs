@@ -95,6 +95,10 @@ impl Worker {
             self.proof
                 .receipt_result_for_test(observation, Step::Check, &checked);
             checked?;
+            #[cfg(all(test, unix))]
+            self.proof
+                .receipt_after_intent_for_test(observation, &transaction)
+                .await?;
             let insertion = store::stage_dispatch_terminal(&transaction, &candidate).await;
             #[cfg(test)]
             {

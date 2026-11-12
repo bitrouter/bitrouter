@@ -149,8 +149,132 @@ async fn actual_readonly_receipt_fault_stays_fenced_after_acknowledged_rollback(
     ensure!(
         !before.fenced && before.physical_write_reserved == 0 && before.completion_reserved > 0
     );
-    // SQLite returns typed READONLY for the actual receipt INSERT, while the
-    // actual transaction can still acknowledge ROLLBACK. No fabricated outcome.
+    // Acquire the real write intent first, then set query_only on that SAME
+    // transaction/connection for this exact observed receipt key only. The
+    // following real INSERT must fail READONLY, not begin_write_receipt.
+    proof.readonly_receipt_after_intent_for_test(&Key {
+        installation: harness.fixture.installation.clone(),
+        tenant: harness.fixture.tenant.clone(),
+        execution: owner.id().clone(),
+    })?;
+    let result: Result<()> = async {
+        let gate = proof.hold(Phase::RollingBack);
+        let completing = owner.clone();
+        let finish = AbortOnDropHandle::new(tokio::spawn(async move {
+            completing.finish(Outcome::Cancelled).await
+        }));
+        let held: Result<()> = async {
+            tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
+            ensure!(proof.disposition() == Disposition::Pending);
+            let current = observe()?;
+            ensure!(current.fenced && current.physical_write_reserved > 0);
+            ensure!(current.completion_reserved == before.completion_reserved);
+            for maintenance in [false, true] {
+                ensure!(matches!(
+                    budget.reserve(0, maintenance),
+                    Err(ErrorCode::StorageUnavailable)
+                ));
+            }
+            Ok(())
+        }
+        .await;
+        proof.release_gate();
+        let finished = tokio::time::timeout(TIMEOUT, finish).await??;
+        held?;
+        ensure!(finished == Err(ErrorCode::StorageUnavailable));
+        ensure!(proof.disposition() == Disposition::RolledBack);
+        let trace = proof.receipt_trace_for_test()?;
+        ensure!(!trace.overflow && trace.facts[1].is_none());
+        let fact = trace.facts[0].as_ref().context("actual receipt attempt")?;
+        ensure!(fact.begin.is_some_and(|outcome| outcome.ok));
+        ensure!(
+            fact.post_intent_query_only
+                .is_some_and(|outcome| outcome.ok)
+        );
+        ensure!(
+            fact.store
+                .is_some_and(|outcome| !outcome.ok && outcome.sqlite_code == Some(8))
+        );
+        ensure!(fact.rollback.is_some_and(|outcome| outcome.ok));
+        ensure!(fact.commit.is_none() && !owner.durable());
+        let settled = observe()?;
+        ensure!(settled.fenced && settled.physical_write_reserved == 0);
+        ensure!(settled.completion_reserved == before.completion_reserved);
+        harness
+            .fixture
+            .db
+            .execute_unprepared("PRAGMA query_only=OFF")
+            .await?;
+        // The fixture has an unbound volume. A healthy later space observation
+        // cannot clear the process storage-health fence or admit maintenance.
+        harness.fixture.service.admission.receipt_probe(u64::MAX);
+        for maintenance in [false, true] {
+            ensure!(matches!(
+                budget.reserve(0, maintenance),
+                Err(ErrorCode::StorageUnavailable)
+            ));
+        }
+        ensure!(harness.calls.load(Ordering::SeqCst) == 0);
+        ensure!(
+            store::lookup(
+                &harness.fixture.db,
+                &harness.fixture.installation,
+                &harness.fixture.tenant,
+                owner.id()
+            )
+            .await?
+            .is_none()
+        );
+        Ok(())
+    }
+    .await;
+    proof.release_gate();
+    let restored = harness
+        .fixture
+        .db
+        .execute_unprepared("PRAGMA query_only=OFF")
+        .await;
+    drop(execution);
+    let stopped = tokio::time::timeout(TIMEOUT, harness.fixture.service.shutdown()).await;
+    result?;
+    restored?;
+    ensure!(stopped?.is_err());
+    Ok(())
+}
+
+#[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+#[tokio::test]
+async fn actual_readonly_write_intent_fault_stays_fenced_before_receipt_store() -> Result<()> {
+    use crate::tenancy::transaction::{Disposition, Phase, receipt_observation::Key};
+    use sea_orm::ConnectionTrait;
+    let harness = Harness::new(
+        "chat_completions",
+        StatusCode::OK,
+        json_response("chat_completions", full_usage("chat_completions"))?,
+    )
+    .await?;
+    let execution = super::super::admitted(&harness.fixture, &harness.headers).await?;
+    let owner = execution.receipt_owner()?.clone();
+    let proof = &harness.fixture.service.cleanup;
+    proof.observe_receipt_for_test(Key {
+        installation: harness.fixture.installation.clone(),
+        tenant: harness.fixture.tenant.clone(),
+        execution: owner.id().clone(),
+    })?;
+    let budget = harness.fixture.service.storage_budget();
+    let observe = || {
+        budget
+            .calibration_observation(None)
+            .map_err(|error| anyhow::anyhow!("receipt capacity: {error:?}"))
+    };
+    let before = observe()?;
+    ensure!(
+        !before.fenced && before.physical_write_reserved == 0 && before.completion_reserved > 0
+    );
+    let sql_before = proof.sql_counts_for_test();
+    let intent_before = proof.write_intent_counts_for_test();
+    // This separate case intentionally faults the real write intent, before
+    // Store. Keep the original case dedicated to the actual receipt INSERT.
     harness
         .fixture
         .db
@@ -186,10 +310,16 @@ async fn actual_readonly_receipt_fault_stays_fenced_after_acknowledged_rollback(
         ensure!(!trace.overflow && trace.facts[1].is_none());
         let fact = trace.facts[0].as_ref().context("actual receipt attempt")?;
         ensure!(
-            fact.store
+            fact.begin
                 .is_some_and(|outcome| !outcome.ok && outcome.sqlite_code == Some(8))
         );
-        ensure!(fact.rollback.is_some_and(|outcome| outcome.ok));
+        ensure!(fact.store.is_none() && fact.inserted.is_none());
+        ensure!(fact.post_intent_query_only.is_none());
+        // The failed begin_write_receipt consumes and ACKs its own original
+        // transaction; it never returns a transaction to the actor Store branch.
+        ensure!(fact.rollback.is_none());
+        ensure!(proof.sql_counts_for_test() == (sql_before.0 + 1, sql_before.1 + 1));
+        ensure!(proof.write_intent_counts_for_test() == (intent_before.0 + 1, intent_before.1));
         ensure!(fact.commit.is_none() && !owner.durable());
         let settled = observe()?;
         ensure!(settled.fenced && settled.physical_write_reserved == 0);
