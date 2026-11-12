@@ -244,14 +244,13 @@ async fn real_choice_parent_and_child_durable_getters_keep_own_context_mode_and_
             }
         }
     }
-    if let Some(session) = returned.take() {
-        if let Err(error) = tokio::time::timeout(TIMEOUT, session.close())
+    if let Some(session) = returned.take()
+        && let Err(error) = tokio::time::timeout(TIMEOUT, session.close())
             .await
             .context("native session close deadline")
             .and_then(|result| result.map_err(anyhow::Error::from))
-        {
-            cleanup.push(error.to_string());
-        }
+    {
+        cleanup.push(error.to_string());
     }
     let choice_closed = choice.finish().await;
     let owners_closed = finish(&bound.fixture, generation, Ok(())).await;
@@ -261,14 +260,13 @@ async fn real_choice_parent_and_child_durable_getters_keep_own_context_mode_and_
     if let Err(error) = owners_closed {
         cleanup.push(error.to_string());
     }
-    if cleanup.is_empty() {
-        if let Err(error) = tokio::time::timeout(TIMEOUT, bound.fixture.db.clone().close())
+    if cleanup.is_empty()
+        && let Err(error) = tokio::time::timeout(TIMEOUT, bound.fixture.db.clone().close())
             .await
             .context("nested fixture pool close deadline")
             .and_then(|result| result.map_err(anyhow::Error::from))
-        {
-            cleanup.push(error.to_string());
-        }
+    {
+        cleanup.push(error.to_string());
     }
     ensure!(
         cleanup.is_empty(),
