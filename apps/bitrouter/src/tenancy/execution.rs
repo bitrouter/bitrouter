@@ -752,6 +752,10 @@ impl TenantExecution {
         {
             return Err(self.reject(ErrorCode::CapacityExceeded));
         }
+        // Test-only caller scheduling AFTER the original durable receipt and
+        // lifetime checks; no production ACK, actor, SQL or optional-write gate.
+        #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+        self.service.technical_io.after_receipt_ack(&self.id).await;
         Ok(())
     }
     pub(crate) fn record_native_source(

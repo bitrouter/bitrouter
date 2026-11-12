@@ -66,6 +66,28 @@ pub struct FirstTokenTiming {
     pub kind: FirstTokenKind,
 }
 
+// Same accepted-part arithmetic for the existing context and its optional
+// provider-instance capture. No additional parser/classifier or timer policy.
+pub(crate) fn observe_semantic(
+    started: Instant,
+    at: Instant,
+    kind: FirstTokenKind,
+    first_at: &mut Option<Instant>,
+    first: &mut Option<FirstTokenTiming>,
+    generation: &mut Option<u64>,
+) {
+    if let Some(previous) = *first_at {
+        *generation = Some(duration_millis(at.duration_since(previous)));
+    } else {
+        *first_at = Some(at);
+        *first = Some(FirstTokenTiming {
+            ttft_ms: duration_millis(at.duration_since(started)),
+            kind,
+        });
+        *generation = Some(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

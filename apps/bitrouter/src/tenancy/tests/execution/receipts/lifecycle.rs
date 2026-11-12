@@ -62,6 +62,23 @@ async fn unpolled_sse_body_does_not_own_deadline_or_capacity_and_retains_at_most
         .receipt(&Harness::client(false)?, &page.execution_ids[0])
         .await?;
     ensure!(receipt.attempts.len() == 1);
+    let technical = tokio::time::timeout(
+        TIMEOUT,
+        harness
+            .fixture
+            .service
+            .technical_io
+            .observed(&receipt.execution_id),
+    )
+    .await??;
+    technical.validate_against(&receipt)?;
+    ensure!(
+        technical
+            .operations
+            .iter()
+            .all(|operation| operation.partial)
+    );
+
     ensure!(matches!(
         receipt.outcome,
         Outcome::Cancelled | Outcome::Failed
@@ -114,6 +131,21 @@ async fn aborted_http_waiter_before_provider_headers_cancels_and_retains_unknown
         receipt.state == ReceiptState::Unknown
             && receipt.attempts.len() == 1
             && receipt.attempts[0].outcome == Outcome::Unknown
+    );
+    let technical = tokio::time::timeout(
+        TIMEOUT,
+        harness
+            .fixture
+            .service
+            .technical_io
+            .observed(&receipt.execution_id),
+    )
+    .await??;
+    technical.validate_against(&receipt)?;
+    ensure!(technical.operations.len() == 1 && technical.operations[0].partial);
+    ensure!(
+        technical.operations[0].first_semantic.is_none()
+            && technical.operations[0].generation_duration_ms.is_none()
     );
     gate.add_permits(1);
     harness.fixture.service.shutdown().await?;

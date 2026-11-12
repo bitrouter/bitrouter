@@ -18,6 +18,8 @@ pub(in crate::tenancy) enum Request {
     OneV2(ExecutionId),
     UsageEvidence(ExecutionId),
     UsageEvidenceV2(ExecutionId),
+    ProviderTechnical(ExecutionId),
+    ProviderTechnicalV2(ExecutionId),
     Page {
         correlation: CorrelationId,
         after: Option<ExecutionId>,
@@ -129,12 +131,30 @@ pub(in crate::tenancy) async fn body(
         Request::One(id)
         | Request::OneV2(id)
         | Request::UsageEvidence(id)
-        | Request::UsageEvidenceV2(id) => {
+        | Request::UsageEvidenceV2(id)
+        | Request::ProviderTechnical(id)
+        | Request::ProviderTechnicalV2(id) => {
             use super::store::format::{Format, Terminal};
             let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
                 .map_err(|_| storage_failure())?
                 .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+            if matches!(request, Request::ProviderTechnicalV2(_)) {
+                let facts = super::provider_technical::storage::read_v2(db, &terminal)
+                    .await
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+                return serde_json::to_vec(&facts)
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
+            }
+            if matches!(request, Request::ProviderTechnical(_)) {
+                // Optional corruption refuses only this getter. Do not call the
+                // original receipt storage-health failure callback for it.
+                let facts = super::provider_technical::storage::read(db, &terminal)
+                    .await
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+                return serde_json::to_vec(&facts)
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
+            }
             let expected = if matches!(request, Request::OneV2(_) | Request::UsageEvidenceV2(_)) {
                 Format::V2
             } else {

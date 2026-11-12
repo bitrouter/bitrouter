@@ -392,6 +392,7 @@ pub(super) fn admit_send(
                     counted.as_deref(),
                 )
                 .map_err(|code| execution.reject(code))?;
+            super::super::provider_technical::armed(ctx, &attempt_id);
             let adapter = adapter
                 .map(|stream| {
                     execution.handoff_private_adapter(

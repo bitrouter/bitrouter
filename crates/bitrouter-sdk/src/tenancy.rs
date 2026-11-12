@@ -10,6 +10,8 @@ mod eval;
 mod native_controls;
 mod ordered;
 mod profile_observation;
+mod provider_technical_facts;
+mod provider_technical_facts_v2;
 mod resources;
 mod transport;
 mod usage_evidence;

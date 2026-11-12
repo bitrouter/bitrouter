@@ -245,6 +245,7 @@ struct State {
 
 /// Contains no Service/transport handle and cannot cause provider work.
 pub(crate) struct Journal {
+    pub(crate) technical: Arc<super::provider_technical::Capture>,
     owner: Owner,
     ordered: Option<Box<[u16]>>,
     state: Mutex<State>,
@@ -325,6 +326,7 @@ impl Journal {
             owner,
             ordered: ordered.map(Into::into),
             changed: tokio::sync::Notify::new(),
+            technical: Arc::new(super::provider_technical::Capture::default()),
             state: Mutex::new(State {
                 slots: Slots {
                     inline: std::array::from_fn(|_| None),

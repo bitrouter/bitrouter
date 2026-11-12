@@ -15,6 +15,7 @@ pub(super) struct Opened {
     pub(super) shared: shared::Attempt,
     pub(super) scrubber: UpstreamErrorScrubber,
     pub(super) started: Instant,
+    technical: Option<super::super::provider_technical::Guard>,
 }
 
 impl HttpExecutor {
@@ -81,6 +82,8 @@ impl HttpExecutor {
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_target(target, ctx);
         let started = Instant::now();
+        let technical = (!input.stream())
+            .then(|| super::super::provider_technical::begin(ctx, target, started, false));
         let request = self
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
@@ -144,6 +147,7 @@ impl HttpExecutor {
             shared,
             scrubber,
             started,
+            technical,
         })
     }
 
@@ -162,6 +166,7 @@ impl HttpExecutor {
             mut shared,
             scrubber,
             started,
+            technical,
         } = self
             .open_native_generate_content(target, input, ctx)
             .await?;
@@ -200,6 +205,9 @@ impl HttpExecutor {
         receipt::complete(&mut tenant, true)?;
         shared.complete(true, result.usage()).await?;
         let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        if let Some(technical) = &technical {
+            technical.completed();
+        }
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),

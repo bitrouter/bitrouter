@@ -60,6 +60,9 @@ mod m20240101_000046_profiled_authority;
 pub(crate) mod m20240101_000047_shared_admission_health;
 pub(crate) mod m20240101_000048_native_generate_content;
 
+// Optional diagnostic schema is deliberately outside Migrator::migrations.
+pub(crate) mod provider_technical;
+
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 /// Read-only compatibility gate for the retired SQLite receipt reader.

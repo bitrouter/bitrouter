@@ -111,6 +111,8 @@ type CapacityBindTest =
 
 #[derive(Clone)]
 pub(crate) struct Service {
+    #[cfg(test)]
+    technical_io: Arc<actor::provider_technical::tests::State>,
     startup: Option<Arc<origin::StartupOwner>>,
     db: DatabaseConnection,
     authority: Arc<authority::live::Authority>,
@@ -466,7 +468,11 @@ impl Service {
         let http_registry =
             crate::continuation::ContinuationRegistry::for_tenant(http_continuation.clone())?;
         let obligation_due = Arc::new(std::sync::Mutex::new(None));
+        #[cfg(test)]
+        let technical_io = Arc::new(actor::provider_technical::tests::State::default());
         let worker = Worker {
+            #[cfg(test)]
+            technical_io: technical_io.clone(),
             obligation_due: obligation_due.clone(),
             startup: startup.clone(),
             db: db.clone(),
@@ -498,6 +504,8 @@ impl Service {
             .boxed()
             .shared();
         let mut service = Self {
+            #[cfg(test)]
+            technical_io,
             #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
             obligation_due,
             startup,

@@ -589,6 +589,7 @@ impl Worker {
         completions: &mut mpsc::Receiver<Job>,
         stop: tokio_util::sync::CancellationToken,
     ) {
+        let mut optional = super::provider_technical::Slot::default();
         let mut draining = false;
         let mut scheduler = Scheduler::default();
         let mut maintenance_after = Instant::now();
@@ -610,15 +611,18 @@ impl Worker {
                     None
                 }
             };
-            let job = match scheduler
-                .receive(
-                    [safety, completions, ordinary],
-                    (!draining).then_some(&stop),
-                    escalation,
-                    archive,
-                )
-                .await
-            {
+            let turn = tokio::select! {
+                biased;
+                turn = scheduler.receive([safety, completions, ordinary], (!draining).then_some(&stop), escalation, archive) => {
+                    optional.preempt();
+                    turn
+                },
+                result = optional.finished() => {
+                    if result.is_err() { tracing::warn!("optional driver join unconfirmed"); }
+                    continue;
+                },
+            };
+            let job = match turn {
                 Turn::Stop => {
                     ordinary.close();
                     safety.close();
@@ -910,6 +914,14 @@ impl Worker {
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
                         self.quarantine(ordinary, safety, completions).await;
+                    }
+                    if result.is_ok()
+                        && owner.durable()
+                        && self.proof.disposition() != Disposition::Ambiguous
+                    {
+                        if !draining {
+                            optional.offer(self, &owner);
+                        }
                     }
                     // The registry retains the immutable candidate and its reservation
                     // after a confirmed rollback; an ambiguous actor never releases either.
@@ -1378,6 +1390,7 @@ impl Worker {
                 }
             }
         }
+        optional.finish().await;
     }
 
     /// Bootstrap and serving consumers share the existing transaction supervision.

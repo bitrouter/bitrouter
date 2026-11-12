@@ -155,6 +155,14 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(super::ordered::evidence),
         )
         .route(
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v1",
+            get(super::receipts::provider_technical::http::read),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v2",
+            get(super::receipts::provider_technical::http::read_v2),
+        )
+        .route(
             "/control/v1/tenancy/usage-evidence/capabilities",
             get(super::receipts::usage_evidence::http::capabilities),
         )

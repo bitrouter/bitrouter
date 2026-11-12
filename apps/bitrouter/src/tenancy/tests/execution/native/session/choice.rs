@@ -186,6 +186,37 @@ async fn observed(
     tokio::time::timeout(TIMEOUT, bound.fixture.service.admission.wait_drained()).await?;
     let child_receipt = receipt(bound, child).await?;
     let parent_receipt = receipt(bound, parent).await?;
+    let parent_technical = tokio::time::timeout(
+        TIMEOUT,
+        bound
+            .fixture
+            .service
+            .technical_io
+            .observed(&parent_receipt.execution_id),
+    )
+    .await??;
+    let child_technical = tokio::time::timeout(
+        TIMEOUT,
+        bound
+            .fixture
+            .service
+            .technical_io
+            .observed(&child_receipt.execution_id),
+    )
+    .await??;
+    parent_technical.validate_against(&parent_receipt)?;
+    child_technical.validate_against(&child_receipt)?;
+    ensure!(parent_technical.execution_id != child_technical.execution_id);
+    ensure!(
+        parent_technical
+            .operations
+            .iter()
+            .flat_map(|operation| &operation.attempt_ids)
+            .all(|id| child_technical
+                .operations
+                .iter()
+                .all(|operation| !operation.attempt_ids.contains(id)))
+    );
     let parent_evidence = usage_evidence(bound, parent).await?;
     let child_evidence = usage_evidence(bound, child).await?;
     ensure!(
@@ -454,3 +485,5 @@ async fn owned_choice_capacity_one_fails_before_child_queue_or_provider() -> Res
     finish(&bound.fixture, generation, checked).await?;
     choice_closed
 }
+
+mod technical_scopes;

@@ -223,6 +223,20 @@ async fn model_auth_rejection_after_refresh_never_replays_refresh_or_model() -> 
         response.bytes().await?;
         let receipt = harness.receipt(&id).await?;
         ensure!(receipt.attempts.len() == 1 && receipt.outcome != Outcome::Completed);
+        let technical =
+            tokio::time::timeout(TIMEOUT, harness.fixture.service.technical_io.observed(&id))
+                .await??;
+        technical.validate_against(&receipt)?;
+        ensure!(
+            technical.operations.len() == 1
+                && technical.operations[0].attempt_ids.len() == 1
+                && technical.operations[0].partial
+        );
+        ensure!(
+            technical.operations[0].first_semantic.is_none()
+                && technical.operations[0].selected_attempt_id.is_none()
+        );
+
         ensure!(
             harness.provider.refreshes.load(Ordering::SeqCst) == 1
                 && harness.provider.models.load(Ordering::SeqCst) == 1

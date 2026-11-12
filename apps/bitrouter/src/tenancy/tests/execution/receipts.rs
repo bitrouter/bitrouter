@@ -44,6 +44,8 @@ mod lifecycle;
 mod lifetime;
 #[cfg(unix)]
 mod ordered;
+#[cfg(unix)]
+mod provider_technical;
 mod reads;
 mod soft_stop;
 mod terminal;

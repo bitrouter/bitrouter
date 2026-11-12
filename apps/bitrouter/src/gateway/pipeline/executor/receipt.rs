@@ -184,7 +184,7 @@ pub(super) fn batch(
     Ok(())
 }
 
-pub(super) fn successful(part: &StreamPart) -> bool {
+pub(in crate::gateway::pipeline) fn successful(part: &StreamPart) -> bool {
     match part {
         StreamPart::Finish {
             reason: bitrouter_ai::types::FinishReason::Error(_),

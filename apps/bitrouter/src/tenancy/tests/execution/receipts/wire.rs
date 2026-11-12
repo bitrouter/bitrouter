@@ -242,6 +242,21 @@ async fn json_and_sse_evidence_share_original_numbers_and_unresolved_stream_is_u
         let body = response.text().await?;
         let receipt = harness.receipt(&client, &id).await?;
         ensure!(receipt.attempts.len() == 1);
+        let technical =
+            tokio::time::timeout(TIMEOUT, harness.fixture.service.technical_io.observed(&id))
+                .await??;
+        technical.validate_against(&receipt)?;
+        ensure!(technical.operations.len() == 1 && technical.operations[0].partial == !terminal);
+        ensure!(
+            technical.operations[0]
+                .first_semantic
+                .as_ref()
+                .context("actual stream semantic")?
+                .kind
+                == bitrouter_ai::tenancy::provider_technical_facts::FirstSemanticKind::Text
+        );
+        ensure!(technical.operations[0].generation_duration_ms == Some(0));
+
         if terminal {
             ensure!(body.contains("[DONE]"));
             ensure!(

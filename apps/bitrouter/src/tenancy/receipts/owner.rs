@@ -682,6 +682,7 @@ impl Owner {
             .map_err(|_| anyhow::anyhow!("auxiliary producers remain live"))?;
         let auxiliary_unclean = auxiliary.unclean();
         let frozen = self.journal.settled().await?;
+        self.journal.technical.freeze();
         anyhow::ensure!(
             frozen.belongs_to_identity(&self.identity.installation, &self.identity.execution),
             "receipt owner mismatch"
@@ -813,6 +814,21 @@ impl Owner {
         *phase = Phase::Prepared(candidate.clone());
         Ok(candidate)
     }
+    pub(in crate::tenancy) fn take_provider_technical(
+        &self,
+    ) -> Option<(Arc<Terminal>, super::provider_technical::Pending)> {
+        let phase = self.phase.try_lock().ok()?;
+        let Phase::Durable(terminal) = &*phase else {
+            return None;
+        };
+        let terminal = terminal.clone();
+        drop(phase);
+        self.journal
+            .technical
+            .pending()
+            .map(|facts| (terminal, facts))
+    }
+
     pub(in crate::tenancy) fn committed(
         &self,
         candidate: Arc<Terminal>,

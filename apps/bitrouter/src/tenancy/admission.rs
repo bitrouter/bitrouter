@@ -148,6 +148,47 @@ impl Admission {
         })
     }
 
+    #[cfg(all(test, unix))]
+    pub(in crate::tenancy) fn optional_accounting_for_test(
+        &self,
+    ) -> Result<(u64, u64, bool), ErrorCode> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        Ok((
+            state.receipts.totals.technical_bytes,
+            state.receipts.physical_write_reserved(),
+            self.receipt_fenced
+                .load(std::sync::atomic::Ordering::Acquire)
+                || state.receipts.snapshot_for_test().2,
+        ))
+    }
+    pub(in crate::tenancy) fn reserve_optional_provider_write(
+        &self,
+        logical: u64,
+        physical: u64,
+    ) -> Result<(), ErrorCode> {
+        self.update(|state| {
+            if state.publication_pending.is_some() {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            state.receipts.reserve_optional_provider(logical, physical)
+        })
+    }
+    pub(in crate::tenancy) fn finish_optional_provider_write(
+        &self,
+        logical: u64,
+        physical: u64,
+        retain: bool,
+    ) -> Result<(), ErrorCode> {
+        self.update(|state| {
+            state
+                .receipts
+                .finish_optional_provider(logical, physical, retain)
+        })
+    }
+
     /// Release only after confirmed COMMIT or rollback; ambiguous owners retain it.
     pub(in crate::tenancy) fn finish_physical_write(&self, bytes: u64) -> Result<(), ErrorCode> {
         self.update(|state| state.receipts.finish_physical_write(bytes))

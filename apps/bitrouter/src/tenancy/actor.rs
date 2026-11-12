@@ -19,6 +19,7 @@ mod learner;
 mod learning;
 mod learning_startup;
 mod oauth;
+pub(in crate::tenancy) mod provider_technical;
 mod receipts;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod session;
@@ -177,6 +178,8 @@ pub(super) struct Initialized {
 }
 
 pub(super) struct Worker {
+    #[cfg(test)]
+    pub technical_io: Arc<provider_technical::tests::State>,
     pub startup: Option<Arc<super::origin::StartupOwner>>,
     pub db: DatabaseConnection,
     pub authority: Arc<super::authority::live::Authority>,

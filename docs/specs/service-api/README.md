@@ -1548,6 +1548,71 @@ receipts and evidence; child quantities MUST NOT be folded into parent frames.
 The schema rejects self-links, duplicates and a parent also listed as a child.
 Consumers requiring linkage MUST check discovery before relying on it.
 
+### Optional provider technical facts
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v1`
+uses the existing installation binding, current tenant-wide `ReceiptRead` or
+separately issued audit authority, read semaphore, management deadline and
+`Cache-Control: no-store`. The body is the independent
+[version-one object](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
+or JSON `null`. An unknown original execution is still NotFound. A retained
+receipt without retained measurements (including historical receipts and lost
+noncritical writes) returns null when the optional store is available. An absent,
+refused or corrupt optional schema instead makes this getter unavailable without
+fencing the original receipt API. Neither result implies zero, no provider work,
+a billing disposition or permission to repeat inference. Unsupported old Core
+routes remain existing HTTP/service errors; clients do not silently downgrade.
+The original V1/V2 receipt, usage, capability JSON and commitment formats do not
+change. SDK callers can validate the object against the original V1/V2 receipt;
+public DTOs do not expose/recompute the Core-private terminal digest.
+
+Schema one binds the original installation, tenant, principal, execution,
+execution revision and receipt format. Every operation refers to a unique ordered
+subsequence of actual receipt attempts, including the actual sends used by
+authentication recovery. Never group by provider/model/account name or sum
+fallback/child clocks. `selected_attempt_id` records the existing execution
+selection, not successful delivery or financial qualification. The whole object
+is at most64KiB; actual attempts bound operations (V1<=8, V2<=64), and the validator
+checks total cardinality/order/selection across operations in addition to schema.
+
+The clock is the original Core-owned provider operation's raw monotonic interval,
+including authentication recovery and consumption, not an RPC or pure network
+span. JSON upstream uses millisecond truncation (a real positive submillisecond
+sample can be0). Stream upstream/TTFT/generation keep the original helper:
+zero stays0 and a positive submillisecond interval becomes1. `streamed` identifies
+that original timing path: internal SSE collection for a nonstreaming result
+retains JSON timing semantics and does not fabricate TTFT. First semantic
+means accepted nonempty reasoning/text/tool name or arguments before output
+hooks/rendering; tool ID-only, usage, metadata and terminal markers do not count.
+No semantic sample means null first/generation; one means generation0. Separate
+rounding does not imply an additive TTFT+generation inequality. Partial prefix
+observations remain partial independently of receipt/usage completeness.
+Core's paired private bridge does not measure the Cloud-owned Google sender:
+that route requires its own genuine provider facts and is not filled with bridge
+latency. No financial callback/envelope is extended to carry these measurements.
+
+Measurements are a noncritical optional child object. After original durable
+notification, the existing control loop may own one disposable technical task;
+there is no queue or resident worker. Original work/stop preempts its dedicated,
+same-acquisition SQLite connection, never waits for technical SQL in a main-job
+branch. No provider retry, seed marker, outbox or required receipt participant
+repairs missing data. Existing deadlines and high-water/physical budgets apply.
+An interrupted writer must positively close before exact-key readback; absence
+can refund bytes, committed bytes remain charged, and unknown results conserve
+the one optional charge and disable further technical writes. They do not create
+a financial pending state, storage-health fence or original send permit. Unknown
+actual driver closure cannot be reported as successful resource shutdown.
+
+Required business migrations are unchanged. Optional objects and their own
+schema stamp install atomically outside the required migration ledger. Unknown
+or conflicting objects are refused, never adopted, overwritten or marked as a
+successful required migration. Optional installation refusal does not deny
+normal business/receipt startup. Once retained, facts read after restart/archive
+by the original key/digest; conflicting bytes cannot overwrite them. Canonical
+receipt/archive encoding remains unchanged. Independently counted child bytes
+stay inline after parent archival; deleting their exact original parent cascades
+to the child. Optional payload failure refuses only this getter.
+
 ### Resource and evidence migration and rollback
 
 Upgrading adds managed-head/revocation metadata and receipt-bound evidence;
@@ -2178,3 +2243,73 @@ container with the actual wire status and a `body_error`. Calling a shared-only
 submission method against a local server may execute inference before missing
 metadata is detected; the SDK never probes, retries or falls back automatically.
 See the [SDK usage and recovery contract](../../../crates/bitrouter-sdk/README.md).
+
+
+### Core-owned technical scopes (payload 2)
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v2`
+uses the same `ReceiptRead` authorization, installation/tenant namespace,
+original receipt lookup, deadline and no-store response as the version-one
+technical getter. The SDK entry is
+`TenancyClient::provider_technical_facts_v2`. Its independent closed object is
+`ProviderTechnicalFactsV2`, with schema
+[`provider_technical_facts_v2/schema.json`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v2/schema.json).
+One encoded 64KiB bound covers the operations, pipeline and hop observations
+together; receipt V1/V2 and their usage, estimator provenance, digest and native
+financial formats are unchanged.
+
+The original `operations` clocks retain their version-one meanings. The new
+nullable `pipeline_scope` records the actual owning `PipelineContext` ID,
+finalized request duration and actual settlement mode. Request duration uses
+the existing request helper (positive sub-millisecond rounds to one); provider
+JSON operation timing retains its original millisecond floor. Context IDs are
+not inferred from correlation IDs, external replay metadata or parent IDs.
+A JSON context has no stream object. A streamed context may have no stream
+measurement; null does not mean false or zero. Its stream, when observed,
+uses the first opened upstream clock through the original owning processor
+finalization, and that processor's accepted pre-hook semantic deltas. A normal
+single SSE is the singleton case. Core's configured internal server-tool loop
+can use the same owning processor across turns; the source arm is the first
+opened turn's closing auth arm, and the terminal arm is the final successful
+selected turn's closing arm. They can differ. Both must belong to the original
+receipt in source-to-terminal order. Neither ID means the last failed arm in
+the receipt. Missing binding or incomplete termination remains partial.
+
+Hop observations separately identify the actual send-order arm group, callback
+boundary profile and completion/error/drop. JSON outer callbacks, failed stream
+open callbacks and the original opened-stream notify scalar are distinct
+profiles. The last reuses the scalar passed to existing stream observers; it
+is not the merged processor clock or a physical-operation substitute. Wrapper
+EOF can report `completed` while `partial` remains true if no successful
+provider terminal was observed. `unobserved` means the optional snapshot
+preceded the hop end and therefore has null duration and partial=true. None
+of these profiles implies financial success or eligibility for a legacy health
+percentile. An unarmed hop supplies no timing row.
+
+Pipeline scope is finalized before settlement recorders. Receipt ACK never
+waits for it: the single pre-existing disposable optional task can await a
+racing local finalization only within its original five-second/owner cleanup
+deadline, with ordinary main-work preemption. There is no second worker, queue,
+retry or parent sum. If it loses that race, the scope remains unavailable;
+a late finalizer cannot rewrite the retained snapshot. The exact retained
+version and bytes govern optional write readback/accounting. Payloads one and
+two share the existing optional child-table key/FK, physical schema/stamp and
+original GC/capacity owner, with separate payload digest domains. No table
+migration, backfill or second row is introduced. Optional schema installation
+or read failure cannot promote this object into mandatory startup authority.
+
+An old payload-one row is still read exactly through the V1 getter and returns
+null through V2. A new payload-two row provides only its unchanged operation
+view through V1 (null if none); the retained bytes are never rewritten. An old
+Core may refuse the unknown optional row or V2 route; the new SDK does not
+retry, replay, fall back to another source or invent absent facts. Corrupt
+optional data refuses the technical read without corrupting original receipt
+reads. Root/child association must still be checked against the original
+retained usage-evidence parent/child edge and each execution's own receipt;
+timing never creates or repairs that edge.
+
+Stock tenancy profiles do not install Core's internal server-tool loop. This
+contract describes actual Core-owned contexts only. A logical loop assembled
+across executions in Cloud or another process has no Core-owned merged timing
+from this endpoint. There is no cross-process measurement session, observer RPC,
+root clock, or child-duration aggregation.

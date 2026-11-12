@@ -490,14 +490,21 @@ struct ObservedUpstreamStream {
     target: RoutingTarget,
     provider_started_at: Instant,
     terminal: bool,
+    technical_hop: Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>,
+    technical: Option<Arc<crate::tenancy::receipts::provider_technical::Operation>>,
 }
 
 impl ObservedUpstreamStream {
-    fn notify(&mut self, outcome: StreamHopOutcome<'_>) {
+    fn notify(&mut self, outcome: StreamHopOutcome<'_>, complete: bool) {
         if self.terminal {
             return;
         }
         self.terminal = true;
+        if !matches!(outcome, StreamHopOutcome::Completed)
+            && let Some(operation) = &self.technical
+        {
+            operation.source_end(false);
+        }
         if let Some(hop) = &self.operational {
             match outcome {
                 StreamHopOutcome::Failed(error) => {
@@ -517,6 +524,20 @@ impl ObservedUpstreamStream {
         }
         let duration_ms =
             crate::gateway::pipeline::timing::elapsed_millis(self.provider_started_at);
+        if let Some(hop) = &self.technical_hop {
+            use bitrouter_ai::tenancy::provider_technical_facts_v2::{HopEnd, HopProfile};
+            let end = match outcome {
+                StreamHopOutcome::Completed => HopEnd::Completed,
+                StreamHopOutcome::Failed(_) => HopEnd::Failed,
+                StreamHopOutcome::Dropped => HopEnd::Dropped,
+            };
+            hop.finish(
+                HopProfile::CoreStreamHopNotifyV1,
+                end,
+                duration_ms,
+                !complete,
+            );
+        }
         for hook in &self.hooks {
             let callback = std::panic::AssertUnwindSafe(|| {
                 hook.on_stream_hop_end(&self.request_id, &self.target, outcome, duration_ms)
@@ -537,14 +558,36 @@ impl Stream for ObservedUpstreamStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let item = self.inner.as_mut().poll_next(cx);
         match &item {
-            std::task::Poll::Ready(None) => self.notify(StreamHopOutcome::Completed),
+            std::task::Poll::Ready(None) => {
+                if !self.terminal
+                    && let Some(operation) = &self.technical
+                {
+                    operation.source_end(false);
+                }
+                self.notify(StreamHopOutcome::Completed, false);
+            }
             std::task::Poll::Ready(Some(Err(error))) => {
-                self.notify(StreamHopOutcome::Failed(error));
+                self.notify(StreamHopOutcome::Failed(error), false);
             }
-            std::task::Poll::Ready(Some(Ok(part))) if part.is_terminal() => {
-                self.notify(StreamHopOutcome::Completed);
+            std::task::Poll::Ready(Some(Ok(part))) => {
+                // Accepted provider IR before server-tool transforms or hooks.
+                // Bind its semantic clock to this exact original stream/arm set.
+                if let Some(operation) = &self.technical
+                    && let Some(kind) = super::timing::FirstTokenKind::from_part(part)
+                {
+                    operation.semantic(Instant::now(), kind);
+                }
+                if part.is_terminal() {
+                    if let Some(operation) = &self.technical {
+                        operation.source_end(super::executor::receipt::successful(part));
+                    }
+                    self.notify(
+                        StreamHopOutcome::Completed,
+                        super::executor::receipt::successful(part),
+                    );
+                }
             }
-            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+            std::task::Poll::Pending => {}
         }
         item
     }
@@ -552,7 +595,7 @@ impl Stream for ObservedUpstreamStream {
 
 impl Drop for ObservedUpstreamStream {
     fn drop(&mut self) {
-        self.notify(StreamHopOutcome::Dropped);
+        self.notify(StreamHopOutcome::Dropped, false);
     }
 }
 
@@ -2894,6 +2937,7 @@ impl Pipeline {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, false);
             self.observe_hop_start(ctx, target).await;
             let outcome = match reached {
                 Err(error) => Err(error),
@@ -2958,6 +3002,7 @@ impl Pipeline {
                         .await;
                 }
             }
+            technical_hop.finish(outcome.is_ok());
             match outcome {
                 Ok(result) => {
                     for hook in self
@@ -3056,12 +3101,14 @@ impl Pipeline {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, false);
             self.observe_hop_start(ctx, target).await;
             if let Some((control, _)) = attempt_control
                 && let Err(error) = control.before_attempt(ctx.request_id(), index).await
             {
                 self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
                     .await;
+                technical_hop.finish(false);
                 return Err(error);
             }
             let private_context =
@@ -3246,6 +3293,7 @@ impl Pipeline {
                         .await;
                 }
             }
+            technical_hop.finish(outcome.is_ok());
             if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
                 && let Some(failure) = execution.failure()
             {
@@ -3362,6 +3410,9 @@ impl Pipeline {
             }
             self.wait_before_fallback(errors.len()).await;
             let provider_started_at = Instant::now();
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, true);
+            let technical =
+                super::provider_technical::begin(ctx, target, provider_started_at, true);
             let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
@@ -3397,6 +3448,7 @@ impl Pipeline {
                 // more fallback.
                 Ok(stream) => {
                     ctx.set_successful_target(target.clone());
+                    technical.detach();
                     let stream = Box::pin(ObservedUpstreamStream {
                         execution: ctx
                             .extension::<crate::tenancy::execution::TenantExecution>()
@@ -3410,6 +3462,8 @@ impl Pipeline {
                         target: target.clone(),
                         provider_started_at,
                         terminal: false,
+                        technical_hop: technical_hop.opened(),
+                        technical: super::provider_technical::current(ctx),
                     });
                     return Ok(StreamingExecution {
                         stream,
@@ -3417,19 +3471,22 @@ impl Pipeline {
                         provider_started_at,
                     });
                 }
-                Err(e) => match self.classify_failure(ctx, &e, target).await {
-                    FallbackDecision::TryNext => {
-                        tracing::warn!(
-                            provider = %target.provider_name,
-                            model = %target.service_id,
-                            error = %e,
-                            "upstream streaming route candidate failed"
-                        );
-                        errors.push(e);
-                        continue;
+                Err(e) => {
+                    technical_hop.finish(false);
+                    match self.classify_failure(ctx, &e, target).await {
+                        FallbackDecision::TryNext => {
+                            tracing::warn!(
+                                provider = %target.provider_name,
+                                model = %target.service_id,
+                                error = %e,
+                                "upstream streaming route candidate failed"
+                            );
+                            errors.push(e);
+                            continue;
+                        }
+                        FallbackDecision::Fail(e) => return Err(e),
                     }
-                    FallbackDecision::Fail(e) => return Err(e),
-                },
+                }
             }
         }
         if errors.is_empty() && !excluded.issues.is_empty() {
@@ -3625,6 +3682,7 @@ impl Pipeline {
             ExecutionCustody::from_context(ctx).record_pipeline_outcome(false);
         }
         ctx.finalize_request_duration();
+        ctx.finalize_technical_scope(streamed, error.is_some());
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
         if let Some(BitrouterError::UpstreamInvalidResponse {

@@ -36,7 +36,7 @@ use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 
 mod generate_content;
 pub(crate) mod input_count;
-mod receipt;
+pub(super) mod receipt;
 mod response_body;
 mod shared;
 mod stream_bridge;
@@ -1582,6 +1582,7 @@ impl HttpExecutor {
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_target(target, ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut refreshed = false;
         loop {
             let mut body = client.render_decision_request(&target.model_target(), request)?;
@@ -1669,6 +1670,7 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
             if status.is_success() {
+                technical.completed();
                 return Ok((
                     text,
                     scrubber,
@@ -1708,6 +1710,7 @@ impl HttpExecutor {
     ) -> Result<ExecutionResult> {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let capture = Arc::new(BridgeCapture::default());
         let collected = crate::gateway::model::stream::collect::collect_generate(
             self.execute_http_stream(target, prompt, ctx, Some(capture.clone()))
@@ -1716,6 +1719,7 @@ impl HttpExecutor {
         .await?;
         let result = capture.complete(self, target, prompt, ctx, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
+        technical.completed();
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -2053,6 +2057,7 @@ impl Executor for HttpExecutor {
 
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut attempted_auth_refresh = false;
         let requested_effort =
             serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
@@ -2323,6 +2328,7 @@ impl Executor for HttpExecutor {
         }
 
         drop(tenant_attempt);
+        technical.completed();
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
