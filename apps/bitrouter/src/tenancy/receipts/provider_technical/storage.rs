@@ -4,6 +4,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     provider_technical_facts::{MAX_BYTES, ProviderTechnicalFactsV1},
     provider_technical_facts_v2::ProviderTechnicalFactsV2,
+    provider_technical_facts_v3::ProviderTechnicalFactsV3,
     validation::Validate,
 };
 use sea_orm::{
@@ -12,6 +13,7 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 const TABLE: &str = "tenancy_provider_technical_facts";
+mod v3;
 
 pub(in crate::tenancy) struct Prepared {
     pub version: i32,
@@ -19,6 +21,28 @@ pub(in crate::tenancy) struct Prepared {
     pub digest: String,
 }
 impl Prepared {
+    /// Select one immutable payload before any SQL/reservation. Observer-only
+    /// refusal/size loss retains the valid scope; no second writer or retry.
+    pub(in crate::tenancy) fn capture(facts: &ProviderTechnicalFactsV3) -> Result<Self> {
+        let fallback = Self::new_v2(&facts.scope)?;
+        if facts.validate().is_err() {
+            return Ok(fallback);
+        }
+        let Ok(retained) = v3::Retained::from_facts(facts) else {
+            return Ok(fallback);
+        };
+        let Ok(json) = serde_json::to_string(&retained) else {
+            return Ok(fallback);
+        };
+        if json.len() > MAX_BYTES {
+            return Ok(fallback);
+        }
+        Ok(Self {
+            version: 3,
+            digest: digest(3, &json)?,
+            json,
+        })
+    }
     #[cfg(test)]
     pub(in crate::tenancy) fn new(facts: &ProviderTechnicalFactsV1) -> Result<Self> {
         facts.validate()?;
@@ -47,6 +71,7 @@ fn digest(version: i32, json: &str) -> Result<String> {
     match version {
         1 => hash.update(b"bitrouter.provider-technical-facts.v1"),
         2 => hash.update(b"bitrouter.provider-technical-facts.v2"),
+        3 => hash.update(b"bitrouter.provider-technical-facts.v3"),
         _ => anyhow::bail!("unknown optional technical payload"),
     }
     hash.update(u64::try_from(json.len()).unwrap_or(u64::MAX).to_be_bytes());
@@ -73,6 +98,7 @@ fn octets(backend: DatabaseBackend, name: &str) -> String {
 enum Payload {
     V1(ProviderTechnicalFactsV1),
     V2(ProviderTechnicalFactsV2),
+    V3(v3::Retained),
 }
 struct Stored {
     prepared: Prepared,
@@ -80,7 +106,9 @@ struct Stored {
 }
 
 async fn read_stored(db: &impl ConnectionTrait, terminal: &Terminal) -> Result<Option<Stored>> {
-    crate::db::migration::provider_technical::validate(db).await?;
+    if !crate::db::migration::provider_technical::available(db).await? {
+        return Ok(None);
+    }
     let backend = db.get_database_backend();
     let mut query = scope(terminal);
     // Actual lengths, not forged byte_count, guard every string BEFORE transfer.
@@ -137,6 +165,13 @@ async fn read_stored(db: &impl ConnectionTrait, terminal: &Terminal) -> Result<O
             }
             Payload::V2(value)
         }
+        3 => {
+            let retained: v3::Retained = serde_json::from_str(&json)?;
+            // Exact closed outer envelope + original scope/receipt always apply.
+            // Observer-only semantics are decoded only by the V3 getter.
+            retained.validate_scope(terminal)?;
+            Payload::V3(retained)
+        }
         _ => anyhow::bail!("unsupported optional technical payload"),
     };
     Ok(Some(Stored {
@@ -161,6 +196,7 @@ pub(in crate::tenancy) async fn read(
         {
             Some(Payload::V1(value)) => Some(value),
             Some(Payload::V2(value)) => value.operation_view(),
+            Some(Payload::V3(value)) => value.scope.operation_view(),
             None => None,
         },
     )
@@ -177,9 +213,24 @@ pub(in crate::tenancy) async fn read_v2(
             .map(|stored| stored.payload)
         {
             Some(Payload::V2(value)) => Some(value),
+            Some(Payload::V3(value)) => Some(value.scope),
             Some(Payload::V1(_)) | None => None,
         },
     )
+}
+
+/// Old payload1/2 has no observer facts. No history repair or version relabel.
+pub(in crate::tenancy) async fn read_v3(
+    db: &impl ConnectionTrait,
+    terminal: &Terminal,
+) -> Result<Option<ProviderTechnicalFactsV3>> {
+    match read_stored(db, terminal)
+        .await?
+        .map(|stored| stored.payload)
+    {
+        Some(Payload::V3(value)) => Ok(Some(value.into_facts(terminal)?)),
+        Some(Payload::V1(_) | Payload::V2(_)) | None => Ok(None),
+    }
 }
 
 /// Exact validated retained bytes for the original close/readback accounting.

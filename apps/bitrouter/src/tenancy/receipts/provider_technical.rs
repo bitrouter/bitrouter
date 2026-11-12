@@ -251,12 +251,12 @@ impl Pending {
     ) -> Option<ProviderTechnicalFactsV1> {
         self.facts(terminal, None, Vec::new())?.operation_view()
     }
-    pub(in crate::tenancy) async fn finish(
+    pub(in crate::tenancy) async fn finish_v3(
         self,
         terminal: &super::store::format::Terminal,
         deadline: tokio::time::Instant,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2> {
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v3::ProviderTechnicalFactsV3> {
         tokio::select! {biased;
             ()=cancel.cancelled()=>return None,
             _=tokio::time::sleep_until(deadline)=>{},
@@ -265,8 +265,28 @@ impl Pending {
         if cancel.is_cancelled() {
             return None;
         }
-        let (scope, hops) = self.capture.scope_snapshot()?;
-        self.facts(terminal, scope, hops)
+        let snapshot = self.capture.scope_snapshot()?;
+        let scope = self.facts(terminal, snapshot.scope, snapshot.hops)?;
+        // Observer validation/size failure is isolated by Prepared::capture;
+        // the already-valid original scope remains eligible for its one write.
+        Some(
+            bitrouter_ai::tenancy::provider_technical_facts_v3::ProviderTechnicalFactsV3 {
+                schema_version: 3,
+                scope,
+                observer_hops: snapshot.observers,
+            },
+        )
+    }
+    #[cfg(test)]
+    pub(in crate::tenancy) async fn finish(
+        self,
+        terminal: &super::store::format::Terminal,
+        deadline: tokio::time::Instant,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2> {
+        self.finish_v3(terminal, deadline, cancel)
+            .await
+            .map(|v| v.scope)
     }
     fn facts(
         &self,

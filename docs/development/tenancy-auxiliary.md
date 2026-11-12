@@ -67,6 +67,24 @@ generation-only stream fields while the proof still binds the complete
 authenticated generation request. Current authority and the original deadline
 remain necessary after every wait.
 
+## SQLite transaction ownership
+
+Mutating authority/receipt transactions acquire SQLite write intent before their
+first application read, using a zero-row update of the required ordinary
+`main.tenancy_installation` table on the same owned transaction. Direct EvalStore
+writers use their own required `main.eval_subjects` table, including standalone
+Eval stores. The guard changes no business rows and adds no marker or migration.
+Pure reads stay deferred; other database backends keep their existing isolation
+choices.
+
+This prevents a separate optional writer from committing between a mutation's
+read snapshot and its write upgrade. It does not remove ordinary SQLite writer
+contention. BEGIN, intent acquisition, body and cleanup share the existing owner
+and deadlines. An intent failure after BEGIN retains the real transaction through
+acknowledged rollback or the existing unknown-outcome custody; it is not a
+pre-BEGIN acquisition failure. No optional-task join, pool exclusion guard,
+provider/transaction retry, new queue or renewed timeout participates.
+
 ## Receipts and cleanup
 
 Refresh and counting facts occupy mutually exclusive, bounded auxiliary state in

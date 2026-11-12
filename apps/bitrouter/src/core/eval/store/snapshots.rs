@@ -186,7 +186,7 @@ impl EvalStore {
     ) -> Result<EvalSnapshot> {
         self.verify_manifest(snapshot, owner)?;
         let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             // Validate the immutable closure in the stable transaction. Never compare
             // against today's admissions: frozen evidence survives later disputes.

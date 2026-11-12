@@ -754,7 +754,7 @@ impl TenantExecution {
         }
         // Test-only caller scheduling AFTER the original durable receipt and
         // lifetime checks; no production ACK, actor, SQL or optional-write gate.
-        #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+        #[cfg(all(test, unix))]
         self.service.technical_io.after_receipt_ack(&self.id).await;
         Ok(())
     }

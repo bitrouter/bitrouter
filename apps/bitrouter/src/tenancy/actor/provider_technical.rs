@@ -160,7 +160,7 @@ async fn write(
 ) -> Report {
     // Scope wait, connection and INSERT all share ONE existing optional bound.
     let deadline = cleanup.min(Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT);
-    let Some(facts) = facts.finish(&terminal, deadline, &cancel).await else {
+    let Some(facts) = facts.finish_v3(&terminal, deadline, &cancel).await else {
         return Report {
             closed: true,
             disable: false,
@@ -172,7 +172,7 @@ async fn write(
             disable: false,
         };
     }
-    let Ok(prepared) = storage::Prepared::new_v2(&facts) else {
+    let Ok(prepared) = storage::Prepared::capture(&facts) else {
         return Report {
             closed: true,
             disable: false,

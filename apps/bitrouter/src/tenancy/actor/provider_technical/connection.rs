@@ -66,6 +66,9 @@ impl Connection {
         state: &std::sync::Arc<super::tests::State>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<()> {
+        state
+            .rotation_commit_gate(&mut *self.db.lock().await, cancel)
+            .await?;
         state.driver_gate(&mut *self.db.lock().await, cancel).await
     }
 }

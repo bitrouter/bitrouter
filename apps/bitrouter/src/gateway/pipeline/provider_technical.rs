@@ -1,7 +1,11 @@
-//! Direct original-clock/actual-arm wiring, independent of ObserveHooks/OTel.
-use super::{context::PipelineContext, types::RoutingTarget};
+//! Direct original operation clocks and separately profiled observer callbacks.
+//! Original operation/notify semantics are not replaced by the new observer.
+use super::{
+    context::{PipelineContext, StreamContext},
+    types::RoutingTarget,
+};
 use crate::tenancy::receipts::provider_technical::Operation;
-use bitrouter_ai::tenancy::identity::AttemptId;
+use bitrouter_ai::{tenancy::identity::AttemptId, types::StreamPart};
 use std::{sync::Arc, time::Instant};
 
 #[derive(Default)]
@@ -10,6 +14,88 @@ pub(super) struct CurrentState {
     hop: Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>,
 }
 pub(super) type Current = Arc<std::sync::Mutex<CurrentState>>;
+/// Fixed first observer in the original callback dispatcher. Only a genuine
+/// attached capture can receive data; anonymous/foreign contexts supply none.
+pub(super) struct HopObserver;
+/// A fork owns its callback pairing even though original operation tracking
+/// shares Current. Overlapping calls on one context lose only observer data.
+#[derive(Default)]
+pub(super) struct ObserverSlot {
+    hop: std::sync::Mutex<Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>>,
+    lost: std::sync::atomic::AtomicBool,
+}
+impl ObserverSlot {
+    fn bind(&self, new: Option<&Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>) {
+        let Ok(mut slot) = self.hop.try_lock() else {
+            self.lost.store(true, std::sync::atomic::Ordering::Release);
+            if let Some(hop) = new {
+                hop.lose_observer();
+            }
+            return;
+        };
+        if let Some(old) = slot.as_ref()
+            && old.observer_pending()
+        {
+            self.lost.store(true, std::sync::atomic::Ordering::Release);
+            old.lose_observer();
+            if let Some(hop) = new {
+                hop.lose_observer();
+            }
+        }
+        *slot = new.cloned();
+    }
+    fn get(
+        &self,
+        owner: &Arc<crate::tenancy::receipts::provider_technical::Capture>,
+    ) -> Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>> {
+        if self.lost.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+        self.hop
+            .try_lock()
+            .ok()?
+            .as_ref()
+            .filter(|hop| hop.belongs_to(owner))
+            .cloned()
+    }
+}
+
+fn observer_hop(
+    ctx: &PipelineContext,
+) -> Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>> {
+    let owner = capture(ctx)?;
+    if !owner.healthy() {
+        return None;
+    }
+    // Observer-only contention loses its sample, never the original scope.
+    ctx.observer_hop.get(&owner)
+}
+#[async_trait::async_trait]
+impl super::hooks::ObserveHook for HopObserver {
+    async fn after_phase(&self, _: super::hooks::Phase, _: &PipelineContext) {}
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &super::hooks::RequestOutcome) {}
+    async fn on_hop_start(&self, ctx: &PipelineContext, _: &RoutingTarget) {
+        if let Some(hop) = observer_hop(ctx) {
+            hop.observer_start();
+        }
+    }
+    async fn on_hop_end(
+        &self,
+        ctx: &PipelineContext,
+        _: &RoutingTarget,
+        outcome: super::hooks::HopOutcome<'_>,
+    ) {
+        use bitrouter_ai::tenancy::provider_technical_facts_v2::HopEnd;
+        if let Some(hop) = observer_hop(ctx) {
+            hop.observer_end(match outcome {
+                super::hooks::HopOutcome::Generated(_) => Some(HopEnd::Completed),
+                super::hooks::HopOutcome::Failed(_) => Some(HopEnd::Failed),
+                super::hooks::HopOutcome::StreamStarted => None,
+            });
+        }
+    }
+}
 fn capture(
     ctx: &PipelineContext,
 ) -> Option<Arc<crate::tenancy::receipts::provider_technical::Capture>> {
@@ -80,6 +166,7 @@ pub(super) fn begin_hop(ctx: &PipelineContext, streamed: bool) -> HopGuard {
     let hop = owner
         .as_ref()
         .and_then(|capture| capture.begin_hop(profile));
+    ctx.observer_hop.bind(hop.as_ref());
     match ctx.provider_technical.try_lock() {
         Ok(mut current) => {
             current.hop = hop.clone();
@@ -263,3 +350,6 @@ pub(super) fn finish_selected(ctx: &PipelineContext) {
         capture.finish_selected();
     }
 }
+
+#[cfg(test)]
+mod observer_tests;

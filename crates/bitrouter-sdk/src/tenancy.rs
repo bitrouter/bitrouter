@@ -12,6 +12,7 @@ mod ordered;
 mod profile_observation;
 mod provider_technical_facts;
 mod provider_technical_facts_v2;
+mod provider_technical_facts_v3;
 mod resources;
 mod transport;
 mod usage_evidence;

@@ -135,6 +135,80 @@ fn operation_ownership_has_no_arc_cycle_and_busy_capture_never_changes_receipt()
 }
 
 #[tokio::test]
+async fn absent_optional_schema_is_null_but_partial_shadowed_and_forged_layouts_refuse()
+-> Result<()> {
+    use sea_orm::{ConnectionTrait, TransactionTrait};
+    let home = tempfile::tempdir()?;
+    let db = crate::db::connect(&format!(
+        "sqlite://{}?mode=rwc",
+        home.path().join("optional.sqlite").display()
+    ))
+    .await?;
+    let checked: Result<()> = async {
+        crate::db::run_migrations(&db).await?;
+        let original = terminal()?;
+        let tx = db.begin().await?;
+        ensure!(super::super::store::insert_terminal(&tx, &original).await?);
+        tx.commit().await?;
+        ensure!(!crate::db::migration::provider_technical::available(&db).await?);
+        ensure!(storage::read(&db, &original).await?.is_none());
+
+        let tx = db.begin().await?;
+        tx.execute_unprepared("CREATE TEMP VIEW tenancy_provider_technical_facts AS SELECT 1")
+            .await?;
+        ensure!(
+            crate::db::migration::provider_technical::available(&tx)
+                .await
+                .is_err()
+        );
+        ensure!(storage::read(&tx, &original).await.is_err());
+        tx.rollback().await?;
+
+        db.execute_unprepared("CREATE TABLE tenancy_provider_technical_facts(foreign_data TEXT)")
+            .await?;
+        ensure!(
+            crate::db::migration::provider_technical::available(&db)
+                .await
+                .is_err()
+        );
+        ensure!(storage::read(&db, &original).await.is_err());
+        ensure!(
+            crate::db::migration::provider_technical::install(&db)
+                .await
+                .is_err()
+        );
+        db.execute_unprepared("DROP TABLE tenancy_provider_technical_facts")
+            .await?;
+        crate::db::migration::provider_technical::install(&db).await?;
+        ensure!(crate::db::migration::provider_technical::available(&db).await?);
+        ensure!(storage::read(&db, &original).await?.is_none());
+        db.execute_unprepared("UPDATE tenancy_provider_technical_schema SET version=2")
+            .await?;
+        ensure!(
+            crate::db::migration::provider_technical::available(&db)
+                .await
+                .is_err()
+        );
+        ensure!(storage::read(&db, &original).await.is_err());
+        let retained = super::super::store::lookup_terminal(
+            &db,
+            &"installation".try_into()?,
+            &"tenant".try_into()?,
+            &"execution".try_into()?,
+        )
+        .await?
+        .context("original receipt remains readable")?;
+        ensure!(retained.json() == original.json() && retained.digest() == original.digest());
+        Ok(())
+    }
+    .await;
+    let closed = db.close().await;
+    checked?;
+    closed?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn optional_bytes_restart_idempotence_corruption_archive_and_exact_parent_cleanup()
 -> Result<()> {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};

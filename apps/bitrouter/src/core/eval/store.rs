@@ -233,7 +233,7 @@ impl EvalStore {
     pub async fn insert_subject(&self, subject: &EvalSubject) -> Result<SubjectInsertOutcome> {
         let owner = self.owner("local")?;
         let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             let outcome = self
                 .insert_subject_in(&tx, subject, &owner, &mut Budget::new(self))
@@ -271,7 +271,7 @@ impl EvalStore {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
         let write = crate::storage::write::Write::start(&self.storage_budget, maintenance)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             let outcome = self
                 .insert_subject_in(&tx, subject, owner_user_id, &mut Budget::new(self))
@@ -409,7 +409,7 @@ impl EvalStore {
     pub async fn insert_result(&self, result: &EvaluationResult) -> Result<ResultInsertOutcome> {
         let owner = self.owner("local")?;
         let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             let outcome = self
                 .insert_result_in(&tx, result, &owner, &mut Budget::new(self))
@@ -428,7 +428,7 @@ impl EvalStore {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
         let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             let outcome = self
                 .insert_result_in(&tx, result, owner_user_id, &mut Budget::new(self))
@@ -604,7 +604,7 @@ impl EvalStore {
         authority_id: &str,
     ) -> Result<AdmissionEvent> {
         let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let tx = self.transaction(true).await?;
+        let (write, tx) = self.write_transaction(write).await?;
         let result = async {
             let event = self
                 .append_admission_in(

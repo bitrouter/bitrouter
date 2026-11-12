@@ -76,6 +76,24 @@ fn definition_digest() -> String {
     hex::encode(hash.finalize())
 }
 
+/// Return false only when both main and temporary namespaces have no optional
+/// objects. Partial, shadowed or conflicting layouts retain strict refusal.
+pub(crate) async fn available(db: &impl ConnectionTrait) -> Result<bool> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite,
+        "optional technical backend unavailable"
+    );
+    let main = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT 1 FROM main.sqlite_schema WHERE lower(name) IN ('tenancy_provider_technical_facts','tenancy_provider_technical_schema') LIMIT 1")).await?;
+    let temporary = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT 1 FROM temp.sqlite_schema WHERE lower(name) IN ('tenancy_provider_technical_facts','tenancy_provider_technical_schema') LIMIT 1")).await?;
+    if main.is_none() && temporary.is_none() {
+        return Ok(false);
+    }
+    validate(db).await?;
+    Ok(true)
+}
+
 /// Recognize only the exact registered optional layout and its committed
 /// installation stamp. An orphan/conflicting name is never adopted or repaired.
 pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<()> {

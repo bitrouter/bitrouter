@@ -351,7 +351,7 @@ impl Worker {
                 // Validate the entire persisted directory under the existing
                 // startup owner, retaining bounded pages rather than all rows.
                 let tx = control
-                    .begin_repeatable_read(&self.db)
+                    .begin_write_repeatable_read(&self.db)
                     .await
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let validated = async {

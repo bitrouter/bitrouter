@@ -125,13 +125,44 @@ fn closed_objects_exact_numbers_and_original_arm_membership_refuse_forgery() -> 
         assert!(serde_json::from_value::<ProviderTechnicalFactsV2>(input).is_err());
     }
     let raw = serde_json::to_string(&value())?;
-    for token in ["0.0", "-1", "18446744073709551616", "true", "\"0\""] {
+    for token in [
+        "0.5",
+        "-1",
+        "18446744073709551616",
+        "18446744073709551615.1",
+        "true",
+        "\"0\"",
+    ] {
         let changed = raw.replace(
             "\"request_duration_ms\":321",
             &format!("\"request_duration_ms\":{token}"),
         );
         assert_ne!(changed, raw);
         assert!(serde_json::from_str::<ProviderTechnicalFactsV2>(&changed).is_err());
+    }
+    // Exact JSON integers are values, not a lexical spelling: the original
+    // RawValue decoder intentionally accepts integral decimals/exponents.
+    for (token, expected) in [
+        ("0.0", 0),
+        ("321.0", 321),
+        ("3.21e2", 321),
+        ("18446744073709551615.0", u64::MAX),
+    ] {
+        let changed = raw.replace(
+            "\"request_duration_ms\":321",
+            &format!("\"request_duration_ms\":{token}"),
+        );
+        assert_ne!(changed, raw);
+        let decoded: ProviderTechnicalFactsV2 = serde_json::from_str(&changed)?;
+        decoded.validate_against(&receipt()?)?;
+        assert_eq!(
+            decoded
+                .pipeline_scope
+                .as_ref()
+                .ok_or("scope")?
+                .request_duration_ms,
+            expected
+        );
     }
     let duplicate = raw.replacen(
         "\"schema_version\":2",

@@ -170,7 +170,7 @@ pub(super) async fn initialize(
     control
         .reserve_write(bytes, true)
         .map_err(|code| anyhow::anyhow!("bootstrap storage capacity unavailable: {code:?}"))?;
-    let transaction = control.begin(db).await?;
+    let transaction = control.begin_write(db).await?;
     let result = async {
         super::trajectory_profile::validate_startup(&transaction, &initial.installation, control)
             .await?;

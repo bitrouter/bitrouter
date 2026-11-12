@@ -115,17 +115,92 @@ async fn actual_json_sender_getter_binds_original_attempts_and_read_never_sends(
             false,
         )
         .await?;
+        let mut pending: Option<
+            AbortOnDropHandle<std::result::Result<reqwest::Response, reqwest::Error>>,
+        > = None;
+        let mut releases = Vec::new();
+        let mut phase = "setup";
         let checked: Result<()> = async {
             let client = Harness::client(false)?;
-            let response = harness.send(&client).send().await?;
+            let deadline = tokio::time::Instant::now() + TIMEOUT;
+            let ack = harness.fixture.service.technical_io.hold_next_receipt_ack()?;
+            releases.push(ack.release.clone().drop_guard());
+            let before = harness.fixture.service.technical_io.hold(
+                crate::tenancy::actor::provider_technical::tests::Point::BeforeInsert,
+            )?;
+            releases.push(before.release.clone().drop_guard());
+            let request = harness.send(&client);
+            pending = Some(AbortOnDropHandle::new(tokio::spawn(request.send())));
+            phase = "actual-receipt-ACK";
+            tokio::time::timeout_at(deadline, ack.entered.cancelled())
+                .await
+                .context("actual receipt ACK barrier not reached")?;
+            let acknowledged = ack.observed_execution()?;
+            ensure!(
+                !pending.as_ref().context("owned POST task")?.is_finished(),
+                "HTTP caller completed while its actual ACK barrier was held"
+            );
+            phase = "BeforeInsert";
+            tokio::time::timeout_at(deadline, async {
+                tokio::select! {biased;
+                    () = before.entered.cancelled() => Ok::<(), anyhow::Error>(()),
+                    closed = harness.fixture.service.technical_io.wait(&acknowledged) => {
+                        closed?;
+                        anyhow::bail!("optional task closed before BeforeInsert");
+                    },
+                }
+            })
+            .await
+            .context("original optional BeforeInsert boundary not reached")??;
+            phase = "optional-writer-close";
+            before.release.cancel();
+            tokio::time::timeout_at(
+                deadline,
+                harness.fixture.service.technical_io.wait(&acknowledged),
+            )
+            .await
+            .context("original optional writer did not close")??;
+            harness.fixture.service.technical_io.clear_gate()?;
+            // No actor read is issued while the original optional writer runs.
+            // Only the post-ACK caller is held; scope was already finalized.
+            phase = "HTTP-caller-join";
+            ack.release.cancel();
+            let joined = tokio::time::timeout_at(
+                deadline,
+                pending.as_mut().context("owned POST task")?,
+            )
+            .await
+            .context("original HTTP caller did not return after ACK release")?;
+            drop(pending.take());
+            let response = joined??;
             ensure!(response.status() == StatusCode::OK);
             let id = execution_id(&response)?;
+            ensure!(id == acknowledged, "response ID differs from actual ACK caller");
             ensure!(!response.bytes().await?.is_empty());
             tokio::time::timeout(TIMEOUT, harness.fixture.service.technical_io.wait(&id)).await??;
+            phase = "original-receipt";
             let original = harness.receipt(&client, &id).await?;
-            let data = measured(&harness, &client, &id)
-                .await?
-                .context("normal JSON observations")?;
+            phase = "normal-JSON-V1-getter";
+            let data = match measured(&harness, &client, &id).await? {
+                Some(data) => data,
+                None => {
+                    phase = "missing-sample-diagnostic";
+                    let layout = match crate::db::migration::provider_technical::available(
+                        &harness.fixture.db,
+                    ).await {
+                        Ok(true) => "present-valid",
+                        Ok(false) => "absent",
+                        Err(_) => "refused",
+                    };
+                    let v2 = measured_v2(&harness, &client, &id).await?;
+                    anyhow::bail!(
+                        "normal JSON observations missing after BeforeInsert and writer close: layout={layout}, v2_present={}, v2_operations={:?}",
+                        v2.is_some(),
+                        v2.as_ref().map(|facts| facts.operations.len())
+                    );
+                }
+            };
+            phase = "original-JSON-oracles";
             data.validate_against(&original)?;
             let scope_facts=measured_v2(&harness,&client,&id).await?.context("actual JSON v2 producer/getter")?;
             scope_facts.validate_against(&original)?;
@@ -160,8 +235,22 @@ async fn actual_json_sender_getter_binds_original_attempts_and_read_never_sends(
             Ok(())
         }
         .await;
+        // Every Result error releases both gates before joining the real POST.
+        // An unfinished request is aborted and actually joined, not detached.
+        drop(releases);
+        let request_join: Result<()> = if let Some(task) = pending.take() {
+            task.abort();
+            match task.await {
+                Ok(_) => Ok(()),
+                Err(error) if error.is_cancelled() => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        } else {
+            Ok(())
+        };
         let shutdown = harness.fixture.service.shutdown().await;
-        checked?;
+        checked.with_context(|| format!("JSON protocol {protocol}, phase {phase}"))?;
+        request_join?;
         shutdown?;
     }
     Ok(())
@@ -328,6 +417,7 @@ async fn corrupt_technical_getter_does_not_fence_receipts_or_bypass_tenant_autho
 }
 
 mod lifecycle;
+mod observer;
 
 mod semantic;
 

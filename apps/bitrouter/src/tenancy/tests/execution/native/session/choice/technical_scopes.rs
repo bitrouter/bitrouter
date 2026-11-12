@@ -168,9 +168,30 @@ async fn real_choice_parent_and_child_durable_getters_keep_own_context_mode_and_
             .pipeline_scope
             .as_ref()
             .context("parent owning context")?;
-        // NativePort::observe_model_stream() is true in this host. Its Decisions
-        // child does not inherit that caller mode; no media-type inference.
-        ensure!(parent_context.context_request_id == parent.as_str() && parent_context.streamed);
+        // NativeSession imports managed::store::local::NativePort. That actual
+        // HarnessPort does not override observe_model_stream(), so the original
+        // default is false. agent::native::port::NativePort is a different host.
+        // Native request construction and retained intent still own these IDs;
+        // keep ID/mode diagnostics separate instead of guessing from a name.
+        ensure!(
+            parent_context.context_request_id == parent.as_str(),
+            "actual native parent context ID mismatch: context={}, admitted={}",
+            parent_context.context_request_id,
+            parent
+        );
+        ensure!(
+            !parent_context.streamed && parent_context.stream.is_none(),
+            "managed native parent mode mismatch: streamed={}, logical_stream_present={}",
+            parent_context.streamed,
+            parent_context.stream.is_some()
+        );
+        ensure!(
+            matches!(
+                generation_request.body.get("stream"),
+                None | Some(Value::Bool(false))
+            ),
+            "managed native fixture unexpectedly requested provider streaming"
+        );
         ensure!(parent_context.context_request_id != child_context.context_request_id);
         ensure!(parent_context.request_duration_ms >= child_context.request_duration_ms);
         ensure!(

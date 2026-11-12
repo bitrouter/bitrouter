@@ -20,6 +20,7 @@ pub(in crate::tenancy) enum Request {
     UsageEvidenceV2(ExecutionId),
     ProviderTechnical(ExecutionId),
     ProviderTechnicalV2(ExecutionId),
+    ProviderTechnicalV3(ExecutionId),
     Page {
         correlation: CorrelationId,
         after: Option<ExecutionId>,
@@ -133,12 +134,20 @@ pub(in crate::tenancy) async fn body(
         | Request::UsageEvidence(id)
         | Request::UsageEvidenceV2(id)
         | Request::ProviderTechnical(id)
-        | Request::ProviderTechnicalV2(id) => {
+        | Request::ProviderTechnicalV2(id)
+        | Request::ProviderTechnicalV3(id) => {
             use super::store::format::{Format, Terminal};
             let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
                 .map_err(|_| storage_failure())?
                 .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+            if matches!(request, Request::ProviderTechnicalV3(_)) {
+                let facts = super::provider_technical::storage::read_v3(db, &terminal)
+                    .await
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+                return serde_json::to_vec(&facts)
+                    .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
+            }
             if matches!(request, Request::ProviderTechnicalV2(_)) {
                 let facts = super::provider_technical::storage::read_v2(db, &terminal)
                     .await

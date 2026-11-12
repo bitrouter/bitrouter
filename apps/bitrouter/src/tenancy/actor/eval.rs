@@ -43,10 +43,20 @@ impl Worker {
         ) {
             control.reserve_write(crate::storage::operation_budget::MAX_BYTES, false)?;
         }
-        let tx = control
-            .begin_repeatable_read(job.identity.database())
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let tx = if matches!(
+            job.request,
+            Request::Put(_) | Request::Submit(_) | Request::Freeze(_)
+        ) {
+            control
+                .begin_write_repeatable_read(job.identity.database())
+                .await
+                .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?
+        } else {
+            control
+                .begin_repeatable_read(job.identity.database())
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?
+        };
         let body = async {
             check().map_err(Failure::from)?;
             let (body, write) = match &job.request {
@@ -169,9 +179,9 @@ impl Worker {
         let store = job.execution.eval_store();
         control.reserve_write(crate::storage::operation_budget::MAX_BYTES, true)?;
         let tx = control
-            .begin_repeatable_read(&self.db)
+            .begin_write_repeatable_read(&self.db)
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let body = async {
             check().map_err(OwnedError::Rejected)?;
             let reply = store.put_owned_in(&tx, &job.subject, &check).await?;

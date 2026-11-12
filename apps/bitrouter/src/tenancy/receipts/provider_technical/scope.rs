@@ -1,5 +1,5 @@
 //! The owning pipeline's actual freeze and original hop callback boundaries.
-//! No observer plugin, receipt participant, remote query or second writer.
+//! No external observer plugin, receipt participant, remote query or second writer.
 use super::{Capture, MAX_OPERATIONS};
 use bitrouter_ai::tenancy::{
     identity::AttemptId,
@@ -33,6 +33,23 @@ struct Observation {
 pub(crate) struct Hop {
     capture: Weak<Capture>,
     observation: Mutex<Observation>,
+    observer: ObserverCapture,
+}
+#[derive(Default)]
+struct ObserverClock {
+    started: Option<std::time::Instant>,
+    ended: Option<(HopEnd, u64)>,
+    closed: bool,
+}
+#[derive(Default)]
+struct ObserverCapture {
+    clock: Mutex<ObserverClock>,
+    lost: std::sync::atomic::AtomicBool,
+}
+pub(super) struct Snapshot {
+    pub scope: Option<PipelineScope>,
+    pub hops: Vec<HopObservation>,
+    pub observers: Vec<bitrouter_ai::tenancy::provider_technical_facts_v3::ObserverHop>,
 }
 impl Scope {
     pub(super) fn notify_lost(&self) {
@@ -69,6 +86,7 @@ impl Capture {
         }
         let hop = Arc::new(Hop {
             capture: Arc::downgrade(self),
+            observer: ObserverCapture::default(),
             observation: Mutex::new(Observation {
                 profile,
                 attempts: Vec::new(),
@@ -130,7 +148,7 @@ impl Capture {
             notified.await;
         }
     }
-    pub(super) fn scope_snapshot(&self) -> Option<(Option<PipelineScope>, Vec<HopObservation>)> {
+    pub(super) fn scope_snapshot(&self) -> Option<Snapshot> {
         let Ok(mut state) = self.2.state.try_lock() else {
             self.invalidate();
             return None;
@@ -140,6 +158,7 @@ impl Capture {
         }
         state.sealed = true;
         let mut hops = Vec::new();
+        let mut observers = Vec::new();
         for hop in &state.hops {
             let Ok(value) = hop.observation.try_lock() else {
                 self.invalidate();
@@ -148,6 +167,9 @@ impl Capture {
             let Some(closing) = value.attempts.last() else {
                 continue;
             };
+            if let Some(observed) = hop.observer_snapshot(&value) {
+                observers.push(observed);
+            }
             hops.push(HopObservation {
                 profile: value.profile,
                 attempt_ids: value.attempts.clone(),
@@ -157,10 +179,105 @@ impl Capture {
                 partial: value.partial,
             });
         }
-        Some((state.finalized.clone(), hops))
+        Some(Snapshot {
+            scope: state.finalized.clone(),
+            hops,
+            observers,
+        })
     }
 }
+#[cfg(test)]
+mod observer_tests;
+
 impl Hop {
+    pub(crate) fn belongs_to(&self, capture: &Arc<Capture>) -> bool {
+        self.capture
+            .upgrade()
+            .is_some_and(|owner| Arc::ptr_eq(&owner, capture))
+    }
+    pub(crate) fn lose_observer(&self) {
+        self.observer
+            .lost
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    pub(crate) fn observer_pending(&self) -> bool {
+        self.observer
+            .clock
+            .try_lock()
+            .map(|clock| !clock.closed)
+            .unwrap_or(true)
+    }
+    pub(crate) fn observer_start(&self) {
+        let Ok(mut value) = self.observer.clock.try_lock() else {
+            self.observer
+                .lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            return;
+        };
+        if value.closed || value.started.is_some() {
+            self.observer
+                .lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            return;
+        }
+        // INSIDE the same observer's start callback, after its own pairing lock.
+        value.started = Some(std::time::Instant::now());
+    }
+    pub(crate) fn observer_end(&self, end: Option<HopEnd>) {
+        let Ok(mut value) = self.observer.clock.try_lock() else {
+            self.observer
+                .lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            return;
+        };
+        if value.closed {
+            self.observer
+                .lost
+                .store(true, std::sync::atomic::Ordering::Release);
+            return;
+        }
+        value.closed = true;
+        let Some(started) = value.started.take() else {
+            return;
+        };
+        let Some(end) = end else {
+            return;
+        }; // Opened success: notify, not open latency.
+        // ONE scalar inside this observer's end callback. The original JSON
+        // operation helper has exactly the legacy observer's floor/saturation.
+        let duration = super::json_millis(started.elapsed());
+        value.ended = Some((end, duration));
+    }
+    fn observer_snapshot(
+        &self,
+        hop: &Observation,
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v3::ObserverHop> {
+        use bitrouter_ai::tenancy::provider_technical_facts_v3::{ObserverHop, ObserverHopProfile};
+        if self
+            .observer
+            .lost
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return None;
+        }
+        let clock = self.observer.clock.try_lock().ok()?;
+        let (end, duration_ms) = clock.ended?;
+        let profile = match hop.profile {
+            HopProfile::CoreJsonHopCallbacksV1 => ObserverHopProfile::CoreJsonHopObserverFloorV1,
+            HopProfile::CoreStreamOpenCallbacksV1 if end == HopEnd::Failed => {
+                ObserverHopProfile::CoreStreamOpenHopObserverFloorV1
+            }
+            _ => return None,
+        };
+        Some(ObserverHop {
+            profile,
+            attempt_ids: hop.attempts.clone(),
+            closing_attempt_id: hop.attempts.last()?.clone(),
+            duration_ms,
+            end,
+        })
+    }
+
     pub(crate) fn armed(&self, id: &AttemptId) {
         let Some(capture) = self.capture.upgrade() else {
             return;

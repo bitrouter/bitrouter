@@ -56,3 +56,26 @@ pub(in crate::tenancy) async fn read_v2(
     )
         .into_response())
 }
+
+pub(in crate::tenancy) async fn read_v3(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    input: Result<Path<(TenantId, ExecutionId)>, PathRejection>,
+) -> Result<Response, Failure> {
+    let Path((tenant, id)) = input.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+    let body = service
+        .read_receipt(
+            caller,
+            tenant,
+            super::super::read::Request::ProviderTechnicalV3(id),
+        )
+        .await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
+        .into_response())
+}

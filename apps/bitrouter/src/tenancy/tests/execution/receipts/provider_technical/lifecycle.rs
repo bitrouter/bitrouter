@@ -252,11 +252,18 @@ async fn healthy_required_48_service_survives_optional_name_conflict_and_real_dd
                 )
                 .send()
                 .await?;
-            ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
-            let failure: bitrouter_ai::tenancy::operation::Error = response.json().await?;
-            ensure!(
-                failure.code == bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable
-            );
+            if conflict {
+                ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
+                let failure: bitrouter_ai::tenancy::operation::Error = response.json().await?;
+                ensure!(
+                    failure.code == bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable
+                );
+            } else {
+                ensure!(response.status() == StatusCode::OK);
+                ensure!(response.headers().get("cache-control").is_some_and(|v| v == "no-store"));
+                ensure!(response.json::<Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1>>().await?.is_none());
+                ensure!(!crate::db::migration::provider_technical::available(&harness.fixture.db).await?);
+            }
             let version = harness
                 .fixture
                 .db

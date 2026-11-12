@@ -59,10 +59,12 @@ impl Worker {
                 true,
             )?;
         }
-        let tx = control
-            .begin_repeatable_read(&self.db)
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let tx = if job.work.read() {
+            control.begin_repeatable_read(&self.db).await
+        } else {
+            control.begin_write_repeatable_read(&self.db).await
+        }
+        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         // The one owning actor serializes this exact tenant read with all
         // lifecycle writes. Only one row is retained for this transaction.
         let tenant = if let Work::Prepare { ticket, .. }

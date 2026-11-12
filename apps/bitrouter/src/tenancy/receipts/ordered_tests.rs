@@ -721,6 +721,16 @@ async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_recei
         let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
             .await?
             .installation;
+        // The optional object is not one of the required startup migrations.
+        // This unit fixture inserts its child object directly, without the
+        // optional actor task that normally installs the exact optional schema.
+        ensure!(
+            crate::db::migration::provider_technical::validate(&db)
+                .await
+                .is_err()
+        );
+        crate::db::migration::provider_technical::install(&db).await?;
+        crate::db::migration::provider_technical::validate(&db).await?;
         for count in [1, 8, 9, 64] {
             let identity = identity(&installation, &format!("technical-{count}"), count)?;
             let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;

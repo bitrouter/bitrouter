@@ -81,9 +81,9 @@ impl Worker {
             .ok_or(ErrorCode::CapacityExceeded)?;
         control.reserve_write(encoded, true)?;
         let tx = control
-            .begin(&self.db)
+            .begin_write(&self.db)
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let budget = OperationBudget::new(&check);
         // The prepared payload remains live while the canonical row is re-read.
         let result = async {

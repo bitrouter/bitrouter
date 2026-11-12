@@ -217,6 +217,20 @@ impl Worker {
         code.into()
     }
 
+    /// Preserve only an acknowledged no-effect stop at explicit writing entries.
+    /// Real SQL/acquisition/unknown cleanup and prior fences keep the storage route.
+    fn write_intent_failure(&self, error: anyhow::Error, stopped: ErrorCode) -> Failure {
+        if error.is::<super::transaction::ReadExpired>()
+            && self.proof.disposition() == super::transaction::Disposition::RolledBack
+            && self.live.0.load(Ordering::Acquire)
+            && self.admission.receipts_ready()
+        {
+            stopped.into()
+        } else {
+            self.unavailable(ErrorCode::StorageUnavailable)
+        }
+    }
+
     fn control(&self) -> Control {
         Control::new(self.proof.clone()).with_storage(super::storage::Budget::new(
             self.admission.clone(),
@@ -241,7 +255,7 @@ impl Worker {
             .get()
             .ok_or_else(|| Failure::from(ErrorCode::AuthorityUnavailable))?;
         let tx = control
-            .begin(&self.db)
+            .begin_write(&self.db)
             .await
             .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         let result = super::receipts::ordered::intent::insert(&tx, intent).await;

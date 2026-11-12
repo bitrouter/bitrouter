@@ -39,9 +39,9 @@ impl Worker {
         let budget = OperationBudget::new(&check);
         control.reserve_write(crate::storage::operation_budget::MAX_BYTES, false)?;
         let tx = control
-            .begin_repeatable_read(&self.db)
+            .begin_write_repeatable_read(&self.db)
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let result = store::enroll(&tx, &job.execution, &job.origin, &job.profile, &budget).await;
         let witness = match result.and_then(|value| {
             budget.check()?;

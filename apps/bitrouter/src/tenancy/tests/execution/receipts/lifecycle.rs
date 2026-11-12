@@ -72,12 +72,72 @@ async fn unpolled_sse_body_does_not_own_deadline_or_capacity_and_retains_at_most
     )
     .await??;
     technical.validate_against(&receipt)?;
+    ensure!(technical.operations.len() == 1 && technical.operations[0].streamed);
+    let evidence_bytes = harness
+        .fixture
+        .service
+        .read_receipt(
+            harness.fixture.operator.clone(),
+            harness.fixture.tenant.clone(),
+            read::Request::UsageEvidence(receipt.execution_id.clone()),
+        )
+        .await
+        .map_err(failure)?;
+    let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+        serde_json::from_slice(&evidence_bytes)?;
+    bitrouter_ai::tenancy::validation::Validate::validate(&evidence)?;
     ensure!(
-        technical
-            .operations
-            .iter()
-            .all(|operation| operation.partial)
+        evidence.execution_id == receipt.execution_id
+            && evidence.installation_id == receipt.installation_id
+            && evidence.tenant_id == receipt.tenant_id
+            && evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Captured
+            && evidence.attempts.len() == receipt.attempts.len()
     );
+    // HTTP delivery is still cancelled/failed below. A decoder-validated provider
+    // terminal is an independent immutable fact and can precede public polling.
+    // Only that original retained evidence permits a non-partial source sample.
+    for operation in &technical.operations {
+        let closing = operation
+            .attempt_ids
+            .last()
+            .context("actual operation closing arm")?;
+        let attempt = receipt
+            .attempts
+            .iter()
+            .find(|a| &a.attempt_id == closing)
+            .context("original provider attempt")?;
+        let original = evidence
+            .attempts
+            .iter()
+            .find(|a| &a.attempt_id == closing)
+            .context("original provider terminal evidence")?;
+        ensure!(original.outcome == attempt.outcome);
+        ensure!(
+            match (&original.target, &attempt.target) {
+                (Some(original), Some(attempt)) => {
+                    original.provider_id == attempt.provider_id
+                        && original.model_id == attempt.model_id
+                        && original.account_id == attempt.account_id
+                        && original.credential_id == attempt.credential_id
+                        && original.credential_version == attempt.credential_version
+                }
+                (None, None) => true,
+                _ => false,
+            },
+            "original provider target evidence mismatch"
+        );
+        if !operation.partial {
+            ensure!(
+                original.terminal_observed
+                    && attempt.outcome == Outcome::Completed
+                    && operation.upstream_duration_ms.is_some(),
+                "complete technical sample has no independent successful provider terminal: terminal={}, outcome={:?}, upstream={:?}",
+                original.terminal_observed,
+                attempt.outcome,
+                operation.upstream_duration_ms
+            );
+        }
+    }
 
     ensure!(matches!(
         receipt.outcome,

@@ -1557,9 +1557,10 @@ separately issued audit authority, read semaphore, management deadline and
 [version-one object](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
 or JSON `null`. An unknown original execution is still NotFound. A retained
 receipt without retained measurements (including historical receipts and lost
-noncritical writes) returns null when the optional store is available. An absent,
-refused or corrupt optional schema instead makes this getter unavailable without
-fencing the original receipt API. Neither result implies zero, no provider work,
+noncritical writes) returns null. The same result applies when neither optional
+object has been installed, including a refused installation that left no objects.
+A partial, shadowed, conflicting or corrupt optional layout instead makes this
+getter unavailable without fencing the original receipt API. Neither result implies zero, no provider work,
 a billing disposition or permission to repeat inference. Unsupported old Core
 routes remain existing HTTP/service errors; clients do not silently downgrade.
 The original V1/V2 receipt, usage, capability JSON and commitment formats do not
@@ -1594,9 +1595,11 @@ latency. No financial callback/envelope is extended to carry these measurements.
 Measurements are a noncritical optional child object. After original durable
 notification, the existing control loop may own one disposable technical task;
 there is no queue or resident worker. Original work/stop preempts its dedicated,
-same-acquisition SQLite connection, never waits for technical SQL in a main-job
-branch. No provider retry, seed marker, outbox or required receipt participant
-repairs missing data. Existing deadlines and high-water/physical budgets apply.
+same-acquisition SQLite connection. Main jobs do not join the optional task.
+Transactions that may mutate acquire SQLite write intent before application
+reads, on their original owned transaction; pure reads remain deferred. Ordinary
+storage contention can consume the original deadline. No provider retry, seed
+marker, outbox or required receipt participant repairs missing data. Existing deadlines and high-water/physical budgets apply.
 An interrupted writer must positively close before exact-key readback; absence
 can refund bytes, committed bytes remain charged, and unknown results conserve
 the one optional charge and disable further technical writes. They do not create
@@ -2313,3 +2316,69 @@ contract describes actual Core-owned contexts only. A logical loop assembled
 across executions in Cloud or another process has no Core-owned merged timing
 from this endpoint. There is no cross-process measurement session, observer RPC,
 root clock, or child-duration aggregation.
+
+### Observer-local hop clock (technical payload 3)
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v3`
+and `TenancyClient::provider_technical_facts_v3` read
+[`ProviderTechnicalFactsV3`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v3/schema.json).
+The closed response contains `schema_version:3`, the unchanged typed V2 `scope`,
+and `observer_hops`. The old V1/V2 DTOs and enum values remain unchanged. This
+format adds no source, receipt, usage, financial, native or send authority.
+Validate its scope against the original receipt, and each observer group against
+the corresponding actual original scope hop. Categories may reference the same
+group; duplicate observer samples or order/closing mismatches are invalid.
+
+JSON and unsuccessful stream-open `on_hop_end` callbacks have no duration
+parameter. The former Cloud fallback observer computed its own elapsed scalar
+inside its paired callbacks, using `as_millis()` floor. The outer callback guard
+uses a different window and rounding; no subtraction or enum rename recovers
+that observer fact. The Core producer now installs one private observer in the
+fixed first slot of the existing observer dispatch. It remembers a start inside
+its own start callback and computes ONE floor scalar inside its own end callback
+using the existing JSON timing primitive. Its duration therefore includes later
+start observers and excludes later end observers. It is not a sample taken after
+all end callbacks, nor physical operation or merged stream timing. Registration
+order is part of the observation source: this does not reproduce arbitrary old
+Cloud hook orders, an old execution's timestamps or any Cloud-owned clock.
+
+`core_json_hop_observer_floor_v1` covers actual Generated/Failed JSON callbacks.
+`core_stream_open_hop_observer_floor_v1` covers a Failed open only. `completed`
+means Generated was observed at this boundary; it does not imply the enclosing
+execution or billing succeeded. The actual Hop/capture and original arm group
+bind both ends, independently of provider names or request correlation. Each
+context/fork has a separate pairing slot; overlapping callbacks on one context
+lose that observer sample rather than borrowing another turn's clock. A real
+positive sub-millisecond scalar may be zero. Missing start/end, cancellation,
+panic, duplicate pairing or diagnostic lock loss produces no observer row, not
+zero or an elapsed reconstructed from receipt timestamps. A successful open
+clears this pairing without a second sample; its full hop still uses the exact
+original `core_stream_hop_notify_v1` callback scalar. The existing JSON/open
+callback-guard profiles keep their own meanings. No profile automatically gains
+legacy percentile eligibility; consumers must independently establish source,
+owner, actual-arm and outcome eligibility before selecting a metric.
+
+All observations still share one optional row, key/FK, writer, original cleanup
+and capacity budgets, and one 64KiB encoded bound. Observer-only capture uses a
+separate bounded per-Hop cell; its contention cannot invalidate the old scope.
+The private retained payload3 envelope is closed/map-only with fields
+`schema_version`, `scope`, and `observer_hops_json` (the bounded serialized
+observer array string). Its digest domain is
+`bitrouter.provider-technical-facts.v3`, followed by the original big-endian u64
+UTF-8 JSON length and exact JSON bytes. This is private storage framing; public
+HTTP returns the typed array, not that string. No physical schema/stamp/table
+migration is needed. Idempotence and unknown-write readback compare this exact
+retained version/byte sequence, never a projected V2 view.
+
+Writing selects its one immutable payload before reservation/SQL: invalid or
+oversized observer contents retain the already-valid scope-only payload2. There
+is no second write, retry, backfill or larger allowance. For payload3, old getters
+strictly parse the known retained envelope and validate its scope against the
+original receipt, then return their original typed views. They do not interpret
+observer-only contents. V3 separately parses and validates that array; an invalid
+observer array refuses V3 while the original scope/receipt remain readable.
+Invalid outer framing, scope, digest or whole-row transfer bound still refuses
+the technical read under the original guards. Old retained payload1/2 returns
+null through V3, without relabelling history or inventing observer samples. A
+scope-only fallback remains readable through V2. The new SDK getter performs no
+automatic downgrade, repeated inference, additional admission or source repair.
