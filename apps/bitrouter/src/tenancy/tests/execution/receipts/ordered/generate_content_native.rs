@@ -525,6 +525,17 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                     let control = harness.ordered.control(false, version)?;
                     let evidence = control.usage_evidence_v2(&receipt).await?;
                     ensure!(evidence.extractor_version == 2);
+                    if !stream {
+                        ensure!(
+                            evidence.estimation
+                                == if native_ordinal == 0 {
+                                    bitrouter_ai::tenancy::usage_evidence::Estimation::NotUsed
+                                } else {
+                                    bitrouter_ai::tenancy::usage_evidence::Estimation::NotCaptured
+                                }
+                        );
+                        ensure!(evidence.estimate.is_none());
+                    }
                     if native_ordinal == 0 {
                         let frames = evidence
                             .frames
@@ -566,6 +577,65 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                 }
             }
         }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_generate_content_failed_json_never_asserts_estimator_non_use() -> Result<()> {
+    for (case, media, body) in [
+        ("invalid JSON", "application/json", "["),
+        (
+            "missing terminal",
+            "application/json",
+            r#"{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":2}}"#,
+        ),
+        (
+            "invalid media",
+            "text/plain",
+            r#"{"candidates":[{"finishReason":"STOP"}]}"#,
+        ),
+    ] {
+        let harness = Harness::new(1, "messages", false).await?;
+        harness.peer.reject.store(false, Ordering::Release);
+        *harness
+            .peer
+            .reply_data
+            .lock()
+            .map_err(|_| anyhow::anyhow!("reply"))? = Some((media.into(), body.into()));
+        ensure!(
+            harness.invoke(false, HttpVersion::Http1Only).await.is_err(),
+            "{case}"
+        );
+        ensure!(
+            harness.ordered.observed()? == ["model-1"],
+            "{case}: unexpected fallback"
+        );
+        let id = {
+            let records = harness
+                .peer
+                .records
+                .lock()
+                .map_err(|_| anyhow::anyhow!("records"))?;
+            ensure!(records.len() == 1, "{case}: expected one actual send");
+            records[0].0.execution_id.clone()
+        };
+        let receipt = harness.ordered.receipt(&id).await?;
+        ensure!(
+            receipt.outcome != Outcome::Completed && receipt.attempts.len() == 1,
+            "{case}"
+        );
+        let evidence = harness
+            .ordered
+            .control(false, HttpVersion::Http1Only)?
+            .usage_evidence_v2(&receipt)
+            .await?;
+        ensure!(
+            evidence.estimation == bitrouter_ai::tenancy::usage_evidence::Estimation::NotCaptured,
+            "{case}"
+        );
+        ensure!(evidence.estimate.is_none(), "{case}");
+        harness.ordered.fixture.service.shutdown().await?;
     }
     Ok(())
 }

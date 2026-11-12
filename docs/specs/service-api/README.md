@@ -1521,9 +1521,20 @@ discarded observations with saturation at the exact integer maximum, and
 invalid data nor missing completion evidence establishes complete provider
 totals or zero cost for unseen work.
 
-`estimation` distinguishes unrecorded estimator provenance (`not_captured`), an
-installed finalizer that did not use an estimate (`not_used`), and an estimate
-actually used (`captured`). Only the last permits a nonnull `estimate`.
+`estimation` distinguishes unrecorded estimator provenance (`not_captured`),
+affirmatively observed non-use of an estimator (`not_used`), and an estimate
+actually used (`captured`). Non-use is recorded by the installed stream
+finalizer or the successful non-streaming native generate-content executor,
+which does not install that estimator. Absence of an observation MUST remain
+`not_captured`; it MUST NOT be inferred to mean `not_used`. Only `captured`
+permits a nonnull `estimate`.
+
+This expands the producers of an existing fact without changing the enum or
+wire schema. Historical `not_captured` documents remain unchanged. A reader
+that does not support the native protocol or extractor MUST continue to reject
+that evidence; `not_used` alone does not qualify native usage or authorize a
+financial interpretation.
+
 Algorithm `stream_character_ceiling`, version 1, rounds each prompt/output
 Unicode scalar count divided by four upward. It retains the numerical inputs,
 text/reasoning coverage and completed/disconnected trigger defined in the

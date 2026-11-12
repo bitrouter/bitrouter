@@ -720,7 +720,8 @@ impl Drop for AttemptPermit {
 }
 
 impl Journal {
-    /// Called by the installed stream finalizer before receipt preparation.
+    /// Records the installed stream finalizer's result or the native JSON
+    /// executor's affirmative non-use observation before receipt preparation.
     pub(crate) fn observe_estimator(
         &self,
         estimate: Option<bitrouter_ai::tenancy::usage_evidence::Estimate>,

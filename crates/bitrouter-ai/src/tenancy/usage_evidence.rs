@@ -80,7 +80,7 @@ wire_enum! { /// Evidence retention, independent of invocation outcome.
 }
 wire_enum! { /// Whether estimator provenance was captured by this contract.
     Estimation { /// No estimate is asserted by this document.
-        NotCaptured, /// The installed stream finalizer did not use an estimator.
+        NotCaptured, /// The stream finalizer or successful native JSON executor affirmatively observed no estimator use.
         NotUsed, /// The installed stream finalizer used the recorded estimator.
         Captured }
 }

@@ -184,6 +184,19 @@ impl HttpExecutor {
         receipt::native(&mut tenant, Source::Json, &body)?;
         let result = native::qualify_json(input, body)
             .map_err(|error| scrubber.scrub_error(error.into()))?;
+        // This non-streaming native path never installs the stream estimator.
+        // Record that affirmative fact before terminal receipt preparation;
+        // historical or unavailable observations remain NotCaptured.
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution
+                .journal()
+                .and_then(|journal| {
+                    journal
+                        .observe_estimator(None)
+                        .map_err(crate::tenancy::receipts::journal_error)
+                })
+                .map_err(|_| BitrouterError::UpstreamUnavailable)?;
+        }
         receipt::complete(&mut tenant, true)?;
         shared.complete(true, result.usage()).await?;
         let elapsed = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;

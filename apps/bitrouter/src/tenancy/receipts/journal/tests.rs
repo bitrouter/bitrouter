@@ -760,3 +760,46 @@ fn owned_linkage_is_bidirectional_bounded_and_refuses_reparenting_or_started_chi
     ));
     Ok(())
 }
+
+#[test]
+fn estimator_provenance_is_idempotent_conflicting_and_closed_after_freeze() -> Result<()> {
+    use bitrouter_ai::tenancy::usage_evidence::{
+        Estimate, EstimateCoverage, EstimateTrigger, EstimatorAlgorithm,
+    };
+    let estimate = Estimate {
+        algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
+        version: 1,
+        characters_per_token: 4,
+        coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,
+        trigger: EstimateTrigger::Completed,
+        prompt_characters: 5,
+        output_characters: 9,
+        input_tokens: 2,
+        output_tokens: 3,
+    };
+    for initial in [None, Some(estimate.clone())] {
+        let journal = Journal::owned(owner("estimator-observation")?);
+        journal.observe_estimator(initial.clone())?;
+        journal.observe_estimator(initial.clone())?;
+        let conflicting = if initial.is_some() {
+            None
+        } else {
+            Some(estimate.clone())
+        };
+        ensure!(matches!(
+            journal.observe_estimator(conflicting.clone()),
+            Err(Error::Conflict)
+        ));
+        let frozen = journal.freeze()?;
+        ensure!(frozen.usage_evidence.estimator_seen && frozen.usage_evidence.estimate == initial);
+        ensure!(matches!(
+            journal.observe_estimator(initial),
+            Err(Error::Closed)
+        ));
+        ensure!(matches!(
+            journal.observe_estimator(conflicting),
+            Err(Error::Closed)
+        ));
+    }
+    Ok(())
+}
