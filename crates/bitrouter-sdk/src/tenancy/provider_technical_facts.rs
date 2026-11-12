@@ -13,7 +13,8 @@ impl TenancyClient {
     ///
     /// # Errors
     /// Returns authorization, unsupported/missing execution, bounded transport,
-    /// schema or identity errors. Pair with validate_against[_v2] for a receipt.
+    /// schema or identity errors. Pair with `validate_against` or
+    /// `validate_against_v2` for the original receipt format.
     pub async fn provider_technical_facts_v1(
         &self,
         installation: &InstallationId,
