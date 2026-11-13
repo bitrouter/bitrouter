@@ -277,9 +277,9 @@ async fn directory_one_row_capacity_refuses_without_skipping_or_storage_fence() 
             DatabaseBackend::Sqlite,
             "UPDATE tenancy_bindings SET scope_json=? WHERE tenant_id=? AND id=?",
             [
-                "x".repeat(4 * 1024 * 1024),
-                fixture.tenant.to_string(),
-                fixture.binding.to_string(),
+                "x".repeat(4 * 1024 * 1024).into(),
+                fixture.tenant.to_string().into(),
+                fixture.binding.to_string().into(),
             ],
         ))
         .await?;
