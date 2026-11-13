@@ -3,7 +3,8 @@
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
 //! `policy create` / `providers (list|login|logout)` / `agents` / `run` /
-//! `threads` / `launch` / `cloud` / `skills` / `mcp (list|show|add|edit|remove|check)` / `acp serve`.
+//! `threads` / `launch` / `cloud` / `skills` / `connector` /
+//! `mcp (list|show|add|edit|remove|check)` / `acp serve`.
 //! Resource configuration administration uses `tenancy` over the HTTP SDK.
 //! Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
@@ -23,6 +24,8 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 
+#[path = "main/connector.rs"]
+mod connector;
 #[path = "main/shared_operator.rs"]
 mod shared_operator;
 #[cfg(test)]
@@ -234,6 +237,11 @@ enum SharedAction {
 enum Command {
     /// Report this executable's compiled features, profile and source identity.
     BuildInfo,
+    /// Observe and control bounded execution for a configured local inference pool.
+    Connector {
+        #[command(subcommand)]
+        action: connector::Action,
+    },
     /// Explicit shared-gateway initialization and administration.
     Shared {
         #[command(subcommand)]
@@ -1965,6 +1973,15 @@ fn retired_ui_error(attach: bool) -> anyhow::Error {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    // This standalone connector path never discovers gateway configuration,
+    // credentials, named contexts, storage, or a background daemon.
+    if let Some(Command::Connector { action }) = &cli.command {
+        anyhow::ensure!(
+            cli.context.as_deref().is_none_or(|name| name == "local"),
+            "connector commands are local-only; named remote contexts are unsupported"
+        );
+        return connector::run(action, output).await;
+    }
     #[cfg(not(feature = "multi-instance"))]
     if matches!(&cli.command, Some(Command::Shared { .. })) {
         anyhow::bail!("shared administration requires the multi-instance feature");
@@ -2103,6 +2120,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
+        // Connector commands return through the standalone path above before
+        // discovery. Keep exhaustive dispatch non-panicking as the enum grows.
+        Command::Connector { action } => connector::run(&action, output).await,
         Command::Shared { action } => run_shared(action, output).await,
         Command::Tenancy { action } => tenancy::run(&action, cli.context.as_deref(), output).await,
         Command::BuildInfo => {

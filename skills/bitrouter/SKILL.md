@@ -160,7 +160,7 @@ See [shared gateway configuration](references/shared-gateway.md).
 
 | File | When to read |
 |---|---|
-| `references/cli.md` | Full subcommand reference — the primary reference |
+| `references/cli.md` | Full subcommand reference, including standalone provider connector observation and bounded local execution |
 | `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
 | `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |

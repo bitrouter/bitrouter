@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.4**. This is the single
+Status: **beta, specification revision 1.0.0-beta.5**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -73,7 +73,117 @@ from a successful response. Deployments requiring a transitive deadline use
 compatible gateways and retain an outer deadline. JSON/SSE bodies and the existing
 error vocabulary remain unchanged; no SDK DTO or JSON discriminator is added.
 
-### Offline recovery evidence v2
+## Standalone local connector
+
+Revision beta.5 adds this opt-in standalone local connector profile.
+Existing gateway, tenancy and managed execution namespaces are unchanged.
+
+The local connector CLI and independently implemented local clients consume
+this narrow `/v1/connector` profile. Its request DTOs live in
+[`connector/request.rs`](../../../apps/bitrouter/src/connector/request.rs),
+management/status DTOs in
+[`connector/controller.rs`](../../../apps/bitrouter/src/connector/controller.rs),
+and retained execution facts in
+[`connector/journal.rs`](../../../apps/bitrouter/src/connector/journal.rs).
+The [operator guide](../../development/provider-connector.md) supplies command
+examples and deployment requirements; the
+[configuration contract](../configuration/README.md#standalone-provider-connector)
+owns local settings and their schema. This profile does not require Cloud,
+create a public Source, or define commercial request acceptance.
+
+Every route MUST authenticate the configured local operator bearer. The pilot
+binds only loopback IP addresses, defaults to `127.0.0.1:4367`, and does not use
+gateway API keys or ambient provider login. The local credential is trusted
+management authority, including reconciliation; a future Cloud request
+principal MUST NOT inherit that authority merely by being allowed to infer.
+
+| Method and path, below `/v1/connector` | Behavior |
+| --- | --- |
+| `GET /status` | Current owner, pool generation, capabilities, observation, policy/budget reason and separate outstanding counts |
+| `POST /pause` | Persist manual pause and refuse new admission/dispatch; preserve already sent work |
+| `POST /resume` | Clear manual pause and require fresh healthy observations; preserve unknown work and storage fences |
+| `POST /requests` | Validate one bounded fixed-model text chat, deduplicate, count input at the selected upstream, and attempt local admission |
+| `GET /requests/{id}` | Read the retained execution record; never execute or replay response text |
+| `POST /requests/{id}/cancel` | Cancel only a reservation with no durable send intent; possible sends are refused |
+| `POST /requests/{id}/reconcile` | Apply an exact, explicit trusted operator attestation to an unknown attempt |
+
+`LocalRequest` requires `request_id`, `pool_id`, `pool_generation`,
+`deadline_ms` and `request`. The nested chat requires `model`, `messages` and
+`max_tokens`; `stream` defaults to false. Each message requires only `role`
+and nonempty text `content`. Roles are system/user/assistant, there are 1–128
+messages, and the final message is user. Unknown request fields, tools, media,
+URL overrides, caller-supplied counts/templates and multiple choices MUST be
+rejected. IDs are 1–128 ASCII alphanumeric/underscore/hyphen/dot bytes, excluding
+`.` and `..`. For a new ID the configured pool, generation and model MUST match. The caller
+cannot select a different target or widen the authorized scope.
+
+`deadline_ms` is a relative whole-call duration beginning at local HTTP ingress;
+body reading and tokenization consume it. The journal stores the resulting
+absolute Unix deadline. A duplicate MUST NOT renew that deadline. Actual input
+counting and forced output bounds use the selected operator-controlled vLLM
+endpoint and matching chat rendering; unavailable, inconsistent or over-limit
+counts MUST refuse generation. This is an upstream protocol trust assumption,
+not independent model-fidelity verification.
+
+The request digest is SHA-256 of the typed request's serialized JSON, including
+the declared duration and resolved default `stream: false`. Whitespace and input
+object key order do not create new identities; changed typed content does. A
+retained equal ID/digest MUST NOT dispatch again. A different digest for that ID
+MUST conflict. After authenticated bounded strict decoding, retained-ID lookup
+MUST precede mutable target, deadline and policy validation. An exact retained
+retry returns its original record even when the active generation, model or
+execution bounds have changed; it gains no dispatch authority. New IDs must
+meet the current binding and bounds. Clients can also query the original ID
+without resubmitting it.
+
+Pre-response refusals use non-success HTTP status and a bounded
+`{"error":{"code":"..."}}` object. Once a response stream is established,
+HTTP 200 MUST NOT be interpreted as completed inference. Later execution errors
+are bounded JSON error objects for non-streaming calls or SSE `event: error`
+frames; callers MUST query the original retained state when uncertain. The CLI
+request command exits successfully only after a final state query reports
+`succeeded`; query failure or another state cannot trigger automatic replay.
+
+Non-streaming output requires a validated bound completion and durable terminal
+record before returning the body. Streaming requires valid bounded frames,
+finish evidence, matching usage, `[DONE]` and clean upstream EOF. Durable
+completion MUST precede the local final `[DONE]`. Truncation, later malformed
+data, connection loss, cancellation or deadlines cannot establish engine
+termination. Response text is not retained for replay.
+
+Execution records distinguish `reserved`, `sending`, `running`, `unknown`,
+`succeeded`, `failed`, `cancelled` and `reconciled`. Sending intent MUST be durable
+before network send. Restart recovery cancels definitely-unsent reservations
+and restores possible sends as unknown before new budget issuance. Unknown
+occupancy has no expiration. All instances admitting a pool MUST share the
+same protected persistent authority store; the local lock does not coordinate
+independent volumes or provide transparent failover.
+
+Reconciliation requires the exact original `attempt_id`, `pool_generation`,
+`expected_revision`, `expected_state: "unknown"`, explicit
+`confirmed_not_running: true` and a bounded printable `evidence_reference`.
+It records `reconciled` with `operator_confirmed_stopped` provenance, releasing
+occupancy on the trusted operator assertion. It MUST NOT fabricate a successful
+provider response, claim independent termination proof or make that ID reusable.
+Retained identities are never pruned in this pilot; journal exhaustion refuses
+new IDs. Initialization MUST NOT reset existing or known-missing recovery state.
+
+### Connector compatibility cases
+
+- An older binary without this profile rejects the unknown command/route;
+  clients MUST NOT fall back to an unprotected gateway or upstream request.
+- New binaries retain Phase A observation-only configurations; serving requires
+  the explicitly configured execution profile and first-time initialization.
+- Unknown request fields and missing required fields fail visibly. Adding a
+  required field or changing enum, digest, bounds or terminal meanings requires
+  explicit compatibility review; beta status does not permit silent reuse.
+- Equal-ID retries, changed-content conflicts, crash recovery, owner exclusion,
+  stale telemetry, token bounds, pause races, SSE interruption and operator
+  reconciliation are exercised by connector unit/wire tests and
+  [`connector_recovery.rs`](../../../apps/bitrouter/tests/connector_recovery.rs).
+  These fixtures do not establish production GPU interference guarantees.
+
+## Offline recovery evidence v2
 
 Offline plan writers, provisioning recorders and independent verifiers use the
 explicit v2 formats in the [offline envelope schema](offline-v2.schema.json).

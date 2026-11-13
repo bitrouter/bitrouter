@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConnectorConfig",
+  "description": "The standalone, fixed-model connector format.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "pool": {
+      "$ref": "#/$defs/PoolConfig"
+    },
+    "observation": {
+      "$ref": "#/$defs/ObservationConfig",
+      "default": {
+        "timeout_ms": 2000,
+        "max_body_bytes": 1048576,
+        "max_sample_age_ms": 15000
+      }
+    },
+    "execution": {
+      "description": "Absent configurations remain observation-only.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "pool"
+  ],
+  "$defs": {
+    "PoolConfig": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "scope": {
+          "$ref": "#/$defs/PoolScope"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemberConfig"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "model",
+        "scope",
+        "members"
+      ]
+    },
+    "PoolScope": {
+      "description": "A complete member list declared by the operator, not discovered from a router.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "static_members"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "MemberConfig": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "inference_endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "metrics_endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "engines": {
+          "description": "Complete set of vLLM `engine` labels at this direct member endpoint.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "metrics_bearer_env": {
+          "description": "The variable name only. Its value is read just before a metrics request.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inference_bearer_env": {
+          "description": "Optional local inference credential; never transmitted to callers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "inference_endpoint",
+        "metrics_endpoint",
+        "engines"
+      ]
+    },
+    "ObservationConfig": {
+      "type": "object",
+      "properties": {
+        "timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 10,
+          "maximum": 30000,
+          "default": 2000
+        },
+        "max_body_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1024,
+          "maximum": 4194304,
+          "default": 1048576
+        },
+        "max_sample_age_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 100,
+          "maximum": 300000,
+          "default": 15000
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionConfig": {
+      "description": "Explicit operator-selected pilot limits; no capacity is inferred from GPU use.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "exclusive_pool_owner": {
+          "description": "Confirms this persistent authority volume is shared by every instance\nallowed to admit extra traffic for the declared pool.",
+          "type": "boolean",
+          "const": true
+        },
+        "allow_collection_only_metrics": {
+          "description": "Explicit acknowledgement when exporter sample timestamps are unavailable.",
+          "type": "boolean",
+          "default": false
+        },
+        "state_dir": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "auth_bearer_env": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+        },
+        "max_dispatch_rps": {
+          "type": "number",
+          "format": "double",
+          "maximum": 1000,
+          "exclusiveMinimum": 0
+        },
+        "burst": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_extra_inflight": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_records": {
+          "description": "Retained identities are never purged or made executable again.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "max_deadline_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 100,
+          "maximum": 300000
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1024,
+          "maximum": 4194304
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1024,
+          "maximum": 4194304
+        },
+        "stream_idle_timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 10,
+          "maximum": 300000
+        },
+        "lease_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 100,
+          "maximum": 30000
+        },
+        "update_interval_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 10,
+          "maximum": 15000
+        },
+        "health_window_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 10,
+          "maximum": 300000
+        },
+        "max_running_requests": {
+          "description": "Aggregate engine gauges include both primary and extra traffic.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "max_waiting_requests": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "max_kv_cache_usage_fraction": {
+          "type": "number",
+          "format": "double",
+          "maximum": 1,
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "exclusive_pool_owner",
+        "state_dir",
+        "auth_bearer_env",
+        "max_dispatch_rps",
+        "burst",
+        "max_extra_inflight",
+        "max_records",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_deadline_ms",
+        "max_request_bytes",
+        "max_response_bytes",
+        "stream_idle_timeout_ms",
+        "lease_ms",
+        "update_interval_ms",
+        "health_window_ms",
+        "max_running_requests",
+        "max_waiting_requests",
+        "max_kv_cache_usage_fraction"
+      ]
+    }
+  }
+}

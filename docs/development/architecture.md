@@ -161,6 +161,15 @@ The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The gateway owns model/MCP interop; the harness
 owns ACP execution. The application also owns local actions and presentation.
 
+The application-owned `connector` module observes one explicitly declared,
+fixed-model static pool independently of gateway assembly. Its standalone CLI
+reads bounded vLLM metrics and can run an explicitly enabled authenticated local
+pilot service. A single persistent authority owns policy, atomic extra-traffic
+admission and minimal execution recovery; exact direct-member tokenization and
+generation share the same binding. It does not discover providers, join Cloud
+or estimate commercial capacity. See the
+[connector boundary guide](provider-connector.md).
+
 ### Dependency Logic
 
 **`bitrouter-ai`** owns public model/protocol data, lifecycle and capability

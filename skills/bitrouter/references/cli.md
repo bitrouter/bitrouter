@@ -26,6 +26,66 @@ The SDK also enables `http2` by default. For cleartext HTTP/2, explicitly select
 `Auto` uses HTTP/1.1 for cleartext URLs. Consumers using `default-features = false`
 must explicitly enable SDK `http2` to use prior knowledge.
 
+## Provider connector
+
+```sh
+bro connector check --config connector.yaml
+bro connector observe --config connector.yaml --json
+bro connector observe --config connector.yaml --human
+bro connector serve --config connector.yaml --initialize-state
+bro connector status --config connector.yaml
+bro connector pause --config connector.yaml
+bro connector resume --config connector.yaml
+bro connector request --config connector.yaml --file request.json
+bro connector request-status --config connector.yaml --request-id pilot-001
+bro connector cancel --config connector.yaml --request-id pilot-001
+bro connector reconcile --config connector.yaml --request-id pilot-001 --file attestation.json
+```
+
+These commands require an explicit standalone version 1 file and work without a
+daemon, login or optional application features. `check` validates and prints an
+observation dry-run without network access. `observe` makes bounded metrics GETs
+for one fixed-model pool with explicit static direct members and vLLM engine
+labels. JSON is the default; `--human` selects readable output. A complete
+declared-scope observation exits zero; missing, stale or incomplete telemetry
+exits nonzero with diagnostics. It does not report available capacity or readiness
+to sell. Named remote contexts are unsupported; `--context local` is accepted.
+
+The file is capped at 64 KiB and is separate from gateway `bitrouter.yaml`.
+The required shape is `version: 1`, `pool: {id, model, scope: {kind:
+static_members}, members: [{id, inference_endpoint, metrics_endpoint, engines:
+["0"]}]}`. Optional `metrics_bearer_env` names a member's metrics token variable;
+never put its value in the file. Optional `observation` defaults to
+`timeout_ms: 2000`, `max_body_bytes: 1048576`, `max_sample_age_ms: 15000`.
+Inference and metrics URLs must be HTTP(S) without userinfo, query or fragment.
+Set direct endpoints and every engine label explicitly; no router discovery or
+production-coverage verification occurs.
+
+Optional `execution` is disabled unless explicitly configured and enabled with
+operator-selected hard bounds. `serve` defaults to `127.0.0.1:4367` and accepts
+`--listen` only for loopback addresses. The first start requires
+`--initialize-state`; never delete its persistent authority directory to clear
+unknown work. Other control commands accept `--endpoint` for a different
+loopback HTTP origin and authenticate using `execution.auth_bearer_env` (32–4096
+printable ASCII bytes). `inference_bearer_env` is a member-local credential;
+neither bearer value belongs in configuration or output.
+
+Status provides the pool generation. A request file contains
+`{request_id,pool_id,pool_generation,deadline_ms,request:{model,messages,max_tokens,stream}}`.
+Only text messages with system/user/assistant roles are supported, final role
+user, no extra fields or token-count claims. The first declared direct vLLM
+member tokenizes the same chat before local admission and bounded generation.
+No redirect/fallback/retry occurs. `request` writes raw JSON/SSE; controls use
+JSON/human reports. Duplicates return retained state, never repeat inference or
+replay lost text. Pause stops new work; cancel releases only confirmed unsent
+work. Sent disconnect/deadline ambiguity remains unknown and occupies capacity.
+Reconcile is a trusted operator attestation after external diagnosis, requiring
+exact attempt/generation/revision, expected unknown state, confirmed stopped and
+an evidence reference; it never means provider success or permits ID reuse.
+There is no Cloud pairing, offer publication or commercial capacity estimate.
+See [the connector guide](../../../docs/development/provider-connector.md) for
+the exact pilot request, authority and recovery boundaries.
+
 ## Single-operation native and ACP controls
 
 Use the running local daemon; queries do not start it. `--config PATH` selects
