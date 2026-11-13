@@ -105,6 +105,47 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 > Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run`, `task run`, `task managed`, and management `events --follow` emit NDJSON; `launch` inherits the terminal for the external harness; and `cloud api` streams the remote response body. Bare `agents`, `run --background`, and single-operation management commands remain ordinary structured reports.
 
+## Provider connector
+
+`bro connector check --config PATH` validates a standalone version 1 connector
+file and prints its observation dry-run/capabilities without contacting an
+endpoint. `bro connector observe --config PATH [--json|--human]` reads one bounded
+live vLLM metrics snapshot. JSON is the default. A complete declared-scope
+observation exits zero; unknown, stale or incomplete telemetry exits nonzero
+with the snapshot and diagnostics. Completeness is not available capacity or
+readiness to sell.
+
+These commands work without default features, login or a daemon. They require
+an explicit file, do not discover `bitrouter.yaml`, and reject named remote
+contexts before reading input. `--context local` is accepted. The file is capped
+at 64 KiB; its [schema and example](specs/configuration/README.md#standalone-provider-connector)
+define the one fixed-model pool, static direct members and observation limits.
+`check` and `observe` read only configured metrics endpoints and never dispatch.
+Endpoint binding and production coverage remain operator declarations.
+
+`bro connector serve --config PATH [--listen 127.0.0.1:4367]` starts the optional
+authenticated loopback pilot service. It requires an explicitly enabled,
+bounded `execution` block and persistent local authority. The first start also
+requires `--initialize-state`; this flag never resets existing records. A
+missing or incompatible journal blocks subsequent starts.
+
+`connector status`, `pause`, `resume`, `request --file PATH`,
+`request-status --request-id ID`, `cancel --request-id ID`, and
+`reconcile --request-id ID --file PATH` require
+`--config PATH` and accept `--endpoint http://127.0.0.1:4367` for another loopback
+origin. They authenticate with `execution.auth_bearer_env`; upstream inference
+and metrics credentials stay local. `request` writes its JSON or SSE response
+directly; the other commands use ordinary JSON/human reports. Pause stops new
+admission/send, resume retains health checks, and cancel can release only a
+confirmed unsent reservation. Sent ambiguity remains unknown and consumes
+capacity across restarts. After external diagnosis, the trusted local operator
+can attest that one exact unknown attempt is no longer running; reconcile
+records operator provenance, never provider success or a reusable identity.
+Repeating an ID returns retained state without a
+second execution or response replay. No Cloud or sales behavior is enabled.
+See the request shape, token boundary and recovery details in the
+[implementation boundary](development/provider-connector.md).
+
 ## Native tasks through the managed core
 
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`

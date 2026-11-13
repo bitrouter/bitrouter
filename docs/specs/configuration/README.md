@@ -1,8 +1,9 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.4**. This is the single
+Status: **beta, specification revision 1.0.0-beta.5**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
-referenced `policy-lock.yaml`. These are related configuration artifacts; this
+referenced `policy-lock.yaml`, plus standalone connector configuration. These
+are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
 MUST, MUST NOT, SHOULD and MAY express requirements on readers and writers.
 
@@ -295,6 +296,96 @@ substituted. The deployment key is an environment-variable reference, not its
 secret value. The [shared gateway guide](../../../skills/bitrouter/references/shared-gateway.md)
 contains a complete deployment example and current feature restrictions.
 
+## Standalone provider connector
+
+Revision beta.5 adds a standalone connector file with an explicit `version: 1`,
+including observation and optional, explicitly enabled local pilot execution.
+It is not a `bitrouter.yaml` section and does not activate gateway serving.
+Its consumers are operators retaining a pool declaration and the standalone
+`bro connector check/observe/serve --config PATH` readers. The
+[generated schema](provider-connector-v1.schema.json) is the structural field
+catalog; the [complete example](provider-connector-v1.example.yaml) is illustrative
+and does not assert a real deployment. `ConnectorConfig::from_yaml` and `check`
+also enforce semantic bounds, uniqueness and endpoint rules. Schema acceptance
+alone does not establish a valid or reachable pool.
+
+The document is limited to 64 KiB UTF-8 YAML. Unknown keys at every object level
+and unknown versions or scope kinds MUST fail. One pool has one exact model
+identifier and an explicit `static_members` scope. The operator declares one to
+64 members, with unique identifiers, unique normalized direct inference and
+metrics URLs, and each member's complete nonempty decimal `engine` label set.
+Every selected metric's
+`model_name` must equal the declared model. This is operator-declared scope;
+neither parser nor observer verifies physical production coverage, inference
+health, router binding or model fidelity.
+
+Endpoint strings require HTTP(S), a host, and no userinfo, query or fragment.
+`metrics_endpoint` is the exact URL read. Observation does not contact
+`inference_endpoint`. Enabled pilot execution requires its path to be `/v1` or
+`/v1/`; generation uses that member's `/v1/chat/completions` and tokenization
+uses `/tokenize` on the same origin. No redirect, fallback or arbitrary caller
+URL is allowed. Optional `metrics_bearer_env`
+accepts omission or null and names a variable read only during live metrics
+collection. `inference_bearer_env` likewise accepts omission or null and names
+the credential used only for that member's tokenizer and inference calls.
+Configuration values are literal; there is no `${VAR}` expansion,
+credential discovery or login. Bearer values MUST NOT appear in reports.
+
+Omitting `observation`, or individual fields inside it, retains defaults:
+2,000 ms request timeout, 1,048,576 body bytes and 15,000 ms maximum sample age.
+Explicit null does not select numeric defaults. Timeout is 10–30,000 ms, body
+size is 1,024–4,194,304 bytes and sample age is 100–300,000 ms; timeout MUST NOT
+exceed sample age.
+
+Omitting `execution`, or setting it to null, preserves observation-only behavior.
+An execution object requires every field shown by the schema except
+`allow_collection_only_metrics`, which defaults to false. `enabled: false`
+still validates its bounds but cannot start the serving controller. Enabling it
+requires `exclusive_pool_owner: true`: the operator commits to one authority
+directory shared by every instance allowed to admit this pool. `state_dir` MUST
+be an absolute persistent local filesystem directory. Local file ownership
+prevents two processes using that same authority; separate volumes are not a
+distributed lock. `auth_bearer_env` names a local service bearer with 32–4096
+printable ASCII bytes. It is independent of upstream credentials.
+
+Execution fields use milliseconds, bytes, token counts, request counts and
+dispatch attempts per second as their names indicate. Bounds and timing
+relationships are checked by the parser: the lease cannot exceed sample age,
+updates occur at least twice per lease, and the healthy recovery window is no
+shorter than an update interval. All rate, burst, concurrency, input, output,
+request-duration and body limits are explicit. Aggregate engine gauges include
+primary and extra traffic; they are pressure gates, not calibrated throughput.
+Default execution requires explicit recent exporter timestamps; setting
+`allow_collection_only_metrics: true` acknowledges that collection freshness
+cannot prove exporter sample freshness. `max_records` bounds retained IDs;
+records are never pruned to make an old ID executable. At the limit, new IDs
+are refused while retained state remains queryable.
+
+The earlier observation-only connector reader rejects `execution` or `inference_bearer_env`
+keys because it is strict. A beta.5 reader accepts an observation-only document
+unchanged and remains observation-only. An old application reader rejects this
+separate standalone shape; operators
+MUST select a compatible connector reader explicitly. A new connector reader
+MUST reject unknown required semantics rather than interpreting the file as
+gateway configuration. There is no implicit file rewrite. Execution initializes
+its local recovery database only with explicit `--initialize-state`; absence,
+corruption or incompatible store identity fails closed on later starts. To roll
+back to observation, remove the execution block and keep the persistent journal
+for recovery; downgrading MUST NOT discard unknown work or reissue retained IDs.
+Future changes to defaults, keys, units, nullability or scope
+semantics require schema/example and compatibility-case review together.
+
+Regenerate the schema from its DTOs with:
+
+```sh
+cargo run --locked -p bitrouter --no-default-features --example connector_config_schema > docs/specs/configuration/provider-connector-v1.schema.json
+```
+
+The process test checks the committed schema against the generated schema,
+parses the example, rejects incompatible documents and exercises live CLI
+observation with local Rust fixtures. Implementation and observation authority
+are described in the [connector guide](../../development/provider-connector.md).
+
 ## Policy lock format 4
 
 `policy-lock.yaml` has its own discriminator, `lockfileVersion: 4`. Only version
@@ -325,6 +416,11 @@ implementation ownership are documented in the
 
 ## Compatibility cases
 
+- Parse the standalone connector example; reject unknown keys/version/scope,
+  duplicate members/endpoints/engines, undeclared engine sets, credential-bearing
+  URLs, invalid observation bounds and numeric nulls. Omitted observation fields
+  retain defaults. A valid check makes no network request, and a failed live
+  observation does not change primary inference routing.
 - Parse the ordinary local example and reject an unknown root key. Check nested
   openness against the corresponding schema rather than applying one rule to
   all objects. Missing values retain declared defaults and units.

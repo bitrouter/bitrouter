@@ -14,6 +14,7 @@ They do not create independently versioned format specifications. Follow the
 - [Tenant routing, rate limits and circuit ownership](tenant-routing.md)
 - [Catalog generation and agent conformance](catalogs.md)
 - [Observation and export](observability.md)
+- [Provider connector observation and local execution](provider-connector.md)
 - [Configuration-state comparison](configuration-state.md)
 - [CLI and workflow skills](cli-and-skills.md)
 - [Compiled extensions, host integration and request checks](extensions.md)

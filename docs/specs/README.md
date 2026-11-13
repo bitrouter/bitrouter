@@ -7,8 +7,8 @@ compatibility consequences. Admission and review follow the
 | Object | Canonical specification | Why it needs a maintained format contract |
 | --- | --- | --- |
 | Published model/provider registry | [Registry v1](registry-v1/README.md), beta `1.0.0-beta.6` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
-| Application and routing-policy configuration | [Configuration formats](configuration/README.md), beta `1.0.0-beta.2` | Existing YAML files, defaults, startup tenancy, routing weights, strict readers, explicit migration and policy artifact versions |
-| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), beta `1.0.0-beta.2` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+| Application, connector and routing-policy configuration | [Configuration formats](configuration/README.md), beta `1.0.0-beta.5` | Existing YAML files, standalone pool declarations and bounded local execution, defaults, startup tenancy, routing weights, strict readers, explicit migration and policy artifact versions |
+| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), beta `1.0.0-beta.5` | Independently updated clients/services, local connector control and execution, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
 
 Each object has one specification. A transport, profile or feature is a section
 of that object's contract when it needs the same compatibility review; it does

@@ -10,6 +10,7 @@ pub mod agents;
 mod artifact;
 pub mod commands;
 pub mod config;
+pub mod connector;
 pub mod daemon;
 pub mod eval;
 pub mod mcp;
