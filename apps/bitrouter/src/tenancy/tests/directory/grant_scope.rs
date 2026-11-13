@@ -67,8 +67,11 @@ async fn large_scope_default_budget_issues_once_authorizes_exactly_and_reopens()
                 binding(&fixture, "foreign-wide-put", foreign_scope)?,
             ),
         )
-        .await;
-    ensure!(matches!(foreign, Err(error) if error.0.code == ErrorCode::Forbidden));
+        .await
+        .map_err(failure)?;
+    ensure!(
+        matches!(foreign, StoredResponse::Failure(error) if error.code == ErrorCode::Forbidden)
+    );
     ensure!(
         fixture.service.current().map_err(failure)?.revision
             == created.authority_revision.context("binding revision")?
@@ -107,8 +110,9 @@ async fn large_scope_default_budget_issues_once_authorizes_exactly_and_reopens()
             fixture.operator.clone(),
             Command::Issue(fixture.tenant.clone(), outside),
         )
-        .await;
-    ensure!(matches!(denied, Err(error) if error.0.code == ErrorCode::Forbidden));
+        .await
+        .map_err(failure)?;
+    ensure!(matches!(denied, StoredResponse::Failure(error) if error.code == ErrorCode::Forbidden));
     ensure!(fixture.service.current().map_err(failure)?.revision == before_denial);
     let authenticated = fixture
         .service

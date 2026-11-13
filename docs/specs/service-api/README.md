@@ -402,8 +402,10 @@ unchanged. JSON Schema describes the shape and uniqueness; the typed validator
 enforces the serialized-byte bound. Runtime working and retained-view budgets
 remain separate, lazy, operator-configured capacity constraints. Sequential
 point reads charge actual retained record lengths before loading their links;
-startup can reduce its working page on capacity refusal without skipping any
-directory, operation or retained-record validation.
+startup can reduce its directory working page on capacity refusal without
+skipping any records. Operation and retained-record validation run once with
+their original budgets; their preflight refusals do not trigger directory
+retries.
 
 This broadens accepted inputs without changing their serialized shape. Every
 previously valid 256-key scope fits the new byte limit at maximum identity width.
