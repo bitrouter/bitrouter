@@ -10,6 +10,7 @@ use bitrouter_ai::{
 use bitrouter_sdk::tenancy::TenancyClient;
 
 mod bounds;
+mod grant_scope;
 mod secrets;
 
 const OPERATOR: &str = "directory-operator-synthetic-token-32-bytes";

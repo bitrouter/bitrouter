@@ -138,9 +138,23 @@ impl Worker {
             .begin_repeatable_read(&self.db)
             .await
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-        let result = self
-            .directory_entries(&tx, read, state.revision, control)
-            .await;
+        let mut limit = read.limit;
+        let result = loop {
+            let result = self
+                .directory_entries(&tx, read, state.revision, limit, control)
+                .await;
+            match result {
+                Err(error) if error.is::<store::directory::CapacityExceeded>() && limit > 1 => {
+                    // The SQL projection divides its fixed byte allowance by
+                    // rows, including a continuation sentinel. Retry only this
+                    // bounded read in the same snapshot, before building a page.
+                    // Halving reaches one returned row and one sentinel, then
+                    // refuses; neither the allowance nor deadline increases.
+                    limit = (limit / 2).max(1);
+                }
+                result => break result,
+            }
+        };
         control
             .rollback(tx)
             .await
@@ -168,11 +182,7 @@ impl Worker {
         // cursor. Array commas add exactly one byte per preceding entry. Keep
         // the first entry that does not fit for the next request, without ever
         // serializing an oversized response or repeatedly encoding its prefix.
-        for (index, entry) in entries
-            .into_iter()
-            .take(usize::from(read.limit))
-            .enumerate()
-        {
+        for (index, entry) in entries.into_iter().take(usize::from(limit)).enumerate() {
             let size = serde_json::to_vec(&entry)
                 .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
                 .len();
@@ -200,6 +210,7 @@ impl Worker {
         tx: &sea_orm::DatabaseTransaction,
         read: &Read,
         revision: AuthorityRevision,
+        limit: u16,
         control: &Control,
     ) -> anyhow::Result<Vec<DirectoryEntryV1>> {
         use store::directory as facts;
@@ -211,7 +222,7 @@ impl Worker {
             header.header.revision == revision,
             "directory authority mismatch"
         );
-        let bound = usize::from(read.limit) + 1;
+        let bound = usize::from(limit) + 1;
         let after = read.after.as_ref().map(DirectoryCursorV1::key);
         let bytes = self.authority.load_budget() / 4;
         let mut entries = Vec::new();

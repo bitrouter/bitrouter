@@ -58,6 +58,111 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(10);
 const SECRET: &str = "owned-upstream-secret";
 
+/// SDV for real cold dispatch and restart with a near-limit explicit grant.
+#[tokio::test]
+async fn large_scope_default_budget_keeps_cold_dispatch_and_revocation_after_restart() -> Result<()>
+{
+    use bitrouter_ai::tenancy::authority::{MAX_GRANT_SCOPE_BYTES, ResourceKey, ResourceKind};
+    let mut provider = Provider::start().await?;
+    let (mut fixture, route, slot) = provision(&provider.url).await?;
+    let revision = draft(&fixture, &route, "wide-dispatch-draft", 25).await?;
+    let mut issue = fixture.issuance("wide-dispatch-issue").await?;
+    let mut keys = (0..740)
+        .map(|index| {
+            Ok(ResourceKey {
+                owner_kind: OwnerKind::OperatorPool,
+                owner_id: "o".repeat(128).try_into()?,
+                resource_kind: ResourceKind::Configuration,
+                resource_id: format!("{index:03}{}", "r".repeat(125)).try_into()?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    keys.extend([route.key(), slot.key()]);
+    let scope = GrantScope::Resources { resources: keys };
+    let encoded = serde_json::to_vec(&scope)?.len();
+    ensure!(encoded > 250 * 1024 && encoded <= MAX_GRANT_SCOPE_BYTES);
+    let crate::tenancy::model::Caller::Installation(owner) = &fixture.operator else {
+        anyhow::bail!("installation operator missing");
+    };
+    result(
+        fixture
+            .service
+            .execute(
+                fixture.operator.clone(),
+                Command::Binding(
+                    fixture.tenant.clone(),
+                    fixture.binding.clone(),
+                    BindingPut {
+                        operation_id: "wide-dispatch-binding".try_into()?,
+                        expected_revision: fixture.binding_result.resource_revision.clone(),
+                        principal_id: fixture.principal.clone(),
+                        role: TenantRole::TenantAdmin,
+                        scope: scope.clone(),
+                        expires_at: issue.expires_at.clone(),
+                        expected_management_owner: Some(owner.clone()),
+                        installation_id: fixture.installation.clone(),
+                    },
+                ),
+            )
+            .await
+            .map_err(failure)?,
+    )?;
+    issue.expected_authority_revision = fixture.service.current().map_err(failure)?.revision;
+    issue.scope = scope;
+    let credential = issued(
+        fixture
+            .service
+            .execute(
+                fixture.operator.clone(),
+                Command::Issue(fixture.tenant.clone(), issue),
+            )
+            .await
+            .map_err(failure)?,
+    )?;
+    let token = credential.secret.as_deref().context("issuance secret")?;
+    enable_dispatch(&fixture);
+    let binding = headers(&fixture, token, &revision.revision_id)?;
+    provider.generation(&fixture.service, &binding, 25).await?;
+    ensure!(provider.calls() == 1);
+
+    fixture.service.shutdown().await?;
+    let snapshot = store::load(&fixture.db, Utc::now()).await?;
+    fixture.service = Service::start_prepared(
+        fixture.db.clone(),
+        None,
+        snapshot,
+        fixture.service.resources.clone(),
+    )
+    .await?;
+    enable_dispatch(&fixture);
+    let binding = headers(&fixture, token, &revision.revision_id)?;
+    provider.generation(&fixture.service, &binding, 25).await?;
+    ensure!(provider.calls() == 2);
+    result(
+        fixture
+            .service
+            .execute(
+                fixture.operator.clone(),
+                Command::Revoke(
+                    fixture.tenant.clone(),
+                    credential.credential_id,
+                    Mutation {
+                        operation_id: "wide-dispatch-revoke".try_into()?,
+                        expected_revision: credential.credential_revision,
+                        installation_id: fixture.installation.clone(),
+                    },
+                ),
+            )
+            .await
+            .map_err(failure)?,
+    )?;
+    let (status, rejection) = dispatch(&fixture.service, &binding).await?;
+    ensure!(status == StatusCode::UNAUTHORIZED && rejection["dispatch_state"] == "not_started");
+    ensure!(provider.calls() == 2, "revoked wide grant reached provider");
+    fixture.service.shutdown().await?;
+    Ok(())
+}
+
 #[derive(Clone)]
 struct Observation {
     sent: mpsc::Sender<(HeaderMap, Value)>,

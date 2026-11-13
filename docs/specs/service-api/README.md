@@ -323,7 +323,12 @@ plaintext and operation secrets are never returned. Diagnostics omit contents.
 
 `limit` defaults to 100 and must be an integer in 1–100. Each page contains at
 most that many entries and at most 1 MiB of serialized JSON, including the
-envelope and cursor. The byte bound can produce a shorter page. Empty results
+envelope and cursor. The byte bound or a smaller bounded SQL working page can
+produce a shorter page. The server may halve a working page only after a typed
+capacity refusal, in the same read snapshot and original deadline, down to one
+returned entry plus its continuation sentinel. This never retries a mutation,
+skips a record, or increases the caller's requested limit or working allowance.
+Empty results
 are successful with `entries: []` and `next_after: null`; a full final page also
 has a null continuation. A record that cannot fit by itself fails with
 `payload_too_large`, without skipping it.
@@ -386,6 +391,28 @@ updates and credential revoke compare the observed revision. A tenant-wide
 activation requires tenant-wide `policy.activate` in both the current credential
 and binding. Current permission and lifecycle are checked again at the point
 of an attempt; a previously admitted configuration is not a permanent grant.
+
+The entire compact UTF-8 JSON encoding of either `GrantScope` variant, including
+its `kind` tag, is bounded at 262144 bytes (256 KiB). There is no separate
+256-resource cardinality ceiling. The validator counts encoded bytes into a
+bounded sink before allocating its uniqueness set; this does not claim that an
+HTTP decoder has not already allocated the input. Resource identities, duplicate
+rejection, nonempty resource scopes and operator-pool ownership rules are
+unchanged. JSON Schema describes the shape and uniqueness; the typed validator
+enforces the serialized-byte bound. Runtime working and retained-view budgets
+remain separate, lazy, operator-configured capacity constraints. Sequential
+point reads charge actual retained record lengths before loading their links;
+startup can reduce its working page on capacity refusal without skipping any
+directory, operation or retained-record validation.
+
+This broadens accepted inputs without changing their serialized shape. Every
+previously valid 256-key scope fits the new byte limit at maximum identity width.
+New readers accept old data, but old AI/SDK validators and old Core storage
+readers reject scopes above 256 keys. Upgrade the service and all management,
+directory and dispatch consumers together before writing such grants; an old
+binary is not a supported rollback reader for these new records. Never truncate
+an allowlist or replace it with tenant-wide authority for compatibility. Existing
+2 MiB management bodies and 1 MiB directory responses retain their bounds.
 
 The configuration and its referenced route/policy revisions are pinned for
 execution. Current health, credential and authority changes can narrow eligible

@@ -144,6 +144,23 @@ pub(in crate::tenancy) async fn load_header_in(
 /// Counts describe this complete validation snapshot, never subsequent live mutations.
 pub(in crate::tenancy) async fn load_header_observed_in(
     db: &impl ConnectionTrait,
+    mut budget: Budget,
+) -> Result<Option<(LoadedHeader, directory::DirectoryTotals)>> {
+    loop {
+        match load_header_with_rows_in(db, budget).await {
+            Err(error) if error.is::<CapacityExceeded>() && budget.rows > 1 => {
+                // Retain the caller's snapshot and aggregate reservation. A
+                // smaller keyset page gives each large authority row a larger
+                // share, without skipping any validation or publishing a prefix.
+                budget.rows = (budget.rows / 2).max(1);
+            }
+            result => return result,
+        }
+    }
+}
+
+async fn load_header_with_rows_in(
+    db: &impl ConnectionTrait,
     budget: Budget,
 ) -> Result<Option<(LoadedHeader, directory::DirectoryTotals)>> {
     let page = budget.page()?;
