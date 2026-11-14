@@ -155,7 +155,8 @@ pub(super) fn decode(value: Value) -> Result<(RoutingTarget, Vec<u8>)> {
                 .account
                 .as_ref()
                 .is_none_or(|account| !account.is_empty())
-            && !matches!(decoded.protocol, ApiProtocol::Custom(_)),
+            && !matches!(&decoded.protocol, ApiProtocol::Custom(name)
+                if name != bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL),
         "invalid retained target identity"
     );
     crate::config::url_validator::validate_upstream_url(&decoded.api_base)

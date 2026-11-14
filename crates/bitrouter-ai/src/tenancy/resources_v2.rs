@@ -17,6 +17,8 @@ pub enum ResourcePutRequest {
     V1(Box<super::resources::ResourcePut>),
     /// Explicit shared-health profile command.
     V2(Box<ResourcePutV2>),
+    /// Explicit current native route; no format-one authority widening.
+    V3(Box<super::resources_v3::ResourcePutV3>),
 }
 
 impl<'de> Deserialize<'de> for ResourcePutRequest {
@@ -35,6 +37,9 @@ impl<'de> Deserialize<'de> for ResourcePutRequest {
             2 => serde_json::from_str(raw.get())
                 .map(Self::V2)
                 .map_err(D::Error::custom),
+            3 => serde_json::from_str(raw.get())
+                .map(Self::V3)
+                .map_err(D::Error::custom),
             _ => Err(D::Error::custom("unsupported resource format")),
         }
     }
@@ -45,6 +50,7 @@ impl Validate for ResourcePutRequest {
         match self {
             Self::V1(input) => input.validate(),
             Self::V2(input) => input.validate(),
+            Self::V3(input) => input.validate(),
         }
     }
 }

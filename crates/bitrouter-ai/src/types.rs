@@ -1704,6 +1704,32 @@ pub struct StopDetails {
     pub explanation: Option<String>,
 }
 
+/// A source-proven boundary of one streamed client tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "boundary", rename_all = "snake_case")]
+pub enum ToolCallBoundary {
+    /// Responses finalized the arguments, independently of the output item.
+    Arguments,
+    /// A Responses item snapshot, carried by item.done or the terminal output.
+    ResponsesItem {
+        /// The exact native item status, when present.
+        status: Option<String>,
+        /// True when the snapshot was present only in the terminal output.
+        terminal_only: bool,
+    },
+    /// A source without item-end events reached its existing turn boundary.
+    /// This is projection evidence, not a native Responses item status.
+    Turn {
+        /// Whether the turn ended with complete tool inputs.
+        complete: bool,
+    },
+    /// An Anthropic tool-use block ended.
+    MessagesBlock {
+        /// Whether the block may be emitted as a complete client tool call.
+        complete: bool,
+    },
+}
+
 /// A complete non-streaming generation result.
 ///
 /// **Relationship to the Vercel AI SDK V3 `LanguageModelV3GenerateResult`.** This
@@ -1808,14 +1834,9 @@ impl std::fmt::Debug for ResponseOutputCommitment {
 /// encoders (see [`Self::TextStart`]). The following V3 members are
 /// deliberately **not** modeled, each for a no-dead-code reason:
 ///
-/// - **`tool-input-start` / `tool-input-end`.** Tool-argument streaming is
-///   already framed losslessly without dedicated markers: a
-///   [`Self::ToolCallDelta`] whose `name` is `Some` *is* the start signal — both
-///   block-framed encoders force-close the open block and open a new tool block
-///   on it, so consecutive tool calls land in distinct blocks (Anthropic
-///   `tool_use`, Responses `function_call`), and the block closes on the next
-///   block/terminal. A separate `tool-input-end` would change no re-encoded
-///   byte, so it would be unconstructed-or-unconsumed churn.
+/// - **`tool-input-start`.** A name-bearing [`Self::ToolCallDelta`] opens
+///   the call. [`Self::ToolCallEnd`] preserves explicit per-call boundaries
+///   from block-framed sources independently of the whole-turn terminal.
 /// - **`stream-start { warnings }`.** Request-conversion diagnostics belong in
 ///   a separate preparation report, not provider model stream parts. This
 ///   extraction does not add that report or a client streaming warnings slot.
@@ -1921,6 +1942,13 @@ pub enum StreamPart {
         /// Responses custom tools use plain text input instead of JSON arguments.
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         provider_metadata: ProviderMetadata,
+    },
+    /// A per-call boundary. This does not terminate or settle the response.
+    ToolCallEnd {
+        /// The canonical call ID introduced by its opening delta.
+        id: String,
+        /// The source's boundary and completion evidence.
+        boundary: ToolCallBoundary,
     },
     /// A complete **provider/router-executed** tool call, emitted whole (not as
     /// [`Self::ToolCallDelta`] fragments). The server-side tool loop emits this

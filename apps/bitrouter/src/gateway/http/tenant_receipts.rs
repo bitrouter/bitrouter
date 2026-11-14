@@ -3,7 +3,7 @@ use crate::{
     gateway::{
         error::{BitrouterError, Result},
         model::{
-            protocol::{StreamEncoder, inbound_adapter_for},
+            protocol::{StreamEncoder, tenant_adapter_for},
             stream::SseFrame,
         },
         pipeline::execution::{DeliveryPermit, Pipeline, PreparedPipelineStream},
@@ -39,7 +39,6 @@ async fn frames(
         ));
     }
     let last = frames.len().checked_sub(1);
-    let mut total = 0usize;
     for (index, frame) in frames.into_iter().enumerate() {
         let wire = frame
             .to_wire()
@@ -47,15 +46,9 @@ async fn frames(
                 message: "tenant wire encoding failed".into(),
                 usage: None,
             })?;
-        total = total
-            .checked_add(wire.len())
-            .ok_or(BitrouterError::UpstreamUnavailable)?;
-        if total > BODY {
-            return Err(BitrouterError::UpstreamInvalidResponse {
-                message: "tenant wire expansion limit".into(),
-                usage: None,
-            });
-        }
+        // Each complete SSE event is bounded by to_wire() before entering the
+        // one-slot channel. Multiple individually valid snapshots may exceed
+        // that per-event limit together; native custody has its separate bound.
         let last_chunk = wire.len().saturating_sub(1) / CHUNK;
         for (chunk_index, chunk) in wire.as_bytes().chunks(CHUNK).enumerate() {
             // Copy rather than slicing a shared larger backing allocation.
@@ -110,8 +103,11 @@ pub(super) fn stream(
     inbound: ApiProtocol,
     request_id: String,
 ) -> Result<Response> {
-    let adapter = inbound_adapter_for(&inbound).ok_or(BitrouterError::UpstreamUnavailable)?;
-    let mut encoder = adapter.stream_encoder(&request_id, &prepared.model_id);
+    let adapter = tenant_adapter_for(&inbound).ok_or(BitrouterError::UpstreamUnavailable)?;
+    let mut encoder = execution
+        .native_generate_content_encoder()
+        .unwrap_or_else(|| adapter.stream_encoder(&request_id, &prepared.model_id));
+    let native = execution.native_generate_content_custody();
     let model_id = prepared.model_id;
     let mut parts = prepared.parts;
     let receipt = execution.receipt_owner()?.clone();
@@ -127,6 +123,18 @@ pub(super) fn stream(
             loop {
                 let item=tokio::select! {
                     item=parts.next()=>item,
+                    ()=async {match &native {
+                        Some(owner)=>owner.ready().await,
+                        None=>std::future::pending::<()>().await,
+                    }}=>{
+                        if let Some(owner)=&native {
+                            match owner.drain_ready() {
+                                Ok(ready)=>{if frames(&sender,ready,None).await.is_err(){return;}},
+                                Err(error)=>{failed(&sender,encoder.as_mut(),&execution,error.into(),None).await;return;},
+                            }
+                        }
+                        continue;
+                    },
                     ()=tokio::time::sleep(keepalive)=>{
                         if frames(&sender,vec![SseFrame::Comment("keepalive".into())],None).await.is_err(){return;}
                         continue;
@@ -157,7 +165,7 @@ pub(super) fn stream(
         while let Some(wire)=receiver.recv().await {
             if let Some(delivery)=wire.delivery && let Err(error)=delivery.deliver().await {
                 // A fresh error encoder retains no accumulated provider output.
-                if let Some(adapter)=inbound_adapter_for(&inbound) {
+                if let Some(adapter)=tenant_adapter_for(&inbound) {
                     let mut encoder=adapter.stream_encoder(&request_id,&model_id);
                     for frame in encoder.encode_stream_error(&error.stream_error()) {
                         let bytes=match frame.to_wire() { Ok(bytes)=>bytes, Err(_)=>{yield Err(std::io::Error::other("terminal error encoding failed"));return;} };

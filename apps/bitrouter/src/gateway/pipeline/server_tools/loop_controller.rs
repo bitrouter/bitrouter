@@ -9,7 +9,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 
 use super::approval::ApprovalPolicy;
-use super::classify::{RouterCall, TurnDisposition, classify_turn};
+use super::classify::{RouterCall, TurnDisposition, classify_turn, permits_tool_execution};
 use super::config::ServerToolLoopConfig;
 use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::gateway::error::{BitrouterError, Result};
@@ -165,7 +165,14 @@ impl ServerToolLoop {
                 had_usage = true;
             }
 
-            match classify_turn(&generation.content, &owned) {
+            // A partial call can have valid JSON and an owned name. Keep its
+            // provider response and usage, but never turn it into a side effect.
+            let disposition = if permits_tool_execution(generation.finish_reason.as_ref()) {
+                classify_turn(&generation.content, &owned)
+            } else {
+                TurnDisposition::HandBack
+            };
+            match disposition {
                 TurnDisposition::Done | TurnDisposition::HandBack => {
                     if had_usage {
                         generation.usage = Some(total);
@@ -995,3 +1002,7 @@ mod tests {
         assert_eq!(provider_entry.status, ServerToolStatus::Ok);
     }
 }
+
+#[cfg(test)]
+#[path = "loop_finish_tests.rs"]
+mod finish_tests;

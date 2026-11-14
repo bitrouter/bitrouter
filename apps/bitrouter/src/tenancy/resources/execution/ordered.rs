@@ -31,10 +31,7 @@ impl RetainedExecutionRevision {
         if self.document.policy.is_some()
             || self.document.learning.mode != LearningMode::Off
             || self.document.learning.max_evaluations != 0
-            || !matches!(
-                inbound,
-                ApiProtocol::ChatCompletions | ApiProtocol::Messages | ApiProtocol::Responses
-            )
+            || super::generation_protocol(inbound).is_err()
         {
             return Err(ErrorCode::CapabilityMismatch);
         }
@@ -67,6 +64,9 @@ impl RetainedExecutionRevision {
             GenerationProtocol::ChatCompletions => ApiProtocol::ChatCompletions,
             GenerationProtocol::Messages => ApiProtocol::Messages,
             GenerationProtocol::Responses => ApiProtocol::Responses,
+            GenerationProtocol::GenerateContent => {
+                ApiProtocol::Custom(bitrouter_ai::tenancy::generate_content::PROTOCOL.into())
+            }
         };
         let route = self.ordered_base(reference, &inbound)?;
         let candidates = route
@@ -334,6 +334,11 @@ impl RetainedRoute {
             }
             RouteSelection::Wire(ApiProtocol::Messages) => GenerationProtocol::Messages,
             RouteSelection::Wire(ApiProtocol::Responses) => GenerationProtocol::Responses,
+            RouteSelection::Wire(ApiProtocol::Custom(name))
+                if name == bitrouter_ai::tenancy::generate_content::PROTOCOL =>
+            {
+                GenerationProtocol::GenerateContent
+            }
             _ => return Err(ErrorCode::CapabilityMismatch),
         };
         Ok(Some(AcceptedSelectionV2 {

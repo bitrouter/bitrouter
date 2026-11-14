@@ -1,5 +1,199 @@
 use super::*;
 
+/// Uses the same real sender, original issuance and original actor transaction.
+/// No manual authority/receipt write and no replacement Proof participates.
+async fn rotation_with_optional_intent_order(hold_optional_during_intent: bool) -> Result<()> {
+    use crate::tenancy::actor::provider_technical::tests::RotationOverlap;
+    use sea_orm::{ConnectionTrait, Statement};
+
+    let h = harness(&["responses"], true, None).await?;
+    h.controls.stateful.store(true, Ordering::SeqCst);
+    let original = h.binding(vec![0], GenerationProtocol::Responses).await?;
+    let old_headers = caller_timeout::ordered_headers(&h, &original)?;
+    let mut input = h.fixture.issuance("native-rotate-overlap").await?;
+    input.rotate_credential_id = Some(h.credential.credential_id.clone());
+    let before = crate::tenancy::store::startup::read_header_in(&h.fixture.db, 4096)
+        .await?
+        .context("rotation baseline header")?
+        .header;
+    let mode = h
+        .fixture
+        .db
+        .query_one(Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "PRAGMA journal_mode",
+        ))
+        .await?
+        .context("rotation journal mode")?
+        .try_get::<String>("", "journal_mode")?;
+    ensure!(mode == "wal", "rotation overlap requires actual WAL");
+
+    let end = tokio::time::Instant::now() + TIMEOUT;
+    let probe = RotationOverlap::new(
+        h.fixture.installation.clone(),
+        input.operation_id.clone(),
+        end.min(tokio::time::Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT),
+    );
+    h.fixture
+        .service
+        .technical_io
+        .arm_rotation_overlap(probe.clone())?;
+    h.fixture
+        .service
+        .cleanup
+        .install_rotation_overlap_for_test(probe.clone())?;
+    // Every early error/unwind releases BOTH holds before shutdown. The native
+    // callback also has the same original five-second bound, not a new window.
+    let release = (
+        probe.commit_release.clone().drop_guard(),
+        probe.header_release.clone().drop_guard(),
+    );
+    let checked = tokio::time::timeout_at(probe.deadline, async {
+        eprintln!("rotation_overlap stage=sender_start");
+        let (id, _) = invoke(
+            &h,
+            &original,
+            GenerationProtocol::Responses,
+            json!({"input":"remember:violet"}),
+            None,
+        )
+        .await?;
+        eprintln!("rotation_overlap stage=sender_complete");
+        probe.commit_entered.cancelled().await;
+        eprintln!("rotation_overlap stage=optional_commit_entered");
+        ensure!(probe.execution()? == id, "optional worker execution mismatch");
+
+        let proof = &h.fixture.service.cleanup;
+        let (entered, acquired) = proof.write_intent_counts_for_test();
+        let client = h.control(true, HttpVersion::Http1Only)?;
+        let rotation = client.issue_credential(&h.fixture.tenant, &input);
+        tokio::pin!(rotation);
+        if hold_optional_during_intent {
+            tokio::select! {biased;
+                () = probe.target_store_entered.cancelled() => {},
+                _ = &mut rotation => anyhow::bail!("rotation completed before its actual store entry"),
+            }
+            // This exact operation is now inside the original serial actor's
+            // store call. No maintenance job can own the following counter.
+            tokio::select! {biased;
+                result = proof.wait_write_intent_entered_for_test(entered) => result?,
+                _ = &mut rotation => anyhow::bail!("rotation completed before write-intent entry"),
+            }
+            let counts = proof.write_intent_counts_for_test();
+            ensure!(counts.0 > entered && counts.1 == acquired);
+            ensure!(
+                !probe.header_entered.is_cancelled()
+                    && !probe.commit_release.is_cancelled()
+                    && !probe.commit_expired.load(Ordering::Acquire),
+                "main reached snapshot/acquisition while optional commit was held"
+            );
+            // entered means real BEGIN/entry to DML, not a SQLite lock ACK.
+            // There is no sleep, optional-ACK join or new exclusion mechanism.
+            eprintln!("rotation_overlap stage=intent_entered_before_snapshot");
+            probe.commit_release.cancel();
+            proof
+                .wait_write_intent_acquired_for_test(acquired)
+                .await?;
+            probe.header_entered.cancelled().await;
+            ensure!(proof.write_intent_counts_for_test().1 > acquired);
+            eprintln!("rotation_overlap stage=intent_acquired_then_authority_snapshot");
+            h.fixture.service.technical_io.wait(&id).await?;
+            eprintln!("rotation_overlap stage=optional_worker_closed");
+            probe.header_release.cancel();
+        } else {
+            // Control: the SAME worker commits/closes before rotation is polled.
+            probe.commit_release.cancel();
+            h.fixture.service.technical_io.wait(&id).await?;
+            eprintln!("rotation_overlap stage=optional_worker_closed");
+            probe.header_release.cancel();
+        }
+        let rotated = rotation.await;
+        let observed = probe.outcome()?;
+        let after = crate::tenancy::store::startup::read_header_in(&h.fixture.db, 4096)
+            .await?
+            .context("rotation final header")?
+            .header;
+        let rows = h
+            .fixture
+            .db
+            .query_one(Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT count(*) AS n FROM tenancy_provider_technical_facts \
+                 WHERE installation_id=? AND tenant_id=? AND execution_id=?",
+                [
+                    h.fixture.installation.as_str().into(),
+                    h.fixture.tenant.as_str().into(),
+                    id.as_str().into(),
+                ],
+            ))
+            .await?
+            .context("actual optional row observation")?
+            .try_get::<i64>("", "n")?;
+        let preempt = probe.preempt_seen.load(Ordering::Acquire);
+        // Fixed stage/numeric SQLite outcome only; no error text, SQL, secrets,
+        // provider body, credential or identifying request bytes are printed.
+        eprintln!(
+            "rotation_overlap stage=write_complete held_during_intent={} ok={} sqlite_extended={:?} preempt={} optional_rows={}",
+            hold_optional_during_intent, observed.ok, observed.sqlite_code, preempt, rows
+        );
+        ensure!(
+            !probe.commit_expired.load(Ordering::Acquire) && rows == 1,
+            "optional native commit/closed-row witness missing"
+        );
+        if hold_optional_during_intent {
+            ensure!(preempt, "original Slot cancellation was not observed");
+        }
+        if rotated.is_err() {
+            ensure!(
+                !observed.ok && observed.sqlite_code == Some(517),
+                "rotation failed without typed snapshot witness"
+            );
+            ensure!(
+                after.revision == before.revision
+                    && after.operation_ids == before.operation_ids
+                    && after.safety_operation_ids == before.safety_operation_ids,
+                "failed rotation changed authority header"
+            );
+        }
+        // Regression oracle: optional diagnostics must not break the actual
+        // rotation. Same success oracle, now with actual intent-before-snapshot.
+        ensure!(
+            rotated.is_ok() && observed.ok && observed.sqlite_code.is_none(),
+            "optional COMMIT invalidated actual actor rotation; sqlite_extended={:?}",
+            observed.sqlite_code
+        );
+        let rotated = rotated.map_err(|_| anyhow::anyhow!("actor rotation failed"))?;
+        ensure!(rotated.credential_id != h.credential.credential_id);
+        let mut headers = old_headers;
+        headers.insert(HEADER, PROVIDER_NATIVE_V1.parse()?);
+        let denied = raw(
+            &h,
+            headers,
+            json!({"model":MODEL,"input":"recall","previous_response_id":"resp_receipts"}),
+        )
+        .await?;
+        ensure!(denied.status() == StatusCode::UNAUTHORIZED && h.observed()?.len() == 1);
+        Ok::<(), anyhow::Error>(())
+    })
+    .await;
+    drop(release);
+    let shutdown = tokio::time::timeout_at(end, h.fixture.service.shutdown()).await;
+    // Observe shutdown even when the regression fails.
+    shutdown??;
+    checked??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn optional_commit_before_authority_snapshot_preserves_actual_rotation() -> Result<()> {
+    Box::pin(rotation_with_optional_intent_order(false)).await
+}
+
+#[tokio::test]
+async fn write_intent_precedes_authority_snapshot_during_owned_optional_commit() -> Result<()> {
+    Box::pin(rotation_with_optional_intent_order(true)).await
+}
+
 async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
     h._gateway.abort();
     let stopped = tokio::time::timeout(TIMEOUT, &mut h._gateway).await?;

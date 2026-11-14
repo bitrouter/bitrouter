@@ -62,8 +62,10 @@ impl Worker {
                 .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
             let caller = match &read.subject {
                 AuthoritySubject::Token { hash, .. } => {
+                    // One sequential decode window in the existing third
+                    // of working memory; duplicate rows are never decoded.
                     let credential =
-                        directory::credential_by_hash_in(&transaction, hash, bytes / 96)
+                        directory::credential_by_hash_in(&transaction, hash, bytes / 48)
                             .await
                             .map_err(|error| self.directory_failure(error))?
                             .ok_or(ErrorCode::Unauthorized)?;

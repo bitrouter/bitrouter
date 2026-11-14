@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (Rust APIs, next alpha release):** add the private ordered
+  `GenerationProtocol::GenerateContent` and `ProtocolEnd::GenerateContentFinished`
+  variants. Consumers with exhaustive matches must handle them when upgrading
+  `bitrouter-ai` and `bitrouter-sdk` together. Technical usage also adds
+  `Protocol::GenerateContent` and `Source::GenerateContentChunk`; resource
+  dispatch adds `ResourcePutRequest::V3`. These are closed-enum source changes.
+  The existing three protocol wire
+  values are unchanged. This separate, discovered tenancy operation does not
+  restore the retired public Google routes or provider registrations.
+
+- **Breaking (Rust APIs):** `StreamPart::ToolCallEnd` explicitly seals complete
+  tool arguments. Consumers must preserve it through conversion and handle it
+  in exhaustive matches; partial arguments cannot become executable tools.
+
 - **Breaking (macOS):** officially release and test Apple Silicon (`arm64`)
   only. Retire Intel macOS artifacts across full, gateway and shared gateway
   distributions.

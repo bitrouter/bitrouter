@@ -11,6 +11,7 @@ pub(crate) mod journal;
 pub(in crate::tenancy) mod ordered;
 pub(crate) mod output;
 pub(crate) mod owner;
+pub(crate) mod provider_technical;
 pub(in crate::tenancy) mod read;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod recovery;
@@ -33,6 +34,12 @@ pub(crate) fn journal_error(error: journal::Error) -> ErrorCode {
 }
 
 impl super::execution::TenantExecution {
+    pub(crate) fn provider_technical_capture(
+        &self,
+    ) -> Option<std::sync::Arc<provider_technical::Capture>> {
+        self.journal().ok().map(|journal| journal.technical.clone())
+    }
+
     /// Evidence can forbid another attempt, never authorize one. The ordinary
     /// fallback policy and the current-authority send gate still both apply.
     pub(crate) fn receipt_blocks_fallback(&self) -> bool {

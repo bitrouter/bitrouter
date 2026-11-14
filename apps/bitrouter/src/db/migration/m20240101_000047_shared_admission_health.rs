@@ -35,42 +35,62 @@ fn identities(backend: DatabaseBackend) -> SelectStatement {
         .to_owned()
 }
 
+impl Migration {
+    pub(in crate::db) async fn apply_mysql(
+        &self,
+        fence: &super::super::migration_fence::MysqlFence<'_>,
+    ) -> Result<(), DbErr> {
+        apply(&SchemaManager::new(fence.transaction())).await
+    }
+}
+
+async fn apply(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    let db = manager.get_connection();
+    let backend = manager.get_database_backend();
+    super::m20240101_000045_ordered_receipts::validate(db).await?;
+    let rows = db.query_all(backend.build(&identities(backend))).await?;
+    if rows.len() > 1 {
+        return Err(incompatible());
+    }
+    let Some(row) = rows.first() else {
+        // A fresh store has no authority row; initialization writes format four.
+        return Ok(());
+    };
+    let format = row.try_get::<i32>("", "schema_version")?;
+    if row.try_get::<i32>("", "singleton")? != 1 || !matches!(format, 1 | 3) {
+        return Err(incompatible());
+    }
+    let _: InstallationId = row
+        .try_get::<String>("", "installation_id")?
+        .try_into()
+        .map_err(|_| incompatible())?;
+    if format == 1 {
+        // Only the owned legacy capacity upgrade may release the old latch.
+        return Ok(());
+    }
+    let update = Query::update()
+        .table(Alias::new("tenancy_installation"))
+        .value(Alias::new("schema_version"), 4)
+        .and_where(Expr::col(Alias::new("singleton")).eq(1))
+        .and_where(Expr::col(Alias::new("schema_version")).eq(3))
+        .to_owned();
+    if db.execute(backend.build(&update)).await?.rows_affected() != 1 {
+        return Err(incompatible());
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let db = manager.get_connection();
-        let backend = manager.get_database_backend();
-        super::m20240101_000045_ordered_receipts::validate(db).await?;
-        let rows = db.query_all(backend.build(&identities(backend))).await?;
-        if rows.len() > 1 {
-            return Err(incompatible());
+        // A historical step count can race framework rediscovery on MySQL.
+        // Never let that path execute a writer fence without its transaction.
+        if manager.get_database_backend() == DatabaseBackend::MySql {
+            return Err(DbErr::Custom(
+                "MySQL writer fence requires transactional runner".into(),
+            ));
         }
-        let Some(row) = rows.first() else {
-            // A fresh store has no authority row; initialization writes format four.
-            return Ok(());
-        };
-        let format = row.try_get::<i32>("", "schema_version")?;
-        if row.try_get::<i32>("", "singleton")? != 1 || !matches!(format, 1 | 3) {
-            return Err(incompatible());
-        }
-        let _: InstallationId = row
-            .try_get::<String>("", "installation_id")?
-            .try_into()
-            .map_err(|_| incompatible())?;
-        if format == 1 {
-            // Only the owned legacy capacity upgrade may release the old latch.
-            return Ok(());
-        }
-        let update = Query::update()
-            .table(Alias::new("tenancy_installation"))
-            .value(Alias::new("schema_version"), 4)
-            .and_where(Expr::col(Alias::new("singleton")).eq(1))
-            .and_where(Expr::col(Alias::new("schema_version")).eq(3))
-            .to_owned();
-        if db.execute(backend.build(&update)).await?.rows_affected() != 1 {
-            return Err(incompatible());
-        }
-        Ok(())
+        apply(manager).await
     }
 
     async fn down(&self, _: &SchemaManager) -> Result<(), DbErr> {
@@ -120,7 +140,9 @@ mod tests {
             }
             let ledger = Migrator::get_migration_models(&db).await?;
             let valid = identity == "x".repeat(128);
-            let result = crate::db::run_migrations(&db).await;
+            // This component probe stops at the shared-health fence. Successor
+            // migrations have their own atomicity and historical-byte probes.
+            let result = crate::db::test_migrations::through_shared_health(&db).await;
             ensure!(result.is_ok() == valid);
             let row = db
                 .query_one(Statement::from_string(

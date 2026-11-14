@@ -49,6 +49,9 @@ pub(super) fn generation_protocol(
         ApiProtocol::ChatCompletions => Ok(GenerationProtocol::ChatCompletions),
         ApiProtocol::Messages => Ok(GenerationProtocol::Messages),
         ApiProtocol::Responses => Ok(GenerationProtocol::Responses),
+        ApiProtocol::Custom(name) if name == bitrouter_ai::tenancy::generate_content::PROTOCOL => {
+            Ok(GenerationProtocol::GenerateContent)
+        }
         _ => anyhow::bail!("unsupported admission protocol"),
     }
 }
@@ -242,7 +245,8 @@ impl RetainedExecutionRevision {
         raw_model: &str,
         inbound: &ApiProtocol,
     ) -> std::result::Result<RetainedRoute, ErrorCode> {
-        if matches!(inbound, ApiProtocol::Custom(_)) {
+        if matches!(inbound, ApiProtocol::Custom(name) if name != bitrouter_ai::tenancy::generate_content::PROTOCOL)
+        {
             return Err(ErrorCode::InvalidRequest);
         }
         let data = self.routes.get(raw_model).ok_or(ErrorCode::NotFound)?;
@@ -376,7 +380,7 @@ pub(crate) struct RetainedRoute {
 
 struct RouteData {
     reference: ResourceRef,
-    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachmentV1>>,
+    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
     assessment: Option<ResourceRef>,
     block: Option<Box<super::block::Profile>>,
     block_pricing: Vec<Option<crate::gateway::pipeline::stream::UsagePricing>>,

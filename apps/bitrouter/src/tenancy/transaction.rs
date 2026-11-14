@@ -13,6 +13,8 @@ use tokio::time::Instant;
 
 #[cfg(test)]
 pub(in crate::tenancy) mod receipt_observation;
+#[cfg(test)]
+mod write_intent;
 
 pub(super) const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -30,6 +32,10 @@ pub(super) struct Evidence {
     pub disposition: Disposition,
     #[cfg(test)]
     pub fenced: bool,
+    #[cfg(test)]
+    write_intent_entered: usize,
+    #[cfg(test)]
+    write_intent_acquired: usize,
 }
 
 /// Borrowed, read-only preparation connection. Each awaited statement keeps its
@@ -104,6 +110,9 @@ impl sea_orm::ConnectionTrait for ReadConnection<'_> {
 
 /// Joining the worker is insufficient without its explicit transaction outcome.
 pub(super) struct Proof {
+    #[cfg(test)]
+    rotation_overlap:
+        std::sync::Mutex<Option<Arc<super::actor::provider_technical::tests::RotationOverlap>>>,
     state: watch::Sender<Evidence>,
     live: Arc<AtomicBool>,
     #[cfg(test)]
@@ -121,11 +130,17 @@ pub(super) struct Proof {
 impl Proof {
     pub fn new(live: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
+            #[cfg(test)]
+            rotation_overlap: std::sync::Mutex::new(None),
             live,
             state: watch::channel(Evidence {
                 disposition: Disposition::NoTransaction,
                 #[cfg(test)]
                 fenced: false,
+                #[cfg(test)]
+                write_intent_entered: 0,
+                #[cfg(test)]
+                write_intent_acquired: 0,
             })
             .0,
             #[cfg(test)]
@@ -231,6 +246,13 @@ impl std::fmt::Display for ReadExpired {
 impl std::error::Error for ReadExpired {}
 
 impl Control {
+    #[cfg(test)]
+    pub(in crate::tenancy) fn rotation_overlap_for_test(
+        &self,
+    ) -> Option<Arc<super::actor::provider_technical::tests::RotationOverlap>> {
+        self.proof.rotation_overlap.lock().ok()?.clone()
+    }
+
     pub fn new(proof: Arc<Proof>) -> Self {
         proof.record(Disposition::NoTransaction);
         Self {
@@ -413,6 +435,82 @@ impl Control {
         self.begin_configured(db, isolation, false).await
     }
 
+    /// Required tenancy writers acquire SQLite intent before any application read.
+    pub async fn begin_write(&self, db: &DatabaseConnection) -> Result<DatabaseTransaction> {
+        self.with_write_intent(self.begin(db).await?).await
+    }
+
+    /// Retain the original repeatable-read choice on non-SQLite backends.
+    pub async fn begin_write_repeatable_read(
+        &self,
+        db: &DatabaseConnection,
+    ) -> Result<DatabaseTransaction> {
+        self.with_write_intent(self.begin_repeatable_read(db).await?)
+            .await
+    }
+
+    /// Only BEGIN itself can use the receipt's typed pre-acquisition exception.
+    pub async fn begin_write_receipt(
+        &self,
+        db: &DatabaseConnection,
+    ) -> Result<DatabaseTransaction> {
+        self.with_write_intent(self.begin_receipt(db).await?).await
+    }
+
+    async fn with_write_intent(
+        &self,
+        transaction: DatabaseTransaction,
+    ) -> Result<DatabaseTransaction> {
+        use sea_orm::ConnectionTrait;
+        if transaction.get_database_backend() != sea_orm::DatabaseBackend::Sqlite {
+            return Ok(transaction);
+        }
+        // BEGIN already succeeded: every failure below owns this SAME transaction.
+        // The native tenancy schema guarantees the ordinary main target. Do not
+        // inspect/fallback/create a schema, or establish a read snapshot first.
+        let result: Result<()> = async {
+            self.check_read()?;
+            #[cfg(test)]
+            self.proof.state.send_modify(|state| {
+                state.write_intent_entered = state.write_intent_entered.saturating_add(1);
+            });
+            let applied = transaction
+                .execute_unprepared(
+                    "UPDATE main.tenancy_installation SET singleton=singleton WHERE 0",
+                )
+                .await?;
+            ensure!(
+                applied.rows_affected() == 0,
+                "write intent changed installation rows"
+            );
+            #[cfg(test)]
+            self.proof.state.send_modify(|state| {
+                state.write_intent_acquired = state.write_intent_acquired.saturating_add(1);
+            });
+            self.check_read()?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => Ok(transaction),
+            Err(error) => {
+                if error.downcast_ref::<ReadExpired>().is_none() {
+                    self.storage_failed();
+                }
+                // No ConnectionAcquire/NoTransaction reclassification after BEGIN.
+                // Consuming rollback must ACK; on Err its original Proof remains
+                // Ambiguous. Keep the primary typed cause, with cleanup context.
+                match self.rollback(transaction).await {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => {
+                        Err(error
+                            .context(format!("write-intent rollback is unconfirmed: {cleanup}")))
+                    }
+                }
+            }
+        }
+    }
+
     async fn begin_configured(
         &self,
         db: &DatabaseConnection,
@@ -550,6 +648,44 @@ pub(super) struct Gate {
 
 #[cfg(test)]
 impl Proof {
+    /// Monotonic actual Control boundaries; entered does not assert a SQL lock.
+    pub fn write_intent_counts_for_test(&self) -> (usize, usize) {
+        let state = self.state.borrow();
+        (state.write_intent_entered, state.write_intent_acquired)
+    }
+
+    pub async fn wait_write_intent_entered_for_test(&self, after: usize) -> Result<()> {
+        let mut state = self.state.subscribe();
+        state
+            .wait_for(|state| state.write_intent_entered > after)
+            .await
+            .map_err(|_| anyhow::anyhow!("write intent entry observation closed"))?;
+        Ok(())
+    }
+
+    pub async fn wait_write_intent_acquired_for_test(&self, after: usize) -> Result<()> {
+        let mut state = self.state.subscribe();
+        state
+            .wait_for(|state| state.write_intent_acquired > after)
+            .await
+            .map_err(|_| anyhow::anyhow!("write intent acquisition observation closed"))?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(in crate::tenancy) fn install_rotation_overlap_for_test(
+        &self,
+        probe: Arc<super::actor::provider_technical::tests::RotationOverlap>,
+    ) -> Result<()> {
+        let mut slot = self
+            .rotation_overlap
+            .lock()
+            .map_err(|_| anyhow::anyhow!("rotation proof probe unavailable"))?;
+        ensure!(slot.is_none(), "rotation proof probe already installed");
+        *slot = Some(probe);
+        Ok(())
+    }
+
     /// Monotonic observations survive unrelated later jobs on the same writer.
     pub fn sql_counts_for_test(&self) -> (usize, usize) {
         (

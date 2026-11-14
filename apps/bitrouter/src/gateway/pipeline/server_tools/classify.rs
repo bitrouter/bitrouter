@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use bitrouter_ai::types::Content;
+use bitrouter_ai::types::{Content, FinishReason};
 
 /// One router-owned tool call extracted from a model turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +29,18 @@ pub enum TurnDisposition {
     Execute(Vec<RouterCall>),
 }
 
+/// Automatic side effects require a known complete provider turn.
+pub(super) fn permits_tool_execution(finish: Option<&FinishReason>) -> bool {
+    matches!(finish, Some(FinishReason::Stop | FinishReason::ToolCalls))
+}
+
 /// Classify `content` against the set of router-owned tool names.
 ///
 /// Provider-executed calls (`provider_executed: true`) were already run by the
 /// upstream and are ignored. If any client-owned call is present the turn is
-/// handed back; otherwise the router-owned calls (if any) are executed.
+/// handed back; otherwise the router-owned calls (if any) are identified.
+/// Ownership alone is not completion proof: execution also requires an
+/// eligible provider finish reason at the controller boundary.
 pub fn classify_turn(content: &[Content], owned: &BTreeSet<String>) -> TurnDisposition {
     let mut router_calls = Vec::new();
     let mut has_client_call = false;

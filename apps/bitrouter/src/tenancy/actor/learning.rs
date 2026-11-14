@@ -50,9 +50,11 @@ impl Worker {
             for _ in 0..2 {
                 control.reserve_write(crate::storage::operation_budget::MAX_BYTES, cleanup)?;
                 let tx = control
-                    .begin_repeatable_read(&self.db)
+                    .begin_write_repeatable_read(&self.db)
                     .await
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                    .map_err(|error| {
+                        self.write_intent_failure(error, ErrorCode::CapacityExceeded)
+                    })?;
                 let result = async {
                     let budget = OperationBudget::with_row_limit(&check, 1024);
                     let reply = match &job.work {

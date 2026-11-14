@@ -58,6 +58,7 @@ use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamP
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
 
 enum ExecutionInput<'a> {
+    GenerateContent(&'a super::types::generate_content::Input),
     #[cfg(feature = "server-tools")]
     Generation(&'a Prompt),
     Decisions(&'a bitrouter_ai::decisions::DecisionRequest),
@@ -489,14 +490,21 @@ struct ObservedUpstreamStream {
     target: RoutingTarget,
     provider_started_at: Instant,
     terminal: bool,
+    technical_hop: Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>,
+    technical: Option<Arc<crate::tenancy::receipts::provider_technical::Operation>>,
 }
 
 impl ObservedUpstreamStream {
-    fn notify(&mut self, outcome: StreamHopOutcome<'_>) {
+    fn notify(&mut self, outcome: StreamHopOutcome<'_>, complete: bool) {
         if self.terminal {
             return;
         }
         self.terminal = true;
+        if !matches!(outcome, StreamHopOutcome::Completed)
+            && let Some(operation) = &self.technical
+        {
+            operation.source_end(false);
+        }
         if let Some(hop) = &self.operational {
             match outcome {
                 StreamHopOutcome::Failed(error) => {
@@ -516,6 +524,20 @@ impl ObservedUpstreamStream {
         }
         let duration_ms =
             crate::gateway::pipeline::timing::elapsed_millis(self.provider_started_at);
+        if let Some(hop) = &self.technical_hop {
+            use bitrouter_ai::tenancy::provider_technical_facts_v2::{HopEnd, HopProfile};
+            let end = match outcome {
+                StreamHopOutcome::Completed => HopEnd::Completed,
+                StreamHopOutcome::Failed(_) => HopEnd::Failed,
+                StreamHopOutcome::Dropped => HopEnd::Dropped,
+            };
+            hop.finish(
+                HopProfile::CoreStreamHopNotifyV1,
+                end,
+                duration_ms,
+                !complete,
+            );
+        }
         for hook in &self.hooks {
             let callback = std::panic::AssertUnwindSafe(|| {
                 hook.on_stream_hop_end(&self.request_id, &self.target, outcome, duration_ms)
@@ -536,14 +558,36 @@ impl Stream for ObservedUpstreamStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let item = self.inner.as_mut().poll_next(cx);
         match &item {
-            std::task::Poll::Ready(None) => self.notify(StreamHopOutcome::Completed),
+            std::task::Poll::Ready(None) => {
+                if !self.terminal
+                    && let Some(operation) = &self.technical
+                {
+                    operation.source_end(false);
+                }
+                self.notify(StreamHopOutcome::Completed, false);
+            }
             std::task::Poll::Ready(Some(Err(error))) => {
-                self.notify(StreamHopOutcome::Failed(error));
+                self.notify(StreamHopOutcome::Failed(error), false);
             }
-            std::task::Poll::Ready(Some(Ok(part))) if part.is_terminal() => {
-                self.notify(StreamHopOutcome::Completed);
+            std::task::Poll::Ready(Some(Ok(part))) => {
+                // Accepted provider IR before server-tool transforms or hooks.
+                // Bind its semantic clock to this exact original stream/arm set.
+                if let Some(operation) = &self.technical
+                    && let Some(kind) = super::timing::FirstTokenKind::from_part(part)
+                {
+                    operation.semantic(Instant::now(), kind);
+                }
+                if part.is_terminal() {
+                    if let Some(operation) = &self.technical {
+                        operation.source_end(super::executor::receipt::successful(part));
+                    }
+                    self.notify(
+                        StreamHopOutcome::Completed,
+                        super::executor::receipt::successful(part),
+                    );
+                }
             }
-            std::task::Poll::Ready(Some(Ok(_))) | std::task::Poll::Pending => {}
+            std::task::Poll::Pending => {}
         }
         item
     }
@@ -551,7 +595,7 @@ impl Stream for ObservedUpstreamStream {
 
 impl Drop for ObservedUpstreamStream {
     fn drop(&mut self) {
-        self.notify(StreamHopOutcome::Dropped);
+        self.notify(StreamHopOutcome::Dropped, false);
     }
 }
 
@@ -651,7 +695,8 @@ struct PipelineStreamUpstream {
 #[async_trait]
 impl UpstreamStream for PipelineStreamUpstream {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream> {
-        let ctx = self.context.fork_for_prompt(prompt.clone());
+        let mut ctx = self.context.fork_for_prompt(prompt.clone());
+        ctx.insert_extension(Arc::new(super::server_tools::stream::ProviderToolTurn));
         let execution = self
             .pipeline
             .execute_stream_with_fallback(&self.chain, &ctx)
@@ -862,6 +907,8 @@ impl Pipeline {
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
                 .ok_or(BitrouterError::UpstreamUnavailable)?;
             registration.validate(self.owned_tasks())?;
+            registration.validate_execution(execution.id())?;
+            execution.claim_preparation()?;
             let tasks = self
                 .owned_tasks()
                 .cloned()
@@ -921,26 +968,20 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        if let Some(execution) = req
+        if req
             .extensions
             .get::<Arc<crate::tenancy::execution::TenantExecution>>()
-            .cloned()
+            .is_some()
         {
+            // Validation does not own a preparation or a failure proposal.
+            // The detached entry claims custody only after exact registration
+            // checks; the registered lifecycle owns abandoned-input cleanup.
             let pipeline = req
                 .extensions
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
-                .ok_or(BitrouterError::UpstreamUnavailable)
-                .and_then(|registration| registration.pipeline(self));
-            match pipeline {
-                Ok(pipeline) => return pipeline.execute_detached(req).await,
-                Err(error) => {
-                    drop(req);
-                    execution
-                        .terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed)
-                        .await?;
-                    return Err(error);
-                }
-            }
+                .ok_or(BitrouterError::UpstreamUnavailable)?
+                .pipeline(self)?;
+            return pipeline.execute_detached(req).await;
         }
         let prepared = self
             .execute_prepared(
@@ -1072,6 +1113,10 @@ impl Pipeline {
                 )
                 .await
                 .map(|outcome| (outcome.result, true, outcome.output_rejection)),
+            (Ok(_), PipelineInput::GenerateContent(input), _) => self
+                .execute_with_fallback(&chain, ExecutionInput::GenerateContent(input), &ctx)
+                .await
+                .map(|result| (result, true, None)),
             (Ok(_), PipelineInput::Decisions(request), _) => self
                 .execute_with_fallback(&chain, ExecutionInput::Decisions(request), &ctx)
                 .await
@@ -1556,6 +1601,8 @@ impl Pipeline {
                 .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
                 .ok_or(BitrouterError::UpstreamUnavailable)?;
             registration.validate(self.owned_tasks())?;
+            registration.validate_execution(execution.id())?;
+            execution.claim_preparation()?;
             let tasks = self
                 .owned_tasks()
                 .cloned()
@@ -2224,6 +2271,16 @@ impl Pipeline {
                 PipelineInput::Generation(prompt) => {
                     content_fragments(prompt, binding.max_input_bytes)
                 }
+                PipelineInput::GenerateContent(input) => {
+                    let prompt = input.projection().ok_or_else(|| {
+                        super::types::generate_content::Input::unavailable(
+                            &bitrouter_ai::types::ApiProtocol::Custom(
+                                bitrouter_ai::tenancy::generate_content::PROTOCOL.into(),
+                            ),
+                        )
+                    })?;
+                    content_fragments(prompt, binding.max_input_bytes)
+                }
                 PipelineInput::Decisions(request) => {
                     decision_content_fragments(request, binding.max_input_bytes)
                 }
@@ -2438,7 +2495,9 @@ impl Pipeline {
             }
         }
         let native = preparation_runtime(ctx);
-        if operation == ModelOperation::Generation {
+        if operation == ModelOperation::Generation
+            && !matches!(ctx.input(), PipelineInput::GenerateContent(_))
+        {
             let prepared = if let Some(prepared) =
                 ctx.extension::<crate::gateway::routing::preparation::Prepared>()
             {
@@ -2530,7 +2589,9 @@ impl Pipeline {
         .await?;
         let mut context_changed = false;
         let mut routing_prompt = None;
-        if operation == ModelOperation::Generation {
+        if operation == ModelOperation::Generation
+            && !matches!(ctx.input(), PipelineInput::GenerateContent(_))
+        {
             filter_reasoning_effort_targets(&mut chain, ctx.require_generation_prompt()?)?;
             // A native caller may leave the output budget to the selected model.
             // Resolve it before committing the exact prompt and before token counts.
@@ -2844,13 +2905,20 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
-        #[cfg(feature = "server-tools")]
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
             }
             match input {
+                ExecutionInput::GenerateContent(input) => {
+                    if !self
+                        .admit_generate_content_candidate(target, input, false, ctx, &mut excluded)
+                        .await?
+                    {
+                        continue;
+                    }
+                }
                 #[cfg(feature = "server-tools")]
                 ExecutionInput::Generation(prompt) => {
                     if !self
@@ -2869,10 +2937,16 @@ impl Pipeline {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, false);
             self.observe_hop_start(ctx, target).await;
             let outcome = match reached {
                 Err(error) => Err(error),
                 Ok(()) => match input {
+                    ExecutionInput::GenerateContent(input) => {
+                        self.executor
+                            .execute_generate_content(target, input, ctx)
+                            .await
+                    }
                     #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(prompt) => {
                         self.executor.execute(target, prompt, ctx).await
@@ -2884,6 +2958,10 @@ impl Pipeline {
             }
             .and_then(|result| {
                 let matches = match input {
+                    ExecutionInput::GenerateContent(_) => {
+                        result.result.generation().is_some()
+                            || result.result.native_generate_content().is_some()
+                    }
                     #[cfg(feature = "server-tools")]
                     ExecutionInput::Generation(_) => result.result.generation().is_some(),
                     ExecutionInput::Decisions(_) => result.result.decisions().is_some(),
@@ -2924,6 +3002,7 @@ impl Pipeline {
                         .await;
                 }
             }
+            technical_hop.finish(outcome.is_ok());
             match outcome {
                 Ok(result) => {
                     for hook in self
@@ -2951,7 +3030,6 @@ impl Pipeline {
                 },
             }
         }
-        #[cfg(feature = "server-tools")]
         if errors.is_empty() && !excluded.issues.is_empty() {
             return Err(BitrouterError::Incompatible { report: excluded });
         }
@@ -3023,12 +3101,14 @@ impl Pipeline {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
             };
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, false);
             self.observe_hop_start(ctx, target).await;
             if let Some((control, _)) = attempt_control
                 && let Err(error) = control.before_attempt(ctx.request_id(), index).await
             {
                 self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
                     .await;
+                technical_hop.finish(false);
                 return Err(error);
             }
             let private_context =
@@ -3213,6 +3293,7 @@ impl Pipeline {
                         .await;
                 }
             }
+            technical_hop.finish(outcome.is_ok());
             if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
                 && let Some(failure) = execution.failure()
             {
@@ -3308,20 +3389,30 @@ impl Pipeline {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
-            if !self
-                .admit_candidate(
-                    target,
-                    ctx.require_generation_prompt()?,
-                    true,
-                    ctx,
-                    &mut excluded,
-                )
-                .await?
-            {
+            let admitted = match ctx.input() {
+                PipelineInput::GenerateContent(input) => {
+                    self.admit_generate_content_candidate(target, input, true, ctx, &mut excluded)
+                        .await?
+                }
+                _ => {
+                    self.admit_candidate(
+                        target,
+                        ctx.require_generation_prompt()?,
+                        true,
+                        ctx,
+                        &mut excluded,
+                    )
+                    .await?
+                }
+            };
+            if !admitted {
                 continue;
             }
             self.wait_before_fallback(errors.len()).await;
             let provider_started_at = Instant::now();
+            let mut technical_hop = super::provider_technical::begin_hop(ctx, true);
+            let technical =
+                super::provider_technical::begin(ctx, target, provider_started_at, true);
             let reached = match ctx.extension::<crate::tenancy::execution::TenantExecution>() {
                 Some(execution) => execution.reached_hop(attempt_index, target),
                 None => Ok(()),
@@ -3329,11 +3420,18 @@ impl Pipeline {
             self.observe_hop_start(ctx, target).await;
             let outcome = match reached {
                 Err(error) => Err(error),
-                Ok(()) => {
-                    self.executor
-                        .execute_stream(target, ctx.require_generation_prompt()?, ctx)
-                        .await
-                }
+                Ok(()) => match ctx.input() {
+                    PipelineInput::GenerateContent(input) => {
+                        self.executor
+                            .execute_generate_content_stream(target, input, ctx)
+                            .await
+                    }
+                    _ => {
+                        self.executor
+                            .execute_stream(target, ctx.require_generation_prompt()?, ctx)
+                            .await
+                    }
+                },
             };
             match &outcome {
                 Ok(_) => {
@@ -3350,6 +3448,7 @@ impl Pipeline {
                 // more fallback.
                 Ok(stream) => {
                     ctx.set_successful_target(target.clone());
+                    technical.detach();
                     let stream = Box::pin(ObservedUpstreamStream {
                         execution: ctx
                             .extension::<crate::tenancy::execution::TenantExecution>()
@@ -3363,6 +3462,8 @@ impl Pipeline {
                         target: target.clone(),
                         provider_started_at,
                         terminal: false,
+                        technical_hop: technical_hop.opened(),
+                        technical: super::provider_technical::current(ctx),
                     });
                     return Ok(StreamingExecution {
                         stream,
@@ -3370,19 +3471,22 @@ impl Pipeline {
                         provider_started_at,
                     });
                 }
-                Err(e) => match self.classify_failure(ctx, &e, target).await {
-                    FallbackDecision::TryNext => {
-                        tracing::warn!(
-                            provider = %target.provider_name,
-                            model = %target.service_id,
-                            error = %e,
-                            "upstream streaming route candidate failed"
-                        );
-                        errors.push(e);
-                        continue;
+                Err(e) => {
+                    technical_hop.finish(false);
+                    match self.classify_failure(ctx, &e, target).await {
+                        FallbackDecision::TryNext => {
+                            tracing::warn!(
+                                provider = %target.provider_name,
+                                model = %target.service_id,
+                                error = %e,
+                                "upstream streaming route candidate failed"
+                            );
+                            errors.push(e);
+                            continue;
+                        }
+                        FallbackDecision::Fail(e) => return Err(e),
                     }
-                    FallbackDecision::Fail(e) => return Err(e),
-                },
+                }
             }
         }
         if errors.is_empty() && !excluded.issues.is_empty() {
@@ -3421,6 +3525,36 @@ impl Pipeline {
                 report.require_admitted()?;
                 Ok(report)
             });
+        self.admit_assessment(assessment, target, ctx, excluded)
+            .await
+    }
+
+    async fn admit_generate_content_candidate(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        stream: bool,
+        ctx: &PipelineContext,
+        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+    ) -> Result<bool> {
+        let assessment = self
+            .executor
+            .preflight_generate_content(target, input, stream, ctx)
+            .and_then(|report| {
+                report.require_admitted()?;
+                Ok(report)
+            });
+        self.admit_assessment(assessment, target, ctx, excluded)
+            .await
+    }
+
+    async fn admit_assessment(
+        &self,
+        assessment: Result<bitrouter_ai::conversion::ConversionReport>,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+    ) -> Result<bool> {
         match assessment {
             Ok(report) => {
                 if !report.admitted.is_empty() {
@@ -3548,6 +3682,7 @@ impl Pipeline {
             ExecutionCustody::from_context(ctx).record_pipeline_outcome(false);
         }
         ctx.finalize_request_duration();
+        ctx.finalize_technical_scope(streamed, error.is_some());
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
         if let Some(BitrouterError::UpstreamInvalidResponse {

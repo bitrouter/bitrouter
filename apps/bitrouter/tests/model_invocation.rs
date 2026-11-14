@@ -368,9 +368,8 @@ async fn codex_generate_rejects_truncated_failed_and_post_terminal_streams() -> 
     Ok(())
 }
 
-#[tokio::test]
-async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestResult {
-    let events = vec![
+fn codex_native_sparse_events() -> Vec<Value> {
+    vec![
         json!({"type":"response.created","response":{"id":"native-result"}}),
         json!({"type":"response.output_item.added","item":{"id":"reasoning","type":"reasoning"}}),
         json!({"type":"response.reasoning_summary_text.delta","delta":"reason"}),
@@ -387,7 +386,28 @@ async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestR
         json!({"type":"response.output_text.delta","delta":"last"}),
         json!({"type":"response.output_item.done","item":{"id":"last-text","type":"message"}}),
         json!({"type":"response.incomplete","response":{"id":"native-result","status":"incomplete","output":[],"usage":{"input_tokens":12,"output_tokens":4,"input_tokens_details":{"cached_tokens":5},"output_tokens_details":{"reasoning_tokens":1}}}}),
-    ];
+    ]
+}
+
+fn codex_native_tool_snapshot() -> Value {
+    json!({"id":"native-item","type":"custom_tool_call","call_id":"native-call","name":"apply_patch","namespace":"tools","input":"raw patch","status":"completed"})
+}
+
+#[tokio::test]
+async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestResult {
+    let mut events = codex_native_sparse_events();
+    // Done events carry the complete output item, and the terminal response
+    // retains that item in its output array. Keep the sparse input below as a
+    // negative fixture instead of treating missing identity as completion proof.
+    // https://developers.openai.com/api/reference/resources/responses/streaming-events
+    events[11]["item"] = codex_native_tool_snapshot();
+    events[15]["response"]["output"] = json!([
+        {"id":"reasoning","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"reason"}]},
+        {"id":"first-text","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"first","annotations":[]}]},
+        codex_native_tool_snapshot(),
+        {"id":"last-text","type":"message","status":"incomplete","role":"assistant","content":[{"type":"output_text","text":"last","annotations":[]}]}
+    ]);
+    events[15]["response"]["incomplete_details"] = json!({"reason":"max_output_tokens"});
     let body = events.into_iter().map(event).collect::<String>();
     let mut server = fixture(200, body, true, None).await?;
     let mut selected = target(&server.base, ApiProtocol::Responses);
@@ -410,6 +430,35 @@ async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestR
     assert_eq!(usage.cache_read_tokens, 5);
     assert_eq!(usage.reasoning_tokens, 1);
     tokio::time::timeout(DEADLINE, &mut server.server).await???;
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_generate_rejects_sparse_and_omitted_custom_tool_snapshots() -> TestResult {
+    let client = ModelClient::new(HttpTimeouts::default())?;
+    for complete_item in [false, true] {
+        let mut events = codex_native_sparse_events();
+        if complete_item {
+            events[11]["item"] = codex_native_tool_snapshot();
+        }
+        let body = events.into_iter().map(event).collect::<String>();
+        let mut server = fixture(200, body, true, None).await?;
+        let mut selected = target(&server.base, ApiProtocol::Responses);
+        selected.provider_name = "openai-codex".into();
+        let result = client
+            .generate(&selected, &prompt()?, &CancellationToken::new())
+            .await;
+        let expected = if complete_item {
+            "Responses terminal omitted a streamed tool item"
+        } else {
+            "Responses tool snapshot changed identity"
+        };
+        assert!(
+            matches!(result, Err(ModelError::InvalidResponse { ref message, .. }) if message == expected),
+            "{result:?}"
+        );
+        tokio::time::timeout(DEADLINE, &mut server.server).await???;
+    }
     Ok(())
 }
 

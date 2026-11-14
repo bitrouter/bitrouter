@@ -19,9 +19,7 @@ use crate::gateway::model::protocol::responses::{
 use crate::gateway::observability::event::EventBus;
 use crate::gateway::pipeline::settlement::{RequiredFinalizationContext, SettlementContext};
 use crate::gateway::pipeline::stream::UsageAccumulator;
-use crate::gateway::pipeline::timing::{
-    FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
-};
+use crate::gateway::pipeline::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
 use crate::gateway::pipeline::types::{
     ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
 };
@@ -253,6 +251,9 @@ pub struct PipelineContext {
     completed_decision_usage: Mutex<Option<Usage>>,
     completed_decision_failure: AtomicBool,
     stream_provider_started_at: Option<Instant>,
+    finalized_stream_upstream_ms: Option<u64>,
+    pub(super) provider_technical: super::provider_technical::Current,
+    pub(super) observer_hop: super::provider_technical::ObserverSlot,
     first_token_timing: Option<FirstTokenTiming>,
     generation_duration_ms: Option<u64>,
     finalized_request_duration_ms: Option<u64>,
@@ -291,7 +292,7 @@ pub struct PipelineContext {
 impl PipelineContext {
     /// Build a fresh context from an inbound request.
     pub fn new(req: PipelineRequest) -> Self {
-        Self {
+        let ctx = Self {
             request_id: req.request_id,
             original_model: req.original_model,
             model: req.model,
@@ -305,10 +306,13 @@ impl PipelineContext {
             route_chain: None,
             last_attempted_target: Mutex::new(None),
             successful_target: Arc::new(Mutex::new(None)),
+            provider_technical: Default::default(),
+            observer_hop: Default::default(),
             execution_result: None,
             completed_decision_usage: Mutex::new(None),
             completed_decision_failure: AtomicBool::new(false),
             stream_provider_started_at: None,
+            finalized_stream_upstream_ms: None,
             first_token_timing: None,
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
@@ -321,7 +325,9 @@ impl PipelineContext {
             extensions: Extensions(req.extensions),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
-        }
+        };
+        super::provider_technical::register_context(&ctx);
+        ctx
     }
 
     /// Fork the immutable request and accumulated hook state for a later
@@ -344,10 +350,13 @@ impl PipelineContext {
             route_chain: self.route_chain.clone(),
             last_attempted_target: Mutex::new(None),
             successful_target: self.successful_target.clone(),
+            provider_technical: self.provider_technical.clone(),
+            observer_hop: Default::default(),
             execution_result: None,
             completed_decision_usage: Mutex::new(None),
             completed_decision_failure: AtomicBool::new(false),
             stream_provider_started_at: None,
+            finalized_stream_upstream_ms: None,
             first_token_timing: None,
             generation_duration_ms: None,
             finalized_request_duration_ms: None,
@@ -376,6 +385,7 @@ impl PipelineContext {
     }
 
     pub(crate) fn set_successful_target(&self, target: RoutingTarget) {
+        super::provider_technical::selected(self);
         match self.successful_target.lock() {
             Ok(mut current) => *current = Some(target),
             Err(poisoned) => *poisoned.into_inner() = Some(target),
@@ -447,12 +457,25 @@ impl PipelineContext {
     }
 
     pub(crate) fn finalize_stream_upstream_duration(&mut self) {
+        super::provider_technical::finish_selected(self);
         let Some(provider_started_at) = self.stream_provider_started_at else {
             return;
         };
         if let Some(result) = self.execution_result.as_mut() {
-            result.upstream_duration_ms = Some(elapsed_millis(provider_started_at));
+            let elapsed = elapsed_millis(provider_started_at);
+            self.finalized_stream_upstream_ms = Some(elapsed);
+            result.upstream_duration_ms = Some(elapsed);
         }
+    }
+
+    pub(super) fn finalize_technical_scope(&self, streamed: bool, failed: bool) {
+        super::provider_technical::finalize_scope(
+            self,
+            streamed,
+            failed || (streamed && !self.stream_terminal_succeeded),
+            self.finalized_stream_upstream_ms,
+            self.stream_provider_started_at.is_some(),
+        );
     }
 
     /// The first semantic output timing captured for a streamed request.
@@ -816,6 +839,9 @@ impl PipelineContext {
     /// can still estimate prompt tokens. The estimate is deliberately rough but
     /// should not collapse tool-heavy agent follow-up turns to `0`.
     fn prompt_text_chars(&self) -> u64 {
+        if let super::types::PipelineInput::GenerateContent(input) = self.input() {
+            return input.text_characters();
+        }
         let Some(prompt) = self.generation_prompt() else {
             return self
                 .decision_request()
@@ -994,6 +1020,9 @@ impl PipelineContext {
             raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
             media_input_count: match &self.input {
+                PipelineInput::GenerateContent(input) => input.projection().map_or(0, |prompt| {
+                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
+                }),
                 PipelineInput::Generation(prompt) => {
                     count_media(prompt.messages.iter().flat_map(|m| &m.content))
                 }
@@ -1140,18 +1169,14 @@ impl StreamContext {
             return;
         };
         let observed_at = Instant::now();
-        if let Some(first_semantic_at) = self.first_semantic_at {
-            self.generation_duration_ms = Some(duration_millis(
-                observed_at.duration_since(first_semantic_at),
-            ));
-        } else {
-            self.first_semantic_at = Some(observed_at);
-            self.first_token_timing = Some(FirstTokenTiming {
-                ttft_ms: duration_millis(observed_at.duration_since(provider_started_at)),
-                kind,
-            });
-            self.generation_duration_ms = Some(0);
-        }
+        super::timing::observe_semantic(
+            provider_started_at,
+            observed_at,
+            kind,
+            &mut self.first_semantic_at,
+            &mut self.first_token_timing,
+            &mut self.generation_duration_ms,
+        );
     }
 
     /// Observe only post-hook output when deciding whether downstream really

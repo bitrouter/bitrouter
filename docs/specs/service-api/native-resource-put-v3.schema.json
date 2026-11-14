@@ -1,0 +1,298 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourcePutV3",
+  "description": "Operator-only creation/rotation through the existing resource transaction.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Exactly three; older formats cannot create native route authority.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 3,
+      "maximum": 3
+    },
+    "operation_id": {
+      "description": "Existing operation identity, including ACK-loss recovery.",
+      "$ref": "#/$defs/OperationId"
+    },
+    "installation_id": {
+      "description": "Persistent authority store addressed by the command.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "key": {
+      "description": "Exact route key; current writer enforces owner/grant scope.",
+      "$ref": "#/$defs/ResourceKey"
+    },
+    "expected_revision": {
+      "description": "Explicit nullable managed-head CAS; never an implicit head lookup.",
+      "$ref": "#/$defs/RequiredNullable_RevisionId"
+    },
+    "definition": {
+      "description": "Closed native profile/credential/root association definition.",
+      "$ref": "#/$defs/DefinitionV3"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "operation_id",
+    "installation_id",
+    "key",
+    "expected_revision",
+    "definition"
+  ],
+  "$defs": {
+    "OperationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceKey": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id"
+      ],
+      "additionalProperties": false
+    },
+    "RequiredNullable_RevisionId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "DefinitionV3": {
+      "description": "Only a fully explicit current native route may use format three.",
+      "oneOf": [
+        {
+          "description": "One static route, with an exact profile mapping over each retained root.",
+          "type": "object",
+          "properties": {
+            "routing": {
+              "description": "Explicit routing source; no ambient providers or inline credentials.",
+              "type": "object",
+              "additionalProperties": true
+            },
+            "selector": {
+              "description": "The static selector resolved only within this source.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "policy": {
+              "description": "Required null; dynamic policies are outside this bounded format.",
+              "type": "null"
+            },
+            "credentials": {
+              "description": "Unique explicit provider/account credential slot associations.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CredentialBinding"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            },
+            "attachments": {
+              "description": "Total current root map; at least one native GenerateContent entry.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/NativeAdmissionAttachmentV1"
+              },
+              "minItems": 1,
+              "maxItems": 1024,
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "inbound_protocol": {
+                    "const": "generate_content"
+                  }
+                },
+                "required": [
+                  "inbound_protocol"
+                ]
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "native_profiled_route_v1"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "routing",
+            "selector",
+            "policy",
+            "credentials",
+            "attachments"
+          ]
+        }
+      ]
+    },
+    "CredentialBinding": {
+      "description": "One explicit provider/account binding to an immutable upstream credential.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "Provider name in the route's explicit routing source.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "account": {
+          "description": "Explicit account label, including `default` for a single account.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "credential": {
+          "description": "Authorized credential slot revision; never a secret or an ambient key.",
+          "$ref": "#/$defs/ResourceRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "account",
+        "credential"
+      ]
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "NativeAdmissionAttachmentV1": {
+      "description": "Complete four-protocol route attachment bound to exact retained authorities.",
+      "type": "object",
+      "properties": {
+        "inbound_protocol": {
+          "description": "Actual ingress protocol, never inferred from a Chat permission.",
+          "$ref": "#/$defs/GenerationProtocol"
+        },
+        "candidate_index": {
+          "description": "Stable ordinal within that exact retained protocol root.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "credential": {
+          "description": "Exact immutable static credential slot.",
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "profile": {
+          "description": "Exact operator-pool admission profile revision.",
+          "$ref": "#/$defs/ResourceRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "inbound_protocol",
+        "candidate_index",
+        "credential",
+        "profile"
+      ]
+    },
+    "GenerationProtocol": {
+      "type": "string",
+      "enum": [
+        "chat_completions",
+        "messages",
+        "responses",
+        "generate_content"
+      ]
+    }
+  }
+}

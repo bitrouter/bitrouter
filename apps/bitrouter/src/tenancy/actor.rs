@@ -19,6 +19,7 @@ mod learner;
 mod learning;
 mod learning_startup;
 mod oauth;
+pub(in crate::tenancy) mod provider_technical;
 mod receipts;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod session;
@@ -55,6 +56,8 @@ use super::{
 pub(super) struct Message {
     pub caller: Caller,
     pub command: Command,
+    /// Trusted service transport configuration, separate from command identity.
+    pub native_adapter_configured: bool,
     pub reply: oneshot::Sender<Result<StoredResponse, Failure>>,
 }
 
@@ -175,6 +178,8 @@ pub(super) struct Initialized {
 }
 
 pub(super) struct Worker {
+    #[cfg(test)]
+    pub technical_io: Arc<provider_technical::tests::State>,
     pub startup: Option<Arc<super::origin::StartupOwner>>,
     pub db: DatabaseConnection,
     pub authority: Arc<super::authority::live::Authority>,
@@ -212,6 +217,20 @@ impl Worker {
         code.into()
     }
 
+    /// Preserve only an acknowledged no-effect stop at explicit writing entries.
+    /// Real SQL/acquisition/unknown cleanup and prior fences keep the storage route.
+    fn write_intent_failure(&self, error: anyhow::Error, stopped: ErrorCode) -> Failure {
+        if error.is::<super::transaction::ReadExpired>()
+            && self.proof.disposition() == super::transaction::Disposition::RolledBack
+            && self.live.0.load(Ordering::Acquire)
+            && self.admission.receipts_ready()
+        {
+            stopped.into()
+        } else {
+            self.unavailable(ErrorCode::StorageUnavailable)
+        }
+    }
+
     fn control(&self) -> Control {
         Control::new(self.proof.clone()).with_storage(super::storage::Budget::new(
             self.admission.clone(),
@@ -236,7 +255,7 @@ impl Worker {
             .get()
             .ok_or_else(|| Failure::from(ErrorCode::AuthorityUnavailable))?;
         let tx = control
-            .begin(&self.db)
+            .begin_write(&self.db)
             .await
             .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         let result = super::receipts::ordered::intent::insert(&tx, intent).await;

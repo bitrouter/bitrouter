@@ -70,6 +70,14 @@ async fn actual_receipt_and_same_actor_archive_estimates_cover_sampled_file_grow
         )
         .await?;
         let db = h.fixture.db.clone();
+        // This calibration samples only receipt/archive writes. Exercise a real
+        // optional DDL refusal so its separate write cannot pollute these files.
+        #[cfg(unix)]
+        let _optional_readonly = h
+            .fixture
+            .service
+            .technical_io
+            .hold(crate::tenancy::actor::provider_technical::tests::Point::DdlReadOnly)?;
         let result: Result<()> = async {
             let budget = h.fixture.service.storage_budget();
             let client = Harness::client(false)?;
@@ -95,6 +103,11 @@ async fn actual_receipt_and_same_actor_archive_estimates_cover_sampled_file_grow
             h.fixture.service.cleanup.release_gate();
             let id = tokio::time::timeout(TIMEOUT, caller).await???;
             tokio::time::timeout(TIMEOUT, h.fixture.service.admission.wait_drained()).await?;
+            #[cfg(unix)]
+            tokio::time::timeout(TIMEOUT, h.fixture.service.technical_io.wait(&id)).await??;
+            #[cfg(unix)]
+            ensure!(!crate::db::migration::provider_technical::available(&db).await?,
+                "optional writer changed receipt calibration schema");
             ensure!(measurement::reservation(&budget)? == 0);
             let encoded = measurement::report(&db, &path, &format!("receipt/stream={stream}"), &before, pending, charged).await?;
             let candidate = store::lookup_candidate(&db, &h.fixture.installation, &h.fixture.tenant, &id)

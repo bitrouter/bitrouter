@@ -81,6 +81,9 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         let proof = Proof::new(live.clone());
         let gate = proof.hold(phase);
         let worker = Worker {
+            technical_io: Arc::new(
+                crate::tenancy::actor::provider_technical::tests::State::default(),
+            ),
             obligation_due: Arc::new(std::sync::Mutex::new(None)),
             startup: None,
             db: db.clone(),

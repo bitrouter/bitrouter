@@ -164,6 +164,9 @@ async fn invoke(
         }};
     }
     Ok(match protocol {
+        GenerationProtocol::GenerateContent => {
+            anyhow::bail!("native protocol requires the paired fixture")
+        }
         GenerationProtocol::Responses => send!(
             responses_reply,
             ResponsesRequest,

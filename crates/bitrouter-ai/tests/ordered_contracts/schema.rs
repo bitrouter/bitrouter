@@ -94,18 +94,26 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
         ("OrderedCapabilitiesV2", "contract_version", 2),
         ("ExecutionReceiptV2", "schema_version", 2),
         ("ExecutionUsageEvidenceV2", "schema_version", 2),
-        ("ExecutionUsageEvidenceV2", "extractor_version", 1),
     ] {
         assert_eq!(schemas[name]["properties"][field]["const"], version);
     }
     assert_eq!(
         schemas["GenerationProtocol"]["enum"],
-        json!(["chat_completions", "messages", "responses"])
+        json!([
+            "chat_completions",
+            "messages",
+            "responses",
+            "generate_content"
+        ])
     );
     for name in ["OrderedCapabilitiesV2", "ExecutionReceiptV2"] {
         assert_eq!(schemas[name]["properties"]["attempt_limit"]["minimum"], 1);
         assert_eq!(schemas[name]["properties"]["attempt_limit"]["maximum"], 64);
     }
+    assert_eq!(
+        schemas["ExecutionUsageEvidenceV2"]["properties"]["extractor_version"]["enum"],
+        json!([1, 2])
+    );
     let descriptor = &schemas["CandidateDescriptorV1"]["properties"];
     assert_eq!(descriptor["candidate_index"]["maximum"], 255);
     assert_eq!(

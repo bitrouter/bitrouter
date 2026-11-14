@@ -57,7 +57,8 @@ pub(super) fn compiled_with_operation(
     ensure!(
         revision.compiler_version == COMPILER_VERSION
             || revision.compiler_version == super::PROFILED_COMPILER_VERSION
-            || revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION,
+            || revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION
+            || revision.compiler_version == super::NATIVE_COMPILER_VERSION,
         "unsupported configuration compiler"
     );
     ensure!(
@@ -131,7 +132,7 @@ pub(super) fn compiled_with_operation(
             ensure!(
                 envelope.artifacts.len() <= MAX_CLOSURE
                     && envelope.routes.len() <= document.routes.len()
-                    && (matches!(envelope.format, 4 | 5)
+                    && (matches!(envelope.format, 4..=6)
                         || envelope.routes.len() == document.routes.len()),
                 "compiled envelope count mismatch"
             );
@@ -162,6 +163,9 @@ pub(super) fn compiled_with_operation(
                         }
                         | Definition::ProfiledRoute {
                             selector, policy, ..
+                        }
+                        | Definition::NativeProfiledRouteV1 {
+                            selector, policy, ..
                         },
                         Some(route),
                     ) => {
@@ -171,7 +175,7 @@ pub(super) fn compiled_with_operation(
                                 && route.policy == *policy,
                             "retained route binding mismatch"
                         );
-                        route_shape(route, &dependencies)?;
+                        route_shape(route, &dependencies, artifact.definition.is_native_route())?;
                     }
                     (
                         Definition::Policy { .. }
@@ -216,7 +220,7 @@ pub(super) fn compiled_with_operation(
                 "compiled closure mismatch"
             );
             for route in &envelope.routes {
-                route_shape(route, &dependencies)?;
+                route_shape(route, &dependencies, false)?;
                 if let (Some(reference), Some(name)) = (&route.policy, &route.policy_name) {
                     let source = artifacts
                         .get(&route.reference)
@@ -245,7 +249,7 @@ pub(super) fn compiled_with_operation(
                     crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
                 }
             }
-            let expected = if matches!(envelope.format, 4 | 5) {
+            let expected = if matches!(envelope.format, 4..=6) {
                 compiler::configuration_routes_with_operation(
                     document,
                     &envelope.artifacts,
@@ -255,13 +259,17 @@ pub(super) fn compiled_with_operation(
                 compiler::configuration_routes(document, &envelope.artifacts)
             }
             .map_err(|_| anyhow::anyhow!("invalid retained route composition"))?;
-            if matches!(envelope.format, 4 | 5) {
+            if matches!(envelope.format, 4..=6) {
                 // Compare against independently retained projections, never a
                 // clone of wire input. Full identities preserve ordinary root
                 // ordering and reject missing or extra profiled projections.
                 let ordinary = expected.iter().filter(|route| {
                     !artifacts.get(&route.reference).is_some_and(|artifact| {
-                        matches!(artifact.definition, Definition::ProfiledRoute { .. })
+                        matches!(
+                            artifact.definition,
+                            Definition::ProfiledRoute { .. }
+                                | Definition::NativeProfiledRouteV1 { .. }
+                        )
                     })
                 });
                 ensure!(
@@ -287,10 +295,18 @@ pub(super) fn compiled_with_operation(
             == (revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION),
         "shared health configuration compiler mismatch"
     );
+    ensure!(
+        (envelope.format == 6) == (revision.compiler_version == super::NATIVE_COMPILER_VERSION),
+        "native configuration compiler mismatch"
+    );
     super::execution::validate_with_operation(envelope, operation)
 }
 
-fn route_shape(route: &RouteEnvelope, dependencies: &HashSet<&ResourceRef>) -> Result<()> {
+fn route_shape(
+    route: &RouteEnvelope,
+    dependencies: &HashSet<&ResourceRef>,
+    native: bool,
+) -> Result<()> {
     ByteBudget::new(MAX_ARTIFACT_BYTES).charge(route)?;
     ensure!(
         route.reference.resource_kind == ResourceKind::Route
@@ -318,7 +334,11 @@ fn route_shape(route: &RouteEnvelope, dependencies: &HashSet<&ResourceRef>) -> R
         ensure!(
             !chain.selector.is_empty()
                 && chain.selector.len() <= 512
-                && !matches!(chain.inbound, ApiProtocol::Custom(_))
+                && match &chain.inbound {
+                    ApiProtocol::Custom(name) =>
+                        native && name == bitrouter_ai::tenancy::generate_content::PROTOCOL,
+                    _ => true,
+                }
                 && chains.insert((&chain.selector, chain.inbound.as_str()))
                 && !chain.targets.is_empty()
                 && chain.targets.len() <= 256,
@@ -367,8 +387,14 @@ fn route_shape(route: &RouteEnvelope, dependencies: &HashSet<&ResourceRef>) -> R
             .map_err(|_| anyhow::anyhow!("invalid retained target URL"))?;
             let protocol: ApiProtocol = serde_json::from_value(fields["protocol"].clone())?;
             ensure!(
-                !matches!(protocol, ApiProtocol::Custom(_))
-                    && protocol.operation() == chain.inbound.operation(),
+                match &protocol {
+                    ApiProtocol::Custom(name) =>
+                        native
+                            && name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL
+                            && matches!(&chain.inbound, ApiProtocol::Custom(inbound)
+                            if inbound == bitrouter_ai::tenancy::generate_content::PROTOCOL),
+                    _ => true,
+                } && protocol.operation() == chain.inbound.operation(),
                 "unqualified retained protocol"
             );
             ensure!(

@@ -700,3 +700,105 @@ async fn ordered_authority_bootstrap_converts_intents_before_service_publication
     service.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_receipt_changes()
+-> Result<()> {
+    use crate::tenancy::receipts::{
+        provider_technical::{Capture, storage as technical},
+        read::{self, Request},
+    };
+    let failure = || {
+        crate::tenancy::error::Failure::from(
+            bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable,
+        )
+    };
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("technical-v2.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let checked: Result<()> = async {
+        let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+            .await?
+            .installation;
+        // The optional object is not one of the required startup migrations.
+        // This unit fixture inserts its child object directly, without the
+        // optional actor task that normally installs the exact optional schema.
+        ensure!(
+            crate::db::migration::provider_technical::validate(&db)
+                .await
+                .is_err()
+        );
+        crate::db::migration::provider_technical::install(&db).await?;
+        crate::db::migration::provider_technical::validate(&db).await?;
+        for count in [1, 8, 9, 64] {
+            let identity = identity(&installation, &format!("technical-{count}"), count)?;
+            let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+            persist_intent(&db, &intent).await?;
+            let original = terminal(&intent)?;
+            let tx = db.begin().await?;
+            ensure!(store::insert_terminal(&tx, &original).await?);
+            tx.commit().await?;
+            let before = (
+                original.json().to_owned(),
+                original.private_json().to_owned(),
+                original.digest().to_owned(),
+            );
+            let capture = Arc::new(Capture::default());
+            let operation = capture.begin(std::time::Instant::now(), false);
+            let Terminal::V2(value) = &original else {
+                anyhow::bail!("V2 fixture")
+            };
+            for attempt in &value.receipt.attempts {
+                operation.armed(&attempt.attempt_id);
+            }
+            operation.finish(false);
+            operation.selected();
+            capture.freeze();
+            let facts = capture.take(&original).context("V2 technical snapshot")?;
+            ensure!(facts.receipt_format == 2 && facts.operations[0].attempt_ids.len() == count);
+            facts.validate_against_v2(&value.receipt)?;
+            ensure!(technical::insert(&db, &original, &technical::Prepared::new(&facts)?).await?);
+            let bytes = read::body(
+                &db,
+                &installation,
+                &identity.tenant,
+                &Request::ProviderTechnical(identity.execution.clone()),
+                failure,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("technical read failed: {:?}", error.0.code))?;
+            let saved: Option<
+                bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1,
+            > = serde_json::from_slice(&bytes)?;
+            ensure!(saved == Some(facts));
+            let loaded =
+                store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+                    .await?
+                    .context("unchanged V2 receipt")?;
+            ensure!(
+                loaded.json() == before.0
+                    && loaded.private_json() == before.1
+                    && loaded.digest() == before.2
+            );
+            ensure!(
+                read::body(
+                    &db,
+                    &installation,
+                    &identity.tenant,
+                    &Request::One(identity.execution.clone()),
+                    failure
+                )
+                .await
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+    .await;
+    let closed = db.close().await;
+    checked?;
+    closed?;
+    drop((startup, lease));
+    Ok(())
+}

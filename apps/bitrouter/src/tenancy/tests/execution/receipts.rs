@@ -35,6 +35,7 @@ mod barrier;
 mod calibration;
 mod conformance;
 mod fault_campaign;
+mod fragment_followup;
 mod ingress_overflow;
 mod ingress_socket;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
@@ -43,6 +44,8 @@ mod lifecycle;
 mod lifetime;
 #[cfg(unix)]
 mod ordered;
+#[cfg(unix)]
+mod provider_technical;
 mod reads;
 mod soft_stop;
 mod terminal;

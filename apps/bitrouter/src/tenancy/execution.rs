@@ -77,6 +77,7 @@ pub(crate) struct Submission {
     credential: CredentialId,
     binding: DispatchIdentity,
     configuration_defaults: bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults,
+    generate_content: Option<crate::gateway::pipeline::types::generate_content::Input>,
     deadline: deadline::Deadline,
     cancelled: tokio_util::sync::CancellationToken,
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -98,10 +99,25 @@ struct DispatchIdentity {
 }
 
 impl Submission {
+    pub(in crate::tenancy) fn has_ordered_selection(&self) -> bool {
+        self.binding.selection.is_some()
+    }
+
     pub(crate) fn validate_http_input(
         &self,
         input: &crate::gateway::pipeline::types::PipelineInput,
     ) -> Result<(), Failure> {
+        if let crate::gateway::pipeline::types::PipelineInput::GenerateContent(input) = input {
+            if !self
+                .generate_content
+                .as_ref()
+                .is_some_and(|own| own.same_original(input))
+                || !input.cache_allowed(self.binding.native_controls)
+            {
+                return Err(ErrorCode::CapabilityMismatch.into());
+            }
+            return Ok(());
+        }
         if self.binding.selection.is_some() {
             native_controls::validate_input(
                 input.generation_prompt(),
@@ -146,6 +162,7 @@ pub(crate) struct TenantExecution {
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     hop: Mutex<Option<Arc<super::operational::Hop>>>,
+    preparation_claimed: AtomicBool,
     entered: AtomicBool,
     #[cfg(feature = "core")]
     observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
@@ -389,6 +406,7 @@ impl Service {
             binding,
             configuration_defaults:
                 bitrouter_ai::tenancy::generation_defaults::ConfigurationDefaults::Apply,
+            generate_content: None,
             deadline: self.submission_deadline(),
             cancelled: tokio_util::sync::CancellationToken::new(),
             #[cfg(all(feature = "core", feature = "harness"))]
@@ -591,6 +609,7 @@ impl Service {
             journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             hop: Mutex::new(None),
+            preparation_claimed: AtomicBool::new(false),
             entered: AtomicBool::new(false),
             #[cfg(feature = "core")]
             observation: std::sync::OnceLock::new(),
@@ -672,6 +691,40 @@ impl Service {
 }
 
 impl TenantExecution {
+    pub(crate) fn native_generate_content_encoder(
+        &self,
+    ) -> Option<Box<dyn crate::gateway::model::protocol::StreamEncoder>> {
+        self.submission
+            .generate_content
+            .as_ref()?
+            .native_stream_encoder()
+    }
+    pub(crate) fn native_generate_content_custody(
+        &self,
+    ) -> Option<Arc<crate::gateway::model::protocol::generate_content::native::stream::Custody>>
+    {
+        self.submission
+            .generate_content
+            .as_ref()?
+            .native_stream_custody()
+    }
+    pub(crate) fn validate_generate_content(
+        &self,
+        input: &crate::gateway::pipeline::types::generate_content::Input,
+    ) -> crate::gateway::error::Result<()> {
+        if !self.route.is_ordered()
+            || !self.profiled()
+            || !self
+                .submission
+                .generate_content
+                .as_ref()
+                .is_some_and(|own| own.same_original(input))
+            || !input.cache_allowed(self.submission.binding.native_controls)
+        {
+            return Err(self.reject(ErrorCode::CapabilityMismatch));
+        }
+        self.revalidate().map_err(|code| self.reject(code))
+    }
     pub(crate) fn receipt_owner(
         &self,
     ) -> crate::gateway::error::Result<&Arc<super::receipts::owner::Owner>> {
@@ -699,6 +752,10 @@ impl TenantExecution {
         {
             return Err(self.reject(ErrorCode::CapacityExceeded));
         }
+        // Test-only caller scheduling AFTER the original durable receipt and
+        // lifetime checks; no production ACK, actor, SQL or optional-write gate.
+        #[cfg(all(test, unix))]
+        self.service.technical_io.after_receipt_ack(&self.id).await;
         Ok(())
     }
     pub(crate) fn record_native_source(

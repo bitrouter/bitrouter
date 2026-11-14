@@ -238,7 +238,13 @@ pub(crate) fn reject_google_continuity(
                     bitrouter_ai::types::Content::ToolCall {
                         provider_metadata, ..
                     } if *protocol != ApiProtocol::ChatCompletions => provider_metadata,
-                    bitrouter_ai::types::Content::Reasoning {
+                    bitrouter_ai::types::Content::Text {
+                        provider_metadata, ..
+                    }
+                    | bitrouter_ai::types::Content::File {
+                        provider_metadata, ..
+                    }
+                    | bitrouter_ai::types::Content::Reasoning {
                         provider_metadata, ..
                     } => provider_metadata,
                     _ => return None,
@@ -286,6 +292,7 @@ pub(crate) fn reject_google_continuity_part(
 
 pub mod chat_completions;
 pub mod decisions;
+pub mod generate_content;
 mod managed;
 pub mod messages;
 pub mod responses;
@@ -579,7 +586,9 @@ pub trait StreamDecoder: Send {
 
 /// Stateful encoder: canonical stream parts → client SSE frames.
 pub trait StreamEncoder: Send {
-    /// Encode one canonical part into zero or more SSE frames.
+    /// Encode one canonical part into zero or more complete SSE events.
+    /// Each event is an independent bounded delivery unit. Multiple snapshots
+    /// from one part need not fit in a single event-sized byte budget.
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>>;
 
     /// Encode a mid-stream error into a **protocol-shaped terminal error
@@ -613,6 +622,16 @@ pub fn inbound_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdap
         ApiProtocol::Messages => Some(Box::new(messages::MessagesAdapter)),
         ApiProtocol::Responses => Some(Box::new(responses::ResponsesAdapter)),
         ApiProtocol::Custom(_) | ApiProtocol::Decisions => None,
+    }
+}
+
+pub(crate) fn tenant_adapter_for(protocol: &ApiProtocol) -> Option<Box<dyn InboundAdapter>> {
+    if matches!(protocol, ApiProtocol::Custom(name) if name ==
+        bitrouter_ai::tenancy::generate_content::PROTOCOL)
+    {
+        Some(Box::new(generate_content::GenerateContentAdapter))
+    } else {
+        inbound_adapter_for(protocol)
     }
 }
 
@@ -658,6 +677,10 @@ impl OutboundDispatch {
         d.register(
             Arc::new(responses::ResponsesAdapter),
             Arc::new(responses::ResponsesTransport),
+        );
+        d.register(
+            Arc::new(generate_content::paired::Adapter),
+            Arc::new(generate_content::paired::PairedTransport),
         );
         d
     }

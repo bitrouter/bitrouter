@@ -68,7 +68,7 @@ impl Worker {
                     .reserve_write(32 * 1024 * 1024, true)
                     .map_err(Failure::from)?;
                 let tx = control
-                    .begin_repeatable_read(&self.db)
+                    .begin_write_repeatable_read(&self.db)
                     .await
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 let result = async {

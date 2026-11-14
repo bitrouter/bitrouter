@@ -26,8 +26,8 @@ use crate::gateway::model::target::ModelTarget;
 use bitrouter_ai::types::{
     ApiProtocol, ChatTokenLimitField, Content, DataContent, FinishReason, GenerateResult,
     GenerationParams, Message, Modality, Prompt, ProviderMetadata, ResponseFormat, Role, Source,
-    StreamPart, Tool, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage, UsageOrigin,
-    provider_namespace, set_provider_metadata,
+    StreamPart, Tool, ToolCallBoundary, ToolChoice, ToolResultContentPart, ToolResultOutput, Usage,
+    UsageOrigin, provider_namespace, set_provider_metadata,
 };
 
 /// The Chat Completions inbound + outbound protocol adapter.
@@ -1613,6 +1613,7 @@ struct ChatStreamDecoder {
     /// carries `id`) so the canonical `ToolCallDelta.id` is stable across the
     /// continuation chunks.
     tool_ids: Vec<String>,
+    tool_names: Vec<Option<String>>,
     done: bool,
     /// Chat providers commonly emit `finish_reason`, then a usage-only chunk,
     /// then `[DONE]`. Hold the terminal until the sentinel/EOF so the trailing
@@ -1621,6 +1622,27 @@ struct ChatStreamDecoder {
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats the top-level `id`; we surface it only once.
     response_started_emitted: bool,
+}
+
+impl ChatStreamDecoder {
+    fn finish_turn(&mut self) -> Vec<StreamPart> {
+        let Some(reason) = self.pending_finish.take() else {
+            return Vec::new();
+        };
+        let complete = matches!(reason, FinishReason::Stop | FinishReason::ToolCalls);
+        let mut parts: Vec<_> = self
+            .tool_ids
+            .iter()
+            .zip(&self.tool_names)
+            .filter(|(id, name)| !id.is_empty() && name.is_some())
+            .map(|(id, _)| StreamPart::ToolCallEnd {
+                id: id.clone(),
+                boundary: ToolCallBoundary::Turn { complete },
+            })
+            .collect();
+        parts.push(StreamPart::Finish { reason });
+        parts
+    }
 }
 
 impl StreamDecoder for ChatStreamDecoder {
@@ -1638,11 +1660,7 @@ impl StreamDecoder for ChatStreamDecoder {
         }
         if data == "[DONE]" && !named_error {
             self.done = true;
-            return Ok(self
-                .pending_finish
-                .take()
-                .map(|reason| vec![StreamPart::Finish { reason }])
-                .unwrap_or_default());
+            return Ok(self.finish_turn());
         }
         let chunk: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
@@ -1745,13 +1763,39 @@ impl StreamDecoder for ChatStreamDecoder {
                             .unwrap_or("");
                         while self.tool_ids.len() <= idx {
                             self.tool_ids.push(String::new());
+                            self.tool_names.push(None);
                         }
-                        if let Some(id) = id {
-                            self.tool_ids[idx] = id.to_string();
+                        if let Some(id) = id.filter(|id| !id.is_empty()) {
+                            if (!self.tool_ids[idx].is_empty() && self.tool_ids[idx] != id)
+                                || self
+                                    .tool_ids
+                                    .iter()
+                                    .enumerate()
+                                    .any(|(other, known)| other != idx && known == id)
+                            {
+                                return Err(ModelError::InvalidResponse {
+                                    message: "Chat tool call identity changed or was reused".into(),
+                                    usage: None,
+                                });
+                            }
+                            self.tool_ids[idx] = id.to_owned();
                         }
+                        let name = match (name, &self.tool_names[idx]) {
+                            (Some(name), Some(known)) if known != name => {
+                                return Err(ModelError::InvalidResponse {
+                                    message: "Chat tool name changed within one call".into(),
+                                    usage: None,
+                                });
+                            }
+                            (Some(name), None) => {
+                                self.tool_names[idx] = Some(name.to_owned());
+                                Some(name.to_owned())
+                            }
+                            _ => None,
+                        };
                         parts.push(StreamPart::ToolCallDelta {
                             id: self.tool_ids[idx].clone(),
-                            name: name.map(|n| n.to_string()),
+                            name,
                             arguments: args.to_string(),
                             provider_metadata: parse_google_chat_metadata(tc.get("extra_content"))?,
                         });
@@ -1790,11 +1834,7 @@ impl StreamDecoder for ChatStreamDecoder {
             return Ok(Vec::new());
         }
         self.done = true;
-        Ok(self
-            .pending_finish
-            .take()
-            .map(|reason| vec![StreamPart::Finish { reason }])
-            .unwrap_or_default())
+        Ok(self.finish_turn())
     }
 }
 
@@ -1907,6 +1947,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 delta.insert("reasoning_content".into(), text.clone().into());
                 frames.push(self.chunk(serde_json::Value::Object(delta), None));
             }
+            StreamPart::ToolCallEnd { .. } => {}
             StreamPart::ToolCallDelta {
                 id,
                 name,

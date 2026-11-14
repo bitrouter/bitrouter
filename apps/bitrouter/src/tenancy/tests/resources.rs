@@ -8,6 +8,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::sync::Arc;
 
 mod admission;
+mod native_generate_content;
 mod profile_observation;
 mod shared_admission;
 
@@ -463,6 +464,7 @@ async fn lost_resource_reply_still_commits_once_during_shutdown() -> Result<()> 
         .commands
         .try_send(
             super::super::actor::Message {
+                native_adapter_configured: false,
                 caller: fixture.operator.clone(),
                 command: Command::Resource(fixture.tenant.clone(), input.clone()),
                 reply,

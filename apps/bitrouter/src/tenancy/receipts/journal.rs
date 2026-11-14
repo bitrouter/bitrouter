@@ -245,6 +245,7 @@ struct State {
 
 /// Contains no Service/transport handle and cannot cause provider work.
 pub(crate) struct Journal {
+    pub(crate) technical: Arc<super::provider_technical::Capture>,
     owner: Owner,
     ordered: Option<Box<[u16]>>,
     state: Mutex<State>,
@@ -281,6 +282,18 @@ impl Frozen {
 }
 
 impl Journal {
+    /// Read an armed source observation without freezing or closing its journal.
+    #[cfg(all(test, feature = "server-tools"))]
+    pub(crate) fn received_usage_for_test(&self, input: u64, output: u64) -> Result<bool, Error> {
+        Ok(self.lock()?.slots.iter().flatten().any(|entry| {
+            let usage = entry.evidence.project().usage;
+            entry.live
+                && entry.phase == Phase::Armed
+                && usage.input_tokens == Some(input)
+                && usage.output_tokens == Some(output)
+        }))
+    }
+
     /// One journal per admission must be retained by the execution's future
     /// receipt owner. Public headers/CallerContext cannot construct this owner.
     pub(crate) fn new(execution: &TenantExecution) -> Result<Arc<Self>, Error> {
@@ -313,6 +326,7 @@ impl Journal {
             owner,
             ordered: ordered.map(Into::into),
             changed: tokio::sync::Notify::new(),
+            technical: Arc::new(super::provider_technical::Capture::default()),
             state: Mutex::new(State {
                 slots: Slots {
                     inline: std::array::from_fn(|_| None),
@@ -629,6 +643,7 @@ impl AttemptPermit {
             Protocol::Responses => Wire::Responses,
             Protocol::Messages => Wire::Messages,
             Protocol::Decisions => Wire::Decisions,
+            Protocol::GenerateContent => Wire::GenerateContent,
         };
         state
             .usage_evidence
@@ -707,7 +722,8 @@ impl Drop for AttemptPermit {
 }
 
 impl Journal {
-    /// Called by the installed stream finalizer before receipt preparation.
+    /// Records the installed stream finalizer's result or the native JSON
+    /// executor's affirmative non-use observation before receipt preparation.
     pub(crate) fn observe_estimator(
         &self,
         estimate: Option<bitrouter_ai::tenancy::usage_evidence::Estimate>,

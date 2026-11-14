@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProviderTechnicalFactsV1",
+  "description": "Optional bounded provider-operation facts. Response null means unavailable/not retained, not zero. UTF-8 object bytes <=65536; validate_against additionally checks unchanged receipt identity and original attempt subsequence. No financial/admission authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_format",
+    "installation_id",
+    "tenant_id",
+    "principal_id",
+    "execution_id",
+    "execution_revision",
+    "operations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "receipt_format": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "installation_id": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "tenant_id": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "principal_id": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "execution_id": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "execution_revision": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempt_ids",
+          "selected_attempt_id",
+          "streamed",
+          "upstream_duration_ms",
+          "first_semantic",
+          "generation_duration_ms",
+          "partial"
+        ],
+        "properties": {
+          "attempt_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          },
+          "selected_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "streamed": {
+            "type": "boolean"
+          },
+          "upstream_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "first_semantic": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ttft_ms",
+                  "kind"
+                ],
+                "properties": {
+                  "ttft_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 18446744073709551615
+                  },
+                  "kind": {
+                    "enum": [
+                      "reasoning",
+                      "text",
+                      "tool"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "streamed": {
+                  "const": false
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "first_semantic": {
+                  "type": "null"
+                },
+                "generation_duration_ms": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "first_semantic": {
+                  "type": "null"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "generation_duration_ms": {
+                  "type": "null"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "generation_duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "partial": {
+                  "const": false
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "upstream_duration_ms": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "receipt_format": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "maxItems": 8,
+            "items": {
+              "properties": {
+                "attempt_ids": {
+                  "maxItems": 8
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

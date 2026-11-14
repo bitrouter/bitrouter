@@ -56,6 +56,16 @@ async fn expired_selected_seed_refreshes_once_then_messages_json_sse_and_reopen_
             check_system(&posted, true)?;
             let receipt = harness.receipt(&id).await?;
             ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 1);
+            let technical =
+                tokio::time::timeout(TIMEOUT, harness.fixture.service.technical_io.observed(&id))
+                    .await??;
+            technical.validate_against(&receipt)?;
+            ensure!(
+                technical.operations.len() == 1 && technical.operations[0].attempt_ids.len() == 1
+            );
+            ensure!(!technical.operations[0].partial && technical.operations[0].streamed == stream);
+            ensure!(technical.operations[0].first_semantic.is_some() == stream);
+
             ensure!(
                 receipt.usage.input_tokens == Some(16) && receipt.usage.output_tokens == Some(7)
             );

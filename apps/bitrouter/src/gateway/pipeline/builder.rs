@@ -485,6 +485,18 @@ impl PipelineBuilder {
             .fallback_policy
             .unwrap_or_else(|| Arc::new(DefaultFallbackPolicy));
 
+        // Same observer-local clock definition as fallback health: own callback
+        // start/end, floor milliseconds. First slot is explicit and stable;
+        // subsequent start callbacks are included, subsequent end callbacks not.
+        let mut observe_hooks = self.observe_hooks;
+        observe_hooks.insert(
+            0,
+            HookRegistration::new(
+                Arc::new(super::provider_technical::HopObserver),
+                OperationScope::Both,
+                TypeId::of::<super::provider_technical::HopObserver>(),
+            ),
+        );
         Ok(Pipeline {
             pre_resolution_hooks: self.pre_resolution_hooks,
             router_preparation_hooks: self.router_preparation_hooks,
@@ -496,7 +508,7 @@ impl PipelineBuilder {
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,
             required_finalizers: self.required_finalizers,
-            observe_hooks: self.observe_hooks,
+            observe_hooks,
             routing_table,
             fallback_policy,
             executor,

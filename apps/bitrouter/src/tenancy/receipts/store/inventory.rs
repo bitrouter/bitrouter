@@ -207,6 +207,12 @@ pub(super) async fn load(
         Ok(())
     })
     .await?;
+    match super::super::provider_technical::storage::retained_bytes(db).await {
+        Ok(bytes) => inventory.technical_bytes = bytes,
+        Err(_) => tracing::warn!(
+            "optional provider inventory unavailable; physical volume budget remains authoritative"
+        ),
+    }
     inventory.oauth_bytes = crate::tenancy::oauth::storage::inventory(db, installation).await?;
     let unknown = obligations::validate(db, installation, &|_, _| Ok(())).await?;
     inventory.unknown_count = unknown.unknown_count;

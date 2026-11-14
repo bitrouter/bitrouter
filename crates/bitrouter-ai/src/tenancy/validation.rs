@@ -51,6 +51,32 @@ pub(super) fn bytes<T: Serialize>(value: &T, max: usize) -> Result<(), Validatio
     write_json(value, max, std::io::sink())
 }
 
+// Match the transport's default serde_json budget, including the enclosing
+// objects supplied by each caller. Programmatic Values must be checked before
+// recursive hashing or serialization, not only after encoding on the wire.
+pub(super) fn json_depth(
+    value: &serde_json::Value,
+    parents: usize,
+    message: &'static str,
+) -> Result<(), ValidationError> {
+    match value {
+        serde_json::Value::Array(values) => {
+            require(parents + 1 < 128, message)?;
+            for value in values {
+                json_depth(value, parents + 1, message)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            require(parents + 1 < 128, message)?;
+            for value in values.values() {
+                json_depth(value, parents + 1, message)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn write_json(
     value: &impl Serialize,
     max: usize,

@@ -1,8 +1,8 @@
 //! The streaming stitcher: merge the N upstream streams of a tool loop into one
 //! caller-visible [`StreamPart`] stream. Router tool calls are intercepted
-//! (their raw `ToolCallDelta`s suppressed), executed, and re-emitted as
+//! (their raw fragments and call boundaries suppressed), executed, and re-emitted as
 //! `ServerToolCall` + `ServerToolResult` parts; intermediate terminals are
-//! suppressed; usage is accumulated into one final part; and a single terminal
+//! suppressed; received usage is published as cumulative snapshots; and a single terminal
 //! `Finish` closes the merged stream. Keep-alive during tool execution is the
 //! SSE layer's job (a gap in this part stream), not a `StreamPart`.
 
@@ -12,14 +12,15 @@ use std::time::Instant;
 use async_trait::async_trait;
 use futures::StreamExt;
 
-use super::classify::RouterCall;
+use super::classify::{RouterCall, permits_tool_execution};
 use super::loop_controller::{ServerToolLoop, add_usage};
 use super::toolset::ToolContext;
-use crate::gateway::error::Result;
+use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::executor::StreamPartStream;
 use crate::gateway::pipeline::stream::UsageAccumulator;
 use bitrouter_ai::types::{
-    Content, FinishReason, Message, Prompt, ProviderMetadata, Role, StreamPart, Usage,
+    Content, FinishReason, Message, Prompt, ProviderMetadata, Role, StreamPart, ToolCallBoundary,
+    Usage,
 };
 
 /// One upstream streaming turn for a working prompt — the loop's callback into
@@ -31,12 +32,63 @@ pub trait UpstreamStream: Send + Sync {
     async fn run(&self, prompt: &Prompt) -> Result<StreamPartStream>;
 }
 
+/// Marks the pipeline's actual provider turn, whose HTTP EOF closes routing
+/// custody independently of the enclosing logical server-tool request.
+pub(crate) struct ProviderToolTurn;
+
 /// A tool call reconstructed from streamed `ToolCallDelta` fragments.
 struct BufferedCall {
     id: String,
     name: String,
     args: String,
     provider_metadata: ProviderMetadata,
+    boundaries: Vec<ToolCallBoundary>,
+}
+
+fn invalid_tool_lifecycle(message: &str) -> BitrouterError {
+    BitrouterError::UpstreamInvalidResponse {
+        message: message.to_owned(),
+        usage: None,
+    }
+}
+
+fn cumulative_usage(
+    completed: &Usage,
+    had_completed: bool,
+    current: &UsageAccumulator,
+) -> Option<Usage> {
+    let received = current.finalized();
+    if !had_completed && received.is_none() {
+        return None;
+    }
+    let mut total = completed.clone();
+    if let Some(received) = received {
+        add_usage(&mut total, &received);
+    }
+    Some(total)
+}
+
+/// Settlement gives embedded error usage precedence over accumulated stream
+/// usage. Expose the same logical total on both paths at the loop boundary.
+fn merge_error_usage(
+    error: &mut BitrouterError,
+    completed: &Usage,
+    had_completed: bool,
+    current: &mut UsageAccumulator,
+) -> Option<Usage> {
+    let BitrouterError::UpstreamInvalidResponse {
+        usage: Some(embedded),
+        ..
+    } = error
+    else {
+        return None;
+    };
+    current.observe(&StreamPart::Usage {
+        usage: embedded.as_ref().clone(),
+    });
+    let total = cumulative_usage(completed, had_completed, current)?;
+    **embedded = total.clone();
+    Some(total)
 }
 
 impl ServerToolLoop {
@@ -73,7 +125,13 @@ impl ServerToolLoop {
                     Some(stream) => stream,
                     None => match upstream.run(&working).await {
                         Ok(stream) => stream,
-                        Err(error) => {
+                        Err(mut error) => {
+                            let mut opening_usage = UsageAccumulator::default();
+                            if let Some(usage) = merge_error_usage(&mut error, &total, had_usage, &mut opening_usage) {
+                                yield Ok(StreamPart::Usage { usage });
+                            } else if had_usage {
+                                yield Ok(StreamPart::Usage { usage: total });
+                            }
                             yield Err(error);
                             return;
                         }
@@ -88,21 +146,27 @@ impl ServerToolLoop {
 
                 // Forward narration in real time; buffer tool-call deltas;
                 // select one cumulative usage snapshot for this upstream turn;
-                // capture (but suppress) the terminal. Providers may repeat a
-                // cumulative snapshot on every chunk, so summing here would
-                // multiply one request's usage. Cross-turn totals are added
-                // only after this upstream stream ends.
+                // capture (but suppress) the terminal. Publish completed turns
+                // plus the current selected snapshot before polling again so
+                // downstream custody retains received usage on error or drop.
+                // Commit the current turn to the total only once at EOF.
                 while let Some(item) = upstream_stream.next().await {
                     let part = match item {
                         Ok(p) => p,
-                        Err(e) => {
-                            yield Err(e);
+                        Err(mut error) => {
+                            if let Some(usage) = merge_error_usage(&mut error, &total, had_usage, &mut turn_usage) {
+                                yield Ok(StreamPart::Usage { usage });
+                            }
+                            yield Err(error);
                             return;
                         }
                     };
                     match part {
                         StreamPart::Usage { usage } => {
                             turn_usage.observe(&StreamPart::Usage { usage });
+                            if let Some(usage) = cumulative_usage(&total, had_usage, &turn_usage) {
+                                yield Ok(StreamPart::Usage { usage });
+                            }
                         }
                         StreamPart::Finish { reason } => finish = Some(reason),
                         StreamPart::ResponseCompleted {
@@ -117,6 +181,9 @@ impl ServerToolLoop {
                             // or the loop under-bills a Responses upstream.
                             if let Some(u) = usage {
                                 turn_usage.observe(&StreamPart::Usage { usage: u });
+                                if let Some(usage) = cumulative_usage(&total, had_usage, &turn_usage) {
+                                    yield Ok(StreamPart::Usage { usage });
+                                }
                             }
                             if finish.is_none() {
                                 finish = Some(FinishReason::Stop);
@@ -132,7 +199,15 @@ impl ServerToolLoop {
                         } => match buffered.iter_mut().find(|b| b.id == id) {
                             Some(b) => {
                                 if let Some(n) = name.as_deref().filter(|n| !n.is_empty()) {
-                                    b.name = n.to_string();
+                                    if !b.name.is_empty() {
+                                        yield Err(invalid_tool_lifecycle("duplicate router tool call ID"));
+                                        return;
+                                    }
+                                    b.name = n.to_owned();
+                                }
+                                if !b.boundaries.is_empty() {
+                                    yield Err(invalid_tool_lifecycle("router tool arguments followed a close boundary"));
+                                    return;
                                 }
                                 b.args.push_str(&arguments);
                                 b.provider_metadata.extend(provider_metadata);
@@ -142,8 +217,16 @@ impl ServerToolLoop {
                                 name: name.unwrap_or_default(),
                                 args: arguments,
                                 provider_metadata,
+                                boundaries: Vec::new(),
                             }),
                         },
+                        StreamPart::ToolCallEnd { id, boundary } => {
+                            let Some(call) = buffered.iter_mut().find(|call| call.id == id) else {
+                                yield Err(invalid_tool_lifecycle("router tool boundary has no matching call"));
+                                return;
+                            };
+                            call.boundaries.push(boundary);
+                        }
                         StreamPart::TextDelta { text } => {
                             assistant_text.push_str(&text);
                             yield Ok(StreamPart::TextDelta { text });
@@ -162,10 +245,19 @@ impl ServerToolLoop {
                 // force a spurious hand-back of an empty-named tool call.
                 buffered.retain(|b| !b.name.is_empty());
 
+                let can_execute = permits_tool_execution(finish.as_ref())
+                    && response_completion.as_ref().is_none_or(|(_, _, status, _)| status == "completed")
+                    && buffered.iter().all(|call| call.boundaries.iter().all(|boundary| match boundary {
+                        ToolCallBoundary::MessagesBlock { complete } | ToolCallBoundary::Turn { complete } => *complete,
+                        ToolCallBoundary::ResponsesItem { status, .. } => {
+                            status.as_deref().is_none_or(|status| status == "completed")
+                        }
+                        ToolCallBoundary::Arguments => true,
+                    }));
                 let has_client = buffered.iter().any(|b| !owned.contains(&b.name) || !b.provider_metadata.is_empty());
                 let router: Vec<RouterCall> = buffered
                     .iter()
-                    .filter(|b| owned.contains(&b.name) && b.provider_metadata.is_empty())
+                    .filter(|b| can_execute && owned.contains(&b.name) && b.provider_metadata.is_empty())
                     .map(|b| RouterCall {
                         id: b.id.clone(),
                         name: b.name.clone(),
@@ -184,6 +276,9 @@ impl ServerToolLoop {
                                 arguments: b.args.clone(),
                                 provider_metadata: b.provider_metadata.clone(),
                             });
+                            for boundary in &b.boundaries {
+                                yield Ok(StreamPart::ToolCallEnd { id: b.id.clone(), boundary: boundary.clone() });
+                            }
                         }
                     }
                     if had_usage {
@@ -340,6 +435,355 @@ mod tests {
         fn server_name(&self) -> Option<&str> {
             Some("docs")
         }
+    }
+
+    struct CountingTool(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl RouterToolset for CountingTool {
+        async fn list_tools(&self, ctx: &ToolContext) -> Result<Vec<Tool>> {
+            OneTool.list_tools(ctx).await
+        }
+
+        async fn call_tool(
+            &self,
+            name: &str,
+            arguments: &str,
+            ctx: &ToolContext,
+        ) -> Result<ToolResultOutput> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            OneTool.call_tool(name, arguments, ctx).await
+        }
+
+        fn owns(&self, name: &str) -> bool {
+            OneTool.owns(name)
+        }
+    }
+
+    struct RawMessages(Vec<crate::gateway::model::protocol::SseEvent>);
+
+    #[async_trait]
+    impl UpstreamStream for RawMessages {
+        async fn run(&self, _: &Prompt) -> Result<StreamPartStream> {
+            use crate::gateway::model::protocol::{OutboundAdapter, messages::MessagesAdapter};
+            let events = self.0.clone();
+            Ok(Box::pin(async_stream::try_stream! {
+                let mut decoder = MessagesAdapter.stream_decoder();
+                for event in events {
+                    for part in decoder.decode(&event)? {
+                        yield part;
+                    }
+                }
+                for part in decoder.finish()? {
+                    yield part;
+                }
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_messages_identity_cannot_execute_router_owned_tool() -> anyhow::Result<()> {
+        use crate::gateway::model::protocol::SseEvent;
+        use serde_json::json;
+
+        let event = |kind: &str, mut value: serde_json::Value| {
+            value["type"] = json!(kind);
+            SseEvent {
+                event: Some(kind.to_owned()),
+                data: value.to_string(),
+            }
+        };
+        let start = |index| {
+            event(
+                "content_block_start",
+                json!({
+                    "index":index,"content_block":{"type":"tool_use","id":"reused","name":"search","input":{}}
+                }),
+            )
+        };
+        let delta = |index, text| {
+            event(
+                "content_block_delta",
+                json!({
+                    "index":index,"delta":{"type":"input_json_delta","partial_json":text}
+                }),
+            )
+        };
+        let stop = |index| event("content_block_stop", json!({"index":index}));
+        let call = |args: &str| StreamPart::ToolCallDelta {
+            id: "reused".into(),
+            name: Some("search".into()),
+            arguments: args.into(),
+            provider_metadata: Default::default(),
+        };
+        let raw = RawMessages(vec![
+            event("message_start", json!({"message":{"id":"msg_duplicate"}})),
+            start(0),
+            delta(0, r#"{"safe":"#),
+            stop(0),
+            start(1),
+            delta(1, "true}"),
+            stop(1),
+            event("message_delta", json!({"delta":{"stop_reason":"tool_use"}})),
+            event("message_stop", json!({})),
+        ]);
+        let canonical = ScriptedStream {
+            scripts: Mutex::new(VecDeque::from([vec![
+                call(r#"{"safe":"#),
+                call("true}"),
+                StreamPart::Finish {
+                    reason: FinishReason::ToolCalls,
+                },
+            ]])),
+        };
+        let upstreams: [Arc<dyn UpstreamStream>; 2] = [Arc::new(raw), Arc::new(canonical)];
+        for upstream in upstreams {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let loop_ = Arc::new(ServerToolLoop::new(
+                ToolsetRegistry::new(vec![Arc::new(CountingTool(calls.clone()))]),
+                ServerToolLoopConfig::default(),
+                Arc::new(AllowAll),
+            ));
+            let mut stream = loop_
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
+                .await?;
+            let mut rejected = false;
+            while let Some(item) = stream.next().await {
+                match item {
+                    Ok(part) => assert!(
+                        !part.is_terminal() && !matches!(part, StreamPart::ServerToolCall { .. })
+                    ),
+                    Err(BitrouterError::UpstreamInvalidResponse { .. }) => rejected = true,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            assert!(rejected);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        Ok(())
+    }
+
+    struct FailingUsageStream {
+        turns: Mutex<VecDeque<Vec<Result<StreamPart>>>>,
+    }
+
+    #[async_trait]
+    impl UpstreamStream for FailingUsageStream {
+        async fn run(&self, _: &Prompt) -> Result<StreamPartStream> {
+            let turn = self
+                .turns
+                .lock()
+                .map_err(|_| BitrouterError::UpstreamUnavailable)?
+                .pop_front()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            Ok(Box::pin(futures::stream::iter(turn)))
+        }
+    }
+
+    #[tokio::test]
+    async fn received_usage_survives_stitcher_error_and_cross_turn_accounting() -> anyhow::Result<()>
+    {
+        use bitrouter_ai::types::UsageOrigin;
+        let usage = |input, output| StreamPart::Usage {
+            usage: Usage {
+                prompt_tokens: input,
+                completion_tokens: output,
+                origin: UsageOrigin::ProviderReported,
+                ..Default::default()
+            },
+        };
+        for prior_turn in [false, true] {
+            let mut turns = VecDeque::new();
+            if prior_turn {
+                turns.push_back(vec![
+                    Ok(usage(10, 2)),
+                    Ok(usage(10, 3)),
+                    Ok(StreamPart::ToolCallDelta {
+                        id: "c1".into(),
+                        name: Some("search".into()),
+                        arguments: "{}".into(),
+                        provider_metadata: Default::default(),
+                    }),
+                    Ok(StreamPart::Finish {
+                        reason: FinishReason::ToolCalls,
+                    }),
+                ]);
+            }
+            turns.push_back(vec![
+                Ok(usage(40, 7)),
+                Ok(usage(40, 7)),
+                Err(BitrouterError::UpstreamUnavailable),
+            ]);
+            let mut stream = loop_()
+                .run_stream(
+                    &base_prompt(),
+                    &tool_ctx(),
+                    Arc::new(FailingUsageStream {
+                        turns: Mutex::new(turns),
+                    }),
+                )
+                .await?;
+            let mut received = Vec::new();
+            let mut errors = 0;
+            while let Some(part) = stream.next().await {
+                match part {
+                    Ok(StreamPart::Usage { usage }) => {
+                        assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+                        received.push((usage.prompt_tokens, usage.completion_tokens));
+                    }
+                    Ok(part) => assert!(!part.is_terminal()),
+                    Err(BitrouterError::UpstreamUnavailable) => {
+                        assert_eq!(
+                            received.last().copied(),
+                            Some(if prior_turn { (50, 10) } else { (40, 7) })
+                        );
+                        errors += 1;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            assert_eq!(errors, 1);
+        }
+        Ok(())
+    }
+
+    struct EmbeddedUsageStream {
+        turns: Mutex<VecDeque<Result<Vec<Result<StreamPart>>>>>,
+    }
+
+    #[async_trait]
+    impl UpstreamStream for EmbeddedUsageStream {
+        async fn run(&self, _: &Prompt) -> Result<StreamPartStream> {
+            let parts = self
+                .turns
+                .lock()
+                .map_err(|_| BitrouterError::UpstreamUnavailable)?
+                .pop_front()
+                .ok_or(BitrouterError::UpstreamUnavailable)??;
+            Ok(Box::pin(futures::stream::iter(parts)))
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_usage_matches_cumulative_snapshot_on_drain_and_open_error()
+    -> anyhow::Result<()> {
+        use bitrouter_ai::types::UsageOrigin;
+        use serde_json::json;
+        let usage = |input, output| Usage {
+            prompt_tokens: input,
+            completion_tokens: output,
+            origin: UsageOrigin::ProviderReported,
+            raw: Some(Box::new(
+                json!({"prompt_tokens":input,"completion_tokens":output}),
+            )),
+            ..Default::default()
+        };
+        for prior_turn in [false, true] {
+            for opening in [false, true] {
+                // A first-turn opening failure remains the eager setup error;
+                // cross-turn opening failures occur inside the owned stream.
+                if opening && !prior_turn {
+                    continue;
+                }
+                for repeated_snapshot in [false, true] {
+                    let mut turns = VecDeque::new();
+                    if prior_turn {
+                        turns.push_back(Ok(vec![
+                            Ok(StreamPart::Usage {
+                                usage: usage(10, 3),
+                            }),
+                            Ok(StreamPart::ToolCallDelta {
+                                id: "c1".into(),
+                                name: Some("search".into()),
+                                arguments: "{}".into(),
+                                provider_metadata: Default::default(),
+                            }),
+                            Ok(StreamPart::Finish {
+                                reason: FinishReason::ToolCalls,
+                            }),
+                        ]));
+                    }
+                    let error = BitrouterError::UpstreamInvalidResponse {
+                        message: "fixture embedded error".into(),
+                        usage: Some(Box::new(usage(40, 7))),
+                    };
+                    if opening {
+                        turns.push_back(Err(error));
+                    } else {
+                        let mut parts = Vec::new();
+                        if repeated_snapshot {
+                            parts.push(Ok(StreamPart::Usage {
+                                usage: usage(40, 7),
+                            }));
+                            parts.push(Ok(StreamPart::Usage {
+                                usage: usage(40, 7),
+                            }));
+                        }
+                        parts.push(Err(error));
+                        turns.push_back(Ok(parts));
+                    }
+                    let calls = Arc::new(AtomicUsize::new(0));
+                    let loop_ = Arc::new(ServerToolLoop::new(
+                        ToolsetRegistry::new(vec![Arc::new(CountingTool(calls.clone()))]),
+                        ServerToolLoopConfig::default(),
+                        Arc::new(AllowAll),
+                    ));
+                    let mut stream = loop_
+                        .run_stream(
+                            &base_prompt(),
+                            &tool_ctx(),
+                            Arc::new(EmbeddedUsageStream {
+                                turns: Mutex::new(turns),
+                            }),
+                        )
+                        .await?;
+                    let mut latest = None;
+                    let mut errors = 0;
+                    while let Some(part) = stream.next().await {
+                        match part {
+                            Ok(StreamPart::Usage { usage }) => latest = Some(usage),
+                            Ok(part) => assert!(!part.is_terminal()),
+                            Err(BitrouterError::UpstreamInvalidResponse {
+                                usage: Some(embedded),
+                                ..
+                            }) => {
+                                let expected = if prior_turn { (50, 10) } else { (40, 7) };
+                                assert_eq!(
+                                    (embedded.prompt_tokens, embedded.completion_tokens),
+                                    expected
+                                );
+                                let latest = latest.as_ref().ok_or_else(|| {
+                                    anyhow::anyhow!("missing cumulative snapshot")
+                                })?;
+                                assert_eq!(
+                                    (latest.prompt_tokens, latest.completion_tokens),
+                                    expected
+                                );
+                                assert_eq!(embedded.origin, UsageOrigin::ProviderReported);
+                                assert_eq!(embedded.raw, latest.raw);
+                                let raw = embedded
+                                    .raw
+                                    .as_deref()
+                                    .ok_or_else(|| anyhow::anyhow!("missing raw evidence"))?;
+                                assert_eq!(
+                                    raw,
+                                    &if prior_turn {
+                                        json!({"provider_usage_fragments":[{"prompt_tokens":10,"completion_tokens":3},{"prompt_tokens":40,"completion_tokens":7}]})
+                                    } else {
+                                        json!({"prompt_tokens":40,"completion_tokens":7})
+                                    }
+                                );
+                                errors += 1;
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                    assert_eq!(errors, 1);
+                    assert_eq!(calls.load(Ordering::SeqCst), usize::from(prior_turn));
+                }
+            }
+        }
+        Ok(())
     }
 
     struct ScriptedStream {
@@ -652,6 +1096,7 @@ mod tests {
 
         let usage = parts
             .iter()
+            .rev()
             .find_map(|p| match p {
                 StreamPart::Usage { usage } => Some(usage),
                 _ => None,
@@ -700,6 +1145,7 @@ mod tests {
 
         let usage = parts
             .iter()
+            .rev()
             .find_map(|part| match part {
                 StreamPart::Usage { usage } => Some(usage),
                 _ => None,
@@ -772,6 +1218,7 @@ mod tests {
 
         let usage = parts
             .iter()
+            .rev()
             .find_map(|part| match part {
                 StreamPart::Usage { usage } => Some(usage),
                 _ => None,

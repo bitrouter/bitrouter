@@ -85,6 +85,7 @@ pub mod native_work;
 pub mod operations;
 pub(crate) mod owned_tasks;
 pub(crate) mod provider_admission;
+mod provider_technical;
 pub mod request_checks;
 pub mod routing;
 #[cfg(feature = "server-tools")]

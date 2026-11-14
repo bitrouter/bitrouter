@@ -137,11 +137,12 @@ fn versioned_raw_envelope_decoder_preserves_exact_numeric_tokens_and_depth() -> 
             "[".repeat(depth),
             "]".repeat(depth)
         );
-        let decoded: OrderedBody = serde_json::from_str(&raw)?;
-        assert_eq!(
-            decoded.envelope.context("envelope")?.digest().is_ok(),
-            depth == 124
-        );
+        let decoded = serde_json::from_str::<OrderedBody>(&raw);
+        if depth == 124 {
+            decoded?.envelope.context("envelope")?.digest()?;
+        } else {
+            assert!(decoded.is_err());
+        }
     }
     Ok(())
 }

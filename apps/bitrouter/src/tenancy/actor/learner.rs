@@ -290,9 +290,9 @@ impl Worker {
         }
         control.reserve_write(learner::MAX_BYTES, false)?;
         let tx = control
-            .begin_repeatable_read(&self.db)
+            .begin_write_repeatable_read(&self.db)
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let work = async {
             configuration_store::reserve_learner_configuration(
                 &tx,

@@ -828,3 +828,7 @@ impl Drop for Admission {
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "server-tools"))]
+#[path = "state_custody.rs"]
+pub(crate) mod custody;

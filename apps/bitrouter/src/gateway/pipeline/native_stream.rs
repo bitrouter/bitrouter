@@ -320,6 +320,7 @@ impl Collector {
                     current_arguments.push_str(arguments);
                 }
             }
+            StreamPart::ToolCallEnd { .. } => {}
             StreamPart::ServerToolCall {
                 id,
                 name,

@@ -323,7 +323,12 @@ plaintext and operation secrets are never returned. Diagnostics omit contents.
 
 `limit` defaults to 100 and must be an integer in 1–100. Each page contains at
 most that many entries and at most 1 MiB of serialized JSON, including the
-envelope and cursor. The byte bound can produce a shorter page. Empty results
+envelope and cursor. The byte bound or a smaller bounded SQL working page can
+produce a shorter page. The server may halve a working page only after a typed
+capacity refusal, in the same read snapshot and original deadline, down to one
+returned entry plus its continuation sentinel. This never retries a mutation,
+skips a record, or increases the caller's requested limit or working allowance.
+Empty results
 are successful with `entries: []` and `next_after: null`; a full final page also
 has a null continuation. A record that cannot fit by itself fails with
 `payload_too_large`, without skipping it.
@@ -386,6 +391,30 @@ updates and credential revoke compare the observed revision. A tenant-wide
 activation requires tenant-wide `policy.activate` in both the current credential
 and binding. Current permission and lifecycle are checked again at the point
 of an attempt; a previously admitted configuration is not a permanent grant.
+
+The entire compact UTF-8 JSON encoding of either `GrantScope` variant, including
+its `kind` tag, is bounded at 262144 bytes (256 KiB). There is no separate
+256-resource cardinality ceiling. The validator counts encoded bytes into a
+bounded sink before allocating its uniqueness set; this does not claim that an
+HTTP decoder has not already allocated the input. Resource identities, duplicate
+rejection, nonempty resource scopes and operator-pool ownership rules are
+unchanged. JSON Schema describes the shape and uniqueness; the typed validator
+enforces the serialized-byte bound. Runtime working and retained-view budgets
+remain separate, lazy, operator-configured capacity constraints. Sequential
+point reads charge actual retained record lengths before loading their links;
+startup can reduce its directory working page on capacity refusal without
+skipping any records. Operation and retained-record validation run once with
+their original budgets; their preflight refusals do not trigger directory
+retries.
+
+This broadens accepted inputs without changing their serialized shape. Every
+previously valid 256-key scope fits the new byte limit at maximum identity width.
+New readers accept old data, but old AI/SDK validators and old Core storage
+readers reject scopes above 256 keys. Upgrade the service and all management,
+directory and dispatch consumers together before writing such grants; an old
+binary is not a supported rollback reader for these new records. Never truncate
+an allowlist or replace it with tenant-wide authority for compatibility. Existing
+2 MiB management bodies and 1 MiB directory responses retain their bounds.
 
 The configuration and its referenced route/policy revisions are pinned for
 execution. Current health, credential and authority changes can narrow eligible
@@ -1168,8 +1197,9 @@ headers, credentials or candidate order. No owned continuation handle is publish
 imported or reconstructed, and no history is replayed. Ordinary gateway response
 IDs retain their existing encoding; this mode does not make them resumable or
 export a separate native-ID mapping. Provider success establishes no
-historical ownership or usage facts. Generate Content `cachedContent` is not
-supported by this mode; the retired protocol remains unavailable.
+historical ownership or usage facts. The ordinary version-one field set does
+not add Generate Content `cachedContent`; that control belongs to the separate
+private operation below. Retired public Google routes remain unavailable.
 
 Source-native fields remain protocol-bound. The existing post-parse merge suppresses
 a supplemental key when source extras already contain that key, including null;
@@ -1193,6 +1223,122 @@ usage-evidence v2 still describe current execution only, with no format changes.
 A predecessor without discovery cannot be assumed to support this mode. Its
 ordinary non-null-control refusal remains meaningful; an empty opted-in request
 has no new custody or publication promise and may still execute ordinarily.
+
+### Private ordered Generate Content
+
+This new version-one operation is scoped to the next alpha release after
+alpha.35. The Rust additions `GenerationProtocol::GenerateContent` and
+`ProtocolEnd::GenerateContentFinished` intentionally require exhaustive-match
+consumers to recompile and handle the new variants. Existing protocol wire
+values, ordinary ordered-v2 discovery, and native-controls-v1's three-field set
+remain unchanged. Old readers reject the unknown protocol rather than treating
+it as Chat. No retired public Google endpoint or provider registration is restored.
+
+Authenticated `GET /control/v1/tenancy/ordered/generate-content/capabilities`
+returns `OrderedGenerateContentCapabilitiesV1`. Its installation, instance and
+capability revision must match the retained dispatch binding. `enabled` requires
+ordered readiness and an explicitly paired operator adapter;
+`cached_content_enabled` additionally reflects current provider-native policy.
+The SDK's explicit `with_generate_content` observation enables this protocol,
+not cache-state ownership or a discovery retry. Non-null effective
+`cachedContent` also requires the independent provider-native header opt-in.
+Source null can suppress a native default; it cannot erase a foreign supplemental
+control. Core rechecks effective controls after the bound defaults merge.
+
+The only data endpoint is `POST /v1/tenancy/ordered/generate-content`, with exact
+media type `application/vnd.bitrouter.ordered-generate-content.v1+json` and no
+query-selected mode. `OrderedGenerateContentRequestV1` is a closed envelope with
+`schema_version: 1`, retained route resource ID `model`, boolean `stream`, and
+`request`, an original native object without competing model, stream or dispatch
+members. Model/mode authority and the existing digest-bound defaults/envelope
+remain outside that original object. Its encoded bound is 16 MiB; programmatic
+native values reserve both enclosing objects within the transport's default
+128-container recursion budget and fail validation before serialization when
+that budget is exceeded. Defaults retain their existing nesting budget.
+
+The request object must come from the retained original native input, preserving
+field presence, IDs, signatures, controls and provider data. A canonical policy
+projection or a prior codec's rendering cannot reconstruct lost source data.
+Authorized preset defaults remain a separate commitment; neither source-default
+flattening nor a raw cache selector establishes historical credential ownership.
+The reached paired endpoint uses protocol `ordered_generate_content`, a fixed
+`/generate-content` path and the same native envelope with the reached provider
+model. Current route/member/profile/credential authority and the exact method,
+endpoint, mode and body commitment bind each signed physical attempt.
+
+Native-to-native JSON preserves the full raw candidates array and native fields.
+Every candidate must have a valid object/content shape and concrete terminal;
+explicit candidate indices are unique nonnegative int32 values. A non-null error
+or prompt-block envelope is refused. The canonical policy/foreign-projection view
+selects only the first candidate and never merges candidates. Missing usage is
+not rewritten to zero, and opaque native signatures/media remain under the
+actual authenticated native response owner.
+
+Native SSE retains full raw payloads without assigning an omitted index to zero.
+The first nonempty candidate event locks the response to either an anonymous
+singleton or explicit indexed mode. Anonymous mode stays one unindexed candidate;
+indexed mode requires unique nonnegative int32 indices in every later candidate
+entry, including singleton events. Null, fractional, negative, out-of-range and
+mixed anonymous/indexed identities are invalid. One candidate's completion does
+not complete or retarget another candidate. Missing/null/unspecified finish is
+nonterminal until a concrete reason seals that candidate; a sealed candidate
+allows only its index and optional identical finish, never content, new metadata
+or a null/unspecified finish downgrade.
+
+Initial native metadata is retained. Root metadata remains allowed while a
+previous candidate is open or the event introduces a new explicit candidate.
+Only when all prior candidates were sealed and no new candidate is introduced
+are root tails restricted to usageMetadata, responseId, modelVersion, candidates
+and neutral `error: null`. Non-null errors and prompt blocks always fail.
+Present responseId/modelVersion must be nonempty nonnull strings and remain
+stable globally. A bounded terminal group is held from the first concrete finish
+until every observed candidate is sealed and HTTP EOF is clean. Only then may
+`GenerateContentFinished` become visible. Reset, cancellation, malformed/error,
+identity switches or conflicting tails never authorize a successful terminal or
+another inference send.
+
+Ordinary compatible candidates use the strict canonical codec; native-only
+constraints exclude incompatible targets before rate/health admission. The native
+paired path must retain signed text/media even where canonical deltas cannot
+represent their metadata. It must not use a safe projection refusal to erase a
+native feature. Actual accepted headers, outcomes, usage observations, deadlines,
+receipt custody and original selected ranks retain the existing ordered rules.
+Unsigned/unknown bridge outcomes and interrupted streams never authorize fallback.
+
+Native routes require explicit resource format three, independently observed at
+`GET /control/v1/tenancy/resource-capabilities/v3`. The existing resource POST
+accepts `ResourcePutV3` with a closed `native_profiled_route_v1` definition;
+[`native-resource-put-v3.schema.json`](native-resource-put-v3.schema.json) and
+[`native-resource-capabilities-v3.schema.json`](native-resource-capabilities-v3.schema.json)
+define its wire fields. Every compiled protocol root has an exact ordinal,
+credential and admission-profile association. Only the native root can target
+the operator-paired `ordered_generate_content` bridge. A Chat grant cannot
+create native membership. Arbitrary custom protocols remain unsupported.
+
+Format-one resource definitions and their three-protocol attachment codec remain
+unchanged; format two still provisions shared-health profiles only. Native
+artifacts and configurations use `tenancy-native-generate-content-v1`, retained
+envelope format six and authority writer/schema five. The data-only migration
+keeps historical receipt/evidence bytes and refuses malformed/future markers;
+predecessor writers must refuse the new marker. Downgrade requires an operator
+backup, not a serving rewrite. Discovery and successful provisioning alone do
+not grant dispatch authority or qualify an adapter's response/usage evidence.
+
+MySQL writer fences require InnoDB for the installation header and migration
+ledger tables. Their engines are checked under the same transaction's metadata
+custody before marker updates; unsupported engines are refused without automatic
+table conversion or retained-data rewrites. Direct framework execution of either
+writer-fence migration refuses on MySQL before any marker or ledger change;
+only the guarded runner may apply the data-only body. This prevents concurrent
+migration discovery from turning a stale historical step count into an
+unprotected fence. A concurrent startup may refuse conservatively; it does not
+automatically retry migrations.
+
+Native requests without an explicit per-call defaults layer preserve absence.
+An explicit defaults envelope retains its committed configuration-defaults
+choice. The original native request and that defaults layer travel separately
+to the reached paired adapter; current authority and the body commitment are
+rechecked at the actual send. Ordinary wires keep their existing defaults.
 
 ### Exact retained admission-profile observations
 
@@ -1364,6 +1510,35 @@ and [Messages streaming specification](https://platform.claude.com/docs/en/build
 The extractor's qualified sources and bounded projection above do not extend
 those upstream contracts.
 
+#### Private ordered GenerateContent observations
+
+Only the explicit private ordered `generate_content` ingress and paired native
+outbound wire qualify this protocol. Chat permissions and ordinary endpoint
+names do not authorize it. Ordered evidence keeps `schema_version: 2` and uses
+`extractor_version: 2` exactly when the accepted ingress is `generate_content`
+or any retained frame has that protocol; otherwise it stays extractor 1.
+Frameless or unavailable native ingress also requires extractor 2. Predecessor
+readers reject the new extractor or closed protocol value. Evidence V1 rejects
+this protocol and `generate_content_chunk`; its schemas and old bytes stay fixed.
+
+Native JSON and HTTP rejection frames use `json` and `http_error`; native SSE
+uses `generate_content_chunk`. Each original `usageMetadata` object is a snapshot,
+not an additive increment. The scalar mapping is `promptTokenCount` to input,
+`candidatesTokenCount` to output, `totalTokenCount` to total,
+`cachedContentTokenCount` to cache read, and `thoughtsTokenCount` to reasoning.
+The [official UsageMetadata definition](https://github.com/googleapis/googleapis/blob/master/google/ai/generativelanguage/v1beta/generative_service.proto)
+uses int32 counters: retained values must be exact nonnegative integers no larger
+than 2,147,483,647. Missing quantities stay absent, explicit zero stays zero, and
+malformed present quantities are null with `invalid: true`. Detail, tool or
+modality fields outside this scalar mapping set `unsupported` without erasing
+known facts. No implicit cache-write or reasoning zero is asserted.
+
+Original output is the candidate-token counter; thoughts are a separate native
+quantity. A normalized inclusive output requires both explicitly observed values
+and a checked sum. Repeated cumulative snapshots must not be summed. These
+technical observations do not qualify commercial settlement or certify complete
+usage from an estimator, invalid stream, unknown outcome or missing dimensions.
+
 #### Bounds, estimates and children
 
 The original encoded response, including whitespace, is limited to 256 KiB.
@@ -1375,9 +1550,20 @@ discarded observations with saturation at the exact integer maximum, and
 invalid data nor missing completion evidence establishes complete provider
 totals or zero cost for unseen work.
 
-`estimation` distinguishes unrecorded estimator provenance (`not_captured`), an
-installed finalizer that did not use an estimate (`not_used`), and an estimate
-actually used (`captured`). Only the last permits a nonnull `estimate`.
+`estimation` distinguishes unrecorded estimator provenance (`not_captured`),
+affirmatively observed non-use of an estimator (`not_used`), and an estimate
+actually used (`captured`). Non-use is recorded by the installed stream
+finalizer or the successful non-streaming native generate-content executor,
+which does not install that estimator. Absence of an observation MUST remain
+`not_captured`; it MUST NOT be inferred to mean `not_used`. Only `captured`
+permits a nonnull `estimate`.
+
+This expands the producers of an existing fact without changing the enum or
+wire schema. Historical `not_captured` documents remain unchanged. A reader
+that does not support the native protocol or extractor MUST continue to reject
+that evidence; `not_used` alone does not qualify native usage or authorize a
+financial interpretation.
+
 Algorithm `stream_character_ceiling`, version 1, rounds each prompt/output
 Unicode scalar count divided by four upward. It retains the numerical inputs,
 text/reasoning coverage and completed/disconnected trigger defined in the
@@ -1390,6 +1576,74 @@ never caller correlation or provider IDs. Parent and child retain separate
 receipts and evidence; child quantities MUST NOT be folded into parent frames.
 The schema rejects self-links, duplicates and a parent also listed as a child.
 Consumers requiring linkage MUST check discovery before relying on it.
+
+### Optional provider technical facts
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v1`
+uses the existing installation binding, current tenant-wide `ReceiptRead` or
+separately issued audit authority, read semaphore, management deadline and
+`Cache-Control: no-store`. The body is the independent
+[version-one object](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
+or JSON `null`. An unknown original execution is still NotFound. A retained
+receipt without retained measurements (including historical receipts and lost
+noncritical writes) returns null. The same result applies when neither optional
+object has been installed, including a refused installation that left no objects.
+A partial, shadowed, conflicting or corrupt optional layout instead makes this
+getter unavailable without fencing the original receipt API. Neither result implies zero, no provider work,
+a billing disposition or permission to repeat inference. Unsupported old Core
+routes remain existing HTTP/service errors; clients do not silently downgrade.
+The original V1/V2 receipt, usage, capability JSON and commitment formats do not
+change. SDK callers can validate the object against the original V1/V2 receipt;
+public DTOs do not expose/recompute the Core-private terminal digest.
+
+Schema one binds the original installation, tenant, principal, execution,
+execution revision and receipt format. Every operation refers to a unique ordered
+subsequence of actual receipt attempts, including the actual sends used by
+authentication recovery. Never group by provider/model/account name or sum
+fallback/child clocks. `selected_attempt_id` records the existing execution
+selection, not successful delivery or financial qualification. The whole object
+is at most64KiB; actual attempts bound operations (V1<=8, V2<=64), and the validator
+checks total cardinality/order/selection across operations in addition to schema.
+
+The clock is the original Core-owned provider operation's raw monotonic interval,
+including authentication recovery and consumption, not an RPC or pure network
+span. JSON upstream uses millisecond truncation (a real positive submillisecond
+sample can be0). Stream upstream/TTFT/generation keep the original helper:
+zero stays0 and a positive submillisecond interval becomes1. `streamed` identifies
+that original timing path: internal SSE collection for a nonstreaming result
+retains JSON timing semantics and does not fabricate TTFT. First semantic
+means accepted nonempty reasoning/text/tool name or arguments before output
+hooks/rendering; tool ID-only, usage, metadata and terminal markers do not count.
+No semantic sample means null first/generation; one means generation0. Separate
+rounding does not imply an additive TTFT+generation inequality. Partial prefix
+observations remain partial independently of receipt/usage completeness.
+Core's paired private bridge does not measure the Cloud-owned Google sender:
+that route requires its own genuine provider facts and is not filled with bridge
+latency. No financial callback/envelope is extended to carry these measurements.
+
+Measurements are a noncritical optional child object. After original durable
+notification, the existing control loop may own one disposable technical task;
+there is no queue or resident worker. Original work/stop preempts its dedicated,
+same-acquisition SQLite connection. Main jobs do not join the optional task.
+Transactions that may mutate acquire SQLite write intent before application
+reads, on their original owned transaction; pure reads remain deferred. Ordinary
+storage contention can consume the original deadline. No provider retry, seed
+marker, outbox or required receipt participant repairs missing data. Existing deadlines and high-water/physical budgets apply.
+An interrupted writer must positively close before exact-key readback; absence
+can refund bytes, committed bytes remain charged, and unknown results conserve
+the one optional charge and disable further technical writes. They do not create
+a financial pending state, storage-health fence or original send permit. Unknown
+actual driver closure cannot be reported as successful resource shutdown.
+
+Required business migrations are unchanged. Optional objects and their own
+schema stamp install atomically outside the required migration ledger. Unknown
+or conflicting objects are refused, never adopted, overwritten or marked as a
+successful required migration. Optional installation refusal does not deny
+normal business/receipt startup. Once retained, facts read after restart/archive
+by the original key/digest; conflicting bytes cannot overwrite them. Canonical
+receipt/archive encoding remains unchanged. Independently counted child bytes
+stay inline after parent archival; deleting their exact original parent cascades
+to the child. Optional payload failure refuses only this getter.
 
 ### Resource and evidence migration and rollback
 
@@ -2021,3 +2275,139 @@ container with the actual wire status and a `body_error`. Calling a shared-only
 submission method against a local server may execute inference before missing
 metadata is detected; the SDK never probes, retries or falls back automatically.
 See the [SDK usage and recovery contract](../../../crates/bitrouter-sdk/README.md).
+
+
+### Core-owned technical scopes (payload 2)
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v2`
+uses the same `ReceiptRead` authorization, installation/tenant namespace,
+original receipt lookup, deadline and no-store response as the version-one
+technical getter. The SDK entry is
+`TenancyClient::provider_technical_facts_v2`. Its independent closed object is
+`ProviderTechnicalFactsV2`, with schema
+[`provider_technical_facts_v2/schema.json`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v2/schema.json).
+One encoded 64KiB bound covers the operations, pipeline and hop observations
+together; receipt V1/V2 and their usage, estimator provenance, digest and native
+financial formats are unchanged.
+
+The original `operations` clocks retain their version-one meanings. The new
+nullable `pipeline_scope` records the actual owning `PipelineContext` ID,
+finalized request duration and actual settlement mode. Request duration uses
+the existing request helper (positive sub-millisecond rounds to one); provider
+JSON operation timing retains its original millisecond floor. Context IDs are
+not inferred from correlation IDs, external replay metadata or parent IDs.
+A JSON context has no stream object. A streamed context may have no stream
+measurement; null does not mean false or zero. Its stream, when observed,
+uses the first opened upstream clock through the original owning processor
+finalization, and that processor's accepted pre-hook semantic deltas. A normal
+single SSE is the singleton case. Core's configured internal server-tool loop
+can use the same owning processor across turns; the source arm is the first
+opened turn's closing auth arm, and the terminal arm is the final successful
+selected turn's closing arm. They can differ. Both must belong to the original
+receipt in source-to-terminal order. Neither ID means the last failed arm in
+the receipt. Missing binding or incomplete termination remains partial.
+
+Hop observations separately identify the actual send-order arm group, callback
+boundary profile and completion/error/drop. JSON outer callbacks, failed stream
+open callbacks and the original opened-stream notify scalar are distinct
+profiles. The last reuses the scalar passed to existing stream observers; it
+is not the merged processor clock or a physical-operation substitute. Wrapper
+EOF can report `completed` while `partial` remains true if no successful
+provider terminal was observed. `unobserved` means the optional snapshot
+preceded the hop end and therefore has null duration and partial=true. None
+of these profiles implies financial success or eligibility for a legacy health
+percentile. An unarmed hop supplies no timing row.
+
+Pipeline scope is finalized before settlement recorders. Receipt ACK never
+waits for it: the single pre-existing disposable optional task can await a
+racing local finalization only within its original five-second/owner cleanup
+deadline, with ordinary main-work preemption. There is no second worker, queue,
+retry or parent sum. If it loses that race, the scope remains unavailable;
+a late finalizer cannot rewrite the retained snapshot. The exact retained
+version and bytes govern optional write readback/accounting. Payloads one and
+two share the existing optional child-table key/FK, physical schema/stamp and
+original GC/capacity owner, with separate payload digest domains. No table
+migration, backfill or second row is introduced. Optional schema installation
+or read failure cannot promote this object into mandatory startup authority.
+
+An old payload-one row is still read exactly through the V1 getter and returns
+null through V2. A new payload-two row provides only its unchanged operation
+view through V1 (null if none); the retained bytes are never rewritten. An old
+Core may refuse the unknown optional row or V2 route; the new SDK does not
+retry, replay, fall back to another source or invent absent facts. Corrupt
+optional data refuses the technical read without corrupting original receipt
+reads. Root/child association must still be checked against the original
+retained usage-evidence parent/child edge and each execution's own receipt;
+timing never creates or repairs that edge.
+
+Stock tenancy profiles do not install Core's internal server-tool loop. This
+contract describes actual Core-owned contexts only. A logical loop assembled
+across executions in Cloud or another process has no Core-owned merged timing
+from this endpoint. There is no cross-process measurement session, observer RPC,
+root clock, or child-duration aggregation.
+
+### Observer-local hop clock (technical payload 3)
+
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v3`
+and `TenancyClient::provider_technical_facts_v3` read
+[`ProviderTechnicalFactsV3`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v3/schema.json).
+The closed response contains `schema_version:3`, the unchanged typed V2 `scope`,
+and `observer_hops`. The old V1/V2 DTOs and enum values remain unchanged. This
+format adds no source, receipt, usage, financial, native or send authority.
+Validate its scope against the original receipt, and each observer group against
+the corresponding actual original scope hop. Categories may reference the same
+group; duplicate observer samples or order/closing mismatches are invalid.
+
+JSON and unsuccessful stream-open `on_hop_end` callbacks have no duration
+parameter. The former Cloud fallback observer computed its own elapsed scalar
+inside its paired callbacks, using `as_millis()` floor. The outer callback guard
+uses a different window and rounding; no subtraction or enum rename recovers
+that observer fact. The Core producer now installs one private observer in the
+fixed first slot of the existing observer dispatch. It remembers a start inside
+its own start callback and computes ONE floor scalar inside its own end callback
+using the existing JSON timing primitive. Its duration therefore includes later
+start observers and excludes later end observers. It is not a sample taken after
+all end callbacks, nor physical operation or merged stream timing. Registration
+order is part of the observation source: this does not reproduce arbitrary old
+Cloud hook orders, an old execution's timestamps or any Cloud-owned clock.
+
+`core_json_hop_observer_floor_v1` covers actual Generated/Failed JSON callbacks.
+`core_stream_open_hop_observer_floor_v1` covers a Failed open only. `completed`
+means Generated was observed at this boundary; it does not imply the enclosing
+execution or billing succeeded. The actual Hop/capture and original arm group
+bind both ends, independently of provider names or request correlation. Each
+context/fork has a separate pairing slot; overlapping callbacks on one context
+lose that observer sample rather than borrowing another turn's clock. A real
+positive sub-millisecond scalar may be zero. Missing start/end, cancellation,
+panic, duplicate pairing or diagnostic lock loss produces no observer row, not
+zero or an elapsed reconstructed from receipt timestamps. A successful open
+clears this pairing without a second sample; its full hop still uses the exact
+original `core_stream_hop_notify_v1` callback scalar. The existing JSON/open
+callback-guard profiles keep their own meanings. No profile automatically gains
+legacy percentile eligibility; consumers must independently establish source,
+owner, actual-arm and outcome eligibility before selecting a metric.
+
+All observations still share one optional row, key/FK, writer, original cleanup
+and capacity budgets, and one 64KiB encoded bound. Observer-only capture uses a
+separate bounded per-Hop cell; its contention cannot invalidate the old scope.
+The private retained payload3 envelope is closed/map-only with fields
+`schema_version`, `scope`, and `observer_hops_json` (the bounded serialized
+observer array string). Its digest domain is
+`bitrouter.provider-technical-facts.v3`, followed by the original big-endian u64
+UTF-8 JSON length and exact JSON bytes. This is private storage framing; public
+HTTP returns the typed array, not that string. No physical schema/stamp/table
+migration is needed. Idempotence and unknown-write readback compare this exact
+retained version/byte sequence, never a projected V2 view.
+
+Writing selects its one immutable payload before reservation/SQL: invalid or
+oversized observer contents retain the already-valid scope-only payload2. There
+is no second write, retry, backfill or larger allowance. For payload3, old getters
+strictly parse the known retained envelope and validate its scope against the
+original receipt, then return their original typed views. They do not interpret
+observer-only contents. V3 separately parses and validates that array; an invalid
+observer array refuses V3 while the original scope/receipt remain readable.
+Invalid outer framing, scope, digest or whole-row transfer bound still refuses
+the technical read under the original guards. Old retained payload1/2 returns
+null through V3, without relabelling history or inventing observer samples. A
+scope-only fallback remains readable through V2. The new SDK getter performs no
+automatic downgrade, repeated inference, additional admission or source repair.

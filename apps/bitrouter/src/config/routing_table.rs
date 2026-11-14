@@ -223,6 +223,7 @@ fn build_targets(
     model_id: &str,
     inbound: Option<&ApiProtocol>,
     operation: ModelOperation,
+    eligible: fn(&ApiProtocol) -> bool,
 ) -> Result<Vec<RoutingTarget>> {
     if provider.registry.is_some() {
         return build_registry_targets(
@@ -235,13 +236,18 @@ fn build_targets(
                 operation,
                 ..Default::default()
             },
+            eligible,
         );
     }
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
-    let Some(protocol) = select_protocol(&provider.protocols_for(model_id), inbound, operation)
-    else {
+    let Some(protocol) = select_protocol(
+        &provider.protocols_for(model_id),
+        inbound,
+        operation,
+        eligible,
+    ) else {
         return Ok(Vec::new());
     };
     // A per-protocol endpoint override lets one provider serve different
@@ -370,6 +376,7 @@ fn build_registry_targets(
     model_id: &str,
     native_only: bool,
     prefs: &RoutingPrefs,
+    eligible: fn(&ApiProtocol) -> bool,
 ) -> Result<Vec<RoutingTarget>> {
     let Some((projected, selected)) =
         crate::gateway::catalog::execution::select(provider, model_id, native_only, prefs)
@@ -385,6 +392,7 @@ fn build_registry_targets(
         &model.id,
         prefs.inbound_protocol.as_ref(),
         prefs.operation,
+        eligible,
     )?;
     for target in &mut targets {
         target.registry = Some(selected.clone());
@@ -397,9 +405,10 @@ fn build_targets_for_prefs(
     provider: &crate::config::ProviderConfig,
     model_id: &str,
     prefs: &RoutingPrefs,
+    eligible: fn(&ApiProtocol) -> bool,
 ) -> Result<Vec<RoutingTarget>> {
     if provider.registry.is_some() {
-        build_registry_targets(provider_id, provider, model_id, false, prefs)
+        build_registry_targets(provider_id, provider, model_id, false, prefs, eligible)
     } else {
         build_targets(
             provider_id,
@@ -407,6 +416,7 @@ fn build_targets_for_prefs(
             model_id,
             prefs.inbound_protocol.as_ref(),
             prefs.operation,
+            eligible,
         )
     }
 }
@@ -415,16 +425,18 @@ fn select_protocol(
     protocols: &[ApiProtocol],
     inbound: Option<&ApiProtocol>,
     operation: ModelOperation,
+    eligible: fn(&ApiProtocol) -> bool,
 ) -> Option<ApiProtocol> {
     if let Some(protocol) = inbound
         && protocol.operation() == operation
         && protocols.contains(protocol)
+        && eligible(protocol)
     {
         return Some(protocol.clone());
     }
     protocols
         .iter()
-        .find(|protocol| protocol.operation() == operation)
+        .find(|protocol| protocol.operation() == operation && eligible(protocol))
         .cloned()
 }
 
@@ -482,6 +494,7 @@ fn resolve_virtual_model(
     virtual_model: &crate::config::VirtualModel,
     config: &Config,
     prefs: &RoutingPrefs,
+    eligible: fn(&ApiProtocol) -> bool,
 ) -> Result<Vec<RoutingTarget>> {
     use crate::config::VirtualModelStrategy;
 
@@ -511,7 +524,13 @@ fn resolve_virtual_model(
         }
         endpoints.push((
             endpoint.provider.clone(),
-            build_targets_for_prefs(&endpoint.provider, provider, &endpoint.service_id, prefs)?,
+            build_targets_for_prefs(
+                &endpoint.provider,
+                provider,
+                &endpoint.service_id,
+                prefs,
+                eligible,
+            )?,
         ));
     }
 
@@ -573,6 +592,17 @@ pub(crate) fn resolve_clean_route_chain(
     clean: &str,
     prefs: &RoutingPrefs,
 ) -> Result<Vec<RoutingTarget>> {
+    resolve_clean_route_chain_allowed(config, clean, prefs, |_| true)
+}
+
+/// Resolve against an explicit wire eligibility predicate before choosing the
+/// preferred protocol or its endpoint. Existing routing permits every wire.
+pub(crate) fn resolve_clean_route_chain_allowed(
+    config: &Config,
+    clean: &str,
+    prefs: &RoutingPrefs,
+    eligible: fn(&ApiProtocol) -> bool,
+) -> Result<Vec<RoutingTarget>> {
     if let Some(native) = bitrouter_registry::selector::decode(clean)
         .map_err(|e| BitrouterError::bad_request(e.to_string()))?
     {
@@ -582,8 +612,15 @@ pub(crate) fn resolve_clean_route_chain(
             .filter(|p| p.active)
             .ok_or_else(|| BitrouterError::NotFound("native provider unavailable".into()))?;
         if provider.registry.is_some() {
-            return build_registry_targets(&native.provider, provider, &native.model, true, prefs)
-                .and_then(|chain| require_compatible_chain(chain, prefs.operation));
+            return build_registry_targets(
+                &native.provider,
+                provider,
+                &native.model,
+                true,
+                prefs,
+                eligible,
+            )
+            .and_then(|chain| require_compatible_chain(chain, prefs.operation));
         }
         return Err(BitrouterError::NotFound(
             "native selector requires a declared registry inventory entry".into(),
@@ -594,13 +631,13 @@ pub(crate) fn resolve_clean_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return build_targets_for_prefs(provider_id, provider, model_id, prefs)
+        return build_targets_for_prefs(provider_id, provider, model_id, prefs, eligible)
             .and_then(|chain| require_compatible_chain(chain, prefs.operation));
     }
 
     // ---- Strategy 2: explicit virtual model ----
     if let Some(virtual_model) = config.models.get(clean) {
-        return resolve_virtual_model(clean, virtual_model, config, prefs);
+        return resolve_virtual_model(clean, virtual_model, config, prefs, eligible);
     }
 
     // ---- Strategy 3: auto-cascade across every provider declaring it ----
@@ -638,7 +675,7 @@ pub(crate) fn resolve_clean_route_chain(
             chain.push((
                 provider_rank(provider, order),
                 provider_id.clone(),
-                build_targets_for_prefs(provider_id, provider, clean, prefs)?,
+                build_targets_for_prefs(provider_id, provider, clean, prefs, eligible)?,
             ));
         }
     }

@@ -7,6 +7,7 @@ use bitrouter_ai::protocol::{
 };
 use reqwest::header::{self, HeaderMap};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 use super::GatewayClient;
 use crate::{
@@ -25,6 +26,8 @@ pub struct Metadata {
     pub request_id: Option<String>,
     /// Optional execution identity; never inferred when absent.
     pub execution_id: Option<String>,
+    /// Stable handle for reading a BitRouter background stream.
+    pub background_request_id: Option<String>,
 }
 
 /// Same-protocol output, selected by the request's stream flag.
@@ -62,6 +65,18 @@ impl GatewayClient {
         .await
     }
 
+    /// Relay native Chat JSON without filling absent request fields or decoding event payloads.
+    ///
+    /// # Errors
+    /// Returns request, transport, service or framing errors without retry.
+    pub async fn chat_event_reply(&self, request: &Value) -> Result<Reply<ChatResponse, Value>> {
+        let streaming = request["stream"].as_bool().ok_or(Error::Request(
+            "raw native relay requires a boolean stream field",
+        ))?;
+        self.relay("v1/chat/completions", request, streaming, Protocol::Chat)
+            .await
+    }
+
     /// Call Messages with the request's JSON/stream mode.
     ///
     /// # Errors
@@ -86,10 +101,142 @@ impl GatewayClient {
             .await
     }
 
+    /// Relay native Responses JSON without filling absent request fields or decoding event payloads.
+    ///
+    /// # Errors
+    /// Returns request, transport, service or framing errors without retry.
+    pub async fn responses_event_reply(
+        &self,
+        request: &Value,
+    ) -> Result<Reply<ResponsesResponse, Value>> {
+        let streaming = request["stream"].as_bool().ok_or(Error::Request(
+            "raw native relay requires a boolean stream field",
+        ))?;
+        self.relay("v1/responses", request, streaming, Protocol::Responses)
+            .await
+    }
+
+    /// Reattach to one already-created native background Responses stream.
+    ///
+    /// # Errors
+    /// A missing result or interrupted stream is not proof of non-execution.
+    pub async fn resume_responses_reply(
+        &self,
+        response_id: &str,
+        starting_after: u64,
+    ) -> Result<Reply<ResponsesResponse, ResponsesEvent>> {
+        self.relay_request(
+            self.responses_resume(response_id, starting_after)?,
+            true,
+            Protocol::Responses,
+        )
+        .await
+    }
+
+    /// Reattach to the original Responses stream and retain native event JSON.
+    ///
+    /// # Errors
+    /// Returns identity, transport, service or framing errors without retry.
+    pub async fn resume_responses_event_reply(
+        &self,
+        response_id: &str,
+        starting_after: u64,
+    ) -> Result<Reply<ResponsesResponse, Value>> {
+        self.relay_request(
+            self.responses_resume(response_id, starting_after)?,
+            true,
+            Protocol::Responses,
+        )
+        .await
+    }
+
+    fn responses_resume(
+        &self,
+        response_id: &str,
+        starting_after: u64,
+    ) -> Result<reqwest::RequestBuilder> {
+        if response_id.is_empty()
+            || response_id.len() > 256
+            || !response_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(Error::Request("invalid native Responses identity"));
+        }
+        let path = format!("v1/responses/{response_id}");
+        Ok(self.http.get(self.url(&path)?).query(&[
+            ("stream", "true".to_owned()),
+            ("starting_after", starting_after.to_string()),
+        ]))
+    }
+
+    /// Replay committed native Chat events using the market base URL (e.g. `/market`).
+    ///
+    /// # Errors
+    /// Returns an error for an invalid request ID or a failed replay connection.
+    pub async fn resume_background_chat(
+        &self,
+        request_id: &str,
+        after: Option<u64>,
+    ) -> Result<Reply<ChatResponse, ChatChunk>> {
+        self.relay_request(
+            self.background_replay(request_id, after)?,
+            true,
+            Protocol::Chat,
+        )
+        .await
+    }
+
+    /// Replay committed native Messages events using the market base URL (e.g. `/market`).
+    ///
+    /// # Errors
+    /// Returns an error for an invalid request ID or a failed replay connection.
+    pub async fn resume_background_messages(
+        &self,
+        request_id: &str,
+        after: Option<u64>,
+    ) -> Result<Reply<MessagesResponse, MessagesEvent>> {
+        self.relay_request(
+            self.background_replay(request_id, after)?,
+            true,
+            Protocol::Messages,
+        )
+        .await
+    }
+
+    fn background_replay(
+        &self,
+        request_id: &str,
+        after: Option<u64>,
+    ) -> Result<reqwest::RequestBuilder> {
+        let request_id = uuid::Uuid::parse_str(request_id)
+            .map_err(|_| Error::Request("invalid background request ID"))?;
+        let path = format!("v1/requests/{request_id}/events");
+        let request = self.http.get(self.url(&path)?);
+        Ok(match after {
+            Some(cursor) => request.query(&[("after", cursor)]),
+            None => request,
+        })
+    }
+
     async fn relay<T: DeserializeOwned, E: DeserializeOwned + Send + 'static>(
         &self,
         path: &str,
         request: &impl Serialize,
+        streaming: bool,
+        protocol: Protocol,
+    ) -> Result<Reply<T, E>> {
+        self.relay_request(
+            self.http.post(self.url(path)?).json(request),
+            streaming,
+            protocol,
+        )
+        .await
+    }
+
+    async fn relay_request<T: DeserializeOwned, E: DeserializeOwned + Send + 'static>(
+        &self,
+        request: reqwest::RequestBuilder,
         streaming: bool,
         protocol: Protocol,
     ) -> Result<Reply<T, E>> {
@@ -98,11 +245,8 @@ impl GatewayClient {
         } else {
             "application/json"
         };
-        let response = self
-            .http
-            .post(self.url(path)?)
+        let response = request
             .header(header::ACCEPT, accept)
-            .json(request)
             .send()
             .await
             .map_err(Error::transport)?;
@@ -166,5 +310,6 @@ fn metadata(status: u16, headers: &HeaderMap) -> Result<Metadata> {
         status,
         request_id: identity(headers, "x-bitrouter-request-id")?,
         execution_id: identity(headers, "x-bitrouter-execution-id")?,
+        background_request_id: identity(headers, "bitrouter-request-id")?,
     })
 }

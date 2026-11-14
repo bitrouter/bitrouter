@@ -10,6 +10,8 @@ pub(in crate::tenancy) const MAINTENANCE_FLOOR: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Default)]
 pub(in crate::tenancy) struct Inventory {
+    /// Independent optional child bytes; never canonical financial receipt bytes.
+    pub technical_bytes: u64,
     /// Canonical receipt and auxiliary bytes for repair verification.
     pub bytes: u64,
     /// Total canonical receipt rows, including archived history, for verification.
@@ -27,6 +29,7 @@ pub(in crate::tenancy) struct Inventory {
 /// A copy contains only scalars; publication recomputes it from current state.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(in crate::tenancy) struct Totals {
+    pub technical_bytes: u64,
     pub reserved: u64,
     pub bytes: u64,
     pub history_bytes: u64,
@@ -152,6 +155,57 @@ impl Accounting {
         self.physical_write_reserved = remaining;
         Ok(())
     }
+    // Optional diagnostics consume the same live-byte/physical envelope and
+    // leave the original next-execution reservation intact. Refusal only loses
+    // diagnostics, never an admission token or original receipt ACK.
+    pub fn reserve_optional_provider(
+        &mut self,
+        logical: u64,
+        physical: u64,
+    ) -> Result<(), ErrorCode> {
+        let technical = self
+            .totals
+            .technical_bytes
+            .checked_add(logical)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        if self
+            .totals
+            .bytes
+            .checked_add(technical)
+            .and_then(|n| n.checked_add(self.totals.reserved))
+            .and_then(|n| n.checked_add(RESERVATION))
+            .is_none_or(|used| used > self.limits.high_water_bytes)
+        {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        self.reserve_physical_write(physical, false)?;
+        self.totals.technical_bytes = technical;
+        Ok(())
+    }
+    /// Only a positively closed optional consumer may call this. Invalid
+    /// bookkeeping conserves its charge without setting the financial fence.
+    pub fn finish_optional_provider(
+        &mut self,
+        logical: u64,
+        physical: u64,
+        retain: bool,
+    ) -> Result<(), ErrorCode> {
+        let remaining_physical = self
+            .physical_write_reserved
+            .checked_sub(physical)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let remaining_logical = if retain {
+            self.totals.technical_bytes
+        } else {
+            self.totals
+                .technical_bytes
+                .checked_sub(logical)
+                .ok_or(ErrorCode::AuthorityUnavailable)?
+        };
+        self.physical_write_reserved = remaining_physical;
+        self.totals.technical_bytes = remaining_logical;
+        Ok(())
+    }
     /// Complete startup validation is allowed above current operator budgets.
     pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
         if self.totals.live != 0 || self.totals.reserved != 0 || self.physical_write_reserved != 0 {
@@ -159,6 +213,7 @@ impl Accounting {
         }
         // Pending OAuth obligations need not have receipt rows. No rows>=unknown check.
         self.totals.bytes = inventory.live_bytes;
+        self.totals.technical_bytes = inventory.technical_bytes;
         self.totals.history_bytes = inventory.history_bytes;
         self.totals.history_rows = inventory.history_rows;
         self.totals.oauth_bytes = inventory.oauth_bytes;
@@ -176,7 +231,8 @@ impl Accounting {
             && self
                 .totals
                 .bytes
-                .checked_add(self.totals.reserved)
+                .checked_add(self.totals.technical_bytes)
+                .and_then(|n| n.checked_add(self.totals.reserved))
                 .is_none_or(|used| {
                     used >= watermark
                         || used
@@ -193,7 +249,8 @@ impl Accounting {
             && self
                 .totals
                 .bytes
-                .checked_add(self.totals.reserved)
+                .checked_add(self.totals.technical_bytes)
+                .and_then(|n| n.checked_add(self.totals.reserved))
                 .and_then(|n| n.checked_add(RESERVATION))
                 .is_some_and(|n| n <= self.limits.high_water_bytes)
             && self

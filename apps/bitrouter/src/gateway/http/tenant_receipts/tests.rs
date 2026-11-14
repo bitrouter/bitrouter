@@ -2,6 +2,35 @@ use super::*;
 use anyhow::{Result as TestResult, ensure};
 use axum::http::StatusCode;
 
+#[test]
+fn sse_delivery_units_keep_the_individual_wire_limit() -> TestResult<()> {
+    let units = [
+        SseFrame::Event {
+            event: Some("first".into()),
+            data: "x".repeat(9 * 1024 * 1024),
+        },
+        SseFrame::Event {
+            event: Some("second".into()),
+            data: "x".repeat(9 * 1024 * 1024),
+        },
+    ];
+    let encoded = units
+        .iter()
+        .map(SseFrame::to_wire)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    ensure!(encoded.iter().map(String::len).sum::<usize>() > BODY);
+    ensure!(encoded.iter().all(|unit| unit.len() <= BODY));
+    ensure!(
+        SseFrame::Event {
+            event: Some("oversized".into()),
+            data: "x".repeat(BODY),
+        }
+        .to_wire()
+        .is_err()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn json_limit_counts_actual_escaped_wire_bytes_before_terminal_authorization()
 -> TestResult<()> {

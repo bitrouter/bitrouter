@@ -1,8 +1,11 @@
 use super::*;
 use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, operation::ErrorCode};
 
-fn request(protocol: GenerationProtocol) -> (&'static str, Value) {
-    match protocol {
+fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
+    Ok(match protocol {
+        GenerationProtocol::GenerateContent => {
+            anyhow::bail!("native protocol requires the paired refusal fixture")
+        }
         GenerationProtocol::ChatCompletions => (
             "chat/completions",
             json!({"model":MODEL,"messages":[{"role":"user","content":"hello"}]}),
@@ -12,7 +15,7 @@ fn request(protocol: GenerationProtocol) -> (&'static str, Value) {
             json!({"model":MODEL,"messages":[{"role":"user","content":"hello"}],"max_tokens":25}),
         ),
         GenerationProtocol::Responses => ("responses", json!({"model":MODEL,"input":"hello"})),
-    }
+    })
 }
 
 async fn send(
@@ -82,7 +85,7 @@ async fn envelope_invalid_binding_and_raw_decoding_never_charge_arm_or_send() ->
         let bound = original
             .clone()
             .with_generation_defaults_envelope(&defaults)?;
-        let (path, body) = request(protocol);
+        let (path, body) = request(protocol)?;
         let raw = body.to_string();
         let payload = serde_json::to_string(&defaults)?;
         let valid = format!("{{\"{ENVELOPE_BODY_MEMBER}\":{payload},{}", &raw[1..]);
@@ -158,7 +161,7 @@ async fn envelope_all_nonnull_continuation_values_refuse_without_charge_or_arm()
                     .binding(vec![0], protocol)
                     .await?
                     .with_generation_defaults_envelope(&defaults)?;
-                let (path, mut body) = request(protocol);
+                let (path, mut body) = request(protocol)?;
                 body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(defaults)?;
                 let response = send(&harness, &binding, path, body.to_string()).await?;
                 ensure!(response.status() == StatusCode::CONFLICT);
@@ -236,7 +239,7 @@ async fn envelope_store_true_messages_refuses_before_provider_send() -> Result<(
             .binding(vec![0], protocol)
             .await?
             .with_generation_defaults_envelope(&defaults)?;
-        let (path, mut body) = request(protocol);
+        let (path, mut body) = request(protocol)?;
         body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(defaults)?;
         let response = send(&harness, &binding, path, body.to_string()).await?;
         ensure!(response.status() == StatusCode::BAD_REQUEST);

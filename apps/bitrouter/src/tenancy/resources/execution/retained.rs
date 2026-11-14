@@ -24,7 +24,8 @@ const MAX_TARGET_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ROUTE_DEPENDENCIES: usize = 16_384;
 
 struct Source {
-    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachmentV1>>,
+    native_route: bool,
+    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
     choice: Option<super::super::core_choice::Profile>,
@@ -82,6 +83,7 @@ pub(super) fn decode_with_operation(
                 sources.insert(
                     reference,
                     Source {
+                        native_route: false,
                         admission: None,
                         routing: Arc::new(routing),
                         credentials,
@@ -101,6 +103,27 @@ pub(super) fn decode_with_operation(
                 sources.insert(
                     reference,
                     Source {
+                        native_route: false,
+                        routing: Arc::new(routing),
+                        credentials,
+                        envelope,
+                        admission: Some(attachments.into_iter().map(|item|bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {inbound_protocol:item.inbound_protocol,candidate_index:item.candidate_index,credential:item.credential,profile:item.profile}).collect()),
+                        choice: None,
+                        assessment: None,
+                        block: None,
+                    },
+                );
+            }
+            Definition::NativeProfiledRouteV1 {
+                routing,
+                credentials,
+                attachments,
+                ..
+            } => {
+                sources.insert(
+                    reference,
+                    Source {
+                        native_route: true,
                         routing: Arc::new(routing),
                         credentials,
                         envelope,
@@ -307,7 +330,11 @@ fn route_data(
 ) -> Result<RouteData> {
     // Derive runtime-only limits/ordering from authenticated source. Keeping
     // these out of the exact target codec preserves compiler-v1 ciphertext.
-    let runtime_config = native_budget.block_config(&source.routing)?;
+    let runtime_config = if source.native_route {
+        native_budget.native_route_config(&source.routing)?
+    } else {
+        native_budget.block_config(&source.routing)?
+    };
     let root_preferences = runtime_config.resolve_router(&route.selector)?.prefs;
     let policy = match (&route.policy, &route.policy_name) {
         (Some(reference), Some(name)) => {
@@ -452,14 +479,20 @@ fn route_data(
             block_pricing.push(pricing);
         }
     }
-    let native = native_v1::derive(
-        &route.selector,
-        &source.routing,
-        &source.credentials,
-        &chains,
-        &candidates,
-        native_budget,
-    );
+    let native = if source.native_route {
+        // This explicit ordered wire artifact grants no native-selection-v1
+        // authority, whose original source/protocol contract remains closed.
+        native_v1::NativeChains::Unavailable(native_v1::Unavailable::Unsupported)
+    } else {
+        native_v1::derive(
+            &route.selector,
+            &source.routing,
+            &source.credentials,
+            &chains,
+            &candidates,
+            native_budget,
+        )
+    };
     native_budget.check_operation()?;
     Ok(RouteData {
         admission: source.admission,

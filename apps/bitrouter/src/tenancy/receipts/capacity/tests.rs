@@ -194,6 +194,7 @@ fn restored_history_and_pending_sources_have_no_live_row_count_limit() -> Result
     state
         .initialize(
             Inventory {
+                technical_bytes: 0,
                 bytes: u64::MAX,
                 rows: u64::MAX,
                 history_bytes: u64::MAX,
@@ -295,4 +296,80 @@ fn archive_watermark_precedes_admission_refusal_and_stops_below_three_quarters()
     );
     accounting.totals.bytes -= 1;
     assert!(!accounting.archive_needed());
+}
+
+#[test]
+fn optional_diagnostics_share_original_bytes_but_never_acquire_send_capacity() -> Result<()> {
+    let limits = crate::config::tenancy::capacity::Receipts {
+        high_water_bytes: 2 * RESERVATION,
+        ..Default::default()
+    };
+    let mut state = Accounting::configured(&limits);
+    state
+        .initialize(Inventory::default(), u64::MAX)
+        .map_err(failure)?;
+    let original = state.totals;
+    for _ in 0..128 {
+        state
+            .reserve_optional_provider(
+                65536,
+                crate::tenancy::storage::estimate(65536).map_err(failure)?,
+            )
+            .map_err(failure)?;
+        ensure!(
+            state.totals.live == original.live
+                && state.totals.reserved == original.reserved
+                && state.totals.uncovered == original.uncovered
+        );
+        state
+            .finish_optional_provider(
+                65536,
+                crate::tenancy::storage::estimate(65536).map_err(failure)?,
+                false,
+            )
+            .map_err(failure)?;
+        ensure!(state.totals == original && !state.fenced && state.ready(0, 0));
+    }
+    state
+        .reserve_optional_provider(RESERVATION, 1)
+        .map_err(failure)?;
+    ensure!(state.reserve_optional_provider(1, 1) == Err(ErrorCode::CapacityExceeded));
+    ensure!(!state.fenced && state.ready(0, 0));
+    state
+        .finish_optional_provider(RESERVATION, 1, true)
+        .map_err(failure)?;
+    ensure!(
+        state.totals.bytes == 0
+            && state.totals.technical_bytes == RESERVATION
+            && state.totals.live == 0
+            && state.physical_write_reserved == 0
+    );
+    Ok(())
+}
+
+#[test]
+fn optional_counter_refusal_is_atomic_and_never_sets_financial_storage_fence() -> Result<()> {
+    let mut state = Accounting::configured(&crate::config::tenancy::capacity::Receipts::default());
+    state
+        .initialize(Inventory::default(), u64::MAX)
+        .map_err(failure)?;
+    state
+        .reserve_optional_provider(128, 1024)
+        .map_err(failure)?;
+    let original = state.totals;
+    ensure!(state.finish_optional_provider(128, 1025, false).is_err());
+    ensure!(state.finish_optional_provider(129, 1024, false).is_err());
+    ensure!(
+        state.totals == original
+            && state.physical_write_reserved == 1024
+            && !state.fenced
+            && state.ready(0, 0)
+    );
+    state
+        .finish_optional_provider(128, 1024, false)
+        .map_err(failure)?;
+    ensure!(
+        state.totals.technical_bytes == 0 && state.physical_write_reserved == 0 && !state.fenced
+    );
+    Ok(())
 }

@@ -1531,6 +1531,7 @@
       "additionalProperties": false
     },
     "GrantScope": {
+      "description": "Explicit tenant or nonempty unique resource scope; at most 262144 bytes of compact UTF-8 JSON for the complete scope, including its kind tag. This byte bound is checked by the contract validator, not by JSON Schema.",
       "oneOf": [
         {
           "type": "object",
@@ -1540,7 +1541,6 @@
             },
             "operator_pools": {
               "type": "array",
-              "maxItems": 256,
               "uniqueItems": true,
               "items": {
                 "allOf": [
@@ -1575,7 +1575,6 @@
                 "$ref": "#/$defs/ResourceKey"
               },
               "minItems": 1,
-              "maxItems": 256,
               "uniqueItems": true
             }
           },

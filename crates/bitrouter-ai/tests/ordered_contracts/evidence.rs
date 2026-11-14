@@ -1,6 +1,9 @@
 use super::*;
 use bitrouter_ai::tenancy::identity::AuthorityRevision;
 
+#[path = "evidence/native.rs"]
+mod native;
+
 fn dimensions() -> [Dimension; 13] {
     [
         Dimension::InputTokens,

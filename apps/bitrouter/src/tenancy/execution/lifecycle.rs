@@ -63,6 +63,7 @@ pub(crate) struct Registry {
     draining: tokio::sync::Mutex<()>,
 }
 pub(crate) struct Registration {
+    execution_id: ExecutionId,
     pipeline: Weak<Pipeline>,
     tasks: Arc<OwnedTasks>,
     _source: Source,
@@ -223,6 +224,7 @@ impl Registry {
         }
         entry.changed.notify_waiters();
         Ok(Registration {
+            execution_id: id.clone(),
             pipeline: pipeline_ref,
             tasks,
             _source: source,
@@ -544,6 +546,15 @@ fn start_drain(runtime: &tokio::runtime::Handle, entry: Arc<Entry>) -> DrainTask
     .shared()
 }
 impl Registration {
+    pub(crate) fn validate_execution(&self, execution_id: &ExecutionId) -> Result<()> {
+        if &self.execution_id != execution_id {
+            return Err(BitrouterError::Forbidden(
+                "request lifecycle belongs to another execution".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn pipeline(&self, expected: &Pipeline) -> Result<Arc<Pipeline>> {
         let pipeline = self
             .pipeline

@@ -48,9 +48,9 @@ impl Worker {
         let mut budget = Budget::owned(&shared);
         control.reserve_write(crate::storage::operation_budget::MAX_BYTES, false)?;
         let tx = control
-            .begin_repeatable_read(store.database())
+            .begin_write_repeatable_read(store.database())
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let result = async {
             check().map_err(Failure::from)?;
             #[cfg(feature = "harness")]
@@ -154,9 +154,9 @@ impl Worker {
         let mut budget = Budget::owned(&shared);
         control.reserve_write(crate::storage::operation_budget::MAX_BYTES, true)?;
         let tx = control
-            .begin_repeatable_read(store.database())
+            .begin_write_repeatable_read(store.database())
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let body = async {
             check().map_err(BudgetError::Rejected)?;
             let request = store

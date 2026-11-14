@@ -10,6 +10,9 @@ impl TenancyClient {
     /// Read a nonsecret operator directory page using current `control:tenancy` authority.
     /// The first page establishes a revision. Pass it with every subsequent cursor;
     /// on revision conflict discard the partial scan and explicitly start again.
+    /// `limit` is an upper bound: encoded bytes or server working capacity may
+    /// shorten a page. Follow `next_after`, not the returned row count. Readers
+    /// must share the server's grant-scope byte contract for scopes above 256 keys.
     ///
     /// # Errors
     /// Rejects limits outside 1..=100 and a cursor without a revision before HTTP.

@@ -16,6 +16,8 @@ pub struct ServerEvent<T> {
 pub enum ProtocolEnd {
     /// Chat Completions `[DONE]` sentinel.
     ChatDone,
+    /// Native Generate Content finish followed by validated HTTP EOF.
+    GenerateContentFinished,
     /// Messages `message_stop` event.
     MessagesStop,
     /// Responses `response.completed` event.

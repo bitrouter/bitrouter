@@ -1,0 +1,15 @@
+[package]
+name = "native-ap-sdk-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bitrouter-ai = { path = "../../../../../crates/bitrouter-ai" }
+bitrouter-sdk = { path = "../../../../../crates/bitrouter-sdk", features = ["http2"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }

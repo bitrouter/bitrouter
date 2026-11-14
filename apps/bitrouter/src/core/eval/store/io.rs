@@ -115,6 +115,8 @@ pub(super) trait Columns {
 }
 
 impl EvalStore {
+    /// Preserve the existing backend BEGIN/isolation choice. Owned mutators
+    /// enter through write_transaction so their Write retains failure custody.
     pub(super) async fn transaction(&self, write: bool) -> Result<DatabaseTransaction> {
         let backend = self.db.get_database_backend();
         if backend == DatabaseBackend::Sqlite {
@@ -131,7 +133,43 @@ impl EvalStore {
         };
         Ok(self.db.begin_with_config(Some(isolation), None).await?)
     }
+
+    /// The same ordinary Eval schema exists in standalone and tenancy stores.
+    /// Acquire SQLite's write intent before exposing this owned transaction to
+    /// caller reads, without requiring a tenancy table or a schema preflight.
+    pub(super) async fn write_transaction(
+        &self,
+        write: crate::storage::write::Write,
+    ) -> Result<(crate::storage::write::Write, DatabaseTransaction)> {
+        let tx = self.transaction(true).await?;
+        if tx.get_database_backend() == DatabaseBackend::Sqlite {
+            let intent = async {
+                let result = tx
+                    .execute(sea_orm::Statement::from_string(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE main.eval_subjects SET eval_id=eval_id WHERE 0",
+                    ))
+                    .await?;
+                ensure!(
+                    result.rows_affected() == 0,
+                    "eval write intent changed rows"
+                );
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = intent {
+                // BEGIN already succeeded. Keep the original physical Write
+                // owner through its acknowledged rollback/error/fence path.
+                // Drop/ConnectionAcquire cannot stand in for that ACK.
+                return write.finish(tx, Err(error)).await;
+            }
+        }
+        Ok((write, tx))
+    }
 }
+
+#[cfg(test)]
+mod write_intent_tests;
 
 /// `query` already contains scope and any legacy owner filters. Read transactions
 /// must be stable; write callers use locked point reads (never mutable collections).

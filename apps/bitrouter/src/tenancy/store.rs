@@ -281,7 +281,23 @@ pub(super) async fn commit(
     operation: &Operation,
     control: &Control,
 ) -> Result<()> {
-    let txn = control.begin(db).await?;
+    #[cfg(test)]
+    if let Some(probe) = control
+        .rotation_overlap_for_test()
+        .filter(|probe| probe.matches(&state.installation, &operation.id))
+    {
+        // Exact operation entry, BEFORE BEGIN. This is not SQLite acquisition.
+        // It binds the later original Proof counters to this serial actor job.
+        probe.target_store_entered.cancel();
+    }
+    let txn = control.begin_write(db).await?;
+    #[cfg(test)]
+    let result = super::actor::provider_technical::tests::observe_rotation_write(
+        control.rotation_overlap_for_test(),
+        write_in(&txn, state, changes, operation),
+    )
+    .await;
+    #[cfg(not(test))]
     let result = write_in(&txn, state, changes, operation).await;
     match result {
         Ok(()) => control.commit(txn).await,
@@ -305,6 +321,28 @@ pub(super) async fn write_in(
         .await?
         .context("authority installation disappeared")?
         .format;
+    #[cfg(test)]
+    if let Some(probe) = super::actor::provider_technical::tests::after_authority_header(
+        &state.installation,
+        &operation.id,
+    )
+    .await?
+    {
+        // Same real mutation, after the actual SELECT has established its
+        // snapshot. Observe typed SQLx error BEFORE the public error mapping.
+        let result = startup::write_in(
+            tx,
+            &startup::LoadedHeader {
+                header: state.header(),
+                format,
+            },
+            changes,
+            operation,
+        )
+        .await;
+        probe.record_result(&result);
+        return result;
+    }
     startup::write_in(
         tx,
         &startup::LoadedHeader {

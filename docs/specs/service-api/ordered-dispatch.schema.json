@@ -335,7 +335,8 @@
       "enum": [
         "chat_completions",
         "messages",
-        "responses"
+        "responses",
+        "generate_content"
       ]
     },
     "CandidateIndices": {
@@ -919,7 +920,8 @@
             "chat_chunk",
             "response_terminal",
             "message_start",
-            "message_delta"
+            "message_delta",
+            "generate_content_chunk"
           ]
         },
         "semantics": {
@@ -1070,6 +1072,47 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "generate_content"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "enum": [
+                  "json",
+                  "http_error",
+                  "generate_content_chunk"
+                ]
+              },
+              "semantics": {
+                "const": "snapshot"
+              },
+              "quantities": {
+                "items": {
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 2147483647
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       ]
     },
@@ -1169,7 +1212,10 @@
         },
         "extractor_version": {
           "type": "integer",
-          "const": 1
+          "enum": [
+            1,
+            2
+          ]
         },
         "estimation": {
           "enum": [
@@ -1453,6 +1499,50 @@
             "properties": {
               "frames": {
                 "maxItems": 4096
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "accepted_selection": {
+                    "properties": {
+                      "inbound_protocol": {
+                        "const": "generate_content"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "frames": {
+                    "contains": {
+                      "properties": {
+                        "protocol": {
+                          "const": "generate_content"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "extractor_version": {
+                "const": 2
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "extractor_version": {
+                "const": 1
               }
             }
           }

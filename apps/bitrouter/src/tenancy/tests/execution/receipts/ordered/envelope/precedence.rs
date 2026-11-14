@@ -67,7 +67,7 @@ async fn envelope_caller_special_and_typed_or_opaque_tool_choice_ownership_matri
                         let choice = if opaque {
                             json!({"type":"future_choice","vendor":7})
                         } else {
-                            native_choice(protocol)
+                            native_choice(protocol)?
                         };
                         let values = defaults(
                             json!({"tool_choice":{"type":"function","function":{"name":"preset_function"}}}),
@@ -207,12 +207,15 @@ async fn envelope_fallback_keeps_complete_digest_and_terminal_response_never_res
     Ok(())
 }
 
-fn native_choice(protocol: GenerationProtocol) -> Value {
-    match protocol {
+fn native_choice(protocol: GenerationProtocol) -> Result<Value> {
+    Ok(match protocol {
+        GenerationProtocol::GenerateContent => {
+            anyhow::bail!("native protocol requires the paired precedence fixture")
+        }
         GenerationProtocol::Messages => json!({"type":"tool","name":"caller_function"}),
         GenerationProtocol::Responses => json!({"type":"function","name":"caller_function"}),
         GenerationProtocol::ChatCompletions => {
             json!({"type":"function","function":{"name":"caller_function"}})
         }
-    }
+    })
 }

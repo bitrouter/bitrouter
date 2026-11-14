@@ -37,7 +37,8 @@ wire_enum! { /// Original protocol whose usage object was inspected.
         ChatCompletions, /// Responses.
         Responses, /// Messages.
         Messages, /// Decisions.
-        Decisions }
+        Decisions, /// Private ordered native GenerateContent. Evidence v2 only.
+        GenerateContent }
 }
 wire_enum! { /// Fixed source locations; never provider-controlled strings.
     Source { /// Nonstreaming response usage.
@@ -46,7 +47,8 @@ wire_enum! { /// Fixed source locations; never provider-controlled strings.
         ChatChunk, /// Accepted response terminal usage.
         ResponseTerminal, /// Accepted initial message usage.
         MessageStart, /// Accepted message update usage.
-        MessageDelta }
+        MessageDelta, /// Accepted native GenerateContent usageMetadata snapshot. Evidence v2 only.
+        GenerateContentChunk }
 }
 wire_enum! { /// Arithmetic semantics of one source observation.
     Semantics { /// Replaces the named quantities; absent quantities remain absent.
@@ -78,7 +80,7 @@ wire_enum! { /// Evidence retention, independent of invocation outcome.
 }
 wire_enum! { /// Whether estimator provenance was captured by this contract.
     Estimation { /// No estimate is asserted by this document.
-        NotCaptured, /// The installed stream finalizer did not use an estimator.
+        NotCaptured, /// The stream finalizer or successful native JSON executor affirmatively observed no estimator use.
         NotUsed, /// The installed stream finalizer used the recorded estimator.
         Captured }
 }
@@ -304,6 +306,13 @@ impl ExecutionUsageEvidenceV1 {
                 "absent evidence cannot assert observations",
             )?;
         }
+        require(
+            self.frames.iter().all(|frame| {
+                frame.protocol != Protocol::GenerateContent
+                    && frame.source != Source::GenerateContentChunk
+            }),
+            "v1 usage evidence protocol",
+        )?;
         validate_observations(&self.attempts, &self.frames)
     }
 }
@@ -362,6 +371,7 @@ pub(super) fn validate_observations(
             (_, Source::Json | Source::HttpError)
                 | (Protocol::ChatCompletions, Source::ChatChunk)
                 | (Protocol::Responses, Source::ResponseTerminal)
+                | (Protocol::GenerateContent, Source::GenerateContentChunk)
                 | (
                     Protocol::Messages,
                     Source::MessageStart | Source::MessageDelta

@@ -6,7 +6,11 @@ use super::identity::{
     AuthorityRevision, BindingId, CredentialId, InstallationId, OperationId, OwnerId, PrincipalId,
     ResourceId, RevisionId, TenantId, Timestamp,
 };
-use super::validation::{Validate, ValidationError, nullable, require, text, unique};
+use super::validation::{Validate, ValidationError, bytes, nullable, require, text, unique};
+
+/// Maximum compact JSON bytes for one explicit grant scope, including its tag.
+/// This bounds validation work; live authority memory is charged separately.
+pub const MAX_GRANT_SCOPE_BYTES: usize = 256 * 1024;
 
 /// Owner namespace; identical IDs in different namespaces are distinct owners.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -62,15 +66,18 @@ pub enum GrantScope {
     },
     /// Only these fully qualified resource identities.
     Resources {
-        /// Nonempty, unique allowlist of at most 256 keys.
+        /// Nonempty, unique allowlist within [`MAX_GRANT_SCOPE_BYTES`].
         resources: Vec<ResourceKey>,
     },
 }
 impl Validate for GrantScope {
     fn validate(&self) -> Result<(), ValidationError> {
+        // Bound encoded input before allocating the uniqueness set. The byte
+        // budget, not an unrelated resource count, limits both scope variants.
+        bytes(self, MAX_GRANT_SCOPE_BYTES)?;
         match self {
             Self::Tenant { operator_pools } => {
-                unique(operator_pools, 0, 256)?;
+                unique(operator_pools, 0, operator_pools.len())?;
                 require(
                     operator_pools
                         .iter()
@@ -78,7 +85,7 @@ impl Validate for GrantScope {
                     "pool owner kind",
                 )
             }
-            Self::Resources { resources } => unique(resources, 1, 256),
+            Self::Resources { resources } => unique(resources, 1, resources.len()),
         }
     }
 }

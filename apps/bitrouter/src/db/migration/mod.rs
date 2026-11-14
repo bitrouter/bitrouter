@@ -58,6 +58,10 @@ pub(crate) mod m20240101_000044_capacity_upgrade;
 pub(crate) mod m20240101_000045_ordered_receipts;
 mod m20240101_000046_profiled_authority;
 pub(crate) mod m20240101_000047_shared_admission_health;
+pub(crate) mod m20240101_000048_native_generate_content;
+
+// Optional diagnostic schema is deliberately outside Migrator::migrations.
+pub(crate) mod provider_technical;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -143,6 +147,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000045_ordered_receipts::Migration),
             Box::new(m20240101_000046_profiled_authority::Migration),
             Box::new(m20240101_000047_shared_admission_health::Migration),
+            Box::new(m20240101_000048_native_generate_content::Migration),
         ]
     }
 }

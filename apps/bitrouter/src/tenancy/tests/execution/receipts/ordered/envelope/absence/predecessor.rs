@@ -126,6 +126,9 @@ async fn predecessor(variable: &str, revision: &str, supports_v1: bool) -> Resul
                     }
                 };
                 let error = match protocol {
+                    GenerationProtocol::GenerateContent => {
+                        anyhow::bail!("native protocol requires the paired predecessor fixture")
+                    }
                     GenerationProtocol::ChatCompletions => call
                         .chat_reply(&serde_json::from_value::<ChatRequest>(request)?)
                         .await

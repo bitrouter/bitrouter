@@ -80,9 +80,9 @@ impl Worker {
         let installation = self.current()?.installation.clone();
         control.reserve_write(32 * 4096, true)?;
         let tx = control
-            .begin(&self.db)
+            .begin_write(&self.db)
             .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            .map_err(|error| self.write_intent_failure(error, ErrorCode::CapacityExceeded))?;
         let result = async {
             let rows = obligations::due_page(&tx, &installation, now, &|_, _| control.check_read())
                 .await?;

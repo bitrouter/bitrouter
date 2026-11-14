@@ -126,6 +126,18 @@ async fn eight_actual_fallback_sends_are_recorded_and_ninth_never_reaches_provid
             && receipt.attempts.len() == 8
             && receipt.outcome == Outcome::Failed
     );
+    let technical =
+        tokio::time::timeout(TIMEOUT, fixture.service.technical_io.observed(&id)).await??;
+    technical.validate_against(&receipt)?;
+    ensure!(technical.operations.len() == 8);
+    ensure!(
+        technical
+            .operations
+            .iter()
+            .all(|operation| operation.attempt_ids.len() == 1
+                && operation.partial
+                && operation.selected_attempt_id.is_none())
+    );
     for (index, attempt) in receipt.attempts.iter().enumerate() {
         ensure!(attempt.outcome == Outcome::Failed);
         let target = attempt.target.as_ref().context("actual target")?;

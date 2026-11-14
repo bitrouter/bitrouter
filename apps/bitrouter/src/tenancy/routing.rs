@@ -141,6 +141,20 @@ pub(crate) fn response_failed(
     }
 }
 
+/// Only the pipeline's provider tool turn can close this routing reservation
+/// at its HTTP EOF. Logical usage and receipt authority stay with their owners.
+#[cfg(feature = "server-tools")]
+pub(crate) fn tool_stream_turn(
+    ctx: &crate::gateway::pipeline::context::PipelineContext,
+    target: &RoutingTarget,
+) -> Option<profile::StreamTurn> {
+    ctx.extension::<crate::gateway::pipeline::server_tools::stream::ProviderToolTurn>()?;
+    Some(profile::StreamTurn::new(
+        ctx.extension::<profile::Profile>()?.as_ref().clone(),
+        target.clone(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

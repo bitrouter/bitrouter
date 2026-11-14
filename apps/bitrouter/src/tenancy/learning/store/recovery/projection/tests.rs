@@ -158,6 +158,7 @@ fn fold_has_no_historical_row_ceiling_and_retains_only_changed_keys() -> Result<
 #[test]
 fn missing_receipt_charges_only_canonical_and_inline_bytes_atomically() -> Result<()> {
     let original = Inventory {
+        technical_bytes: 0,
         bytes: 100,
         rows: 3,
         live_bytes: 200,

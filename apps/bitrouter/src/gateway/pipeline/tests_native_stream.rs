@@ -589,3 +589,142 @@ async fn invalid_native_terminal_retains_error_usage_in_attempt_and_settlement()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn messages_tool_http_held_eof_keeps_usage_without_early_success()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    use axum::{
+        Router,
+        body::{Body, Bytes},
+        response::Response,
+        routing::post,
+    };
+    use std::convert::Infallible;
+    use tokio::sync::{Notify, mpsc};
+
+    const PREFIX: &str = concat!(
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_held\",\"usage\":{\"input_tokens\":40,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"lookup\",\"input\":{}}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    const INVALID_TAIL: &str = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\" \"}}\n\n";
+    for (cancel, bad_tail) in [(true, false), (false, true), (false, false)] {
+        let (tail_tx, tail_rx) = mpsc::channel::<&'static str>(1);
+        let tail_rx = Arc::new(Mutex::new(Some(tail_rx)));
+        let held = Arc::new(Notify::new());
+        let router = Router::new().route(
+            "/messages",
+            post({
+                let held = held.clone();
+                move || {
+                    let held = held.clone();
+                    let tail_rx = tail_rx.clone();
+                    async move {
+                        let mut tail_rx = tail_rx.lock().await.take();
+                        let body = Body::from_stream(async_stream::stream! {
+                            yield Ok::<_, Infallible>(Bytes::from_static(PREFIX.as_bytes()));
+                            held.notify_one();
+                            if let Some(receiver) = &mut tail_rx
+                                && let Some(tail) = receiver.recv().await
+                            {
+                                yield Ok(Bytes::from_static(tail.as_bytes()));
+                            }
+                        });
+                        let mut response = Response::new(body);
+                        response.headers_mut().insert(
+                            axum::http::header::CONTENT_TYPE,
+                            axum::http::HeaderValue::from_static("text/event-stream"),
+                        );
+                        response
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let mut route = target("messages-fixture");
+        route.api_base = format!("http://{}", listener.local_addr()?);
+        route.api_protocol = ApiProtocol::Messages;
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let table = StaticRoutingTable::new();
+        table.insert("test-model", vec![route]);
+        let records = Records::default();
+        let control = Arc::new(Control::default());
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .settlement_recorder(records.clone());
+        let pipeline = Arc::new(builder.build()?);
+        let work = pipeline.execute_native_controlled(request(), control.clone());
+        let mut work = std::pin::pin!(work);
+        let observe = async {
+            held.notified().await;
+            loop {
+                // The native processor observes raw usage immediately but
+                // intentionally only projects it to this observer at Finish.
+                if control.parts.lock().await.iter().any(|part| {
+                    matches!(part,
+                        StreamPart::ToolCallDelta { id, .. } if id == "t1"
+                    )
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::select! {
+            result = &mut work => return Err(format!("provider settled before EOF: {}", result.is_ok()).into()),
+            observed = tokio::time::timeout(std::time::Duration::from_secs(5), observe) =>
+                observed.map_err(|_| "provider prefix did not reach the held EOF gate")?,
+        }
+        // The entire prefix is one upstream chunk. Poll past the already
+        // observed opening delta while the server still holds the tail.
+        assert!(futures::poll!(&mut work).is_pending());
+        assert!(
+            !control
+                .parts
+                .lock()
+                .await
+                .iter()
+                .any(StreamPart::is_terminal)
+        );
+        if cancel {
+            control.cancel.cancel();
+        } else if bad_tail {
+            tail_tx.send(INVALID_TAIL).await?;
+        }
+        // In the cancellation schedule keep EOF held until work settles.
+        let tail_tx = if cancel {
+            Some(tail_tx)
+        } else {
+            drop(tail_tx);
+            None
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), work)
+            .await
+            .map_err(|_| "provider did not settle after the held EOF action")?;
+        drop(tail_tx);
+        server.abort();
+        let _ = server.await;
+        assert_eq!(result.is_err(), cancel || bad_tail);
+        let reports = control.reports.lock().await;
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].error.is_some(), cancel || bad_tail);
+        let observed = reports[0]
+            .result
+            .as_ref()
+            .and_then(|result| result.usage.as_ref())
+            .ok_or("missing received usage")?;
+        assert_eq!(
+            (observed.prompt_tokens, observed.completion_tokens),
+            (40, 7)
+        );
+        assert_eq!(
+            records.0.lock().await.as_slice(),
+            &[(true, 40, cancel || bad_tail)]
+        );
+    }
+    Ok(())
+}

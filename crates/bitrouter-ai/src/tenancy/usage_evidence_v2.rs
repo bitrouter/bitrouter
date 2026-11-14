@@ -9,7 +9,7 @@ use super::{
     execution::Target,
     execution_v2::ExecutionReceiptV2,
     identity::{AuthorityRevision, ExecutionId, InstallationId, TenantId},
-    ordered::{AcceptedSelectionV2, MAX_ATTEMPTS, validate_tenant_reference},
+    ordered::{AcceptedSelectionV2, GenerationProtocol, MAX_ATTEMPTS, validate_tenant_reference},
     usage_evidence::{
         AttemptEvidence, Capture, Estimate, Estimation, Frame, Protocol, validate_observations,
     },
@@ -70,7 +70,7 @@ pub struct ExecutionUsageEvidenceV2 {
     pub accepted_selection: AcceptedSelectionV2,
     /// Capture status; unavailable recovery never manufactures observations.
     pub capture: Capture,
-    /// Extractor mapping version, exactly one.
+    /// One for ordinary protocols; two for native ingress or captured native frames.
     #[serde(deserialize_with = "super::number::integer")]
     pub extractor_version: u8,
     /// Whether the existing stream estimator was actually used.
@@ -91,7 +91,12 @@ pub struct ExecutionUsageEvidenceV2 {
 impl Validate for ExecutionUsageEvidenceV2 {
     fn validate(&self) -> Result<(), ValidationError> {
         require(
-            self.schema_version == 2 && self.extractor_version == 1,
+            self.schema_version == 2
+                && self.extractor_version
+                    == Self::extractor_version_for(
+                        self.accepted_selection.inbound_protocol,
+                        &self.frames,
+                    ),
             "ordered evidence version",
         )?;
         self.accepted_selection.validate()?;
@@ -137,12 +142,38 @@ impl Validate for ExecutionUsageEvidenceV2 {
                 .all(|frame| frame.protocol != Protocol::Decisions),
             "ordered evidence protocol",
         )?;
+        require(
+            self.frames
+                .iter()
+                .filter(|frame| frame.protocol == Protocol::GenerateContent)
+                .all(|frame| {
+                    frame
+                        .quantities
+                        .iter()
+                        .all(|quantity| quantity.value.is_none_or(|value| value <= i32::MAX as u64))
+                }),
+            "native quantity range",
+        )?;
         validate_observations(&self.attempts, &self.frames)?;
         bytes(&self.frames, budget.max_frame_bytes)?;
         bytes(self, budget.max_bytes)
     }
 }
 impl ExecutionUsageEvidenceV2 {
+    /// Select the exact mapping discriminator without changing historical documents.
+    /// Native ingress remains version two even when capture has no retained frames.
+    pub fn extractor_version_for(inbound: GenerationProtocol, frames: &[Frame]) -> u8 {
+        if inbound == GenerationProtocol::GenerateContent
+            || frames
+                .iter()
+                .any(|frame| frame.protocol == Protocol::GenerateContent)
+        {
+            2
+        } else {
+            1
+        }
+    }
+
     /// Validate evidence and bind its identities, selection and actual attempts
     /// to the immutable receipt. Capture absence remains explicit after recovery.
     ///

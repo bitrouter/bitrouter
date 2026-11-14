@@ -56,7 +56,7 @@ impl Worker {
             job.operation != Operation::Start,
         )?;
         let transaction = control
-            .begin(&self.db)
+            .begin_write(&self.db)
             .await
             .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         let write = async {

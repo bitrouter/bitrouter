@@ -40,6 +40,13 @@ pub(super) enum Definition {
     AdmissionProfileV2 {
         profile: AdmissionProfileV2,
     },
+    NativeProfiledRouteV1 {
+        routing: Value,
+        selector: String,
+        policy: Option<ResourceRef>,
+        credentials: Vec<CredentialBinding>,
+        attachments: Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>,
+    },
     ProfiledRoute {
         routing: Value,
         selector: String,
@@ -134,6 +141,32 @@ impl Import {
                     "admission profile requires an operator-pool owner"
                 );
                 ResourceKind::Policy
+            }
+            Definition::NativeProfiledRouteV1 {
+                routing,
+                selector,
+                policy,
+                credentials,
+                attachments,
+            } => {
+                bitrouter_ai::tenancy::resources_v3::DefinitionV3::NativeProfiledRouteV1 {
+                    routing: routing.clone(),
+                    selector: selector.clone(),
+                    policy: policy.clone(),
+                    credentials: credentials
+                        .iter()
+                        .map(
+                            |binding| bitrouter_ai::tenancy::resources::CredentialBinding {
+                                provider: binding.provider.clone(),
+                                account: binding.account.clone(),
+                                credential: binding.credential.clone(),
+                            },
+                        )
+                        .collect(),
+                    attachments: attachments.clone(),
+                }
+                .validate()?;
+                ResourceKind::Route
             }
             Definition::ProfiledRoute {
                 routing,
@@ -303,6 +336,44 @@ impl Definition {
         )
     }
 
+    pub(super) fn is_native_route(&self) -> bool {
+        matches!(self, Self::NativeProfiledRouteV1 { .. })
+    }
+
+    pub(super) fn admission(
+        &self,
+    ) -> Option<(
+        &Option<ResourceRef>,
+        Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>,
+    )> {
+        match self {
+            Self::NativeProfiledRouteV1 {
+                policy,
+                attachments,
+                ..
+            } => Some((policy, attachments.clone())),
+            Self::ProfiledRoute {
+                policy,
+                attachments,
+                ..
+            } => Some((
+                policy,
+                attachments
+                    .iter()
+                    .map(
+                        |item| bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {
+                            inbound_protocol: item.inbound_protocol,
+                            candidate_index: item.candidate_index,
+                            credential: item.credential.clone(),
+                            profile: item.profile.clone(),
+                        },
+                    )
+                    .collect(),
+            )),
+            _ => None,
+        }
+    }
+
     pub(super) fn is_shared_profile(&self) -> bool {
         matches!(self, Self::AdmissionProfileV2 { .. })
     }
@@ -313,11 +384,15 @@ impl Definition {
             Self::AdmissionProfile { .. }
                 | Self::AdmissionProfileV2 { .. }
                 | Self::ProfiledRoute { .. }
+                | Self::NativeProfiledRouteV1 { .. }
         )
     }
 
     pub(super) fn is_route(&self) -> bool {
-        matches!(self, Self::Route { .. } | Self::ProfiledRoute { .. })
+        matches!(
+            self,
+            Self::Route { .. } | Self::ProfiledRoute { .. } | Self::NativeProfiledRouteV1 { .. }
+        )
     }
 
     pub(super) fn requires_envelope_v2(&self) -> bool {
@@ -334,7 +409,9 @@ impl Definition {
 
     pub fn policy_reference(&self) -> Option<&ResourceRef> {
         match self {
-            Self::Route { policy, .. } | Self::ProfiledRoute { policy, .. } => policy.as_ref(),
+            Self::Route { policy, .. }
+            | Self::ProfiledRoute { policy, .. }
+            | Self::NativeProfiledRouteV1 { policy, .. } => policy.as_ref(),
             _ => None,
         }
     }
@@ -342,6 +419,21 @@ impl Definition {
     pub fn dependencies(&self) -> Vec<ResourceRef> {
         let candidates: Vec<_> = match self {
             Self::AdmissionProfile { .. } | Self::AdmissionProfileV2 { .. } => Vec::new(),
+            Self::NativeProfiledRouteV1 {
+                policy,
+                credentials,
+                attachments,
+                ..
+            } => policy
+                .iter()
+                .cloned()
+                .chain(credentials.iter().map(|binding| binding.credential.clone()))
+                .chain(
+                    attachments
+                        .iter()
+                        .map(|attachment| attachment.profile.clone()),
+                )
+                .collect(),
             Self::ProfiledRoute {
                 policy,
                 credentials,

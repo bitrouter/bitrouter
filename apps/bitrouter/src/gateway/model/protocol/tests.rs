@@ -5031,7 +5031,14 @@ fn regression_434_responses_tool_stream_id_mapping() -> crate::gateway::model::e
         .to_string(),
     };
     let p = decoder.decode(&done).unwrap();
-    assert!(p.is_empty(), ".done must not duplicate the arguments delta");
+    assert!(
+        matches!(
+            p.as_slice(),
+            [StreamPart::ToolCallEnd { id, boundary: bitrouter_ai::types::ToolCallBoundary::Arguments }]
+                if id == "call_abc"
+        ),
+        ".done must carry a boundary without duplicating arguments"
+    );
     Ok(())
 }
 
@@ -10737,3 +10744,5 @@ fn parsed_sampling_params_are_not_duplicated_in_extra()
     }
     Ok(())
 }
+
+mod tool_fragment_association;

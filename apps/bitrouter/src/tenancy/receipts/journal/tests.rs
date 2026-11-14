@@ -760,3 +760,112 @@ fn owned_linkage_is_bidirectional_bounded_and_refuses_reparenting_or_started_chi
     ));
     Ok(())
 }
+
+#[test]
+fn estimator_provenance_is_idempotent_conflicting_and_closed_after_freeze() -> Result<()> {
+    use bitrouter_ai::tenancy::usage_evidence::{
+        Estimate, EstimateCoverage, EstimateTrigger, EstimatorAlgorithm,
+    };
+    let estimate = Estimate {
+        algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
+        version: 1,
+        characters_per_token: 4,
+        coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,
+        trigger: EstimateTrigger::Completed,
+        prompt_characters: 5,
+        output_characters: 9,
+        input_tokens: 2,
+        output_tokens: 3,
+    };
+    for initial in [None, Some(estimate.clone())] {
+        let journal = Journal::owned(owner("estimator-observation")?);
+        journal.observe_estimator(initial.clone())?;
+        journal.observe_estimator(initial.clone())?;
+        let conflicting = if initial.is_some() {
+            None
+        } else {
+            Some(estimate.clone())
+        };
+        ensure!(matches!(
+            journal.observe_estimator(conflicting.clone()),
+            Err(Error::Conflict)
+        ));
+        let frozen = journal.freeze()?;
+        ensure!(frozen.usage_evidence.estimator_seen && frozen.usage_evidence.estimate == initial);
+        ensure!(matches!(
+            journal.observe_estimator(initial),
+            Err(Error::Closed)
+        ));
+        ensure!(matches!(
+            journal.observe_estimator(conflicting),
+            Err(Error::Closed)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn technical_operation_uses_actual_arm_ids_without_merging_same_named_targets() -> Result<()> {
+    let identity = owner("technical-execution")?;
+    let journal = Journal::owned(identity.clone());
+    let original = stamp(&identity, "same-model")?;
+    // Dropping a reservation does not add a technical operation or real ID.
+    drop(journal.reserve(original.clone())?);
+    let first = journal.technical.begin(std::time::Instant::now(), false);
+    let mut actual = Vec::new();
+    for status in [401, 503] {
+        let mut permit = journal.reserve(original.clone())?;
+        let id = permit.arm(&original)?;
+        first.armed(&id);
+        actual.push(id);
+        permit.http_status(status)?;
+        drop(permit);
+    }
+    let mut other = original.clone();
+    other.credential.revision_id = "other-credential-revision".try_into()?;
+    other.target = project_target(
+        &identity.installation,
+        &other.route,
+        &other.credential,
+        "provider",
+        "same-model",
+        None,
+    )?;
+    other.candidate = b"exact-private-projection:same-model:other-credential"
+        .to_vec()
+        .into();
+    // Name/model equality is irrelevant: this is a different original operation.
+    let second = journal.technical.begin(std::time::Instant::now(), false);
+    let mut permit = journal.reserve(other.clone())?;
+    let id = permit.arm(&other)?;
+    second.armed(&id);
+    actual.push(id);
+    permit.http_status(503)?;
+    drop(permit);
+    first.finish(false);
+    second.finish(false);
+    second.selected();
+    let frozen = journal.freeze()?;
+    let statuses = frozen.http_statuses.clone();
+    let legacy = receipt(frozen, Outcome::Failed)?;
+    let terminal = crate::tenancy::receipts::store::format::Terminal::V1(std::sync::Arc::new(
+        crate::tenancy::receipts::store::Candidate::new(
+            legacy,
+            crate::tenancy::receipts::store::Disposition {
+                dispatch: DispatchState::Started,
+                statuses,
+                auxiliary_digest: None,
+            },
+        )?,
+    ));
+    journal.technical.freeze();
+    let data = journal
+        .technical
+        .take(&terminal)
+        .context("real arm association")?;
+    ensure!(data.operations.len() == 2 && data.operations[0].attempt_ids == actual[..2]);
+    ensure!(data.operations[1].attempt_ids == actual[2..]);
+    ensure!(data.operations[0].selected_attempt_id.is_none());
+    ensure!(data.operations[1].selected_attempt_id.as_ref() == actual.last());
+    Ok(())
+}

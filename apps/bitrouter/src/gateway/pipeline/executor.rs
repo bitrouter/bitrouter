@@ -34,8 +34,9 @@ use crate::gateway::providers::auth::{
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 
+mod generate_content;
 pub(crate) mod input_count;
-mod receipt;
+pub(super) mod receipt;
 mod response_body;
 mod shared;
 mod stream_bridge;
@@ -100,6 +101,48 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Pure assessment of a retained native input. An executor that cannot
+    /// represent its original wire excludes that target before an attempt.
+    fn preflight_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        let prompt = input.projection().ok_or_else(|| {
+            super::types::generate_content::Input::unavailable(&target.api_protocol)
+        })?;
+        self.preflight_managed(target, prompt, stream, ctx)
+    }
+
+    /// Execute the foreign projection when the native source is representable.
+    /// Native-preserving executors override this without inventing a Prompt.
+    async fn execute_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        let prompt = input.projection().ok_or_else(|| {
+            super::types::generate_content::Input::unavailable(&target.api_protocol)
+        })?;
+        self.execute(target, prompt, ctx).await
+    }
+
+    /// Open one stream, preserving the existing actual-send/fallback ownership.
+    async fn execute_generate_content_stream(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        let prompt = input.projection().ok_or_else(|| {
+            super::types::generate_content::Input::unavailable(&target.api_protocol)
+        })?;
+        self.execute_stream(target, prompt, ctx).await
+    }
+
     /// Complete a collected managed stream using protocol-native terminal
     /// evidence. This callback is local: it must perform no I/O or retry.
     /// The default preserves the canonical parts emitted by custom executors.
@@ -1130,6 +1173,16 @@ impl HttpExecutor {
         bitrouter_ai::conversion::ConversionReport,
     )> {
         crate::gateway::catalog::execution::validate_generation(target, prompt)?;
+        if let super::types::PipelineInput::GenerateContent(input) = ctx.input()
+            && matches!(&target.api_protocol, ApiProtocol::Custom(name)
+                if name == bitrouter_ai::tenancy::generate_content::BRIDGE_PROTOCOL)
+        {
+            let execution = tenancy::execution(ctx).ok_or(BitrouterError::UpstreamUnavailable)?;
+            execution.validate_generate_content(input)?;
+            return input
+                .render(&target.service_id, stream)
+                .map(|body| (body, Default::default()));
+        }
         let plan = native_continuation_plan(target, prompt, ctx)?;
         let mut upstream = match plan.as_ref() {
             Some(plan) => plan
@@ -1177,7 +1230,7 @@ impl HttpExecutor {
                 .insert("previous_response_id".into(), binding.response_id().into());
         }
         if let Some(execution) = tenancy::execution(ctx) {
-            execution.validate_native_controls_body(prompt, &target.api_protocol, &body)?;
+            execution.validate_native_controls_body(prompt, target, &body)?;
         }
         Ok((body, report))
     }
@@ -1529,6 +1582,7 @@ impl HttpExecutor {
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_target(target, ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut refreshed = false;
         loop {
             let mut body = client.render_decision_request(&target.model_target(), request)?;
@@ -1616,6 +1670,7 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
             if status.is_success() {
+                technical.completed();
                 return Ok((
                     text,
                     scrubber,
@@ -1655,6 +1710,7 @@ impl HttpExecutor {
     ) -> Result<ExecutionResult> {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let capture = Arc::new(BridgeCapture::default());
         let collected = crate::gateway::model::stream::collect::collect_generate(
             self.execute_http_stream(target, prompt, ctx, Some(capture.clone()))
@@ -1663,6 +1719,7 @@ impl HttpExecutor {
         .await?;
         let result = capture.complete(self, target, prompt, ctx, collected)?;
         let elapsed = started.elapsed().as_millis() as u64;
+        technical.completed();
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -1785,6 +1842,48 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn preflight_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.preflight_native_generate_content(target, input, stream, ctx)
+    }
+
+    async fn execute_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        if generate_content::paired(target) {
+            self.execute_native_generate_content(target, input, ctx)
+                .await
+        } else {
+            let prompt = input.projection().ok_or_else(|| {
+                super::types::generate_content::Input::unavailable(&target.api_protocol)
+            })?;
+            self.execute(target, prompt, ctx).await
+        }
+    }
+    async fn execute_generate_content_stream(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        if generate_content::paired(target) {
+            self.execute_native_generate_content_stream(target, input, ctx)
+                .await
+        } else {
+            let prompt = input.projection().ok_or_else(|| {
+                super::types::generate_content::Input::unavailable(&target.api_protocol)
+            })?;
+            self.execute_stream(target, prompt, ctx).await
+        }
+    }
     fn finish_native_stream(
         &self,
         target: &RoutingTarget,
@@ -1958,6 +2057,7 @@ impl Executor for HttpExecutor {
 
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
+        let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut attempted_auth_refresh = false;
         let requested_effort =
             serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
@@ -2228,6 +2328,7 @@ impl Executor for HttpExecutor {
         }
 
         drop(tenant_attempt);
+        technical.completed();
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -2395,6 +2496,43 @@ impl DispatchExecutor {
 
 #[async_trait]
 impl Executor for DispatchExecutor {
+    fn preflight_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        stream: bool,
+        ctx: &PipelineContext,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .preflight_generate_content(target, input, stream, ctx)
+    }
+    async fn execute_generate_content(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .execute_generate_content(target, input, ctx)
+            .await
+    }
+    async fn execute_generate_content_stream(
+        &self,
+        target: &RoutingTarget,
+        input: &super::types::generate_content::Input,
+        ctx: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .execute_generate_content_stream(target, input, ctx)
+            .await
+    }
+
     fn finish_native_stream(
         &self,
         target: &RoutingTarget,

@@ -64,10 +64,19 @@ impl Worker {
         if !matches!(job.request, Request::Load(_)) {
             control.reserve_write(crate::storage::operation_budget::MAX_BYTES, cleanup)?;
         }
-        let tx = control
-            .begin_repeatable_read(&self.db)
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let tx = if matches!(job.request, Request::Load(_)) {
+            control
+                .begin_repeatable_read(&self.db)
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?
+        } else {
+            control
+                .begin_write_repeatable_read(&self.db)
+                .await
+                .map_err(|error| {
+                    self.write_intent_failure(error, ErrorCode::AuthorityUnavailable)
+                })?
+        };
         let budget_check = || {
             check().map_err(|error| {
                 error

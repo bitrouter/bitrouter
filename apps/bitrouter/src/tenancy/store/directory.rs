@@ -9,7 +9,10 @@ pub(in crate::tenancy) mod pages;
 pub(super) mod query;
 
 use anyhow::{Result, ensure};
-use bitrouter_ai::tenancy::identity::{BindingId, CredentialId, PrincipalId, TenantId};
+use bitrouter_ai::tenancy::{
+    configuration::ResourceRef,
+    identity::{BindingId, CredentialId, PrincipalId, TenantId},
+};
 use sea_orm::{
     ConnectionTrait,
     sea_query::{Alias, Expr},
@@ -25,28 +28,61 @@ use query::{Table, one, select};
 #[error("authority directory working capacity exceeded")]
 pub(in crate::tenancy) struct CapacityExceeded;
 
-// Maximum directory point reads follow the loader's exact links, not directory
-// cardinality: caller credential/tenant/principal/binding/recipient/manager = 6;
-// issuance can add 5 target facts and a second 6-fact credential closure = 17.
-// Each indexed lookup permits two rows to detect corruption. Reserve 16x encoded
-// bytes for driver/JSON/string copies and tree storage; fixed metadata includes
-// a full BTree leaf and hash-map slack per lookup. These are conservative payload
-// reservations, not allocator/RSS accounting. Live-view charging remains separate.
-fn working_row_bytes(bytes: usize, reads: usize) -> Result<usize> {
-    let metadata = 16
-        * (std::mem::size_of::<Credential>()
-            + std::mem::size_of::<Lookup>()
-            + 4 * std::mem::size_of::<usize>());
-    let remaining = reads
-        .checked_mul(metadata)
-        .and_then(|fixed| bytes.checked_sub(fixed))
+// Lifecycle reads have fixed SQL cell bounds, not Credential-sized payloads.
+// Reserve one sequential driver/decode window plus map growth and the actual
+// identifier bytes to be cloned. Existing payloads remain in caller custody;
+// their slots are included here to cover rehash overlap without cloning them.
+// The same conservative insert-only hash allowance is used by live views.
+fn lifecycle_budget(
+    snapshot: &crate::tenancy::model::Snapshot,
+    loaded: usize,
+    references: &[ResourceRef],
+    bytes: usize,
+) -> Result<()> {
+    if references.is_empty() {
+        return Ok(());
+    }
+    let count = snapshot
+        .resource_lifecycle
+        .records()
+        .count()
+        .checked_add(snapshot.resource_lifecycle.absences().count())
+        .and_then(|count| count.checked_add(loaded))
+        .and_then(|count| count.checked_add(references.len()))
+        .and_then(|count| count.checked_add(1))
         .ok_or(CapacityExceeded)?;
-    let divisor = reads.checked_mul(2 * 16).ok_or(CapacityExceeded)?;
-    let row = remaining
-        .checked_div(divisor)
-        .filter(|row| *row > 0 && *row <= isize::MAX as usize)
+    let slots = count
+        .checked_next_power_of_two()
+        .and_then(|slots| slots.checked_mul(4))
         .ok_or(CapacityExceeded)?;
-    Ok(row)
+    let slot_bytes =
+        std::mem::size_of::<(ResourceRef, crate::tenancy::resources::lifecycle::Record)>()
+            + std::mem::size_of::<ResourceRef>()
+            + std::mem::size_of::<(Lookup, Presence)>()
+            + 4 * std::mem::size_of::<usize>();
+    // Keep the existing 16x bounded-row decode margin and two-row allowance
+    // once for sequential point reads, not once per retained dependency.
+    let window = 2 * 16 * facts::LIFECYCLE_ROW_BYTES;
+    let initial = slots
+        .checked_mul(slot_bytes)
+        .and_then(|bytes| bytes.checked_add(window))
+        .ok_or(CapacityExceeded)?;
+    let required = references.iter().try_fold(initial, |total, reference| {
+        let identifiers = reference.owner_id.as_str().len()
+            + reference.resource_id.as_str().len()
+            + reference.revision_id.as_str().len();
+        // Lookup/key clones use the supplied IDs. Decoded records retain at
+        // most the SQL-bounded row payload, including on a foreign-row error.
+        identifiers
+            .checked_mul(4)
+            .and_then(|bytes| bytes.checked_add(2 * facts::LIFECYCLE_ROW_BYTES))
+            .and_then(|bytes| total.checked_add(bytes))
+            .ok_or(CapacityExceeded)
+    })?;
+    if required > bytes || bytes > isize::MAX as usize {
+        return Err(CapacityExceeded.into());
+    }
+    Ok(())
 }
 
 /// Limits for one page. `bytes` bounds encoded cells, not decoded object/RSS size.
@@ -305,11 +341,7 @@ pub(in crate::tenancy) async fn load_dependencies_in(
     references: &[bitrouter_ai::tenancy::configuration::ResourceRef],
     bytes: usize,
 ) -> Result<()> {
-    if !references.is_empty()
-        && working_row_bytes(bytes, references.len())? < facts::LIFECYCLE_ROW_BYTES
-    {
-        return Err(CapacityExceeded.into());
-    }
+    lifecycle_budget(&facts.snapshot, facts.loaded.len(), references, bytes)?;
     for reference in references {
         facts::resource_in(db, facts, reference).await?;
     }
@@ -325,11 +357,7 @@ pub(in crate::tenancy) async fn extend_dependencies_in(
     references: &[bitrouter_ai::tenancy::configuration::ResourceRef],
     bytes: usize,
 ) -> Result<()> {
-    if !references.is_empty()
-        && working_row_bytes(bytes, references.len())? < facts::LIFECYCLE_ROW_BYTES
-    {
-        return Err(CapacityExceeded.into());
-    }
+    lifecycle_budget(snapshot, 0, references, bytes)?;
     for reference in references {
         facts::snapshot_resource_in(db, snapshot, reference).await?;
     }

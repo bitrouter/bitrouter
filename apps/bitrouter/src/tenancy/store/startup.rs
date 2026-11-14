@@ -30,6 +30,7 @@ pub(in crate::tenancy) enum Format {
     V2,
     V3,
     V4,
+    V5,
 }
 
 impl Format {
@@ -39,6 +40,7 @@ impl Format {
             Self::V2 => 2,
             Self::V3 => 3,
             Self::V4 => 4,
+            Self::V5 => 5,
         }
     }
 }
@@ -87,6 +89,7 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
         2 => Format::V2,
         3 => Format::V3,
         4 => Format::V4,
+        5 => Format::V5,
         _ => anyhow::bail!("unsupported authority store format"),
     };
     let created_at = super::string(row, "created_at")?;
@@ -143,6 +146,54 @@ pub(in crate::tenancy) async fn load_header_observed_in(
     db: &impl ConnectionTrait,
     budget: Budget,
 ) -> Result<Option<(LoadedHeader, directory::DirectoryTotals)>> {
+    let mut page_budget = budget;
+    let directory = loop {
+        match load_directory_header_with_rows_in(db, page_budget).await {
+            Err(error) if error.is::<CapacityExceeded>() && page_budget.rows > 1 => {
+                // Adapt only directory rows within the existing snapshot and
+                // aggregate reservation. Operation and retained-body preflight
+                // keep the caller's original budget and refusal semantics.
+                page_budget.rows = (page_budget.rows / 2).max(1);
+            }
+            result => break result?,
+        }
+    };
+    let Some((loaded, totals)) = directory else {
+        return Ok(None);
+    };
+    let started = std::time::Instant::now();
+    tracing::info!(
+        phase = "operations",
+        outcome = "started",
+        "tenant authority validation phase"
+    );
+    operations::validate_in(db, &loaded.header, budget).await?;
+    tracing::info!(
+        phase = "operations",
+        outcome = "validated",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "tenant authority validation phase"
+    );
+    let started = std::time::Instant::now();
+    tracing::info!(
+        phase = "retained",
+        outcome = "started",
+        "tenant authority validation phase"
+    );
+    retained::validate_in(db, &loaded.header, budget).await?;
+    tracing::info!(
+        phase = "retained",
+        outcome = "validated",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "tenant authority validation phase"
+    );
+    Ok(Some((loaded, totals)))
+}
+
+async fn load_directory_header_with_rows_in(
+    db: &impl ConnectionTrait,
+    budget: Budget,
+) -> Result<Option<(LoadedHeader, directory::DirectoryTotals)>> {
     let page = budget.page()?;
     let bytes = page.bytes / page.rows;
     let Some(loaded) = read_header_in(db, bytes).await? else {
@@ -181,32 +232,6 @@ pub(in crate::tenancy) async fn load_header_observed_in(
     let totals = directory::validate_directory_in(db, page).await?;
     tracing::info!(
         phase = "directory",
-        outcome = "validated",
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "tenant authority validation phase"
-    );
-    let started = std::time::Instant::now();
-    tracing::info!(
-        phase = "operations",
-        outcome = "started",
-        "tenant authority validation phase"
-    );
-    operations::validate_in(db, &loaded.header, budget).await?;
-    tracing::info!(
-        phase = "operations",
-        outcome = "validated",
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "tenant authority validation phase"
-    );
-    let started = std::time::Instant::now();
-    tracing::info!(
-        phase = "retained",
-        outcome = "started",
-        "tenant authority validation phase"
-    );
-    retained::validate_in(db, &loaded.header, budget).await?;
-    tracing::info!(
-        phase = "retained",
         outcome = "validated",
         elapsed_ms = started.elapsed().as_millis() as u64,
         "tenant authority validation phase"

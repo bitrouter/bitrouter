@@ -58,7 +58,7 @@ impl Worker {
         let encoded = encoded.max(crate::storage::operation_budget::MAX_BYTES);
         control.reserve_write(encoded, true)?;
         let transaction_span = owner.observation.span(Phase::Transaction);
-        let beginning = control.begin_receipt(&self.db).await;
+        let beginning = control.begin_write_receipt(&self.db).await;
         #[cfg(test)]
         self.proof
             .receipt_result_for_test(observation, Step::Begin, &beginning);
@@ -95,6 +95,10 @@ impl Worker {
             self.proof
                 .receipt_result_for_test(observation, Step::Check, &checked);
             checked?;
+            #[cfg(all(test, unix))]
+            self.proof
+                .receipt_after_intent_for_test(observation, &transaction)
+                .await?;
             let insertion = store::stage_dispatch_terminal(&transaction, &candidate).await;
             #[cfg(test)]
             {

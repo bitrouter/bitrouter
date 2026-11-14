@@ -109,3 +109,26 @@ fn published_resource_schemas_match_the_public_contract() -> Result<(), Box<dyn 
     }
     Ok(())
 }
+
+#[test]
+fn format_one_attachment_rejects_native_authority_in_bytes_and_programmatic_values()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::tenancy::{admission::AdmissionAttachmentV1, ordered::GenerationProtocol};
+    let mut original = json!({"inbound_protocol":"messages", "candidate_index":0,
+        "credential":{"owner_kind":"tenant","owner_id":"one","resource_kind":"credential","resource_id":"key","revision_id":"r1"},
+        "profile":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy","resource_id":"profile","revision_id":"r1"}});
+    let mut attachment: AdmissionAttachmentV1 = serde_json::from_value(original.clone())?;
+    attachment.validate()?;
+    attachment.inbound_protocol = GenerationProtocol::GenerateContent;
+    assert!(attachment.validate().is_err());
+    original["inbound_protocol"] = json!("generate_content");
+    assert!(
+        serde_json::from_str::<AdmissionAttachmentV1>(&serde_json::to_string(&original)?).is_err()
+    );
+    let mut command = put();
+    command["key"]["resource_kind"] = json!("route");
+    command["definition"] = json!({"kind":"profiled_route","routing":{},"selector":"provider/model","policy":null,
+        "credentials":[{"provider":"provider","account":"default","credential":original["credential"]}],"attachments":[original]});
+    assert!(serde_json::from_value::<ResourcePut>(command).is_err());
+    Ok(())
+}

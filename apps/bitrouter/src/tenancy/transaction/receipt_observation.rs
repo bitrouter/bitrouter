@@ -63,6 +63,8 @@ pub(in crate::tenancy) struct Fact {
     pub fingerprint: Fingerprint,
     pub begin: Option<SqlOutcome>,
     pub store: Option<SqlOutcome>,
+    #[cfg(unix)]
+    pub post_intent_query_only: Option<SqlOutcome>,
     pub inserted: Option<bool>,
     #[cfg(all(feature = "core", feature = "harness"))]
     pub native_checkpoint: Option<SqlOutcome>,
@@ -77,12 +79,16 @@ pub(in crate::tenancy) struct Trace {
     pub key: Key,
     pub facts: [Option<Fact>; 2],
     pub overflow: bool,
+    #[cfg(unix)]
+    readonly_after_intent: bool,
 }
 
 #[derive(Clone, Copy)]
 pub(in crate::tenancy) enum Step {
     Check,
     Begin,
+    #[cfg(unix)]
+    PostIntentQueryOnly,
     Store,
     Commit,
     Rollback,
@@ -102,6 +108,7 @@ impl Proof {
             key,
             facts: [None, None],
             overflow: false,
+            readonly_after_intent: false,
         });
         Ok(())
     }
@@ -113,6 +120,78 @@ impl Proof {
             .map_err(|_| anyhow::anyhow!("receipt observation poisoned"))?
             .clone()
             .context("receipt observer missing")
+    }
+
+    /// Arm only the already observed exact receipt, before any attempt starts.
+    #[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+    pub(in crate::tenancy) fn readonly_receipt_after_intent_for_test(
+        &self,
+        key: &Key,
+    ) -> Result<()> {
+        let mut slot = self
+            .receipt_observation
+            .lock()
+            .map_err(|_| anyhow::anyhow!("receipt observation poisoned"))?;
+        let trace = slot.as_mut().context("receipt observer missing")?;
+        ensure!(
+            &trace.key == key
+                && !trace.readonly_after_intent
+                && !trace.overflow
+                && trace.facts.iter().all(Option::is_none),
+            "readonly receipt injection key or state differs"
+        );
+        trace.readonly_after_intent = true;
+        Ok(())
+    }
+
+    // This entire module is cfg(test). A nonmatching receipt has no observation
+    // index, so cannot consume the one-shot flag or modify any connection.
+    #[cfg(unix)]
+    pub(in crate::tenancy) async fn receipt_after_intent_for_test(
+        &self,
+        index: Option<usize>,
+        transaction: &sea_orm::DatabaseTransaction,
+    ) -> Result<()> {
+        use sea_orm::ConnectionTrait;
+        let Some(index) = index else {
+            return Ok(());
+        };
+        {
+            let mut slot = self
+                .receipt_observation
+                .lock()
+                .map_err(|_| anyhow::anyhow!("receipt observation poisoned"))?;
+            let Some(trace) = slot.as_mut() else {
+                return Ok(());
+            };
+            if !trace.readonly_after_intent {
+                return Ok(());
+            }
+            let fact = trace
+                .facts
+                .get(index)
+                .and_then(Option::as_ref)
+                .context("readonly receipt observation absent")?;
+            ensure!(
+                fact.begin.is_some_and(|outcome| outcome.ok)
+                    && fact.store.is_none()
+                    && fact.post_intent_query_only.is_none(),
+                "readonly receipt injection precedes acknowledged write intent"
+            );
+            trace.readonly_after_intent = false;
+        } // Never hold the observation mutex across actual SQL.
+        ensure!(
+            transaction.get_database_backend() == sea_orm::DatabaseBackend::Sqlite,
+            "readonly receipt injection requires SQLite"
+        );
+        let result: Result<()> = transaction
+            .execute_unprepared("PRAGMA query_only=ON")
+            .await
+            .map(|_| ())
+            .map_err(Into::into);
+        self.receipt_result_for_test(Some(index), Step::PostIntentQueryOnly, &result);
+        result?;
+        Ok(())
     }
 
     pub(in crate::tenancy) fn receipt_started_for_test(
@@ -140,6 +219,8 @@ impl Proof {
             fingerprint: candidate.fingerprint_for_test(),
             begin: None,
             store: None,
+            #[cfg(unix)]
+            post_intent_query_only: None,
             inserted: None,
             #[cfg(all(feature = "core", feature = "harness"))]
             native_checkpoint: None,
@@ -170,6 +251,8 @@ impl Proof {
             match step {
                 Step::Check => fact.check_failed |= !outcome.ok,
                 Step::Begin => fact.begin = Some(outcome),
+                #[cfg(unix)]
+                Step::PostIntentQueryOnly => fact.post_intent_query_only = Some(outcome),
                 Step::Store => fact.store = Some(outcome),
                 Step::Commit => fact.commit = Some(outcome),
                 Step::Rollback => fact.rollback = Some(outcome),

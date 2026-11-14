@@ -82,7 +82,8 @@ pub(super) fn error_json_text(
     Ok(())
 }
 
-/// Call only after the existing stateful decoder accepted this event's identity.
+/// Call only after the stateful decoder accepted this event's identity, or the
+/// executor independently qualified its error-event usage via `error_event_usage`.
 /// No arbitrary event gets a usage interpretation merely for containing that key.
 pub(super) fn event(
     permit: &mut Option<AttemptPermit>,
@@ -183,7 +184,7 @@ pub(super) fn batch(
     Ok(())
 }
 
-pub(super) fn successful(part: &StreamPart) -> bool {
+pub(in crate::gateway::pipeline) fn successful(part: &StreamPart) -> bool {
     match part {
         StreamPart::Finish {
             reason: bitrouter_ai::types::FinishReason::Error(_),
@@ -191,6 +192,22 @@ pub(super) fn successful(part: &StreamPart) -> bool {
         StreamPart::ResponseCompleted { status, .. } => status != "failed",
         _ => true,
     }
+}
+
+/// The native lane calls this with the retained original object, never canonical Usage.
+pub(super) fn native(
+    permit: &mut Option<AttemptPermit>,
+    source: Source,
+    body: &Value,
+) -> Result<()> {
+    if let Some(permit) = permit {
+        match body.get("usageMetadata") {
+            Some(usage) => permit.observe_usage_frame(Protocol::GenerateContent, source, usage),
+            None => permit.incomplete_usage(),
+        }
+        .map_err(|_| unavailable())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

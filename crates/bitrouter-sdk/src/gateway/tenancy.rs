@@ -282,6 +282,7 @@ impl TenantGateway<'_> {
             request,
             request.stream,
             Protocol::Chat,
+            "application/json",
         )
         .await
     }
@@ -295,8 +296,14 @@ impl TenantGateway<'_> {
         request: &MessagesRequest,
     ) -> Result<Reply<Body<MessagesResponse, MessagesEvent>>, Error> {
         reject_stream_shadow(&request.extra)?;
-        self.relay("v1/messages", request, request.stream, Protocol::Messages)
-            .await
+        self.relay(
+            "v1/messages",
+            request,
+            request.stream,
+            Protocol::Messages,
+            "application/json",
+        )
+        .await
     }
 
     /// Dispatch Responses as JSON or SSE, preserving completed/incomplete/failed ends.
@@ -308,8 +315,14 @@ impl TenantGateway<'_> {
         request: &ResponsesRequest,
     ) -> Result<Reply<Body<ResponsesResponse, ResponsesEvent>>, Error> {
         reject_stream_shadow(&request.extra)?;
-        self.relay("v1/responses", request, request.stream, Protocol::Responses)
-            .await
+        self.relay(
+            "v1/responses",
+            request,
+            request.stream,
+            Protocol::Responses,
+            "application/json",
+        )
+        .await
     }
 
     /// Dispatch native Decisions JSON without generation-protocol conversion.
@@ -321,7 +334,12 @@ impl TenantGateway<'_> {
         request: &DecisionRequest,
     ) -> Result<Reply<DecisionsResponse>, Error> {
         let (response, metadata) = self
-            .send("v1/decisions", request, "application/json")
+            .send(
+                "v1/decisions",
+                request,
+                "application/json",
+                "application/json",
+            )
             .await?;
         let body = self.json(response, &metadata).await?;
         Ok(Reply { metadata, body })
@@ -333,13 +351,14 @@ impl TenantGateway<'_> {
         request: &impl Serialize,
         streaming: bool,
         protocol: Protocol,
+        request_media_type: &'static str,
     ) -> Result<Reply<Body<T, E>>, Error> {
         let accept = if streaming {
             "text/event-stream"
         } else {
             "application/json"
         };
-        let (response, metadata) = self.send(path, request, accept).await?;
+        let (response, metadata) = self.send(path, request, accept, request_media_type).await?;
         let body = if streaming {
             let context = metadata.clone();
             let stream = crate::stream::decode_relay(
@@ -372,6 +391,7 @@ impl TenantGateway<'_> {
         path: &str,
         request: &impl Serialize,
         accept: &str,
+        request_media_type: &'static str,
     ) -> Result<(Response, Metadata), Error> {
         let url = self
             .client
@@ -383,7 +403,8 @@ impl TenantGateway<'_> {
             .http
             .post(url)
             .headers(self.headers.clone())
-            .header(header::ACCEPT, accept);
+            .header(header::ACCEPT, accept)
+            .header(header::CONTENT_TYPE, request_media_type);
         let builder = if let Some(Defaults::Canonical(defaults)) = &self.generation_defaults {
             let mut value = serde_json::to_value(request)
                 .map_err(|_| Error::Request("invalid request encoding"))?;
@@ -404,17 +425,11 @@ impl TenantGateway<'_> {
             if body.len() > 16 * 1024 * 1024 {
                 return Err(Error::Request("generation request exceeds body limit"));
             }
-            builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(body)
+            builder.body(body)
         } else if let Some(Defaults::Envelope(defaults)) = &self.generation_defaults {
-            builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(ordered::envelope_body(request, defaults)?)
+            builder.body(ordered::envelope_body(request, defaults)?)
         } else if let Some(Defaults::EnvelopeV2(defaults)) = &self.generation_defaults {
-            builder
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(ordered::envelope_v2_body(request, defaults)?)
+            builder.body(ordered::envelope_v2_body(request, defaults)?)
         } else {
             builder.json(request)
         };
