@@ -3,7 +3,8 @@
     "curation": {
       "checked_at": "2026-10-22T17:30:00Z",
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "expires_at": "2026-12-14T05:57:35.294067680Z"
     },
     "family": "claude-fable",
     "id": "anthropic/claude-fable-5",
@@ -92,9 +93,9 @@
   {
     "curation": {
       "checked_at": "2026-10-22T17:30:00Z",
+      "expires_at": "2026-11-30T18:49:26.939359Z",
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "expires_at": "2026-11-30T18:49:26.939359Z"
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
     },
     "description": "Anthropic's Claude Sonnet 4.6.",
     "family": "claude-sonnet",
@@ -192,5 +193,24 @@
       "text"
     ],
     "release_date": "2026-10-07"
+  },
+  {
+    "id": "anthropic/claude-fable-5.2",
+    "curation": {
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-11-14T05:57:35.294067680Z"
+    },
+    "name": "Anthropic: Claude Fable 5.2",
+    "description": "Claude Fable 5.2 is Anthropic's most capable model for the most demanding technical work, with gains over Fable 5.1 in coding, reasoning, and vision. In prerelease testing it completed otherwise-infeasible...",
+    "input_modalities": [
+      "text",
+      "image",
+      "file"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "context_window": 1000000
   }
 ]

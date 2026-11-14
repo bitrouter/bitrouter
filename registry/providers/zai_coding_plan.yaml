@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:35.288621160Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:31.448013Z"
-        }
+        ]
       }
     ]
   },
@@ -77,6 +77,7 @@
     },
     {
       "canonical_id": "z-ai/glm-5.3",
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
       "interfaces": [
         {
           "operation": "generation",
@@ -93,19 +94,19 @@
           }
         }
       ],
+      "name": "GLM-5.3",
       "provider_model_id": "glm-5.3",
       "status": "active",
-      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GLM-5.3"
+      }
     },
     {
       "canonical_id": "z-ai/glm-5.3-flash",
+      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
       "interfaces": [
         {
           "operation": "generation",
@@ -122,36 +123,35 @@
           }
         }
       ],
+      "name": "GLM-5.3-Flash",
       "provider_model_id": "glm-5.3-flash",
       "status": "active",
-      "description": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GLM-5.3-Flash"
+      }
     },
     {
-      "provider_model_id": "glm-5.3-highspeed",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:35.288621160Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
       "interfaces": [],
+      "name": "GLM-5.3 Highspeed",
+      "provider_model_id": "glm-5.3-highspeed",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:31.448013Z"
-      },
-      "description": "Flagship GLM model for long-horizon coding, agents, and complex project delivery",
-      "name": "GLM-5.3 Highspeed",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:31.448013Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T05:57:35.288621160Z",
+        "owner": "directory"
       }
     }
   ],

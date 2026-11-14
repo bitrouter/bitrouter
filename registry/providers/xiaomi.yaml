@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:22.187960Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:29.370551813Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -351,7 +351,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:22.187960Z",
+        "checked_at": "2026-11-14T05:57:29.370551813Z",
         "scope": "account",
         "source_url": "https://api.xiaomimimo.com/v1/models"
       },
@@ -362,7 +362,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:22.187960Z",
+        "last_seen_at": "2026-11-14T05:57:29.370551813Z",
         "owner": "catalog"
       }
     },
@@ -442,7 +442,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:22.187960Z",
+        "checked_at": "2026-11-14T05:57:29.370551813Z",
         "scope": "account",
         "source_url": "https://api.xiaomimimo.com/v1/models"
       },
@@ -453,13 +453,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:22.187960Z",
+        "last_seen_at": "2026-11-14T05:57:29.370551813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:22.187960Z",
+        "checked_at": "2026-11-14T05:57:29.370551813Z",
         "scope": "account",
         "source_url": "https://api.xiaomimimo.com/v1/models"
       },
@@ -470,13 +470,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:22.187960Z",
+        "last_seen_at": "2026-11-14T05:57:29.370551813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:22.187960Z",
+        "checked_at": "2026-11-14T05:57:29.370551813Z",
         "scope": "account",
         "source_url": "https://api.xiaomimimo.com/v1/models"
       },
@@ -487,7 +487,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:22.187960Z",
+        "last_seen_at": "2026-11-14T05:57:29.370551813Z",
         "owner": "catalog"
       }
     },

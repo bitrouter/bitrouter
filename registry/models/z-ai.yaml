@@ -1,5 +1,10 @@
 [
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Z.ai flagship reasoning model for complex software engineering and long-horizon agent tasks.",
     "family": "glm",
     "id": "z-ai/glm-5.3",
@@ -13,14 +18,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-14",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-14"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Open-weight native multimodal MoE for efficient coding, professional work, and long-horizon agent tasks.",
     "family": "glm",
     "id": "z-ai/glm-5.3-flash",
@@ -36,14 +41,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-26",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-26"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "glm",
     "id": "z-ai/glm-5.2",
     "input_modalities": [
@@ -56,14 +61,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-06-13",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-06-13"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "z-ai/glm-5.3-flashx",
     "input_modalities": [
       "image",
@@ -76,14 +81,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-18",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-18"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "z-ai/glm-5.3-prime",
     "input_modalities": [
       "text"
@@ -94,11 +99,25 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-23",
+    "release_date": "2026-09-23"
+  },
+  {
+    "id": "z-ai/glm-5.3-flashx-legal",
     "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "reason": "Eligible release in approved family retention window",
       "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+      "checked_at": "2026-11-14T05:57:35.294067680Z"
+    },
+    "name": "Z.ai: GLM 5.3 FlashX Legal",
+    "description": "GLM-5.3-FlashX-Legal (GLM-Legal) is Z.ai's legal-domain variant of GLM-5.3-FlashX, a native multimodal model that accepts text, image, and video input and produces text. It adds legal-domain mid-training and post-training with reinforcement...",
+    "input_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "context_window": 1048576
   }
 ]

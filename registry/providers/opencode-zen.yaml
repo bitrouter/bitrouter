@@ -9,9 +9,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:06.446350Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:18.809347795Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -64,7 +64,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -79,13 +79,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -100,7 +100,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -167,6 +167,27 @@
       }
     },
     {
+      "provider_model_id": "claude-fable-5-2",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "name": "Claude Fable 5.2",
+      "status": "active",
+      "availability": {
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
       "canonical_id": "anthropic/claude-haiku-4.5",
       "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
       "interfaces": [
@@ -230,7 +251,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -245,13 +266,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -266,13 +287,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -287,7 +308,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -510,7 +531,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -525,13 +546,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "canonical_id": "deepseek/deepseek-v4.1-flash",
-      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "description": "October 17 update of DeepSeek V4.1 Flash with improved reasoning, coding, agentic tasks, and visual understanding",
       "interfaces": [
         {
           "operation": "generation",
@@ -549,7 +570,7 @@
           "protocol": "chat_completions"
         }
       ],
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "provider_model_id": "deepseek-v4.1-flash",
       "status": "active",
       "sync": {
@@ -561,11 +582,11 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
-      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "description": "October 17 update of DeepSeek V4.1 Flash with improved reasoning, coding, agentic tasks, and visual understanding",
       "interfaces": [],
       "name": "DeepSeek V4.1 Flash Free",
       "provider_model_id": "deepseek-v4.1-flash-free",
@@ -576,13 +597,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -597,13 +618,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -618,13 +639,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -639,13 +660,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -660,7 +681,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -755,8 +776,50 @@
       }
     },
     {
+      "provider_model_id": "gemini-4-carbon",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
+      "name": "Gemini 4 Carbon",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "gemini-4-hydrogen",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
+      "name": "Gemini 4 Hydrogen",
+      "status": "active",
+      "availability": {
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -771,13 +834,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -792,7 +855,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -888,7 +951,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -903,13 +966,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -924,13 +987,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -945,13 +1008,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -966,13 +1029,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -987,13 +1050,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1008,13 +1071,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1029,13 +1092,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1050,13 +1113,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1071,13 +1134,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1092,13 +1155,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1113,13 +1176,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1134,13 +1197,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1155,13 +1218,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1176,13 +1239,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1197,13 +1260,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1218,13 +1281,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1239,13 +1302,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1260,7 +1323,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1602,8 +1665,50 @@
       }
     },
     {
+      "provider_model_id": "iceman-free",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Stealth model, free for a limited time",
+      "name": "Iceman Free",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "inkling-2-small-free",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Inkling 2 Small, free for a limited time",
+      "name": "Inkling 2 Small Free",
+      "status": "active",
+      "availability": {
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1618,13 +1723,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1639,7 +1744,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1704,8 +1809,29 @@
       }
     },
     {
+      "provider_model_id": "longcat-2.5-free",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
+      "name": "LongCat 2.5 Free",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1720,13 +1846,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1741,7 +1867,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1806,8 +1932,29 @@
       }
     },
     {
+      "provider_model_id": "minimax-m3.1-flash-free",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
+      "name": "MiniMax M3.1 Flash Free",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1822,13 +1969,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "muse-ember-1.0",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+      },
+      "description": "Reasoning model from Meta with text, image, video and PDF input and tool use",
+      "name": "Muse Ember 1.0",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "source_url": "https://opencode.ai/zen/v1/models",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1843,13 +2011,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1864,13 +2032,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1885,13 +2053,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1906,13 +2074,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1927,13 +2095,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:06.446350Z",
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
       },
@@ -1948,7 +2116,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:06.446350Z",
+        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },

@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:05.869955Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:18.740533923Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -62,7 +62,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -77,7 +77,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
@@ -102,13 +102,13 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
       "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
       "interfaces": [],
-      "name": "DeepSeek V4 Pro (New)",
+      "name": "DeepSeek V4 Pro",
       "provider_model_id": "deepseek-v4-pro",
       "status": "active",
       "sync": {
@@ -117,20 +117,20 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
     {
       "canonical_id": "deepseek/deepseek-v4.1-flash",
-      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "description": "October 17 update of DeepSeek V4.1 Flash with improved reasoning, coding, agentic tasks, and visual understanding",
       "interfaces": [
         {
           "operation": "generation",
           "protocol": "chat_completions"
         }
       ],
-      "name": "DeepSeek V4.1 Flash",
+      "name": "DeepSeek V4.1 Flash 1017",
       "provider_model_id": "deepseek-v4.1-flash",
       "status": "active",
       "sync": {
@@ -297,7 +297,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -312,13 +312,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "hy4",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z"
+      },
+      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
+      "name": "Hy4",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "source_url": "https://opencode.ai/zen/go/v1/models",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -333,13 +354,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -354,7 +375,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
@@ -398,7 +419,7 @@
     },
     {
       "canonical_id": "moonshotai/kimi-k3.1-pro",
-      "description": "Multimodal Kimi model with 1M context and always-on reasoning for coding, 3D creation, financial research, and agentic work",
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
       "interfaces": [
         {
           "operation": "generation",
@@ -417,7 +438,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -432,8 +453,29 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
+      }
+    },
+    {
+      "provider_model_id": "longcat-2.5-free",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z"
+      },
+      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
+      "name": "LongCat 2.5 Free",
+      "status": "active",
+      "availability": {
+        "source_url": "https://opencode.ai/zen/go/v1/models",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
+        "scope": "public"
       }
     },
     {
@@ -567,7 +609,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -582,13 +624,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -603,7 +645,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     },
@@ -687,7 +729,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:05.869955Z",
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"
       },
@@ -702,7 +744,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:05.869955Z",
+        "last_seen_at": "2026-11-14T05:57:18.740533923Z",
         "owner": "catalog"
       }
     }

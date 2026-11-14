@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:21.988056Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:28.504664727Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -111,7 +111,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -122,7 +122,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     },
@@ -442,7 +442,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -453,13 +453,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -470,7 +470,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     },
@@ -493,7 +493,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -504,13 +504,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -521,13 +521,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:21.988056Z",
+        "checked_at": "2026-11-14T05:57:28.504664727Z",
         "scope": "account",
         "source_url": "https://api.x.ai/v1/models"
       },
@@ -538,7 +538,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:21.988056Z",
+        "last_seen_at": "2026-11-14T05:57:28.504664727Z",
         "owner": "catalog"
       }
     }

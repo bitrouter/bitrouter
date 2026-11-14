@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:54.163342Z",
-          "sequence": 5
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:13.164289978Z",
+          "sequence": 6
         },
         "id": "catalog",
         "inventory": {
@@ -60,7 +60,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -73,13 +73,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -92,13 +92,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -111,13 +111,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -130,13 +130,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -149,13 +149,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -168,13 +168,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -187,7 +187,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -212,7 +212,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -225,13 +225,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -244,13 +244,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -263,13 +263,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -282,13 +282,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -301,13 +301,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -320,13 +320,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -339,13 +339,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -358,7 +358,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -393,7 +393,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -406,7 +406,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -469,7 +469,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -482,7 +482,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -526,7 +526,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -539,13 +539,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -558,7 +558,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -607,27 +607,27 @@
       "status": "active"
     },
     {
-      "provider_model_id": "dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
+      "availability": {
+        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
       "interfaces": [],
+      "name": "dealignai-GLM-5.3-Flash-UNCENSORED-H200-dev",
+      "provider_model_id": "dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z"
-      },
-      "name": "dealignai-GLM-5.3-Flash-UNCENSORED-H200-dev",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.gmi-serving.com/v1/models",
-        "checked_at": "2026-11-02T11:26:54.163342Z",
-        "scope": "account"
+        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -640,13 +640,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -659,13 +659,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -678,13 +678,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -697,13 +697,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -716,13 +716,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -735,13 +735,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -754,13 +754,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -773,13 +773,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -792,13 +792,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -811,13 +811,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "gmicloud/Ripple-65B-Preview",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z"
+      },
+      "name": "ricursiveAI/Ripple-65B-Preview",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "source_url": "https://api.gmi-serving.com/v1/models",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -830,13 +849,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -849,13 +868,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -868,13 +887,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -887,13 +906,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -906,13 +925,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -925,13 +944,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -944,13 +963,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -963,13 +982,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -982,13 +1001,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "google/gemini-4-carbon",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z"
+      },
+      "name": "Gemini-4-Carbon",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "source_url": "https://api.gmi-serving.com/v1/models",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1001,13 +1039,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1020,7 +1058,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1064,7 +1102,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1077,13 +1115,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1096,7 +1134,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1121,7 +1159,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1134,7 +1172,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1168,7 +1206,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1181,13 +1219,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1200,7 +1238,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1244,7 +1282,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1257,7 +1295,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1339,7 +1377,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1352,13 +1390,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1371,13 +1409,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1390,13 +1428,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1409,13 +1447,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1428,13 +1466,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1447,13 +1485,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1466,13 +1504,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1485,7 +1523,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1510,7 +1548,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1523,13 +1561,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1542,13 +1580,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1561,13 +1599,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1580,13 +1618,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "tencent/hy4",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z"
+      },
+      "name": "tencent/hy4",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "source_url": "https://api.gmi-serving.com/v1/models",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1599,13 +1656,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1618,13 +1675,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1637,13 +1694,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "xai/grok4.7",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z"
+      },
+      "name": "Grok 4.7",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "source_url": "https://api.gmi-serving.com/v1/models",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1656,13 +1732,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1675,13 +1751,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1694,7 +1770,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
@@ -1728,7 +1804,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1741,13 +1817,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:54.163342Z",
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
         "scope": "account",
         "source_url": "https://api.gmi-serving.com/v1/models"
       },
@@ -1760,7 +1836,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:54.163342Z",
+        "last_seen_at": "2026-11-14T05:57:13.164289978Z",
         "owner": "catalog"
       }
     }
