@@ -15,9 +15,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:52.474993Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:12.759128313Z",
+          "sequence": 7
         },
         "id": "directory",
         "inventory": {
@@ -94,6 +94,27 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "provider_model_id": "claude-fable-5.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:12.759128313Z"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "name": "Claude Fable 5.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
+        "scope": "public"
       }
     },
     {
@@ -309,8 +330,29 @@
       }
     },
     {
+      "provider_model_id": "gemini-4-carbon",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:12.759128313Z"
+      },
+      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
+      "name": "Gemini 4 Carbon",
+      "status": "staging",
       "availability": {
-        "checked_at": "2026-11-02T11:26:52.474993Z",
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -325,13 +367,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:52.474993Z",
+        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:52.474993Z",
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -346,7 +388,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:52.474993Z",
+        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     },
@@ -591,7 +633,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:52.474993Z",
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -606,7 +648,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:52.474993Z",
+        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     }

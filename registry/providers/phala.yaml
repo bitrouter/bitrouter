@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:09.138131Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:20.310111018Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -61,8 +61,29 @@
   },
   "models": [
     {
+      "provider_model_id": "black-forest-labs/flux.2-klein-4b",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+      },
+      "description": "FLUX.2 [klein] 4B is Black Forest Labs' compact text-to-image model, built for fast, high-quality image generation in a single small architecture.",
+      "name": "FLUX.2 klein 4B",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "source_url": "https://inference.phala.com/v1/models",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -77,13 +98,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -98,13 +119,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -119,13 +140,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -140,13 +161,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -161,13 +182,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -182,13 +203,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "mistralai/voxtral-small-24b-2507",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+      },
+      "description": "Voxtral Small 24B is Mistral AI's speech understanding model, transcribing audio in many languages with strong accuracy on long and noisy recordings.",
+      "name": "Voxtral Small 24B",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "source_url": "https://inference.phala.com/v1/models",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -203,7 +245,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -244,8 +286,29 @@
       }
     },
     {
+      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+      },
+      "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi K3, with a 1M-token context window. It is built for long-horizon coding, 3D creation, financial research, and end-to-end agentic knowledge work, with native image and video understanding.",
+      "name": "MoonshotAI: Kimi K3.1 Pro",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "source_url": "https://inference.phala.com/v1/models",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -260,13 +323,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "openai/whisper-large-v3",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+      },
+      "description": "Whisper large-v3 is OpenAI's speech recognition model, transcribing audio in nearly 100 languages into text.",
+      "name": "Whisper Large v3",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "source_url": "https://inference.phala.com/v1/models",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -281,19 +365,19 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
-      "description": "HauhauCS Qwen3.8-27B Uncensored Aggressive, using the pinned Q8_K_P GGUF and BF16 vision projector. Served with SGLang on a Phala TDX-attested H200, with text and image input and a 262144-token context.",
+      "description": "Uncensored variant of Qwen3.8 27B, built as a lightweight abliteration adapter on the official FP8 weights. Refuses far less while keeping the base model's capabilities, tool calling, and image and video input. Served with SGLang in a TDX-attested enclave, with a 1M-token context.",
       "interfaces": [],
-      "name": "Phala: Qwen3.8 27B Uncensored (Aggressive)",
+      "name": "Phala: Qwen3.8 27B Uncensored",
       "provider_model_id": "phala/qwen3.8-27b-uncensored",
       "status": "active",
       "sync": {
@@ -302,13 +386,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -323,13 +407,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -344,13 +428,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -365,13 +449,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -386,13 +470,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -407,13 +491,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -428,13 +512,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -449,13 +533,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -470,7 +554,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -510,7 +594,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -525,13 +609,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:09.138131Z",
+        "checked_at": "2026-11-14T05:57:20.310111018Z",
         "scope": "public",
         "source_url": "https://inference.phala.com/v1/models"
       },
@@ -546,7 +630,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:09.138131Z",
+        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     }

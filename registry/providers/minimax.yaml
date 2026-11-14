@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:55.970426Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:13.530305655Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -62,7 +62,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -73,13 +73,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -90,13 +90,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -107,13 +107,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -124,13 +124,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -141,7 +141,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },
@@ -204,7 +204,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:55.970426Z",
+        "checked_at": "2026-11-14T05:57:13.530305655Z",
         "scope": "account",
         "source_url": "https://api.minimax.io/v1/models"
       },
@@ -215,7 +215,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:55.970426Z",
+        "last_seen_at": "2026-11-14T05:57:13.530305655Z",
         "owner": "catalog"
       }
     },

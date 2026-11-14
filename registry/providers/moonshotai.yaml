@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:58.817686Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:15.257226228Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -61,7 +61,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "checked_at": "2026-11-14T05:57:15.257226228Z",
         "scope": "account",
         "source_url": "https://api.moonshot.ai/v1/models"
       },
@@ -72,7 +72,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "last_seen_at": "2026-11-14T05:57:15.257226228Z",
         "owner": "catalog"
       }
     },
@@ -125,7 +125,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "checked_at": "2026-11-14T05:57:15.257226228Z",
         "scope": "account",
         "source_url": "https://api.moonshot.ai/v1/models"
       },
@@ -136,7 +136,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "last_seen_at": "2026-11-14T05:57:15.257226228Z",
         "owner": "catalog"
       }
     },
@@ -248,7 +248,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:58.817686Z",
+        "checked_at": "2026-11-14T05:57:15.257226228Z",
         "scope": "account",
         "source_url": "https://api.moonshot.ai/v1/models"
       },
@@ -259,7 +259,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:58.817686Z",
+        "last_seen_at": "2026-11-14T05:57:15.257226228Z",
         "owner": "catalog"
       }
     }

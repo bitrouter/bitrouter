@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:14.863741654Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:58.282109Z"
-        }
+        ]
       }
     ]
   },
@@ -106,6 +106,7 @@
     },
     {
       "canonical_id": "minimax/minimax-m3",
+      "description": "MiniMax multimodal coding model for long-context reasoning and agent tasks",
       "interfaces": [
         {
           "operation": "generation",
@@ -145,19 +146,19 @@
           }
         }
       ],
+      "name": "MiniMax-M3",
       "provider_model_id": "MiniMax-M3",
       "status": "active",
-      "description": "MiniMax multimodal coding model for long-context reasoning and agent tasks",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "MiniMax-M3"
+      }
     },
     {
       "canonical_id": "minimax/minimax-m3.1-flash",
+      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
       "interfaces": [
         {
           "operation": "generation",
@@ -197,16 +198,15 @@
           }
         }
       ],
+      "name": "MiniMax-M3.1-Flash",
       "provider_model_id": "MiniMax-M3.1-Flash",
       "status": "active",
-      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "MiniMax-M3.1-Flash"
+      }
     }
   ],
   "name": "minimax_cn",

@@ -11,6 +11,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:06.834780527Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -32,12 +37,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:40.849969Z"
-        }
+        ]
       }
     ]
   },
@@ -56,6 +56,7 @@
   "models": [
     {
       "canonical_id": "anthropic/claude-fable-5",
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
       "interfaces": [
         {
           "capabilities": [
@@ -90,19 +91,19 @@
           }
         }
       ],
+      "name": "Claude Fable 5",
       "provider_model_id": "claude-fable-5",
       "status": "active",
-      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Fable 5"
+      }
     },
     {
       "canonical_id": "anthropic/claude-fable-5.1",
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [
         {
           "operation": "generation",
@@ -124,19 +125,40 @@
           }
         }
       ],
+      "name": "Claude Fable 5.1",
       "provider_model_id": "claude-fable-5-1",
       "status": "active",
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "provider_model_id": "claude-fable-5-2",
+      "interfaces": [],
+      "sync": {
+        "owner": "directory",
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z"
       },
-      "name": "Claude Fable 5.1"
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
+      "name": "Claude Fable 5.2",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public"
+      }
     },
     {
       "canonical_id": "anthropic/claude-haiku-4.5",
+      "description": "Fast Claude lane for lightweight agents, office tasks, and responsive chat",
       "interfaces": [
         {
           "capabilities": [
@@ -161,40 +183,40 @@
           }
         }
       ],
+      "name": "Claude Haiku 4.5 (latest)",
       "provider_model_id": "claude-haiku-4-5",
       "status": "active",
-      "description": "Fast Claude lane for lightweight agents, office tasks, and responsive chat",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Haiku 4.5 (latest)"
+      }
     },
     {
-      "provider_model_id": "claude-haiku-4-5-20251001",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
       "interfaces": [],
+      "name": "Claude Haiku 4.5",
+      "provider_model_id": "claude-haiku-4-5-20251001",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
-      },
-      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
-      "name": "Claude Haiku 4.5",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "anthropic/claude-haiku-5.5",
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
       "interfaces": [
         {
           "operation": "generation",
@@ -216,103 +238,103 @@
           }
         }
       ],
+      "name": "Claude Haiku 5.5",
       "provider_model_id": "claude-haiku-5-5",
       "status": "active",
-      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Haiku 5.5"
+      }
     },
     {
-      "provider_model_id": "claude-opus-4-5",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+      "interfaces": [],
       "name": "Claude Opus 4.5 (latest)",
+      "provider_model_id": "claude-opus-4-5",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "claude-opus-4-5-20251101",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
-      "name": "Claude Opus 4.5",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "claude-opus-4-6",
       "interfaces": [],
+      "name": "Claude Opus 4.5",
+      "provider_model_id": "claude-opus-4-5-20251101",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
-      "name": "Claude Opus 4.6",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "claude-opus-4-7",
       "interfaces": [],
+      "name": "Claude Opus 4.6",
+      "provider_model_id": "claude-opus-4-6",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+      "interfaces": [],
       "name": "Claude Opus 4.7",
+      "provider_model_id": "claude-opus-4-7",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "anthropic/claude-opus-4.8",
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
       "interfaces": [
         {
           "capabilities": [
@@ -349,19 +371,19 @@
           }
         }
       ],
+      "name": "Claude Opus 4.8",
       "provider_model_id": "claude-opus-4-8",
       "status": "active",
-      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Opus 4.8"
+      }
     },
     {
       "canonical_id": "anthropic/claude-opus-5",
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
       "interfaces": [
         {
           "capabilities": [
@@ -396,19 +418,19 @@
           }
         }
       ],
+      "name": "Claude Opus 5",
       "provider_model_id": "claude-opus-5",
       "status": "active",
-      "description": "Strongest Claude Opus model for coding, agents, and professional work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Opus 5"
+      }
     },
     {
       "canonical_id": "anthropic/claude-opus-5.5",
+      "description": "Claude model for long-running agentic coding and knowledge work",
       "interfaces": [
         {
           "operation": "generation",
@@ -430,19 +452,19 @@
           }
         }
       ],
+      "name": "Claude Opus 5.5",
       "provider_model_id": "claude-opus-5-5",
       "status": "active",
-      "description": "Claude model for long-running agentic coding and knowledge work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Opus 5.5"
+      }
     },
     {
       "canonical_id": "anthropic/claude-sonnet-4.5",
+      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
       "interfaces": [
         {
           "capabilities": [
@@ -469,40 +491,40 @@
           }
         }
       ],
+      "name": "Claude Sonnet 4.5 (latest)",
       "provider_model_id": "claude-sonnet-4-5",
       "status": "active",
-      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Sonnet 4.5 (latest)"
+      }
     },
     {
-      "provider_model_id": "claude-sonnet-4-5-20250929",
+      "availability": {
+        "checked_at": "2026-11-02T11:26:40.849969Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
       "interfaces": [],
+      "name": "Claude Sonnet 4.5",
+      "provider_model_id": "claude-sonnet-4-5-20250929",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z"
-      },
-      "description": "Balanced Claude model for coding, analysis, agent workflows, and cost control",
-      "name": "Claude Sonnet 4.5",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:26:40.849969Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-02T11:26:40.849969Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "anthropic/claude-sonnet-4.6",
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
       "interfaces": [
         {
           "capabilities": [
@@ -539,19 +561,19 @@
           }
         }
       ],
+      "name": "Claude Sonnet 4.6",
       "provider_model_id": "claude-sonnet-4-6",
       "status": "active",
-      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Sonnet 4.6"
+      }
     },
     {
       "canonical_id": "anthropic/claude-sonnet-5",
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
       "interfaces": [
         {
           "capabilities": [
@@ -589,19 +611,19 @@
           }
         }
       ],
+      "name": "Claude Sonnet 5",
       "provider_model_id": "claude-sonnet-5",
       "status": "active",
-      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Sonnet 5"
+      }
     },
     {
       "canonical_id": "anthropic/claude-sonnet-5.5",
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
       "interfaces": [
         {
           "operation": "generation",
@@ -623,16 +645,15 @@
           }
         }
       ],
+      "name": "Claude Sonnet 5.5",
       "provider_model_id": "claude-sonnet-5-5",
       "status": "active",
-      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Claude Sonnet 5.5"
+      }
     }
   ],
   "name": "anthropic",

@@ -2,9 +2,9 @@
   {
     "curation": {
       "checked_at": "2026-10-22T17:30:00Z",
+      "expires_at": "2026-11-30T18:49:26.939359Z",
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "expires_at": "2026-11-30T18:49:26.939359Z"
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
     },
     "id": "google/gemini-3.7-flash",
     "input_modalities": [
@@ -65,5 +65,47 @@
       "text"
     ],
     "release_date": "2026-10-13"
+  },
+  {
+    "id": "google/gemini-4-carbon",
+    "curation": {
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-11-14T05:57:35.294067680Z"
+    },
+    "name": "Google: Gemini 4 Carbon",
+    "description": "Gemini 4 Carbon is a frontier Gemini 4 model from Google for coding, agentic and complex reasoning work. It takes text, image, audio, video and file input, supports long decode...",
+    "input_modalities": [
+      "audio",
+      "file",
+      "image",
+      "text",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "context_window": 1048576
+  },
+  {
+    "id": "google/gemini-4-hydrogen",
+    "curation": {
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-11-14T05:57:35.294067680Z"
+    },
+    "name": "Google: Gemini 4 Hydrogen",
+    "description": "Gemini 4 Hydrogen is the high-efficiency workhorse model of the Gemini 4 family from Google, built for high-throughput agentic workflows, coding and multi-model routing at lower cost and latency than...",
+    "input_modalities": [
+      "audio",
+      "file",
+      "image",
+      "text",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "context_window": 1048576
   }
 ]

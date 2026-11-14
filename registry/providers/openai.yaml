@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:18.657958334Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:04.325800Z"
-        }
+        ]
       }
     ]
   },
@@ -51,469 +51,470 @@
   },
   "models": [
     {
-      "provider_model_id": "gpt-4.1",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Long-lived GPT workhorse for coding, instruction following, and production apps",
-      "name": "GPT-4.1",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-4.1-mini",
       "interfaces": [],
+      "name": "GPT-4.1",
+      "provider_model_id": "gpt-4.1",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Affordable GPT-4.1 lane for fast coding help and structured extraction",
-      "name": "GPT-4.1 mini",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-4o",
       "interfaces": [],
+      "name": "GPT-4.1 mini",
+      "provider_model_id": "gpt-4.1-mini",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Omni-era GPT for multimodal chat, practical coding, and general assistants",
+      "interfaces": [],
       "name": "GPT-4o",
+      "provider_model_id": "gpt-4o",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-4o-2024-08-06",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+      "interfaces": [],
       "name": "GPT-4o (2024-08-06)",
+      "provider_model_id": "gpt-4o-2024-08-06",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-4o-2024-11-20",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
-      "name": "GPT-4o (2024-11-20)",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-4o-mini",
       "interfaces": [],
+      "name": "GPT-4o (2024-11-20)",
+      "provider_model_id": "gpt-4o-2024-11-20",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Small omni GPT for cheap multimodal assistance and production-scale traffic",
-      "name": "GPT-4o mini",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5",
       "interfaces": [],
+      "name": "GPT-4o mini",
+      "provider_model_id": "gpt-4o-mini",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Original GPT-5 workhorse for reasoning, coding, writing, and tool workflows",
-      "name": "GPT-5",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5-mini",
       "interfaces": [],
+      "name": "GPT-5",
+      "provider_model_id": "gpt-5",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Small GPT-5 for responsive agents, coding help, and everyday automation",
-      "name": "GPT-5 Mini",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5-nano",
       "interfaces": [],
+      "name": "GPT-5 Mini",
+      "provider_model_id": "gpt-5-mini",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Tiny GPT-5 lane for routing, extraction, classification, and bulk jobs",
-      "name": "GPT-5 Nano",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5-pro",
       "interfaces": [],
+      "name": "GPT-5 Nano",
+      "provider_model_id": "gpt-5-nano",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Higher-accuracy GPT-5 tier for tough analysis, coding reviews, and planning",
-      "name": "GPT-5 Pro",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.1",
       "interfaces": [],
+      "name": "GPT-5 Pro",
+      "provider_model_id": "gpt-5-pro",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Sharper GPT-5 generation for coding, product work, and tool-assisted tasks",
-      "name": "GPT-5.1",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.2",
       "interfaces": [],
+      "name": "GPT-5.1",
+      "provider_model_id": "gpt-5.1",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Reliable GPT generation for broad coding, writing, and tool-assisted product work",
-      "name": "GPT-5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.2-pro",
       "interfaces": [],
+      "name": "GPT-5.2",
+      "provider_model_id": "gpt-5.2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Higher-accuracy GPT-5.2 variant for tougher reasoning and review workflows",
+      "interfaces": [],
       "name": "GPT-5.2 Pro",
+      "provider_model_id": "gpt-5.2-pro",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.3-codex",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Coding-optimized GPT model for repository edits, reviews, and agentic software work",
+      "interfaces": [],
       "name": "GPT-5.3 Codex",
+      "provider_model_id": "gpt-5.3-codex",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.3-codex-spark",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Coding-optimized GPT model for repository edits, reviews, and agentic software work",
-      "name": "GPT-5.3 Codex Spark",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.4",
       "interfaces": [],
+      "name": "GPT-5.3 Codex Spark",
+      "provider_model_id": "gpt-5.3-codex-spark",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Agent-ready GPT for coding and computer-use workflows at a lower cost",
-      "name": "GPT-5.4",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.4-mini",
       "interfaces": [],
+      "name": "GPT-5.4",
+      "provider_model_id": "gpt-5.4",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Strong small GPT for coding subagents, quick tool use, and high-volume work",
-      "name": "GPT-5.4 mini",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.4-nano",
       "interfaces": [],
+      "name": "GPT-5.4 mini",
+      "provider_model_id": "gpt-5.4-mini",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Cheapest GPT-5.4 lane for simple routing, extraction, and bulk automation",
-      "name": "GPT-5.4 nano",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.4-pro",
       "interfaces": [],
+      "name": "GPT-5.4 nano",
+      "provider_model_id": "gpt-5.4-nano",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "More exact GPT-5.4 tier for demanding professional reasoning and agent tasks",
-      "name": "GPT-5.4 Pro",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.5",
       "interfaces": [],
+      "name": "GPT-5.4 Pro",
+      "provider_model_id": "gpt-5.4-pro",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Default frontier GPT for coding, computer use, research, and knowledge work",
-      "name": "GPT-5.5",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.5-pro",
       "interfaces": [],
+      "name": "GPT-5.5",
+      "provider_model_id": "gpt-5.5",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Highest-accuracy GPT-5.5 tier for slower, precision-heavy reasoning and coding",
-      "name": "GPT-5.5 Pro",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-5.6",
       "interfaces": [],
+      "name": "GPT-5.5 Pro",
+      "provider_model_id": "gpt-5.5-pro",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "interfaces": [],
       "name": "GPT-5.6",
+      "provider_model_id": "gpt-5.6",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "openai/gpt-5.6-luna",
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
       "interfaces": [
         {
           "capabilities": [
@@ -615,19 +616,19 @@
           }
         }
       ],
+      "name": "GPT-5.6 Luna",
       "provider_model_id": "gpt-5.6-luna",
       "status": "active",
-      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-5.6 Luna"
+      }
     },
     {
       "canonical_id": "openai/gpt-5.6-sol",
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
       "interfaces": [
         {
           "capabilities": [
@@ -729,19 +730,19 @@
           }
         }
       ],
+      "name": "GPT-5.6 Sol",
       "provider_model_id": "gpt-5.6-sol",
       "status": "active",
-      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-5.6 Sol"
+      }
     },
     {
       "canonical_id": "openai/gpt-5.6-terra",
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
       "interfaces": [
         {
           "capabilities": [
@@ -843,19 +844,19 @@
           }
         }
       ],
+      "name": "GPT-5.6 Terra",
       "provider_model_id": "gpt-5.6-terra",
       "status": "active",
-      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-5.6 Terra"
+      }
     },
     {
       "canonical_id": "openai/gpt-6-astra",
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
       "interfaces": [
         {
           "operation": "generation",
@@ -896,19 +897,19 @@
           }
         }
       ],
+      "name": "GPT-6 Astra",
       "provider_model_id": "gpt-6-astra",
       "status": "active",
-      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-6 Astra"
+      }
     },
     {
       "canonical_id": "openai/gpt-6-luna",
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
       "interfaces": [
         {
           "operation": "generation",
@@ -992,19 +993,19 @@
           }
         }
       ],
+      "name": "GPT-6 Luna",
       "provider_model_id": "gpt-6-luna",
       "status": "active",
-      "description": "OpenAI's most efficient model for focused, high-volume tasks",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-6 Luna"
+      }
     },
     {
       "canonical_id": "openai/gpt-6-sol",
+      "description": "OpenAI model for complex coding and agentic workflows",
       "interfaces": [
         {
           "operation": "generation",
@@ -1045,19 +1046,19 @@
           }
         }
       ],
+      "name": "GPT-6 Sol",
       "provider_model_id": "gpt-6-sol",
       "status": "active",
-      "description": "OpenAI model for complex coding and agentic workflows",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-6 Sol"
+      }
     },
     {
       "canonical_id": "openai/gpt-6.1-sol",
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
       "interfaces": [
         {
           "operation": "generation",
@@ -1098,19 +1099,19 @@
           }
         }
       ],
+      "name": "GPT-6.1 Sol",
       "provider_model_id": "gpt-6.1-sol",
       "status": "active",
-      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-6.1 Sol"
+      }
     },
     {
       "canonical_id": "openai/gpt-6.1-terra",
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
       "interfaces": [
         {
           "compatibility": {
@@ -1180,204 +1181,203 @@
           }
         }
       ],
+      "name": "GPT-6.1 Terra",
       "provider_model_id": "gpt-6.1-terra",
       "status": "active",
-      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "GPT-6.1 Terra"
+      }
     },
     {
-      "provider_model_id": "gpt-daybreak-blue-latest",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Alias for flagship general-purpose models with safeguards for defensive cybersecurity work",
-      "name": "Daybreak Blue",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-daybreak-red-latest",
       "interfaces": [],
+      "name": "Daybreak Blue",
+      "provider_model_id": "gpt-daybreak-blue-latest",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Alias for advanced cybersecurity models for authorized vulnerability research and security testing",
-      "name": "Daybreak Red",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-image-2",
       "interfaces": [],
+      "name": "Daybreak Red",
+      "provider_model_id": "gpt-daybreak-red-latest",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Image model for prompt-driven generation, editing, and visual design workflows",
-      "name": "gpt-image-2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "gpt-realtime-2.1",
       "interfaces": [],
+      "name": "gpt-image-2",
+      "provider_model_id": "gpt-image-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Realtime speech-to-speech model with configurable reasoning, tool use, and robust voice-agent behavior",
-      "name": "GPT-Realtime-2.1",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "o3",
       "interfaces": [],
+      "name": "GPT-Realtime-2.1",
+      "provider_model_id": "gpt-realtime-2.1",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Deliberate o-series reasoner for hard math, coding, and multi-step analysis",
-      "name": "o3",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "o3-pro",
       "interfaces": [],
+      "name": "o3",
+      "provider_model_id": "o3",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "High-effort o3 tier for difficult technical reasoning and careful answers",
+      "interfaces": [],
       "name": "o3-pro",
+      "provider_model_id": "o3-pro",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "text-embedding-3-large",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "interfaces": [],
       "name": "text-embedding-3-large",
+      "provider_model_id": "text-embedding-3-large",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "text-embedding-3-small",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "interfaces": [],
       "name": "text-embedding-3-small",
+      "provider_model_id": "text-embedding-3-small",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "text-embedding-ada-002",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:04.325800Z"
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.657958334Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "interfaces": [],
       "name": "text-embedding-ada-002",
+      "provider_model_id": "text-embedding-ada-002",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:04.325800Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:18.657958334Z",
+        "owner": "directory"
       }
     }
   ],

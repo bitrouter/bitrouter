@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:27.820231140Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:19.504323Z"
-        }
+        ]
       }
     ]
   },
@@ -102,49 +102,49 @@
       "status": "active"
     },
     {
-      "provider_model_id": "hy3",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:27.820231140Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "interfaces": [],
       "name": "Hy3",
+      "provider_model_id": "hy3",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:19.504323Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "hy3-preview",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+        "last_seen_at": "2026-11-14T05:57:27.820231140Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:27.820231140Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Tencent Hy reasoning model for coding, instruction following, and agent tasks",
+      "interfaces": [],
       "name": "Hy3 preview",
+      "provider_model_id": "hy3-preview",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:19.504323Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:27.820231140Z",
+        "owner": "directory"
       }
     },
     {
-      "provider_model_id": "hy4-preview",
+      "provider_model_id": "hy4",
       "interfaces": [],
       "sync": {
         "owner": "directory",
@@ -153,15 +153,36 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:19.504323Z"
+        "last_seen_at": "2026-11-14T05:57:27.820231140Z"
+      },
+      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
+      "name": "Hy4",
+      "status": "staging",
+      "availability": {
+        "source_url": "https://models.dev/api.json?type=all",
+        "checked_at": "2026-11-14T05:57:27.820231140Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:27.820231140Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "A next-generation productivity model with significantly enhanced Agent and complex task execution capabilities.",
+      "interfaces": [],
       "name": "Hy4 preview",
+      "provider_model_id": "hy4-preview",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:19.504323Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:27.820231140Z",
+        "owner": "directory"
       }
     },
     {

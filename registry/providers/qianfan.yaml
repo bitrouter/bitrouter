@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:10.239472Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:20.977916937Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -61,7 +61,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -76,13 +76,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -97,13 +97,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -118,13 +118,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -139,13 +139,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -160,13 +160,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -181,13 +181,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -202,13 +202,76 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "ernie-5.5-flash-preview",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z"
+      },
+      "description": "ERNIE 5.5 Flash Preview is the latest foundation model in the ERNIE family, with comprehensive improvements in coding, agentic capabilities, knowledge work, and deep research. It has 280 billion total parameters, activates 14 billion parameters per token, and supports a context window of 1 million tokens. Its new architecture combines strong model capabilities with efficient inference, delivering generation speeds of more than 200 tokens per second.",
+      "name": "Baidu: ERNIE-5.5-Flash-Preview",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "source_url": "https://api.baiduqianfan.ai/v1/models",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "ernie-5.5-flash-preview-intl",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z"
+      },
+      "description": "ERNIE 5.5 Flash Preview is the latest foundation model in the ERNIE family, with comprehensive improvements in coding, agentic capabilities, knowledge work, and deep research. It has 280 billion total parameters, activates 14 billion parameters per token, and supports a context window of 1 million tokens. Its new architecture combines strong model capabilities with efficient inference, delivering generation speeds of more than 200 tokens per second.",
+      "name": "Baidu: ERNIE-5.5-Flash-Preview",
+      "status": "active",
+      "availability": {
+        "source_url": "https://api.baiduqianfan.ai/v1/models",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
+        "scope": "public"
+      }
+    },
+    {
+      "provider_model_id": "ernie-light-dt-1.0-intl",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z"
+      },
+      "description": "ERNIE-Light-DT-1.0 is based on open-source GLM models and includes research findings from Baidu Search's Lightning large model. It features Baidu Sparse Attention (BSA), a unique sparse attention mechanism developed by Baidu ERNIE. By using feedback-driven history compression, it improves the storage and indexing of historical information. This significantly reduces KV cache storage and computational costs while maintaining model performance. As a result, it allows for longer context windows at a lower cost.",
+      "name": "Baidu: ERNIE-Light-DT-1.0",
+      "status": "active",
+      "availability": {
+        "source_url": "https://api.baiduqianfan.ai/v1/models",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -223,13 +286,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -244,7 +307,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
@@ -280,7 +343,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -295,13 +358,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -316,13 +379,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -337,7 +400,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },
@@ -385,7 +448,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:10.239472Z",
+        "checked_at": "2026-11-14T05:57:20.977916937Z",
         "scope": "public",
         "source_url": "https://api.baiduqianfan.ai/v1/models"
       },
@@ -400,7 +463,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:10.239472Z",
+        "last_seen_at": "2026-11-14T05:57:20.977916937Z",
         "owner": "catalog"
       }
     },

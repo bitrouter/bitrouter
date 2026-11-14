@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:16.581838591Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:01.074680Z"
-        }
+        ]
       }
     ]
   },
@@ -50,91 +50,92 @@
   },
   "models": [
     {
-      "provider_model_id": "k3",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
-      "name": "Kimi K3",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:01.074680Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "k3-256k",
       "interfaces": [],
+      "name": "Kimi K3",
+      "provider_model_id": "k3",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "256K-context version of Kimi K3, reducing token consumption for shorter coding sessions",
+      "interfaces": [],
       "name": "Kimi K3-256K",
+      "provider_model_id": "k3-256k",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:01.074680Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "k3.1-pro",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:01.074680Z"
+        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
-      "description": "Multimodal Kimi model with 1M context and always-on reasoning for coding, 3D creation, financial research, and agentic work",
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
       "name": "Kimi K3.1 Pro",
+      "provider_model_id": "k3.1-pro",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:01.074680Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "k3.1-pro-highspeed",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:01.074680Z"
-      },
-      "description": "Multimodal Kimi model with 1M context and always-on reasoning for coding, 3D creation, financial research, and agentic work",
-      "name": "Kimi K3.1 Pro Highspeed",
-      "status": "staging",
+        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
+        "owner": "directory"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:01.074680Z",
-        "scope": "public"
+        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro Highspeed",
+      "provider_model_id": "k3.1-pro-highspeed",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "moonshotai/kimi-k3",
+      "description": "Kimi coding model with more efficient thinking and up to 1M context, available through Kimi Code",
       "interfaces": [
         {
           "capabilities": [
@@ -148,36 +149,35 @@
           }
         }
       ],
+      "name": "Kimi K2.8 Preview",
       "provider_model_id": "kimi-for-coding",
       "status": "active",
-      "description": "Kimi coding model with more efficient thinking and up to 1M context, available through Kimi Code",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "Kimi K2.8 Preview"
+      }
     },
     {
-      "provider_model_id": "kimi-for-coding-highspeed",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:16.581838591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Lower-latency Kimi Code variant for interactive edits and coding-agent loops",
       "interfaces": [],
+      "name": "Kimi For Coding HighSpeed",
+      "provider_model_id": "kimi-for-coding-highspeed",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:01.074680Z"
-      },
-      "description": "Lower-latency Kimi Code variant for interactive edits and coding-agent loops",
-      "name": "Kimi For Coding HighSpeed",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:01.074680Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
+        "owner": "directory"
       }
     }
   ],

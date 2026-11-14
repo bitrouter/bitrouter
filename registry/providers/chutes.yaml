@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:50.161423Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:10.951390928Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -58,8 +58,25 @@
   },
   "models": [
     {
+      "provider_model_id": "Qwen/Qwen3.5-27B-TEE",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z"
+      },
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "source_url": "https://llm.chutes.ai/v1/models",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -70,13 +87,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -87,13 +104,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -104,13 +121,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -121,13 +138,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -138,7 +155,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -172,7 +189,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -183,13 +200,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -200,13 +217,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -217,13 +234,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -234,13 +251,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -251,13 +268,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -268,13 +285,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -285,13 +302,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -302,13 +319,30 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "tencent/Hy4",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z"
+      },
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "source_url": "https://llm.chutes.ai/v1/models",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
+        "scope": "public"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -319,13 +353,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -336,13 +370,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -353,13 +387,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:50.161423Z",
+        "checked_at": "2026-11-14T05:57:10.951390928Z",
         "scope": "public",
         "source_url": "https://llm.chutes.ai/v1/models"
       },
@@ -370,7 +404,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:50.161423Z",
+        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     }

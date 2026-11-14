@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:26:33.857041Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:02.502130843Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -70,7 +70,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -81,13 +81,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -98,13 +98,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -115,13 +115,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -132,13 +132,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -149,13 +149,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -166,13 +166,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -183,13 +183,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -200,7 +200,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -274,7 +274,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -285,13 +285,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -302,13 +302,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -319,13 +319,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -336,7 +336,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -406,8 +406,25 @@
       }
     },
     {
+      "provider_model_id": "kimi-k3.1-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z"
+      },
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -418,7 +435,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -645,7 +662,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -656,13 +673,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -673,13 +690,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -690,13 +707,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -707,13 +724,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -724,13 +741,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -741,13 +758,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -758,13 +775,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -775,13 +792,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -792,13 +809,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -809,13 +826,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -826,13 +843,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -843,13 +860,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -860,13 +877,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -877,13 +894,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -894,13 +911,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -911,13 +928,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -928,13 +945,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -945,13 +962,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -962,13 +979,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -979,13 +996,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -996,13 +1013,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1013,13 +1030,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1030,13 +1047,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1047,13 +1064,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1064,13 +1081,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1081,13 +1098,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1098,13 +1115,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1115,13 +1132,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1132,13 +1149,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1149,13 +1166,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1166,13 +1183,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1183,13 +1200,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1200,13 +1217,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1217,13 +1234,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1234,13 +1251,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1251,13 +1268,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1268,13 +1285,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1285,13 +1302,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1302,13 +1319,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1319,13 +1336,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1336,13 +1353,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1353,13 +1370,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1370,13 +1387,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1387,13 +1404,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1404,13 +1421,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1421,13 +1438,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1438,13 +1455,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1455,13 +1472,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1472,13 +1489,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1489,13 +1506,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1506,13 +1523,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1523,13 +1540,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1540,13 +1557,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1557,13 +1574,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1574,13 +1591,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1591,13 +1608,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1608,13 +1625,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1625,13 +1642,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1642,7 +1659,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -1749,7 +1766,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1760,7 +1777,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -1834,7 +1851,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1845,7 +1862,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -1919,7 +1936,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1930,13 +1947,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1947,13 +1964,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1964,13 +1981,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -1981,7 +1998,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -2088,7 +2105,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2099,13 +2116,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2116,7 +2133,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -2398,7 +2415,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2409,7 +2426,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -2491,7 +2508,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2502,7 +2519,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
@@ -2573,7 +2590,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2584,13 +2601,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2601,13 +2618,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2618,13 +2635,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2635,13 +2652,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2652,13 +2669,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2669,13 +2686,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2686,13 +2703,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:26:33.857041Z",
+        "checked_at": "2026-11-14T05:57:02.502130843Z",
         "scope": "account",
         "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
       },
@@ -2703,7 +2720,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:26:33.857041Z",
+        "last_seen_at": "2026-11-14T05:57:02.502130843Z",
         "owner": "catalog"
       }
     }

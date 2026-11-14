@@ -7,6 +7,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:32.063010075Z",
+          "sequence": 2
+        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -28,12 +33,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:26.585698Z"
-        }
+        ]
       }
     ]
   },
@@ -133,70 +133,71 @@
       "status": "active"
     },
     {
-      "provider_model_id": "mimo-v2.5-tts",
-      "interfaces": [],
-      "sync": {
-        "owner": "directory",
-        "field_owners": {
-          "/description": "directory",
-          "/name": "directory",
-          "/status": "directory"
-        },
-        "last_seen_at": "2026-11-02T11:27:26.585698Z"
+      "availability": {
+        "checked_at": "2026-11-14T05:57:32.063010075Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "interfaces": [],
       "name": "MiMo-V2.5-TTS",
+      "provider_model_id": "mimo-v2.5-tts",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:26.585698Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mimo-v2.5-tts-voiceclone",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:26.585698Z"
+        "last_seen_at": "2026-11-14T05:57:32.063010075Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:32.063010075Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "interfaces": [],
       "name": "MiMo-V2.5-TTS-VoiceClone",
+      "provider_model_id": "mimo-v2.5-tts-voiceclone",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:26.585698Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mimo-v2.5-tts-voicedesign",
-      "interfaces": [],
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:27:26.585698Z"
+        "last_seen_at": "2026-11-14T05:57:32.063010075Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:32.063010075Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
       },
       "description": "Speech generation model for controllable voice, narration, and audio delivery",
+      "interfaces": [],
       "name": "MiMo-V2.5-TTS-VoiceDesign",
+      "provider_model_id": "mimo-v2.5-tts-voicedesign",
       "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-02T11:27:26.585698Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-14T05:57:32.063010075Z",
+        "owner": "directory"
       }
     },
     {
       "canonical_id": "xiaomi/mimo-v2.6-flash",
+      "description": "MiMo Flash model for multimodal coding agents and long-context automation",
       "interfaces": [
         {
           "operation": "generation",
@@ -221,19 +222,19 @@
           }
         }
       ],
+      "name": "MiMo-V2.6-Flash",
       "provider_model_id": "mimo-v2.6-flash",
       "status": "active",
-      "description": "MiMo Flash model for multimodal coding agents and long-context automation",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "MiMo-V2.6-Flash"
+      }
     },
     {
       "canonical_id": "xiaomi/mimo-v2.6-pro",
+      "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
       "interfaces": [
         {
           "operation": "generation",
@@ -258,16 +259,15 @@
           }
         }
       ],
+      "name": "MiMo-V2.6-Pro",
       "provider_model_id": "mimo-v2.6-pro",
       "status": "active",
-      "description": "Stronger MiMo Pro tier for multimodal reasoning and coding-agent execution",
       "sync": {
         "field_owners": {
           "/description": "directory",
           "/name": "directory"
         }
-      },
-      "name": "MiMo-V2.6-Pro"
+      }
     }
   ],
   "name": "xiaomi_token_plan_cn",

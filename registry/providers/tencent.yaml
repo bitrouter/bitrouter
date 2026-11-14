@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-02T11:26:32.358Z",
-          "observed_at": "2026-11-02T11:27:17.222774Z",
-          "sequence": 6
+          "id": "2026-11-14T05:57:00.509Z",
+          "observed_at": "2026-11-14T05:57:26.456132256Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -63,7 +63,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -76,13 +76,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -95,13 +95,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -114,13 +114,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -133,13 +133,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -152,13 +152,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -171,13 +171,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -190,13 +190,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -209,13 +209,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -228,7 +228,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
@@ -291,7 +291,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -304,13 +304,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -323,13 +323,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -342,13 +342,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -361,13 +361,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -380,13 +380,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -399,13 +399,70 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "hidream-image-o1-1.5",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "HiDream-O1-Image-1.5 ",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "hidream-image-o1-1.5-edit",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "HiDream-O1-Image-Edit-1.5",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "hy-3d-3.1",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "HY-3D-3.1",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -418,13 +475,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "hy-3d-express",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "HY-3D-Express",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -437,13 +513,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -456,13 +532,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -475,13 +551,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -494,13 +570,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -513,13 +589,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -532,7 +608,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
@@ -557,7 +633,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -570,13 +646,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -589,13 +665,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -608,13 +684,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -627,13 +703,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -646,13 +722,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -665,13 +741,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -684,13 +760,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -703,13 +779,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "hy4",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Hy4",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -722,13 +817,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -741,13 +836,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -760,13 +855,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -779,13 +874,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -798,13 +893,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -817,13 +912,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -836,13 +931,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -855,13 +950,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -874,13 +969,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -893,13 +988,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -912,13 +1007,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -931,13 +1026,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -950,13 +1045,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -969,13 +1064,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -988,13 +1083,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1007,13 +1102,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1026,13 +1121,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1045,13 +1140,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1064,13 +1159,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1083,13 +1178,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1102,13 +1197,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1121,13 +1216,32 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "kling-video-v4-flash",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Kling-Video-v4-flash",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1140,13 +1254,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1159,8 +1273,46 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
+      }
+    },
+    {
+      "provider_model_id": "minimax-image-h3",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Minimax-Image-H3",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "minimax-image-h3-highspeed",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Minimax-Image-H3-Highspeed",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
       }
     },
     {
@@ -1337,7 +1489,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1350,13 +1502,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1369,13 +1521,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1388,13 +1540,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1407,13 +1559,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1426,13 +1578,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1445,13 +1597,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1464,13 +1616,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1483,13 +1635,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1502,13 +1654,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1521,13 +1673,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1540,13 +1692,70 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "miora-3d",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Miora-3D",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "miora-3d-1.2",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Miora-3D-1.2",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "miora-3d-t1",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Miora-3d-T1",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1559,13 +1768,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1578,13 +1787,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1597,13 +1806,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1616,13 +1825,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1635,13 +1844,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1654,13 +1863,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1673,13 +1882,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1692,13 +1901,51 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "tripo-3d-animation",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Tripo-3D-Animation",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "tripo-3d-format",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Tripo-3D-Format",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1711,13 +1958,51 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "tripo-3d-rigging",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Tripo-3D-Rigging",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "tripo-3d-rigging-check",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Tripo-3D-Rigging-Check",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1730,13 +2015,70 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
+      "provider_model_id": "vidu-video-q3",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Vidu-Video-q3.0",
+      "status": "active",
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "vidu-video-q3-pro",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Vidu-Video-q3.0-pro",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "provider_model_id": "vidu-video-q3-turbo",
+      "interfaces": [],
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z"
+      },
+      "name": "Vidu-Video-q3.0-turbo",
+      "status": "active",
+      "availability": {
+        "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
+        "scope": "account"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1749,13 +2091,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1768,13 +2110,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1787,13 +2129,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1806,13 +2148,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1825,13 +2167,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1844,13 +2186,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1863,13 +2205,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1882,13 +2224,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1901,13 +2243,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1920,13 +2262,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-02T11:27:17.222774Z",
+        "checked_at": "2026-11-14T05:57:26.456132256Z",
         "scope": "account",
         "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
       },
@@ -1939,7 +2281,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-02T11:27:17.222774Z",
+        "last_seen_at": "2026-11-14T05:57:26.456132256Z",
         "owner": "catalog"
       }
     }
