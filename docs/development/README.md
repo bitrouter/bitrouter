@@ -22,5 +22,12 @@ They do not create independently versioned format specifications. Follow the
   [remote administration](remote-administration.md),
   and [ACP launch](spawn.md)
 
+## Proposed work
+
+- [Provider inference router implementation proposal](provider-inference-router-proposal.md):
+  optional semantic and provider routing, approximate prefix affinity, and
+  phased implementation gates. This explicitly requested proposal describes
+  unimplemented work; it is not a supported configuration or API contract.
+
 Formats shared with clients and retained files are maintained once in
 [specifications](../specs/README.md). Commands remain in the [CLI guide](../CLI.md).
