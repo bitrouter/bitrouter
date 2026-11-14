@@ -12,9 +12,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:06.834780527Z",
-          "sequence": 2
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:39.902489164Z",
+          "sequence": 3
         },
         "id": "directory",
         "inventory": {
@@ -136,24 +136,24 @@
       }
     },
     {
-      "provider_model_id": "claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z"
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
+        "owner": "directory"
       }
     },
     {
@@ -195,7 +195,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -210,7 +210,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
         "owner": "directory"
       }
     },
@@ -250,7 +250,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -265,13 +265,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -286,13 +286,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -307,13 +307,13 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
         "owner": "directory"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:06.834780527Z",
+        "checked_at": "2026-11-14T06:35:39.902489164Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -328,7 +328,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
+        "last_seen_at": "2026-11-14T06:35:39.902489164Z",
         "owner": "directory"
       }
     },

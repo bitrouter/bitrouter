@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:05.153377179Z",
-          "sequence": 6
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:38.891700804Z",
+          "sequence": 7
         },
         "id": "catalog",
         "inventory": {
@@ -62,7 +62,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:05.153377179Z",
+        "checked_at": "2026-11-14T06:35:38.891700804Z",
         "scope": "public",
         "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
       },
@@ -73,13 +73,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.153377179Z",
+        "last_seen_at": "2026-11-14T06:35:38.891700804Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:05.153377179Z",
+        "checked_at": "2026-11-14T06:35:38.891700804Z",
         "scope": "public",
         "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
       },
@@ -90,13 +90,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.153377179Z",
+        "last_seen_at": "2026-11-14T06:35:38.891700804Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:05.153377179Z",
+        "checked_at": "2026-11-14T06:35:38.891700804Z",
         "scope": "public",
         "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
       },
@@ -107,13 +107,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.153377179Z",
+        "last_seen_at": "2026-11-14T06:35:38.891700804Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:05.153377179Z",
+        "checked_at": "2026-11-14T06:35:38.891700804Z",
         "scope": "public",
         "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
       },
@@ -124,7 +124,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.153377179Z",
+        "last_seen_at": "2026-11-14T06:35:38.891700804Z",
         "owner": "catalog"
       }
     },

@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:07.164708996Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:40.166569086Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
@@ -63,197 +63,197 @@
   },
   "models": [
     {
-      "provider_model_id": "anthropic/claude-fable-5",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5",
-      "name": "Claude Fable 5",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5-aws",
       "interfaces": [],
+      "name": "Claude Fable 5",
+      "provider_model_id": "anthropic/claude-fable-5",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5 AWS",
-      "name": "Claude Fable 5 AWS",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5-ccmax",
       "interfaces": [],
+      "name": "Claude Fable 5 AWS",
+      "provider_model_id": "anthropic/claude-fable-5-aws",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5 CC Max",
-      "name": "Claude Fable 5 CC Max",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5-coding",
       "interfaces": [],
+      "name": "Claude Fable 5 CC Max",
+      "provider_model_id": "anthropic/claude-fable-5-ccmax",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5 Coding",
-      "name": "Claude Fable 5 Coding",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5-z",
       "interfaces": [],
+      "name": "Claude Fable 5 Coding",
+      "provider_model_id": "anthropic/claude-fable-5-coding",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5 Z",
-      "name": "Claude Fable 5 Z",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5.1",
       "interfaces": [],
+      "name": "Claude Fable 5 Z",
+      "provider_model_id": "anthropic/claude-fable-5-z",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5.1",
-      "name": "Claude Fable 5.1",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5.1-ccmax",
       "interfaces": [],
+      "name": "Claude Fable 5.1",
+      "provider_model_id": "anthropic/claude-fable-5.1",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5.1 CC MAX",
-      "name": "Claude Fable 5.1 CC MAX",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5.1-z",
       "interfaces": [],
+      "name": "Claude Fable 5.1 CC MAX",
+      "provider_model_id": "anthropic/claude-fable-5.1-ccmax",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Claude Fable 5.1 Z",
-      "name": "Claude Fable 5.1 Z",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "anthropic/claude-fable-5.2-ccmax",
       "interfaces": [],
+      "name": "Claude Fable 5.1 Z",
+      "provider_model_id": "anthropic/claude-fable-5.1-z",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "Claude Fable 5.2 CC MAX",
-      "name": "Claude Fable 5.2 CC MAX",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Fable 5.2 CC MAX",
+      "interfaces": [],
+      "name": "Claude Fable 5.2 CC MAX",
+      "provider_model_id": "anthropic/claude-fable-5.2-ccmax",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -268,13 +268,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -289,13 +289,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -310,13 +310,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -331,7 +331,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -358,7 +358,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -373,7 +373,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -400,7 +400,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -415,7 +415,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -442,7 +442,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -457,13 +457,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -478,13 +478,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -499,13 +499,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -520,13 +520,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -541,13 +541,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -562,13 +562,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -583,13 +583,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -604,13 +604,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -625,13 +625,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -646,13 +646,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -667,13 +667,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -688,7 +688,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -716,7 +716,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -731,13 +731,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -752,13 +752,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -773,13 +773,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -794,13 +794,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -815,13 +815,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -836,13 +836,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -857,13 +857,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -878,13 +878,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -899,13 +899,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -920,13 +920,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -941,13 +941,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -962,13 +962,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -983,13 +983,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1004,13 +1004,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1025,13 +1025,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1046,13 +1046,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1067,13 +1067,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1088,13 +1088,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1109,13 +1109,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1130,13 +1130,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1151,13 +1151,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1172,13 +1172,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1193,13 +1193,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1214,13 +1214,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1235,13 +1235,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1256,13 +1256,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1277,13 +1277,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1298,13 +1298,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1319,13 +1319,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1340,13 +1340,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1361,13 +1361,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1382,13 +1382,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1403,13 +1403,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1424,13 +1424,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1445,13 +1445,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1466,13 +1466,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1487,13 +1487,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1508,13 +1508,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1529,34 +1529,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "google/gemini-3-flash-preview-developer-as",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3 Flash Preview Developer AiStudio",
       "interfaces": [],
+      "name": "Gemini 3 Flash Preview Developer AiStudio",
+      "provider_model_id": "google/gemini-3-flash-preview-developer-as",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "Gemini 3 Flash Preview Developer AiStudio",
-      "name": "Gemini 3 Flash Preview Developer AiStudio",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1571,13 +1571,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1592,13 +1592,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1613,13 +1613,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1634,13 +1634,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1655,13 +1655,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1676,13 +1676,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1697,34 +1697,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "google/gemini-3.8-flash-developer-as",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.8 Flash Developer AiStudio",
       "interfaces": [],
+      "name": "Gemini 3.8 Flash Developer AiStudio",
+      "provider_model_id": "google/gemini-3.8-flash-developer-as",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "Gemini 3.8 Flash Developer AiStudio",
-      "name": "Gemini 3.8 Flash Developer AiStudio",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1739,13 +1739,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1760,55 +1760,55 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "google/gemini-4-carbon-developer",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
       },
       "description": "Gemini 4 Carbon Developer",
-      "name": "Gemini 4 Carbon Developer",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "google/gemini-4-hydrogen",
       "interfaces": [],
+      "name": "Gemini 4 Carbon Developer",
+      "provider_model_id": "google/gemini-4-carbon-developer",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "Gemini 4 Hydrogen",
-      "name": "Gemini 4 Hydrogen",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 4 Hydrogen",
+      "interfaces": [],
+      "name": "Gemini 4 Hydrogen",
+      "provider_model_id": "google/gemini-4-hydrogen",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1823,13 +1823,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1844,13 +1844,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1865,13 +1865,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1886,7 +1886,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -1934,7 +1934,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1949,13 +1949,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1970,13 +1970,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -1991,7 +1991,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -2027,7 +2027,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2042,13 +2042,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2063,13 +2063,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2084,13 +2084,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2105,13 +2105,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2126,13 +2126,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2147,13 +2147,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2168,13 +2168,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2189,13 +2189,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2210,13 +2210,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2231,13 +2231,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2252,13 +2252,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2273,13 +2273,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2294,34 +2294,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "openai/gpt-6-astra-oai",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Astra OAI",
       "interfaces": [],
+      "name": "GPT 6 Astra OAI",
+      "provider_model_id": "openai/gpt-6-astra-oai",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "GPT 6 Astra OAI",
-      "name": "GPT 6 Astra OAI",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2336,13 +2336,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2357,34 +2357,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "openai/gpt-6-luna-oai",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Luna OAI",
       "interfaces": [],
+      "name": "GPT 6 Luna OAI",
+      "provider_model_id": "openai/gpt-6-luna-oai",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "GPT 6 Luna OAI",
-      "name": "GPT 6 Luna OAI",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2399,13 +2399,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2420,34 +2420,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "openai/gpt-6-sol-oai",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Sol OAI",
       "interfaces": [],
+      "name": "GPT 6 Sol OAI",
+      "provider_model_id": "openai/gpt-6-sol-oai",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "GPT 6 Sol OAI",
-      "name": "GPT 6 Sol OAI",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2462,13 +2462,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2483,13 +2483,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2504,13 +2504,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2525,13 +2525,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2546,13 +2546,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2567,13 +2567,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2588,13 +2588,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2609,13 +2609,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2630,13 +2630,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2651,13 +2651,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2672,13 +2672,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2693,7 +2693,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -2771,7 +2771,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2786,13 +2786,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2807,13 +2807,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2828,34 +2828,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "tencent/hy4",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Hy4",
       "interfaces": [],
+      "name": "Hy4",
+      "provider_model_id": "tencent/hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z"
-      },
-      "description": "Hy4",
-      "name": "Hy4",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.atlascloud.ai/v1/models",
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2870,7 +2870,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -2918,7 +2918,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2933,13 +2933,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2954,13 +2954,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2975,13 +2975,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -2996,13 +2996,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3017,13 +3017,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3038,13 +3038,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3059,13 +3059,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3080,7 +3080,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
@@ -3116,7 +3116,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3131,13 +3131,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3152,13 +3152,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:07.164708996Z",
+        "checked_at": "2026-11-14T06:35:40.166569086Z",
         "scope": "public",
         "source_url": "https://api.atlascloud.ai/v1/models"
       },
@@ -3173,7 +3173,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:07.164708996Z",
+        "last_seen_at": "2026-11-14T06:35:40.166569086Z",
         "owner": "catalog"
       }
     }

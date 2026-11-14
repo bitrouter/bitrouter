@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:13.333157667Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:44.304218984Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
@@ -80,7 +80,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -95,13 +95,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -116,13 +116,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -137,13 +137,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -158,13 +158,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -179,13 +179,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -200,13 +200,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -221,13 +221,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -242,13 +242,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -263,13 +263,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -284,13 +284,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -305,13 +305,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -326,13 +326,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -347,13 +347,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -368,13 +368,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -389,7 +389,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
@@ -437,7 +437,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -452,13 +452,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -473,13 +473,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -494,13 +494,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -515,13 +515,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -536,13 +536,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -557,13 +557,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -578,13 +578,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -599,13 +599,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -620,13 +620,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -641,13 +641,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -662,13 +662,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -683,13 +683,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -704,13 +704,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -725,13 +725,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -746,13 +746,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -767,13 +767,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -788,13 +788,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -809,13 +809,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -830,7 +830,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
@@ -927,7 +927,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -942,13 +942,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -963,13 +963,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -984,13 +984,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1005,7 +1005,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
@@ -1044,71 +1044,71 @@
       }
     },
     {
-      "provider_model_id": "gemini-4-carbon",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z"
+      "availability": {
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
       "description": "Gemini 4 Carbon",
-      "name": "Gemini 4 Carbon",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
-      }
-    },
-    {
-      "provider_model_id": "gemini-4-hydrogen",
       "interfaces": [],
+      "name": "Gemini 4 Carbon",
+      "provider_model_id": "gemini-4-carbon",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z"
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
       "description": "Gemini 4 Hydrogen",
-      "name": "Gemini 4 Hydrogen",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
-      }
-    },
-    {
-      "provider_model_id": "gemini-decision-1",
       "interfaces": [],
+      "name": "Gemini 4 Hydrogen",
+      "provider_model_id": "gemini-4-hydrogen",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z"
-      },
-      "description": "Gemini Decision 1",
-      "name": "Gemini Decision 1",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Decision 1",
+      "interfaces": [],
+      "name": "Gemini Decision 1",
+      "provider_model_id": "gemini-decision-1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1123,13 +1123,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1144,13 +1144,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1165,13 +1165,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1186,13 +1186,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1207,13 +1207,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1228,13 +1228,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1249,34 +1249,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "gemini-omni-1.2-flash",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Omni 1.2 Flash",
       "interfaces": [],
+      "name": "Gemini Omni 1.2 Flash",
+      "provider_model_id": "gemini-omni-1.2-flash",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z"
-      },
-      "description": "Gemini Omni 1.2 Flash",
-      "name": "Gemini Omni 1.2 Flash",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1291,13 +1291,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1312,13 +1312,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1333,13 +1333,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1354,13 +1354,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1375,13 +1375,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1396,13 +1396,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1417,13 +1417,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1438,13 +1438,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1459,13 +1459,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1480,13 +1480,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "checked_at": "2026-11-14T06:35:44.304218984Z",
         "scope": "account",
         "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
@@ -1501,7 +1501,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:13.333157667Z",
+        "last_seen_at": "2026-11-14T06:35:44.304218984Z",
         "owner": "catalog"
       }
     }
