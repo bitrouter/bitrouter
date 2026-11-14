@@ -1,4 +1,4 @@
-//! BYOK HTTP search backends: Parallel, Exa, Firecrawl, and Tavily. Each maps the
+//! BYOK HTTP search backends: Parallel, Exa, Firecrawl, Tavily, and Keenable. Each maps the
 //! shared [`WebSearchBackend`] call onto the provider's REST search endpoint and
 //! normalizes its response into [`WebSearchResults`]. Responses are parsed
 //! defensively through [`serde_json::Value`] so a provider adding or renaming a
@@ -22,6 +22,8 @@ pub enum HttpEngine {
     Firecrawl,
     /// tavily.com — `POST /search`, bearer auth, results under `results`.
     Tavily,
+    /// keenable.ai — `POST /v1/search`, `X-API-Key`, results under `results`.
+    Keenable,
 }
 
 impl HttpEngine {
@@ -32,6 +34,7 @@ impl HttpEngine {
             Self::Exa => "exa",
             Self::Firecrawl => "firecrawl",
             Self::Tavily => "tavily",
+            Self::Keenable => "keenable",
         }
     }
 
@@ -42,6 +45,7 @@ impl HttpEngine {
             Self::Exa => "EXA_API_KEY",
             Self::Firecrawl => "FIRECRAWL_API_KEY",
             Self::Tavily => "TAVILY_API_KEY",
+            Self::Keenable => "KEENABLE_API_KEY",
         }
     }
 
@@ -52,6 +56,7 @@ impl HttpEngine {
             Self::Exa => "https://api.exa.ai/search",
             Self::Firecrawl => "https://api.firecrawl.dev/v2/search",
             Self::Tavily => "https://api.tavily.com/search",
+            Self::Keenable => "https://api.keenable.ai/v1/search",
         }
     }
 }
@@ -112,6 +117,11 @@ impl HttpSearchBackend {
                 "query": query,
                 "max_results": n,
             }),
+            // Keenable: `max_results` caps the result count.
+            HttpEngine::Keenable => json!({
+                "query": query,
+                "max_results": n,
+            }),
         }
     }
 
@@ -120,6 +130,9 @@ impl HttpSearchBackend {
         match self.engine {
             HttpEngine::Parallel | HttpEngine::Exa => req.header("x-api-key", &self.api_key),
             HttpEngine::Firecrawl | HttpEngine::Tavily => req.bearer_auth(&self.api_key),
+            HttpEngine::Keenable => req
+                .header("X-API-Key", &self.api_key)
+                .header("X-Keenable-Title", "BitRouter"),
         }
     }
 
@@ -133,6 +146,7 @@ impl HttpSearchBackend {
                 firecrawl_result,
             ),
             HttpEngine::Tavily => map_array(body.get("results"), tavily_result),
+            HttpEngine::Keenable => map_array(body.get("results"), keenable_result),
         };
         WebSearchResults {
             backend: self.engine.name().to_string(),
@@ -250,6 +264,34 @@ fn tavily_result(v: &Value) -> WebSearchResult {
     }
 }
 
+/// Longest `snippet` kept from a Keenable result when it has no `description`.
+const KEENABLE_SNIPPET_MAX_CHARS: usize = 1000;
+
+fn keenable_result(v: &Value) -> WebSearchResult {
+    // `description` is a short summary but may be empty; `snippet` can be long.
+    let snippet = str_at(v, "description")
+        .filter(|d| !d.trim().is_empty())
+        .or_else(|| {
+            str_at(v, "snippet").map(|s| {
+                if s.chars().count() > KEENABLE_SNIPPET_MAX_CHARS {
+                    let mut t: String = s.chars().take(KEENABLE_SNIPPET_MAX_CHARS).collect();
+                    t.push('…');
+                    t
+                } else {
+                    s
+                }
+            })
+        });
+    WebSearchResult {
+        url: str_at(v, "url").unwrap_or_default(),
+        title: str_at(v, "title"),
+        snippet,
+        content: None,
+        published: str_at(v, "published_at"),
+        score: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +320,28 @@ mod tests {
         let t = backend(HttpEngine::Tavily).request_body("rust async", &opts);
         assert_eq!(t["query"], "rust async");
         assert_eq!(t["max_results"], 5);
+
+        let k = backend(HttpEngine::Keenable).request_body("rust async", &opts);
+        assert_eq!(k["query"], "rust async");
+        assert_eq!(k["max_results"], 5);
+    }
+
+    #[test]
+    fn parses_keenable_results_preferring_description() {
+        let long = "x".repeat(KEENABLE_SNIPPET_MAX_CHARS + 50);
+        let body = json!({
+            "results": [
+                { "url": "https://a", "title": "A", "description": "short", "snippet": "long" },
+                { "url": "https://b", "title": "B", "description": "", "snippet": long }
+            ]
+        });
+        let out = backend(HttpEngine::Keenable).parse_response(&body);
+        assert_eq!(out.backend, "keenable");
+        assert_eq!(out.results.len(), 2);
+        assert_eq!(out.results[0].snippet.as_deref(), Some("short"));
+        let s = out.results[1].snippet.as_deref().unwrap();
+        assert_eq!(s.chars().count(), KEENABLE_SNIPPET_MAX_CHARS + 1);
+        assert!(s.ends_with('…'));
     }
 
     #[test]
@@ -373,6 +437,7 @@ mod tests {
             HttpEngine::Exa,
             HttpEngine::Firecrawl,
             HttpEngine::Tavily,
+            HttpEngine::Keenable,
         ] {
             let key = std::env::var(engine.env_var())
                 .ok()
