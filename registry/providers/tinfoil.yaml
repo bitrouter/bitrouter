@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:28.378138374Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:54.464757813Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
@@ -61,7 +61,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -76,13 +76,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -97,13 +97,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -118,7 +118,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
@@ -157,7 +157,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -172,13 +172,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -193,7 +193,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
@@ -282,7 +282,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -297,13 +297,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -318,7 +318,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
@@ -355,29 +355,29 @@
       }
     },
     {
-      "provider_model_id": "kimi-k3-1-pro",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Moonshot's flagship multimodal MoE model, post-trained from Kimi K3 for long-horizon coding, agentic workflows, and knowledge work",
       "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "kimi-k3-1-pro",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z"
-      },
-      "description": "Moonshot's flagship multimodal MoE model, post-trained from Kimi K3 for long-horizon coding, agentic workflows, and knowledge work",
-      "name": "Kimi K3.1 Pro",
-      "status": "active",
-      "availability": {
-        "source_url": "https://inference.tinfoil.sh/v1/models",
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -392,13 +392,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -413,13 +413,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -434,13 +434,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -455,13 +455,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -476,13 +476,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -497,13 +497,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -518,13 +518,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -539,13 +539,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "checked_at": "2026-11-14T06:35:54.464757813Z",
         "scope": "public",
         "source_url": "https://inference.tinfoil.sh/v1/models"
       },
@@ -560,7 +560,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
+        "last_seen_at": "2026-11-14T06:35:54.464757813Z",
         "owner": "catalog"
       }
     }

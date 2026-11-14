@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:17.285377385Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:47.548687607Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
@@ -59,7 +59,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -74,13 +74,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -95,13 +95,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -116,13 +116,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -137,13 +137,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -158,13 +158,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -179,13 +179,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -200,13 +200,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -221,13 +221,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -242,13 +242,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -263,13 +263,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -284,13 +284,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -305,13 +305,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -326,13 +326,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -347,13 +347,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -368,7 +368,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -434,7 +434,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -449,13 +449,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -470,13 +470,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -491,13 +491,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -512,13 +512,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -533,13 +533,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -554,13 +554,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -575,13 +575,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -596,13 +596,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -617,13 +617,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -638,13 +638,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -659,13 +659,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -680,13 +680,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -701,13 +701,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -722,13 +722,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -743,7 +743,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -770,7 +770,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -785,13 +785,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -806,13 +806,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -827,13 +827,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -848,13 +848,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -869,13 +869,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -890,13 +890,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -911,13 +911,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -932,13 +932,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -953,7 +953,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -989,7 +989,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1004,7 +1004,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -1070,7 +1070,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1085,13 +1085,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1106,13 +1106,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1127,13 +1127,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1148,13 +1148,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1169,13 +1169,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1190,7 +1190,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -1256,7 +1256,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1271,7 +1271,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -1308,7 +1308,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1323,13 +1323,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1344,13 +1344,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1365,13 +1365,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1386,13 +1386,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1407,7 +1407,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -1442,7 +1442,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1457,13 +1457,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1478,13 +1478,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1499,13 +1499,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1520,13 +1520,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1541,13 +1541,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1562,13 +1562,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1583,13 +1583,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1604,13 +1604,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1625,13 +1625,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1646,7 +1646,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -1802,7 +1802,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1817,13 +1817,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1838,13 +1838,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1859,13 +1859,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1880,34 +1880,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "tencent/hy4",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "Tencent: The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity tasks. It also introduces visual understanding for the first time.",
       "interfaces": [],
+      "name": "Hy4",
+      "provider_model_id": "tencent/hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z"
-      },
-      "description": "Tencent: The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity tasks. It also introduces visual understanding for the first time.",
-      "name": "Hy4",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.novita.ai/openai/models",
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1922,13 +1922,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1943,13 +1943,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1964,13 +1964,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -1985,13 +1985,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2006,13 +2006,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2027,13 +2027,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2048,13 +2048,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2069,13 +2069,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2090,13 +2090,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2111,13 +2111,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2132,13 +2132,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2153,13 +2153,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2174,7 +2174,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
@@ -2210,7 +2210,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2225,13 +2225,13 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2246,34 +2246,34 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "zai-org/glm-5.3-flashX",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "GLM-5.3-FlashX is a speed-optimized version built on the same foundation as GLM-5.3-Flash. Targeted at low-latency use cases including programming, Agents and real-time customer service, it features a 1 million token context window.",
       "interfaces": [],
+      "name": "GLM 5.3 FlashX",
+      "provider_model_id": "zai-org/glm-5.3-flashX",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z"
-      },
-      "description": "GLM-5.3-FlashX is a speed-optimized version built on the same foundation as GLM-5.3-Flash. Targeted at low-latency use cases including programming, Agents and real-time customer service, it features a 1 million token context window.",
-      "name": "GLM 5.3 FlashX",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.novita.ai/openai/models",
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
+        "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "checked_at": "2026-11-14T06:35:47.548687607Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
       },
@@ -2288,7 +2288,7 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:17.285377385Z",
+        "last_seen_at": "2026-11-14T06:35:47.548687607Z",
         "owner": "catalog"
       }
     }

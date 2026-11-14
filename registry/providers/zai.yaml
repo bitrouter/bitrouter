@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:33.944615813Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:58.389013755Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
@@ -58,7 +58,7 @@
   "models": [
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -69,13 +69,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -86,13 +86,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -103,13 +103,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -120,13 +120,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -137,13 +137,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -154,13 +154,13 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
         "scope": "account",
         "source_url": "https://api.z.ai/api/paas/v4/models"
       },
@@ -171,7 +171,7 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
         "owner": "catalog"
       }
     },
@@ -418,20 +418,20 @@
       }
     },
     {
-      "provider_model_id": "glm-5.3-flashx-legal",
+      "availability": {
+        "checked_at": "2026-11-14T06:35:58.389013755Z",
+        "scope": "account",
+        "source_url": "https://api.z.ai/api/paas/v4/models"
+      },
       "interfaces": [],
+      "provider_model_id": "glm-5.3-flashx-legal",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z"
-      },
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.z.ai/api/paas/v4/models",
-        "checked_at": "2026-11-14T05:57:33.944615813Z",
-        "scope": "account"
+        "last_seen_at": "2026-11-14T06:35:58.389013755Z",
+        "owner": "catalog"
       }
     }
   ],

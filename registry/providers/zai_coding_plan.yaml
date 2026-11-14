@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:35.288621160Z",
-          "sequence": 2
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:59.163250593Z",
+          "sequence": 3
         },
         "id": "directory",
         "inventory": {
@@ -135,7 +135,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:35.288621160Z",
+        "checked_at": "2026-11-14T06:35:59.163250593Z",
         "scope": "public",
         "source_url": "https://models.dev/api.json?type=all"
       },
@@ -150,7 +150,7 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:35.288621160Z",
+        "last_seen_at": "2026-11-14T06:35:59.163250593Z",
         "owner": "directory"
       }
     }

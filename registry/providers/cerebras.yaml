@@ -8,9 +8,9 @@
     "feeds": [
       {
         "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:10.754851211Z",
-          "sequence": 7
+          "id": "2026-11-14T06:35:35.285Z",
+          "observed_at": "2026-11-14T06:35:42.709941652Z",
+          "sequence": 8
         },
         "id": "catalog",
         "inventory": {
