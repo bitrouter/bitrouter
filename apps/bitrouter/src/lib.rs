@@ -47,6 +47,7 @@ pub mod config;
 pub mod config_synthesis;
 #[cfg(feature = "harness")]
 pub mod conformance;
+pub mod connect;
 pub mod connected_agents;
 pub mod contexts;
 pub mod continuation;
