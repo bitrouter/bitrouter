@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.36]
+
+### Added
+
+- Publish lightweight AI contracts and the service SDK with optional Axum and
+  HTTP/2 support, protected tenancy APIs, and ordered generation evidence.
+
+### Fixed
+
+- Qualify redundant Chat token details and narrowly supported usage metadata
+  without changing billing quantities, pricing inputs, or retained receipts.
+
 ### Changed
 
 - **Breaking (Rust APIs, next alpha release):** add the private ordered
