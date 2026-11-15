@@ -165,7 +165,7 @@ See [shared gateway configuration](references/shared-gateway.md).
 | `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
 | `references/decisions.md` | Native Decisions requests, API-key setup, operation routing and tariff limits |
-| `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
+| `references/cloud-setup.md` | Cloud signup, key mint, and billing |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |

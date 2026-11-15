@@ -87,11 +87,11 @@ contexts or a daemon selected with an explicit foreign socket.
 
 | Entry point | Behavior after a binary replacement |
 | --- | --- |
-| Bare `bro`, `bro code`, or another command that needs a compatible local daemon | Probe compatibility before sending feature commands. If the selected daemon supports safe handoff and is idle, perform it once; otherwise report why it was deferred. |
+| A daemon-dependent command (for example, `bro run` or `bro acp serve`) | Probe compatibility before sending feature commands. If the selected daemon supports safe handoff and is idle, perform it once; otherwise report why it was deferred. |
 | `bro status` and other passive inspection | Never restart merely to answer a read. Report installed and daemon versions, compatibility, active-work state when known, and the next action. |
 | `bro update` for a self-managed install | After installation, use the same safe handoff path by default for an already-running eligible daemon. Report binary and daemon outcomes separately. If no daemon was running, do not start one solely because an update finished. |
 | `bro update` for Homebrew, Cargo, or npm | Continue to delegate installation. Do not modify or shadow package-manager files. The next compatible daemon-dependent `bro` invocation evaluates safe handoff; passive status can report it. |
-| `bro code --no-start` | Do not start or restart the daemon. Return the compatibility diagnosis and explicit action. |
+| `bro run AGENT PROMPT --no-start` | Do not start or restart the daemon. Return the compatibility diagnosis and explicit action. |
 | Explicit `bro restart` | Preserve the existing operator-requested restart semantics, but preflight the candidate database and report live-run interruption before issuing `Stop`. This spec does not silently broaden an explicit restart into process killing. |
 
 A deferred or blocked handoff must not print only `updated`, `running`, or

@@ -1,6 +1,6 @@
 # Cloud setup
 
-The user chose **BitRouter Cloud** (managed proxy at `api.bitrouter.ai`, one bill, no per-provider keys). This file covers the four entry points and the operational details for each: web playground (A), dashboard-minted API key in code (B), permissionless wallet (C), and headless CLI sign-in (D — recommended for terminal-first users).
+The user chose **BitRouter Cloud** (managed proxy at `api.bitrouter.ai`, one bill, no per-provider keys). This file covers the three entry points and the operational details for each: web playground (A), dashboard-minted API key in code (B), and headless CLI sign-in (C — recommended for terminal-first users).
 
 ## A. Web playground (no install, no code)
 
@@ -21,7 +21,7 @@ This is the path agents should default to for any "I want to call BitRouter from
 
 1. <https://bitrouter.ai> → Dashboard → API Keys.
 2. Click "Create key", give it a device name (e.g. `laptop`, `prod-worker`).
-3. Copy the `brk_…` string immediately — only its SHA-256 hash is stored, so the plaintext is shown once.
+3. Copy the `brk_…` string immediately — it is shown once and only a server-side verifier is retained.
 
 ### Use it in code
 
@@ -56,22 +56,11 @@ client.messages.create(
 
 ### Operate the key
 
-- **Rotation / revocation:** Dashboard → API Keys → revoke (per-row). Keys are matched by their `sha256` hash; a revoked key's hash can be reused by a new key without collision.
-- **Billing:** every request decrements the user's Postgres `credit_balances` row by the cost of the actual tokens consumed (not an estimate). Top-up via Stripe in the console — credits are tracked in cents.
-- **Overdraft:** the gate allows a small overdraft if many concurrent requests collectively exceed the balance estimate, but the next request after the balance hits zero will be rejected. Top up before running large batches.
+- **Rotation / revocation:** Dashboard → API Keys → revoke the relevant key, then update every client that used it.
+- **Billing:** usage is settled against the account's prepaid credit balance. Top up through Stripe checkout in the console.
+- **Capacity:** top up before running large batches so available credit does not block a request.
 
-## C. Permissionless wallet — no signup, crypto-native
-
-For users who want to skip account creation entirely. Sign a JWT with a Solana (Ed25519) or EVM (secp256k1) wallet; BitRouter's `bitrouter-node` verifies the signature against the CAIP-10 `iss` claim and routes the request. Payment goes through x402 / MPP escrow on-chain.
-
-This is fiddly to script — recommend pointing the user at <https://bitrouter.ai> docs rather than writing the JWT signing flow inline. Key facts the agent should know without going deeper:
-
-- The `iss` claim is CAIP-10: `solana:<base58 pubkey>` or `eip155:1:<0x address>`.
-- The JOSE `alg` is `SOL_EDDSA` (BitRouter-native, distinct from RFC 7515's `EdDSA`).
-- Cross-`alg` forgery (wallet `iss` with `EdDSA`, or thumbprint `iss` with `SOL_EDDSA`) is rejected before signature verification, so don't try to "fix" mismatches by changing the header.
-- Balance lives in a Mongo `charge_balances` collection keyed by wallet — separate from the Stripe-credit Postgres path.
-
-## D. Headless CLI (`bro cloud login`) — recommended for terminal-first users
+## C. Headless CLI (`bro cloud login`) — recommended for terminal-first users
 
 This is the seam between Local and Cloud, closed by `bro cloud login` (see also `references/cli.md`).
 
@@ -166,7 +155,7 @@ Runs an RFC 7009 best-effort revoke at the AS, then deletes the local credential
 ## What Cloud does for the user that Local doesn't
 
 - **No provider keys to manage.** One `brk_*` instead of `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `GEMINI_API_KEY` + …
-- **One bill.** Stripe credits for fiat, x402 wallet for crypto. No reconciling N upstream invoices.
+- **One bill.** A prepaid account balance with centralized billing instead of reconciling upstream invoices.
 - **Curated registry.** Cloud uses a pinned public registry baked into the deploy image, so model availability and protocol routing match what the playground previews.
 - **No daemon to keep alive.** No `bro status`, no `~/.bitrouter/`, no log rotation.
 
