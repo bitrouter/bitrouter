@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Publish the HTTP service SDK on the independently versioned
+  `2.0.0-alpha.1` API line, distinguishing it from the incompatible embedded
+  pipeline SDK. AI contracts and the application keep their existing version
+  line. No transport or wire behavior changes accompany this version boundary.
+
 ## [1.0.0-alpha.36]
 
 ### Added

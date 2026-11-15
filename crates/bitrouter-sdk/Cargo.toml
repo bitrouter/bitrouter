@@ -1,7 +1,9 @@
 [package]
 name = "bitrouter-sdk"
 description = "HTTP client for the BitRouter service"
-version.workspace = true
+# The service client has a different public API from the former embedded SDK.
+# Keep its incompatible API line independently versioned.
+version = "2.0.0-alpha.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true

@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-alpha.36"
+version = "2.0.0-alpha.1"
 dependencies = [
  "async-stream",
  "axum",
