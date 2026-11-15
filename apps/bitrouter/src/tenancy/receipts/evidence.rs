@@ -152,14 +152,20 @@ impl Evidence {
                 ],
             );
         } else {
+            let redundant = (protocol == Protocol::ChatCompletions).then_some("text_tokens");
+            if redundant.is_some() && !valid_chat_text_tokens(raw) {
+                self.mark_incomplete();
+            }
             self.details(
                 raw.get(input_details),
                 &[("cached_tokens", 2), ("cache_write_tokens", 3)],
+                redundant,
                 protocol,
             );
             self.details(
                 raw.get(output_details),
                 &[("reasoning_tokens", 4)],
+                redundant,
                 protocol,
             );
             self.known_keys(
@@ -225,7 +231,13 @@ impl Evidence {
         };
     }
 
-    fn details(&mut self, raw: Option<&Value>, fields: &[(&str, usize)], protocol: Protocol) {
+    fn details(
+        &mut self,
+        raw: Option<&Value>,
+        fields: &[(&str, usize)],
+        redundant: Option<&str>,
+        protocol: Protocol,
+    ) {
         let Some(raw) = raw else {
             return;
         };
@@ -239,11 +251,12 @@ impl Evidence {
         for (name, index) in fields {
             self.field(*index, object.get(*name), protocol);
         }
-        // At most two known detail keys; object length detects extra fields in O(1).
-        if object.len() > fields.len()
-            || object
-                .keys()
-                .any(|name| !fields.iter().any(|(known, _)| name.as_str() == *known))
+        // The separately validated redundant field never becomes a usage dimension.
+        if object.len() > fields.len() + usize::from(redundant.is_some())
+            || object.keys().any(|name| {
+                Some(name.as_str()) != redundant
+                    && !fields.iter().any(|(known, _)| name.as_str() == *known)
+            })
         {
             self.mark_incomplete();
         }
@@ -338,6 +351,42 @@ fn number(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .filter(|value| *value <= AuthorityRevision::MAX)
+}
+
+/// Qualify only a redundant text-only breakdown, never a new or additive count.
+/// Both capture and projection use the same exact integer and subset checks.
+pub(super) fn valid_chat_text_tokens(raw: &Value) -> bool {
+    for (details, total, subset) in [
+        ("prompt_tokens_details", "prompt_tokens", "cached_tokens"),
+        (
+            "completion_tokens_details",
+            "completion_tokens",
+            "reasoning_tokens",
+        ),
+    ] {
+        let Some(details) = raw.get(details) else {
+            continue;
+        };
+        let Some(text) = details.get("text_tokens") else {
+            continue;
+        };
+        let Some(total) = raw.get(total).and_then(number) else {
+            return false;
+        };
+        if number(text) != Some(total)
+            || details
+                .get(subset)
+                .is_some_and(|value| number(value).is_none_or(|value| value > total))
+            || ["audio_tokens", "image_tokens"].iter().any(|field| {
+                details
+                    .get(*field)
+                    .is_some_and(|value| number(value) != Some(0))
+            })
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn usage(values: [Option<u64>; 5], provenance: Provenance, complete: bool) -> Usage {

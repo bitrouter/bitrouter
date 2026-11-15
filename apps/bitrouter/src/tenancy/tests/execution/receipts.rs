@@ -49,6 +49,7 @@ mod provider_technical;
 mod reads;
 mod soft_stop;
 mod terminal;
+mod text_tokens;
 mod wire;
 
 const TIMEOUT: Duration = Duration::from_secs(10);

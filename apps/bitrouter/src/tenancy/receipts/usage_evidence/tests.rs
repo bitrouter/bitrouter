@@ -9,6 +9,8 @@ use bitrouter_ai::tenancy::{
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 use serde_json::json;
 
+mod text_tokens;
+
 fn receipt() -> Result<ExecutionReceipt> {
     Ok(ExecutionReceipt {
         installation_id: "installation".try_into()?,

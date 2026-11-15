@@ -1504,9 +1504,33 @@ Unknown semantics MUST NOT be assigned an arithmetic interpretation. Malformed
 or mislabeled streams cannot qualify a source merely by containing usage-like
 fields.
 
+Chat Completions may include `text_tokens` inside `prompt_tokens_details` or
+`completion_tokens_details`. This capture compatibility case qualifies only a
+redundant text-only breakdown: each present text counter MUST be an exact
+nonnegative integer within the existing safe range and equal its corresponding
+`prompt_tokens` or `completion_tokens` in the same observation. A present cache
+read or reasoning counter respectively MUST be an exact in-range integer no
+larger than that total. Present audio or image counters in the same detail object
+MUST be exact zero; other modality or extension fields remain unsupported.
+Missing text counters do not change existing capture behavior. Invalid or
+contradictory redundant counters set `invalid` and make normalized projection
+incomplete, while preserving independently observed quantities. In particular,
+output text already includes reasoning; the two MUST NOT be added together.
+
+These validated redundant counters add no quantity, default zero or retained
+field. Extractor 1's quantity mapping, units and snapshot arithmetic stay fixed,
+as do both evidence schemas and predecessor-reader validation. Thus the capture
+fix retains extractor 1 (and the existing native GenerateContent discriminator),
+rather than introducing another wire version. Older writers may retain
+`unsupported: true` for the same source shape. Existing evidence, its flags and
+digests MUST remain unchanged; a newer binary or an extractor version alone MUST
+NOT reinterpret old evidence or certify a provider's commercial qualification.
+
 Upstream usage field meanings remain defined by the
-[Chat API reference](https://developers.openai.com/api/reference/resources/chat)
-and [Messages streaming specification](https://platform.claude.com/docs/en/build-with-claude/streaming).
+[Chat API reference](https://developers.openai.com/api/reference/resources/chat),
+[Qwen Chat usage reference](https://help.aliyun.com/en/model-studio/qwen-api-via-openai-chat-completions)
+(including the overlapping text/reasoning counters), and
+[Messages streaming specification](https://platform.claude.com/docs/en/build-with-claude/streaming).
 The extractor's qualified sources and bounded projection above do not extend
 those upstream contracts.
 
