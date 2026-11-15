@@ -1,5 +1,6 @@
 //! Actual provider sends and protected receipt reads, never DTO-only authority.
 use super::{Fixture, MODEL, draft, failure, headers, provision_protocol};
+mod chat_metadata;
 use crate::tenancy::receipts::{read, store};
 use anyhow::{Context, Result, ensure};
 use axum::{
@@ -49,6 +50,7 @@ mod provider_technical;
 mod reads;
 mod soft_stop;
 mod terminal;
+mod text_tokens;
 mod wire;
 
 const TIMEOUT: Duration = Duration::from_secs(10);

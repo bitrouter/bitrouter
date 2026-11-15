@@ -79,6 +79,11 @@ impl Snapshot {
             unsupported: false,
             invalid: false,
         };
+        if protocol == Protocol::ChatCompletions {
+            frame.invalid = !super::evidence::valid_chat_text_tokens(original)
+                || !super::evidence::valid_chat_advisory_cost(original);
+            frame.unsupported = !super::evidence::supported_chat_prompt_metadata(original);
+        }
         extract(original, mapping(protocol), "", &mut frame);
         let size = match serde_json::to_vec(&frame) {
             Ok(bytes) => bytes.len(),
@@ -313,6 +318,25 @@ fn extract(value: &Value, paths: &[(&str, Dimension)], prefix: &str, frame: &mut
             && let Some(value) = object.get(head)
         {
             extract(value, paths, &path[..prefix.len() + head.len() + 1], frame);
+        }
+    }
+    // These exact Chat detail fields are redundant constraints checked against
+    // the original same-frame totals, not extra quantities or generic extensions.
+    if frame.protocol == Protocol::ChatCompletions
+        && matches!(
+            prefix,
+            "prompt_tokens_details." | "completion_tokens_details."
+        )
+    {
+        known_keys.push("text_tokens");
+    }
+    if frame.protocol == Protocol::ChatCompletions {
+        match prefix {
+            "" => known_keys.push("cost"),
+            "prompt_tokens_details." => {
+                known_keys.extend(["created_cache_tokens", "multimodal_tokens"]);
+            }
+            _ => {}
         }
     }
     frame.unsupported |= object.len() > known_keys.len()

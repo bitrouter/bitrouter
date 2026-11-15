@@ -177,8 +177,12 @@ pub struct Frame {
     /// Only the named fields are described, never an assertion of a complete total.
     pub quantities: Vec<Quantity>,
     /// At least one unqualified source field or shape was present.
+    /// Chat metadata exceptions are exact: advisory root cost, zero-only
+    /// `prompt_tokens_details.created_cache_tokens`, and null-only
+    /// `prompt_tokens_details.multimodal_tokens`. None adds a quantity.
     pub unsupported: bool,
-    /// A recognized source container or numeric field was malformed.
+    /// A recognized source container or numeric field was malformed, including
+    /// a present Chat advisory cost that is not a finite nonnegative JSON number.
     pub invalid: bool,
 }
 

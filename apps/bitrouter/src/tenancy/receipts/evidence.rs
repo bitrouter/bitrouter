@@ -152,20 +152,39 @@ impl Evidence {
                 ],
             );
         } else {
+            let chat = protocol == Protocol::ChatCompletions;
+            if chat
+                && (!valid_chat_text_tokens(raw)
+                    || !valid_chat_advisory_cost(raw)
+                    || !supported_chat_prompt_metadata(raw))
+            {
+                self.mark_incomplete();
+            }
             self.details(
                 raw.get(input_details),
                 &[("cached_tokens", 2), ("cache_write_tokens", 3)],
+                if chat {
+                    &["text_tokens", "created_cache_tokens", "multimodal_tokens"]
+                } else {
+                    &[]
+                },
                 protocol,
             );
             self.details(
                 raw.get(output_details),
                 &[("reasoning_tokens", 4)],
+                if chat { &["text_tokens"] } else { &[] },
                 protocol,
             );
-            self.known_keys(
-                raw,
-                &[input, output, "total_tokens", input_details, output_details],
-            );
+            let known = [
+                input,
+                output,
+                "total_tokens",
+                input_details,
+                output_details,
+                "cost",
+            ];
+            self.known_keys(raw, &known[..if chat { 6 } else { 5 }]);
             self.observe_total(object.get("total_tokens"));
         }
     }
@@ -225,7 +244,13 @@ impl Evidence {
         };
     }
 
-    fn details(&mut self, raw: Option<&Value>, fields: &[(&str, usize)], protocol: Protocol) {
+    fn details(
+        &mut self,
+        raw: Option<&Value>,
+        fields: &[(&str, usize)],
+        metadata: &[&str],
+        protocol: Protocol,
+    ) {
         let Some(raw) = raw else {
             return;
         };
@@ -239,11 +264,12 @@ impl Evidence {
         for (name, index) in fields {
             self.field(*index, object.get(*name), protocol);
         }
-        // At most two known detail keys; object length detects extra fields in O(1).
-        if object.len() > fields.len()
-            || object
-                .keys()
-                .any(|name| !fields.iter().any(|(known, _)| name.as_str() == *known))
+        // Exact metadata constraints are checked before interpreting detail fields.
+        if object.len() > fields.len() + metadata.len()
+            || object.keys().any(|name| {
+                !metadata.contains(&name.as_str())
+                    && !fields.iter().any(|(known, _)| name.as_str() == *known)
+            })
         {
             self.mark_incomplete();
         }
@@ -338,6 +364,64 @@ fn number(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .filter(|value| *value <= AuthorityRevision::MAX)
+}
+
+/// Qualify only a redundant text-only breakdown, never a new or additive count.
+/// Both capture and projection use the same exact integer and subset checks.
+pub(super) fn valid_chat_text_tokens(raw: &Value) -> bool {
+    for (details, total, subset) in [
+        ("prompt_tokens_details", "prompt_tokens", "cached_tokens"),
+        (
+            "completion_tokens_details",
+            "completion_tokens",
+            "reasoning_tokens",
+        ),
+    ] {
+        let Some(details) = raw.get(details) else {
+            continue;
+        };
+        let Some(text) = details.get("text_tokens") else {
+            continue;
+        };
+        let Some(total) = raw.get(total).and_then(number) else {
+            return false;
+        };
+        if number(text) != Some(total)
+            || details
+                .get(subset)
+                .is_some_and(|value| number(value).is_none_or(|value| value > total))
+            || ["audio_tokens", "image_tokens"].iter().any(|field| {
+                details
+                    .get(*field)
+                    .is_some_and(|value| number(value) != Some(0))
+            })
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Provider cost is advisory metadata, never a retained quantity or a price input.
+pub(super) fn valid_chat_advisory_cost(raw: &Value) -> bool {
+    raw.get("cost").is_none_or(|value| {
+        value
+            .as_f64()
+            .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+    })
+}
+
+/// Qualify only explicit zero cache creation and absent multimodal breakdowns.
+/// Positive creation counts and populated modalities remain unsupported.
+/// https://docs.vllm.ai/en/stable/api/vllm/entrypoints/serve/engine/protocol/
+pub(super) fn supported_chat_prompt_metadata(raw: &Value) -> bool {
+    let Some(details) = raw.get("prompt_tokens_details") else {
+        return true;
+    };
+    details
+        .get("created_cache_tokens")
+        .is_none_or(|value| value.as_u64() == Some(0))
+        && details.get("multimodal_tokens").is_none_or(Value::is_null)
 }
 
 fn usage(values: [Option<u64>; 5], provenance: Provenance, complete: bool) -> Usage {
