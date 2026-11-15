@@ -1,5 +1,14 @@
 # BitRouter SDK
 
+The independently versioned `2.0.0-alpha.1` SDK preserves the HTTP client
+implementation already published in `1.0.0-alpha.36`, which remains available.
+Older releases such as `1.0.0-alpha.30` embedded server pipelines and expose an
+incompatible API. The explicit major-version boundary also lets Cargo resolve
+applications retaining old compatibility adapters while adopting the client.
+Public contracts remain in `bitrouter-ai` on its own version line; matching
+package version numbers are not required. The default User-Agent reflects the
+selected SDK version.
+
 HTTP access to an independently running BitRouter gateway. Import request and
 response contracts from `bitrouter-ai`; the SDK supplies transport, bounded
 SSE consumption and optional managed WebSocket access. It does not discover configuration, start a daemon, select

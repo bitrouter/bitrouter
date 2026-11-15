@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Publish the HTTP service SDK on the independently versioned
+  `2.0.0-alpha.1` API line, distinguishing it from the incompatible embedded
+  pipeline SDK. AI contracts and the application keep their existing version
+  line. Transport implementation and protocol payload semantics are unchanged;
+  the default User-Agent now identifies `bitrouter-sdk/2.0.0-alpha.1`.
+
 ## [1.0.0-alpha.36]
 
 ### Added
