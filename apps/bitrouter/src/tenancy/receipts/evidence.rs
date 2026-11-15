@@ -152,26 +152,39 @@ impl Evidence {
                 ],
             );
         } else {
-            let redundant = (protocol == Protocol::ChatCompletions).then_some("text_tokens");
-            if redundant.is_some() && !valid_chat_text_tokens(raw) {
+            let chat = protocol == Protocol::ChatCompletions;
+            if chat
+                && (!valid_chat_text_tokens(raw)
+                    || !valid_chat_advisory_cost(raw)
+                    || !supported_chat_prompt_metadata(raw))
+            {
                 self.mark_incomplete();
             }
             self.details(
                 raw.get(input_details),
                 &[("cached_tokens", 2), ("cache_write_tokens", 3)],
-                redundant,
+                if chat {
+                    &["text_tokens", "created_cache_tokens", "multimodal_tokens"]
+                } else {
+                    &[]
+                },
                 protocol,
             );
             self.details(
                 raw.get(output_details),
                 &[("reasoning_tokens", 4)],
-                redundant,
+                if chat { &["text_tokens"] } else { &[] },
                 protocol,
             );
-            self.known_keys(
-                raw,
-                &[input, output, "total_tokens", input_details, output_details],
-            );
+            let known = [
+                input,
+                output,
+                "total_tokens",
+                input_details,
+                output_details,
+                "cost",
+            ];
+            self.known_keys(raw, &known[..if chat { 6 } else { 5 }]);
             self.observe_total(object.get("total_tokens"));
         }
     }
@@ -235,7 +248,7 @@ impl Evidence {
         &mut self,
         raw: Option<&Value>,
         fields: &[(&str, usize)],
-        redundant: Option<&str>,
+        metadata: &[&str],
         protocol: Protocol,
     ) {
         let Some(raw) = raw else {
@@ -251,10 +264,10 @@ impl Evidence {
         for (name, index) in fields {
             self.field(*index, object.get(*name), protocol);
         }
-        // The separately validated redundant field never becomes a usage dimension.
-        if object.len() > fields.len() + usize::from(redundant.is_some())
+        // Exact metadata constraints are checked before interpreting detail fields.
+        if object.len() > fields.len() + metadata.len()
             || object.keys().any(|name| {
-                Some(name.as_str()) != redundant
+                !metadata.contains(&name.as_str())
                     && !fields.iter().any(|(known, _)| name.as_str() == *known)
             })
         {
@@ -387,6 +400,28 @@ pub(super) fn valid_chat_text_tokens(raw: &Value) -> bool {
         }
     }
     true
+}
+
+/// Provider cost is advisory metadata, never a retained quantity or a price input.
+pub(super) fn valid_chat_advisory_cost(raw: &Value) -> bool {
+    raw.get("cost").is_none_or(|value| {
+        value
+            .as_f64()
+            .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+    })
+}
+
+/// Qualify only explicit zero cache creation and absent multimodal breakdowns.
+/// Positive creation counts and populated modalities remain unsupported.
+/// https://docs.vllm.ai/en/stable/api/vllm/entrypoints/serve/engine/protocol/
+pub(super) fn supported_chat_prompt_metadata(raw: &Value) -> bool {
+    let Some(details) = raw.get("prompt_tokens_details") else {
+        return true;
+    };
+    details
+        .get("created_cache_tokens")
+        .is_none_or(|value| value.as_u64() == Some(0))
+        && details.get("multimodal_tokens").is_none_or(Value::is_null)
 }
 
 fn usage(values: [Option<u64>; 5], provenance: Provenance, complete: bool) -> Usage {

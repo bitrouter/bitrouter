@@ -9,6 +9,7 @@ use bitrouter_ai::tenancy::{
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 use serde_json::json;
 
+mod chat_metadata;
 mod text_tokens;
 
 fn receipt() -> Result<ExecutionReceipt> {

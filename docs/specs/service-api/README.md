@@ -1517,8 +1517,32 @@ contradictory redundant counters set `invalid` and make normalized projection
 incomplete, while preserving independently observed quantities. In particular,
 output text already includes reasoning; the two MUST NOT be added together.
 
+Chat capture also recognizes these exact metadata paths, for JSON and qualified
+usage chunks alike:
+
+- Root `cost` is advisory provider metadata. If present, it MUST be a finite,
+  nonnegative JSON number; malformed values set `invalid` and make normalized
+  projection incomplete. Its units are not inferred. Its value MUST NOT enter
+  quantities, tariff selection or charge calculation.
+- `prompt_tokens_details.created_cache_tokens` is qualified only when it is the
+  exact integer zero. This is a zero-only constraint, not a new cache-write
+  quantity: existing quantities and projection remain unchanged, including
+  absent cache-write observations. Positive, null and malformed values remain
+  `unsupported`; this compatibility case assigns no positive cache pricing.
+- `prompt_tokens_details.multimodal_tokens` is qualified only when null, meaning
+  no multimodal input breakdown. Every non-null value, including an empty object
+  or a populated zero-valued modality, remains `unsupported`.
+
+The prompt-detail shapes are documented by
+[vLLM's PromptTokenUsageInfo](https://docs.vllm.ai/en/stable/api/vllm/entrypoints/serve/engine/protocol/).
+The advisory-cost acceptance rule is this extractor's explicit metadata policy,
+not a provider currency or billing contract. These exceptions apply only to
+Chat Completions at the stated paths; other protocols, paths and unknown fields
+retain their existing refusal behavior. No metadata names or values are retained.
+
 These validated redundant counters add no quantity, default zero or retained
-field. Extractor 1's quantity mapping, units and snapshot arithmetic stay fixed,
+field, and neither do the metadata exceptions above. Extractor 1's quantity
+mapping, units and snapshot arithmetic stay fixed,
 as do both evidence schemas and predecessor-reader validation. Thus the capture
 fix retains extractor 1 (and the existing native GenerateContent discriminator),
 rather than introducing another wire version. Older writers may retain

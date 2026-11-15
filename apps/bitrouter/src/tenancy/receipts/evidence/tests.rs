@@ -6,6 +6,7 @@ use bitrouter_ai::tenancy::{
 };
 use serde_json::json;
 
+mod chat_metadata;
 mod text_tokens;
 
 fn full() -> Value {

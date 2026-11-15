@@ -1,5 +1,6 @@
 //! Actual provider sends and protected receipt reads, never DTO-only authority.
 use super::{Fixture, MODEL, draft, failure, headers, provision_protocol};
+mod chat_metadata;
 use crate::tenancy::receipts::{read, store};
 use anyhow::{Context, Result, ensure};
 use axum::{

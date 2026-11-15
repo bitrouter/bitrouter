@@ -79,10 +79,10 @@ impl Snapshot {
             unsupported: false,
             invalid: false,
         };
-        if protocol == Protocol::ChatCompletions
-            && !super::evidence::valid_chat_text_tokens(original)
-        {
-            frame.invalid = true;
+        if protocol == Protocol::ChatCompletions {
+            frame.invalid = !super::evidence::valid_chat_text_tokens(original)
+                || !super::evidence::valid_chat_advisory_cost(original);
+            frame.unsupported = !super::evidence::supported_chat_prompt_metadata(original);
         }
         extract(original, mapping(protocol), "", &mut frame);
         let size = match serde_json::to_vec(&frame) {
@@ -329,6 +329,15 @@ fn extract(value: &Value, paths: &[(&str, Dimension)], prefix: &str, frame: &mut
         )
     {
         known_keys.push("text_tokens");
+    }
+    if frame.protocol == Protocol::ChatCompletions {
+        match prefix {
+            "" => known_keys.push("cost"),
+            "prompt_tokens_details." => {
+                known_keys.extend(["created_cache_tokens", "multimodal_tokens"]);
+            }
+            _ => {}
+        }
     }
     frame.unsupported |= object.len() > known_keys.len()
         || object

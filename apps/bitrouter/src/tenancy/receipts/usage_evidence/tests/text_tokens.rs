@@ -16,7 +16,7 @@ fn both_details() -> Value {
     raw
 }
 
-fn capture(raw: &Value, source: Source) -> Result<Frame> {
+pub(super) fn capture(raw: &Value, source: Source) -> Result<Frame> {
     let mut snapshot = Snapshot::default();
     let id = "attempt".try_into()?;
     if source == Source::ChatChunk {

@@ -28,6 +28,9 @@ impl TenancyClient {
 
     /// Read immutable original numeric observations for one exact execution.
     /// Historical absence is explicit; this method never reconstructs usage.
+    /// Chat advisory cost, zero-only cache-creation metadata and null multimodal
+    /// metadata do not add quantities. Existing unsupported flags are never
+    /// reinterpreted by this reader; consumers must honor retained refusals.
     ///
     /// # Errors
     /// Returns authorization, missing execution, transport or binding errors.

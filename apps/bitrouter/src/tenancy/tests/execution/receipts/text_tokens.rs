@@ -12,7 +12,7 @@ fn usage() -> Value {
         "completion_tokens_details":{"reasoning_tokens":2}})
 }
 
-fn response(usage: Value, stream: bool) -> Result<String> {
+pub(super) fn response(usage: Value, stream: bool) -> Result<String> {
     if !stream {
         return Ok(serde_json::to_string(&json_response(
             "chat_completions",
@@ -39,7 +39,7 @@ fn response(usage: Value, stream: bool) -> Result<String> {
     Ok(body)
 }
 
-async fn evidence(harness: &Harness, id: &ExecutionId) -> Result<Vec<u8>> {
+pub(super) async fn evidence(harness: &Harness, id: &ExecutionId) -> Result<Vec<u8>> {
     harness
         .fixture
         .service
