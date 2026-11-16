@@ -847,3 +847,22 @@ fn unknown_root_arrays_remain_ordered_content() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn first_source_publication_is_already_stable_after_reload() -> Result<()> {
+    let root = fixture()?;
+    let original = Sources::load(root.path())?;
+    let mut candidate = original.clone();
+    let path = root.path().join("registry/models/org.yaml");
+    candidate.files.get_mut(&path).context("models")?[0]["curation"]["expires_at"] =
+        json!("2026-12-01T00:00:00Z");
+    candidate.files.get_mut(&path).context("models")?[0]["name"] = json!("New display name");
+    candidate.publish(&original, &build_outputs(root.path(), &candidate)?)?;
+    let first = fs::read(&path)?;
+    let reloaded = Sources::load(root.path())?;
+    assert_eq!(first, source::render(&reloaded.files[&path])?.into_bytes());
+    let outputs = build_outputs(root.path(), &reloaded)?;
+    reloaded.publish(&reloaded, &outputs)?;
+    assert_eq!(first, fs::read(path)?);
+    Ok(())
+}

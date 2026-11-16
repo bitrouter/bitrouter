@@ -195,7 +195,7 @@ impl Sources {
                 if original.files.get(path) != Some(value) {
                     atomic_write(
                         &staged.join(path.strip_prefix(registry)?),
-                        source::render(value)?.as_bytes(),
+                        source::render(&ordered_source(value))?.as_bytes(),
                     )?;
                 }
             }
