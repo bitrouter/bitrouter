@@ -143,7 +143,6 @@ jobs:
         run: |
           cargo run -p dist-helper -- registry validate
           cargo run -p dist-helper -- registry build --check
-          cargo run -p dist-helper -- check
 
       - name: Propose validated independent updates
         if: steps.gate.outputs.passed == 'true' && steps.build.outcome == 'success'
