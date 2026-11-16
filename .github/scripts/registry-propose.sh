@@ -71,9 +71,13 @@ if [ "$(git ls-remote origin "refs/heads/$REGISTRY_BASE" | awk '{print $1}')" !=
   echo '::error::Registry accepted source changed; rerun with fresh observations.'
   exit 1
 fi
-git push --force-with-lease="refs/heads/$REGISTRY_BRANCH:$REGISTRY_PROPOSAL_SHA" origin "HEAD:$REGISTRY_BRANCH"
+git push --force-with-lease="refs/heads/$REGISTRY_BRANCH:$REGISTRY_PROPOSAL_SHA" origin "HEAD:refs/heads/$REGISTRY_BRANCH"
 if [ -n "$pr_number" ]; then
   gh pr edit "$pr_number" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
 else
-  gh pr create --base "$REGISTRY_BASE" --head "$REGISTRY_BRANCH" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md" "${draft_args[@]}"
+  create_args=(--base "$REGISTRY_BASE" --head "$REGISTRY_BRANCH" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md")
+  if [ "${#draft_args[@]}" -gt 0 ]; then
+    create_args+=(--draft)
+  fi
+  gh pr create "${create_args[@]}"
 fi
