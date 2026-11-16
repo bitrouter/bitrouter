@@ -1,6 +1,6 @@
 # Registry v1 conformance
 
-Status: **normative beta, `1.0.0-beta.6`; wire version `1`.**
+Status: **beta 7 design requirements, `1.0.0-beta.7`; wire version `1`; implementation pending.**
 
 These observable requirements accompany the [Registry v1 protocol](README.md).
 Each case applies to the producer, reader, synchronizer, or publication role
@@ -41,7 +41,7 @@ of unintended catalog/routing/credential effects.
 | C18 | Public feed, bearer key, custom header/version, empty/missing key | Correct headers; no credential inheritance, network request on missing key, or secret in logs |
 | C19 | Redirect, 401/403, timeout/429/5xx, oversize/malformed body | Bounded execution; no auth downgrade or partial inventory publication |
 | C20 | Multiple pages, empty middle page, duplicate ID/cursor, page cap, missing cursor | Complete traversal or whole-feed failure; never retire from first-page-only data |
-| C21 | Complete missing runs, failed run between, repeated/stale observation sequence, account scope, empty listing | Withdrawal only with both count/time evidence; no double-count; account/empty guards preserved |
+| C21 | One complete authoritative public absence; repeated absence; incomplete, account-scoped, merge-only or disallowed empty listing | Only the complete snapshot proposes immediate withdrawal of owned status; retain native record and other fields; invalid/insufficient evidence preserves inventory; repeated identical content changes no timestamps |
 | C22 | Manual override, separate pricing feed, interface reorder, unknown extension, reappearance | Ownership respected; prices join by protocol/operation/profile triple; no accidental reactivation or extension loss |
 | C23 | Same inputs built across a wall-clock expiry boundary; one-document generation | Same explicit `as_of` yields identical output bytes with one producer configuration; canonical joins derive from inventory; agents/runtimes unchanged |
 | C24 | Truncated/invalid document or cache, unsupported version, offline refresh | Whole-document admission; last good document retained; explicit expiries still enforced |
@@ -66,7 +66,7 @@ of unintended catalog/routing/credential effects.
 | C43 | Historical ID no longer listed, with and without public references | Referenced ID blocks publication; unreferenced ledger history is reported and retained; reviewed native-only resolution does not withdraw provider offer |
 | C44 | Agentic edit, manual edit, rebase, or later publication after a passing audit | Changed candidate requires a new audit; later run refetches; recorded evidence and output-file SHA-256 identify exact validated output; offline checks never claim live success |
 | C45 | OpenRouter audit includes image/decision/embedding/audio models | Request uses exactly `output_modalities=all`, omits narrowing/pagination parameters, and validates non-text IDs; missing/default-text parameter fails configuration |
-| C46 | A(10), B(11), replay A(10), same-sequence conflict, backward time, reload, failed global audit | Stale/replay causes no mutation; conflict/time rollback fails normally; checkpoint and offer changes commit together only after validation |
+| C46 | Concurrent syncs; changed accepted source or proposal head; interruption and retry; failed global audit | Serialize fetch-through-write; changed heads discard candidate and require fresh fetch/recompute; retry has no checkpoint to resume; conditional atomic content write only after validation/audit |
 | C47 | 3 decisions at USD 0.20/1000; token subsets; multiple meters/attempts; unknown usage | Exact USD 0.0006 decision charge; disjoint token counters and all applicable charges summed without per-item rounding; unknown total unavailable |
 | C48 | Known/unknown access policies, missing HTTP base, reasoning levels/default, endpoint profile and cached/reasoning subsets | Resolve explicit contracts without legacy implementation knowledge; unknown execution prerequisites disable affected scope; no guessed credential, counter, or multiplier |
 | C49 | Withdrawn offer returns with ID-only listing; explicit mapped status; manual status override | Feed-owned status resolves from mapping then status default on every presence; reactivates deterministically; manual status and other missing metadata preserved |
@@ -108,3 +108,24 @@ This case applies to all readers under the public-document profile in section 2.
 | C63 | Native resource names with an explicit nonempty literal prefix, unmatched/empty suffixes, chained transforms and canonical-target stripping | Permit exactly one checked native-ID wrapper removal; reject every unmatched/empty identity or forbidden target/chain atomically; preserve suffix spelling and existing binding authority |
 | C64 | Missing terminal cursor with/without explicit end policy, wrong cursor types, unknown policy or conflicting pagination options | Strict by default; only the explicit cursor-only policy accepts omission; unknown policies fail before requests; has-more evidence cannot be weakened |
 | C65 | Explicit identity repair proposals, absent IDs beside similar current IDs, incomplete snapshots and existing binding conflicts | Ordinary sync rejects missing IDs; explicit proposals list every unbinding or recommendation removal, retain native data and ledger history, pass the complete audit, and enter a draft PR before human review; no alias inference, incomplete evidence or conflict repair |
+
+## Content-driven publication and beta 7 migration
+
+These requirements accompany [section 9.3](README.md#93-content-comparison-and-timestamps)
+and [migration](README.md#34-beta-6-to-beta-7-migration). They define expected
+behavior, not completed implementation or acceptance evidence.
+
+| ID | Scenario | Required observable result |
+| --- | --- | --- |
+| C66 | Identical normalized content, reordered object keys, unmapped upstream changes, subsequent run without prior logs/cache | Fresh checks and identity audit; identical source/artifact bytes and times; no new catalog commit or external sync state dependency |
+| C67 | One availability-owned assertion changes; separate pricing/manual field changes; unchanged curation and identity binding | Only changed assertions receive responsible evidence times; public change advances as_of; unrelated evidence and ledger times remain unchanged |
+| C68 | Changed expiry/provenance/unknown timestamp-like field, interface preference or opaque array order; equivalent normalized numeric values | Semantic changes count, equivalent values do not; exact comparison preserves unknowns and uses only defined evidence-time exclusions |
+| C69 | Same desired unmerged proposal across fresh runs; partial return to accepted content; new accepted ownership/configuration; missing proposal | Keep still-needed identical proposal times/bytes and first valid grace deadline; restored assertions reuse accepted evidence; revalidate current scope; no proposal means recompute from accepted source without external recovery state |
+| C70 | Curation expiry with identical feeds; repeated grace checks before/after merge; source-only or encoding-only edit; identical client download | Fresh sync evaluation applies deadlines without sliding; deterministic stored-as_of build; no evidence renewal from passage of time or source-only edits; client advances only local cache check time |
+| C71 | Failed candidate/audit, failed independent feed, dry-run, interrupted write, clock rollback | No invalid source/artifact mutation; independent changes may proceed only under existing gates; no stale proposal used as successful feed evidence; dry-run writes nothing; backward time fails normally |
+| C72 | Beta 6 source has checkpoint, counters/delay controls or last-seen fields under their original paths; unknown same-named extension elsewhere | Reject obsolete exact source paths before fetch with migration guidance; preserve unrelated unknowns; explicit migration retains ownership/content/evidence and discards operational history |
+| C73 | Beta 6 reader/new beta 7 data; beta 7-only reader/old beta 6 data; migration and stream publication | Unsupported revisions fail normally; no silent reader opt-in or path replacement; revision change advances document as_of without mass evidence restamp; schema shape alone grants no revision support |
+| C74 | Snapshot excludes a still-active model through editorial filter versus documented unavailable lifecycle; manual status conflict | Editorial filtering cannot prove withdrawal; lifecycle filtering requires authoritative evidence; manual status is never overwritten, conflicts fail normally |
+| C75 | Accepted offer is active, pending proposal withdraws it, fresh complete feed again yields accepted active content | Retain accepted bytes/timestamps and retire the obsolete proposal or block its stale head; do not leave it mergeable; preserve unrelated human edits and conditional-write/audit gates |
+| C76 | Pending assertion B was observed under configuration F0; accepted feed changes to F1 while accepted assertion A stays unchanged; fresh F1 produces B | Reverify under F1 and use current evidence for B; timestamp-excluding equality to old B cannot restore its ineligible evidence or whole proposal bytes |
+| C77 | A proposed editorial deadline expires before merge; later identical runs still see the recommendation in accepted source | Keep expired record/deadline in pending source and omit it from artifact; repeated checks retain removal bytes/time and cannot restart grace; source cleanup may follow accepted removal |

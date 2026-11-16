@@ -87,8 +87,6 @@
     "mode": "snapshot",
     "scope": "public",
     "complete": true,
-    "allow_empty": false,
-    "missing_runs": 2,
-    "minimum_missing_hours": 24
+    "allow_empty": false
   }
 }

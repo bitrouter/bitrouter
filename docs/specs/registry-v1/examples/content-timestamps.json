@@ -1,0 +1,273 @@
+{
+  "spec_revision": "1.0.0-beta.7",
+  "description": "Synthetic partial assertions, not a public document or implemented behavior. Each changed candidate in runs is accepted before the next run; pending_proposal_case is independent.",
+  "authority": {
+    "provider": "example",
+    "catalog_feed": {
+      "id": "catalog",
+      "owns": [
+        "membership",
+        "metadata"
+      ]
+    },
+    "pricing_feed": {
+      "id": "prices",
+      "owns": [
+        "pricing"
+      ]
+    }
+  },
+  "baseline": {
+    "as_of": "2026-11-01T00:00:00Z",
+    "availability_checked_at": {
+      "chat-1": "2026-11-01T00:00:00Z",
+      "chat-2": "2026-11-01T00:00:00Z"
+    },
+    "offers": {
+      "chat-1": {
+        "status": "active",
+        "context_window": 8192
+      },
+      "chat-2": {
+        "status": "active",
+        "input_usd_per_million_tokens": 1
+      }
+    },
+    "recommendation": {
+      "canonical_id": "example/chat-2",
+      "checked_at": "2026-11-01T00:00:00Z",
+      "expires_at": "2026-11-07T00:00:00Z"
+    }
+  },
+  "runs": [
+    {
+      "id": "unchanged-check",
+      "fetched_at": "2026-11-02T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Both offers present with identical normalized owned content",
+      "expected": {
+        "public_bytes": "identical to baseline",
+        "as_of": "2026-11-01T00:00:00Z",
+        "catalog_pr_needed": false,
+        "fresh_identity_audit": "passed",
+        "persistent_sync_state": "none"
+      }
+    },
+    {
+      "id": "one-offer-changes",
+      "fetched_at": "2026-11-03T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Both offers present; chat-1 context_window changes to 16384",
+      "expected": {
+        "as_of": "2026-11-03T00:00:00Z",
+        "availability_checked_at": {
+          "chat-1": "2026-11-03T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "curation_checked_at": "2026-11-01T00:00:00Z",
+        "catalog_pr_needed": true
+      }
+    },
+    {
+      "id": "complete-absence",
+      "fetched_at": "2026-11-04T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Complete authoritative public snapshot contains chat-2 but not chat-1; catalog owns chat-1 status",
+      "expected": {
+        "as_of": "2026-11-04T00:00:00Z",
+        "chat_1_status": "withdrawn",
+        "record_retained": true,
+        "availability_checked_at": {
+          "chat-1": "2026-11-04T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "catalog_pr_needed": true
+      }
+    },
+    {
+      "id": "unchanged-absence",
+      "fetched_at": "2026-11-05T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Complete authoritative snapshot still lacks chat-1",
+      "expected": {
+        "as_of": "2026-11-04T00:00:00Z",
+        "public_bytes": "identical to prior accepted catalog",
+        "chat_1_status": "withdrawn",
+        "availability_checked_at": {
+          "chat-1": "2026-11-04T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "catalog_pr_needed": false
+      }
+    },
+    {
+      "id": "reappearance",
+      "fetched_at": "2026-11-06T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Both offers present; catalog resolves chat-1 status to active",
+      "expected": {
+        "as_of": "2026-11-06T00:00:00Z",
+        "chat_1_status": "active",
+        "availability_checked_at": {
+          "chat-1": "2026-11-06T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "catalog_pr_needed": true
+      }
+    },
+    {
+      "id": "expiry-with-identical-feed",
+      "fetched_at": "2026-11-07T00:00:00Z",
+      "feed": "catalog",
+      "observation": "Identical feed; example/chat-2 editorial expiry reached at fresh evaluation time",
+      "expected": {
+        "as_of": "2026-11-07T00:00:00Z",
+        "curated_ids": [],
+        "availability_checked_at": {
+          "chat-1": "2026-11-06T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "provider_offers": "preserved",
+        "catalog_pr_needed": true
+      }
+    },
+    {
+      "id": "separate-pricing-change",
+      "fetched_at": "2026-11-08T00:00:00Z",
+      "feed": "prices",
+      "observation": "Only chat-2 input tariff changes to USD 2 per million tokens",
+      "expected": {
+        "as_of": "2026-11-08T00:00:00Z",
+        "availability_checked_at": {
+          "chat-1": "2026-11-06T00:00:00Z",
+          "chat-2": "2026-11-01T00:00:00Z"
+        },
+        "catalog_pr_needed": true
+      }
+    }
+  ],
+  "pending_proposal_case": {
+    "accepted": {
+      "as_of": "2026-11-01T00:00:00Z",
+      "chat_1_context_window": 8192,
+      "chat_1_availability_checked_at": "2026-11-01T00:00:00Z",
+      "curation_checked_at": "2026-11-01T00:00:00Z",
+      "curation_has_expiry": false
+    },
+    "existing_proposal": {
+      "as_of": "2026-11-03T00:00:00Z",
+      "chat_1_context_window": 16384,
+      "chat_1_availability_checked_at": "2026-11-03T00:00:00Z",
+      "curation_checked_at": "2026-11-03T00:00:00Z",
+      "curation_expires_at": "2026-11-10T00:00:00Z"
+    },
+    "repeat_before_merge": {
+      "fetched_at": "2026-11-04T00:00:00Z",
+      "observation": "Identical fresh owned content, authority/configuration and retention transition; accepted source still lacks both changes",
+      "expected": {
+        "catalog_pr_still_needed": true,
+        "catalog_pr_update_needed": false,
+        "public_bytes": "identical to existing proposal",
+        "as_of": "2026-11-03T00:00:00Z",
+        "chat_1_availability_checked_at": "2026-11-03T00:00:00Z",
+        "curation_checked_at": "2026-11-03T00:00:00Z",
+        "curation_expires_at": "2026-11-10T00:00:00Z",
+        "persistent_sync_state": "none",
+        "fresh_identity_audit": "passed"
+      }
+    }
+  },
+  "pending_reversion_case": {
+    "accepted": {
+      "as_of": "2026-11-01T00:00:00Z",
+      "chat_1_status": "active",
+      "chat_1_availability_checked_at": "2026-11-01T00:00:00Z"
+    },
+    "existing_proposal": {
+      "as_of": "2026-11-03T00:00:00Z",
+      "chat_1_status": "withdrawn",
+      "chat_1_availability_checked_at": "2026-11-03T00:00:00Z"
+    },
+    "fresh_run": {
+      "fetched_at": "2026-11-04T00:00:00Z",
+      "observation": "Complete snapshot restores active status and all other owned fields match accepted content",
+      "expected": {
+        "public_bytes": "identical to accepted catalog",
+        "as_of": "2026-11-01T00:00:00Z",
+        "chat_1_availability_checked_at": "2026-11-01T00:00:00Z",
+        "new_catalog_revision_needed": false,
+        "obsolete_proposal_action": "close or reset; otherwise block its obsolete head",
+        "obsolete_head_mergeable": false,
+        "fresh_identity_audit": "passed"
+      }
+    }
+  },
+  "changed_authority_case": {
+    "accepted": {
+      "as_of": "2026-11-01T00:00:00Z",
+      "chat_1_context_window": 8192,
+      "chat_1_availability_checked_at": "2026-11-01T00:00:00Z",
+      "feed_configuration": "F1"
+    },
+    "existing_proposal": {
+      "as_of": "2026-11-03T00:00:00Z",
+      "chat_1_context_window": 16384,
+      "chat_1_availability_checked_at": "2026-11-03T00:00:00Z",
+      "feed_configuration": "F0"
+    },
+    "fresh_run": {
+      "fetched_at": "2026-11-04T00:00:00Z",
+      "observation": "Current F1 yields 16384, identical to pending public content but with a different authority/configuration scope",
+      "expected": {
+        "chat_1_context_window": 16384,
+        "chat_1_availability_checked_at": "2026-11-04T00:00:00Z",
+        "as_of": "2026-11-04T00:00:00Z",
+        "reuse_old_proposal_bytes": false,
+        "catalog_pr_update_needed": true
+      }
+    }
+  },
+  "pending_expiry_case": {
+    "accepted": {
+      "as_of": "2026-11-01T00:00:00Z",
+      "curated_ids": [
+        "example/chat-1"
+      ],
+      "curation_has_expiry": false
+    },
+    "existing_proposal": {
+      "as_of": "2026-11-03T00:00:00Z",
+      "source_record": {
+        "canonical_id": "example/chat-1",
+        "curation_expires_at": "2026-11-10T00:00:00Z"
+      },
+      "curated_ids": [
+        "example/chat-1"
+      ]
+    },
+    "expiry_run": {
+      "evaluated_at": "2026-11-10T00:00:00Z",
+      "transition": "same model remains outside the retention window under the same policy",
+      "expected": {
+        "as_of": "2026-11-10T00:00:00Z",
+        "curated_ids": [],
+        "source_record_retained": true,
+        "source_curation_expires_at": "2026-11-10T00:00:00Z",
+        "catalog_pr_update_needed": true
+      }
+    },
+    "repeat_before_merge": {
+      "evaluated_at": "2026-11-11T00:00:00Z",
+      "observation": "Accepted source still contains the recommendation; same transition holds",
+      "expected": {
+        "as_of": "2026-11-10T00:00:00Z",
+        "curated_ids": [],
+        "source_record_retained": true,
+        "source_curation_expires_at": "2026-11-10T00:00:00Z",
+        "public_bytes": "identical to expiry proposal",
+        "catalog_pr_update_needed": false,
+        "new_grace_period": false
+      }
+    }
+  }
+}

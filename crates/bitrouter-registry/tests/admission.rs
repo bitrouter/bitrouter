@@ -116,10 +116,10 @@ fn provider() -> Value {
 }
 
 #[test]
-fn accepts_worked_example_and_preserves_exact_unknown_information()
+fn accepts_beta6_fixture_and_preserves_exact_unknown_information()
 -> Result<(), Box<dyn std::error::Error>> {
-    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/specs/registry-v1/examples/registry.json");
+    let file =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/registry-beta6.json");
     let document = Document::parse(&std::fs::read(file)?, &ReaderPolicy::default())?;
     let mut original = document.into_value();
     original["data"]["providers"][0]["future"] = json!({"value":null,"as_of":"not a timestamp","available_until":17,"curation":{"checked_at":42}});
@@ -131,6 +131,23 @@ fn accepts_worked_example_and_preserves_exact_unknown_information()
     let roundtrip = Document::parse(&bytes, &ReaderPolicy::default())?;
     assert_eq!(roundtrip.value(), &original);
     assert!(serde_json::to_string(roundtrip.value())?.contains("0.100000000000000000000000000001"));
+    Ok(())
+}
+
+#[test]
+fn beta7_design_example_is_structural_but_not_enabled() -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/specs/registry-v1/examples/registry.json");
+    let bytes = std::fs::read(file)?;
+    let value: ::serde_json::Value = ::serde_json::from_slice(&bytes)?;
+    let schema: ::serde_json::Value = ::serde_json::from_str(bitrouter_registry::document::SCHEMA)?;
+    let validator = jsonschema::validator_for(&schema)?;
+    assert!(validator.is_valid(&value));
+    assert_eq!(value["spec_revision"], "1.0.0-beta.7");
+    let error = Document::parse(&bytes, &ReaderPolicy::default())
+        .err()
+        .ok_or_else(|| RegistryError::invalid("", "Unimplemented beta revision was admitted"))?;
+    assert_eq!(error.code, "registry.unsupported_revision");
     Ok(())
 }
 
