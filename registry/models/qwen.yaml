@@ -1,5 +1,11 @@
 [
   {
+    "curation": {
+      "checked_at": "2026-11-16T03:29:48.003363751Z",
+      "expires_at": "2026-12-16T03:29:48.003363751Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "qwen3.7",
     "id": "qwen/qwen3.7-plus",
     "input_modalities": [
@@ -14,14 +20,15 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-06-01",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-06-01"
   },
   {
+    "curation": {
+      "checked_at": "2026-11-16T03:29:48.003363751Z",
+      "expires_at": "2026-12-16T03:29:48.003363751Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "qwen3.7",
     "id": "qwen/qwen3.7-max",
     "input_modalities": [
@@ -34,14 +41,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-06-10",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-06-10"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Open-weight text MoE with 2.4T total parameters and 95B active parameters for coding, research, and agentic workflows.",
     "family": "qwen3.8",
     "id": "qwen/qwen3.8-2.4t-a95b",
@@ -55,14 +62,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-12",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-12"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Open-weight dense native vision-language model for coding, professional work, and long-running agent tasks.",
     "family": "qwen3.8",
     "id": "qwen/qwen3.8-27b",
@@ -78,14 +85,15 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-14",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-14"
   },
   {
+    "curation": {
+      "checked_at": "2026-11-16T03:29:48.003363751Z",
+      "expires_at": "2026-12-16T03:29:48.003363751Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "qwen/qwen3.7-flash",
     "input_modalities": [
       "image",
@@ -98,14 +106,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-07-27",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-07-27"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "qwen/qwen3.8-flash",
     "input_modalities": [
       "image",
@@ -118,14 +126,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-26",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-26"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "qwen/qwen3.8-max-0902",
     "input_modalities": [
       "image",
@@ -138,14 +146,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-03",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-03"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "qwen/qwen3.8-omni-flash",
     "input_modalities": [
       "audio",
@@ -159,14 +167,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-21",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-21"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "qwen/qwen3.8-max-prime",
     "input_modalities": [
       "image",
@@ -179,11 +187,25 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-23",
+    "release_date": "2026-09-23"
+  },
+  {
+    "context_window": 1000000,
     "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+      "checked_at": "2026-11-16T03:29:48.003363751Z",
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
+    "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text, with a 1M-token context window and reasoning enabled by default....",
+    "id": "qwen/qwen4-max",
+    "input_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "name": "Qwen: Qwen4 Max",
+    "output_modalities": [
+      "text"
+    ]
   }
 ]

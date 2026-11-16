@@ -309,23 +309,23 @@
       }
     },
     {
-      "provider_model_id": "hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
       "interfaces": [],
+      "name": "Hy4",
+      "provider_model_id": "hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "A next-generation multimodal productivity model with significantly enhanced Agent and complex task execution capabilities.",
-      "name": "Hy4",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/go/v1/models",
-        "checked_at": "2026-11-14T05:57:18.740533923Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -446,23 +446,23 @@
       }
     },
     {
-      "provider_model_id": "longcat-2.5-free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.740533923Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
       "interfaces": [],
+      "name": "LongCat 2.5 Free",
+      "provider_model_id": "longcat-2.5-free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
-      "name": "LongCat 2.5 Free",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/go/v1/models",
-        "checked_at": "2026-11-14T05:57:18.740533923Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -710,6 +710,26 @@
           "/description": "catalog",
           "/name": "catalog"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-16T03:29:37.108432483Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Flagship multimodal model for coding, office productivity, frontend design, and complex agentic tasks",
+      "interfaces": [],
+      "name": "Qwen4 Max",
+      "provider_model_id": "qwen4-max",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {

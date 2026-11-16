@@ -1158,31 +1158,42 @@
       }
     },
     {
-      "provider_model_id": "anthropic/claude-fable-5.2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "anthropic/claude-fable-5.2",
+      "description": "Claude Fable 5.2 is Anthropic's most capable model for the most demanding technical work, with gains over Fable 5.1 in coding, reasoning, and vision. In prerelease testing it completed otherwise-infeasible...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image",
-            "file"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs"
           ],
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
           "limits": {
             "context_window": 1000000
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Anthropic: Claude Fable 5.2",
+      "provider_model_id": "anthropic/claude-fable-5.2",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -1191,31 +1202,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "anthropic/claude-fable-5.2",
-      "description": "Claude Fable 5.2 is Anthropic's most capable model for the most demanding technical work, with gains over Fable 5.1 in coding, reasoning, and vision. In prerelease testing it completed otherwise-infeasible...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Anthropic: Claude Fable 5.2",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -2539,88 +2539,40 @@
       }
     },
     {
-      "provider_model_id": "baidu/ernie-5.5-flash-preview:free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "baidu/ernie-5.5-flash-preview:free",
+      "description": "ERNIE 5.5 Flash Preview is the latest foundation model in the ERNIE family, with comprehensive improvements in coding, agentic capabilities, knowledge work, and deep research. It has 280 billion total...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 1024000
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "protocol": "chat_completions",
-            "operation": "generation",
-            "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
-              "/capabilities": "catalog",
-              "/limits": "catalog"
-            },
-            "protocol_profile": "default"
-          }
-        ]
-      },
-      "canonical_id": "baidu/ernie-5.5-flash-preview:free",
-      "description": "ERNIE 5.5 Flash Preview is the latest foundation model in the ERNIE family, with comprehensive improvements in coding, agentic capabilities, knowledge work, and deep research. It has 280 billion total...",
       "model_types": [
         "language"
       ],
       "name": "Baidu: ERNIE-5.5-Flash-Preview (free)",
+      "provider_model_id": "baidu/ernie-5.5-flash-preview:free",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "baidu/ernie-light-dt-1.0-intl",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
-          "capabilities": [
-            "tools",
-            "reasoning",
-            "structured_outputs"
-          ],
-          "limits": {
-            "context_window": 1024000
-          }
-        }
-      ],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -2629,31 +2581,79 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "baidu/ernie-light-dt-1.0-intl",
       "description": "ERNIE-Light-DT-1.0 is based on open-source GLM models and includes research findings from Baidu Search's Lightning large model. It features Baidu Sparse Attention (BSA), a unique sparse attention mechanism developed by...",
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs"
+          ],
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_window": 1024000
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
+        }
+      ],
       "model_types": [
         "language"
       ],
       "name": "Baidu: ERNIE-Light-DT-1.0",
+      "provider_model_id": "baidu/ernie-light-dt-1.0-intl",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -2938,30 +2938,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "Seed 1.6 is a general-purpose model released by the ByteDance Seed team. It incorporates multimodal capabilities and adaptive deep thinking with a 256K context window.",
       "interfaces": [
         {
@@ -2990,14 +2966,7 @@
       ],
       "name": "ByteDance Seed: Seed 1.6",
       "provider_model_id": "bytedance-seed/seed-1.6",
-      "status": "active"
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
-        "scope": "public",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-      },
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -3021,6 +2990,13 @@
           }
         ],
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "Seed 1.6 Flash is an ultra-fast multimodal deep thinking model by ByteDance Seed, supporting both text and visual understanding. It features a 256k context window and can generate outputs of...",
       "interfaces": [
@@ -3050,7 +3026,31 @@
       ],
       "name": "ByteDance Seed: Seed 1.6 Flash",
       "provider_model_id": "bytedance-seed/seed-1.6-flash",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -3119,30 +3119,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "Seed 2.0 Code is a model from ByteDance Seed optimized for agentic coding. It is suited for frontend development, multilingual programming tasks, and coding-agent workflows in tools such as Claude...",
       "interfaces": [
         {
@@ -3171,7 +3147,31 @@
       ],
       "name": "ByteDance Seed: Seed-2.0-Code",
       "provider_model_id": "bytedance-seed/seed-2.0-code",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -3411,34 +3411,18 @@
       }
     },
     {
-      "provider_model_id": "bytedance-seed/seedream-5-5",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
-      },
-      "canonical_id": "bytedance-seed/seedream-5-5",
-      "description": "Seedream 5.5 is an image generation and editing model from ByteDance Seed. It is suited for creating images from text prompts and for editing or combining existing images, using up...",
-      "model_types": [],
-      "name": "ByteDance Seed: Seedream 5.5",
-      "status": "active",
       "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
+      "canonical_id": "bytedance-seed/seedream-5-5",
+      "description": "Seedream 5.5 is an image generation and editing model from ByteDance Seed. It is suited for creating images from text prompts and for editing or combining existing images, using up...",
+      "interfaces": [],
+      "model_types": [],
+      "name": "ByteDance Seed: Seedream 5.5",
+      "provider_model_id": "bytedance-seed/seedream-5-5",
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -3447,13 +3431,29 @@
           "/status": "catalog"
         },
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "ByteDance's next-generation audio-visual generation model with a 4.5B parameter Dual-Branch Diffusion Transformer architecture. Seedance 1.5 Pro generates video and audio simultaneously in a single unified pass — eliminating the timing...",
       "interfaces": [],
       "model_types": [],
       "name": "ByteDance: Seedance 1.5 Pro",
       "provider_model_id": "bytedance/seedance-1-5-pro",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -3630,26 +3630,26 @@
       }
     },
     {
-      "provider_model_id": "cloudflare/clairic",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "cloudflare/clairic",
+      "description": "Clairic is Cloudflare's System One-style extraction model served on Workers AI. Given a text state and optional images plus a schema of typed fields, it extracts, computes, estimates, and forecasts...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Cloudflare: Clairic",
+      "provider_model_id": "cloudflare/clairic",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "cloudflare/clairic",
-      "description": "Clairic is Cloudflare's System One-style extraction model served on Workers AI. Given a text state and optional images plus a schema of typed fields, it extracts, computes, estimates, and forecasts...",
-      "model_types": [],
-      "name": "Cloudflare: Clairic",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -4069,49 +4069,49 @@
       }
     },
     {
-      "provider_model_id": "cohere/embed-5-fast",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "cohere/embed-5-fast",
       "description": "Embed 5 Fast is the lower-latency, cost-efficient tier of Cohere's Embed 5 family of multimodal embedding models (about 1B parameters). It embeds text, images, and interleaved text and image content...",
+      "interfaces": [],
       "model_types": [],
       "name": "Cohere: Embed 5 Fast",
+      "provider_model_id": "cohere/embed-5-fast",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "cohere/embed-5-pro",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "cohere/embed-5-pro",
       "description": "Embed 5 Pro is the higher-accuracy tier of Cohere's Embed 5 family of multimodal embedding models (about 2.4B parameters). It embeds text, images, and interleaved text and image content into...",
+      "interfaces": [],
       "model_types": [],
       "name": "Cohere: Embed 5 Pro",
+      "provider_model_id": "cohere/embed-5-pro",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -4219,49 +4219,49 @@
       }
     },
     {
-      "provider_model_id": "cohere/rerank-5-fast",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "cohere/rerank-5-fast",
       "description": "Rerank 5 Fast is the low-latency tier of Cohere's Rerank 5 family of reranking models. It scores and reorders candidate documents against a query and is suited for high-throughput retrieval...",
+      "interfaces": [],
       "model_types": [],
       "name": "Cohere: Rerank 5 Fast",
+      "provider_model_id": "cohere/rerank-5-fast",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "cohere/rerank-5-pro",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "cohere/rerank-5-pro",
       "description": "Rerank 5 Pro is the higher-accuracy tier of Cohere's Rerank 5 family of reranking models. It scores and reorders candidate documents against a query and is suited for retrieval pipelines...",
+      "interfaces": [],
       "model_types": [],
       "name": "Cohere: Rerank 5 Pro",
+      "provider_model_id": "cohere/rerank-5-pro",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -7241,11 +7241,20 @@
       }
     },
     {
-      "provider_model_id": "google/gemini-4-carbon",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "google/gemini-4-carbon",
+      "description": "Gemini 4 Carbon is a frontier Gemini 4 model from Google for coding, agentic and complex reasoning work. It takes text, image, audio, video and file input, supports long decode...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs"
+          ],
           "input_modalities": [
             "audio",
             "file",
@@ -7253,84 +7262,23 @@
             "text",
             "video"
           ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
           "output_modalities": [
             "text"
           ],
-          "capabilities": [
-            "tools",
-            "reasoning",
-            "structured_outputs"
-          ],
-          "limits": {
-            "context_window": 1048576
-          }
+          "protocol": "chat_completions"
         }
       ],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "protocol": "chat_completions",
-            "operation": "generation",
-            "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
-              "/capabilities": "catalog",
-              "/limits": "catalog"
-            },
-            "protocol_profile": "default"
-          }
-        ]
-      },
-      "canonical_id": "google/gemini-4-carbon",
-      "description": "Gemini 4 Carbon is a frontier Gemini 4 model from Google for coding, agentic and complex reasoning work. It takes text, image, audio, video and file input, supports long decode...",
       "model_types": [
         "language"
       ],
       "name": "Google: Gemini 4 Carbon",
+      "provider_model_id": "google/gemini-4-carbon",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "google/gemini-4-hydrogen",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "audio",
-            "file",
-            "image",
-            "text",
-            "video"
-          ],
-          "output_modalities": [
-            "text"
-          ],
-          "capabilities": [
-            "tools",
-            "reasoning",
-            "structured_outputs"
-          ],
-          "limits": {
-            "context_window": 1048576
-          }
-        }
-      ],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -7339,54 +7287,106 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "google/gemini-4-hydrogen",
       "description": "Gemini 4 Hydrogen is the high-efficiency workhorse model of the Gemini 4 family from Google, built for high-throughput agentic workflows, coding and multi-model routing at lower cost and latency than...",
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs"
+          ],
+          "input_modalities": [
+            "audio",
+            "file",
+            "image",
+            "text",
+            "video"
+          ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
+        }
+      ],
       "model_types": [
         "language"
       ],
       "name": "Google: Gemini 4 Hydrogen",
+      "provider_model_id": "google/gemini-4-hydrogen",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "google/gemini-decision-1",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "google/gemini-decision-1",
       "description": "Gemini Decision 1 is Google's model for the Decisions API. It answers structured questions about an input state (true/false, multiple choice with up to 255 options, and score with up...",
+      "interfaces": [],
       "model_types": [],
       "name": "Google: Gemini Decision 1",
+      "provider_model_id": "google/gemini-decision-1",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -7482,49 +7482,49 @@
       }
     },
     {
-      "provider_model_id": "google/gemini-omni-1.1-flash",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "google/gemini-omni-1.1-flash",
       "description": "Gemini Omni 1.1 Flash is Google's native multimodal video generation and editing model, the generally available successor to Gemini Omni Flash Preview. It is suited for text-to-video, image-to-video, first and...",
+      "interfaces": [],
       "model_types": [],
       "name": "Google: Gemini Omni 1.1 Flash",
+      "provider_model_id": "google/gemini-omni-1.1-flash",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "google/gemini-omni-1.2-flash",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "google/gemini-omni-1.2-flash",
       "description": "Gemini Omni 1.2 Flash is Google's native multimodal video generation and editing model, the successor to Gemini Omni 1.1 Flash. It generates clips up to 15 seconds long with native...",
+      "interfaces": [],
       "model_types": [],
       "name": "Google: Gemini Omni 1.2 Flash",
+      "provider_model_id": "google/gemini-omni-1.2-flash",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -8226,49 +8226,49 @@
       }
     },
     {
-      "provider_model_id": "heygen/heygen-decision-1",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "heygen/heygen-decision-1",
       "description": "HeyGen Decision 1 is a decision model from HeyGen. It reads text and images and answers a set of named questions in one request, returning typed answers with probabilities: a...",
+      "interfaces": [],
       "model_types": [],
       "name": "HeyGen: HeyGen Decision",
+      "provider_model_id": "heygen/heygen-decision-1",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "heygen/heygen-decision-1-turbo",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "heygen/heygen-decision-1-turbo",
       "description": "HeyGen Decision 1 Turbo is a lower-cost variant of [HeyGen Decision 1](/heygen/heygen-decision-1) from HeyGen, with the same question types (`noul`, `choice`, and `score`) over text and images. It suits high-volume...",
+      "interfaces": [],
       "model_types": [],
       "name": "HeyGen: HeyGen Decision Turbo",
+      "provider_model_id": "heygen/heygen-decision-1-turbo",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -8429,30 +8429,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "Mercury 2 is an extremely fast reasoning LLM, and the first reasoning diffusion LLM (dLLM). Instead of generating tokens sequentially, Mercury 2 produces and refines multiple tokens in parallel, achieving...",
       "interfaces": [
         {
@@ -8479,14 +8455,7 @@
       ],
       "name": "Inception: Mercury 2",
       "provider_model_id": "inception/mercury-2",
-      "status": "active"
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
-        "scope": "public",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-      },
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -8510,6 +8479,13 @@
           }
         ],
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "Mercury 2.5 is the fastest reasoning LLM, and the latest diffusion LLM (dLLM) from Inception. Instead of generating tokens sequentially, Mercury 2.5 produces and refines multiple tokens in parallel, achieving...",
       "interfaces": [
@@ -8537,14 +8513,7 @@
       ],
       "name": "Inception: Mercury 2.5",
       "provider_model_id": "inception/mercury-2.5",
-      "status": "active"
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
-        "scope": "public",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-      },
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -8568,6 +8537,13 @@
           }
         ],
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "Mercury 3 is a diffusion-based language model from Inception, and the lab's most capable model to date. It is suited for agentic workflows and real-time applications where latency compounds, such...",
       "interfaces": [
@@ -8595,7 +8571,31 @@
       ],
       "name": "Inception: Mercury 3",
       "provider_model_id": "inception/mercury-3",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -8603,6 +8603,12 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
+      "description": "Mercury Decide is Inception's structured decision model, served as a System One endpoint. Send a state along with typed questions, and it returns a choice, a score, or a yes/no...",
+      "interfaces": [],
+      "model_types": [],
+      "name": "Inception: Mercury Decide",
+      "provider_model_id": "inception/mercury-decide",
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -8611,13 +8617,7 @@
           "/status": "catalog"
         },
         "owner": "catalog"
-      },
-      "description": "Mercury Decide is Inception's structured decision model, served as a System One endpoint. Send a state along with typed questions, and it returns a choice, a score, or a yes/no...",
-      "interfaces": [],
-      "model_types": [],
-      "name": "Inception: Mercury Decide",
-      "provider_model_id": "inception/mercury-decide",
-      "status": "active"
+      }
     },
     {
       "availability": {
@@ -8740,30 +8740,41 @@
       }
     },
     {
-      "provider_model_id": "inclusionai/ling-3.0-tiny",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "inclusionai/ling-3.0-tiny",
+      "description": "Ling 3.0 Tiny is a mixture-of-experts model from InclusionAI, with 1.3B active parameters out of 7.9B total. It is designed for responsive agents, instruction following, and multi-turn conversations, with switchable...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 262144
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "inclusionAI: Ling 3.0 Tiny",
+      "provider_model_id": "inclusionai/ling-3.0-tiny",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -8772,31 +8783,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "inclusionai/ling-3.0-tiny",
-      "description": "Ling 3.0 Tiny is a mixture-of-experts model from InclusionAI, with 1.3B active parameters out of 7.9B total. It is designed for responsive agents, instruction following, and multi-turn conversations, with switchable...",
-      "model_types": [
-        "language"
-      ],
-      "name": "inclusionAI: Ling 3.0 Tiny",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -8859,30 +8859,41 @@
       }
     },
     {
-      "provider_model_id": "inclusionai/ling-3.2-flash:free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "inclusionai/ling-3.2-flash:free",
+      "description": "Ling 3.2 Flash is a hybrid reasoning model from inclusionAI that accepts text and image input, with a 1M-token context window and up to 200 images per request. Thinking can...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs"
           ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
           "limits": {
             "context_window": 1048576
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "inclusionAI: Ling 3.2 Flash (free)",
+      "provider_model_id": "inclusionai/ling-3.2-flash:free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -8891,31 +8902,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "inclusionai/ling-3.2-flash:free",
-      "description": "Ling 3.2 Flash is a hybrid reasoning model from inclusionAI that accepts text and image input, with a 1M-token context window and up to 200 images per request. Thinking can...",
-      "model_types": [
-        "language"
-      ],
-      "name": "inclusionAI: Ling 3.2 Flash (free)",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -9217,30 +9217,41 @@
       }
     },
     {
-      "provider_model_id": "kt/midm-k-3.0-pro",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "kt/midm-k-3.0-pro",
+      "description": "Mi:dm K 3.0 Pro is a Mixture-of-Experts reasoning model from KT, with 120B total and 12B active parameters. It uses a hybrid architecture that mixes Mamba, MoE and attention layers.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 261795
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "KT: Mi:dm K 3.0 Pro",
+      "provider_model_id": "kt/midm-k-3.0-pro",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -9249,31 +9260,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "kt/midm-k-3.0-pro",
-      "description": "Mi:dm K 3.0 Pro is a Mixture-of-Experts reasoning model from KT, with 120B total and 12B active parameters. It uses a hybrid architecture that mixes Mamba, MoE and attention layers.",
-      "model_types": [
-        "language"
-      ],
-      "name": "KT: Mi:dm K 3.0 Pro",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -9420,30 +9420,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "LFM2.5-2.6B is a compact reasoning model from Liquid AI. It is suited for agent workflows, data extraction, RAG, and long-context processing. Liquid advises against using it for agentic coding or...",
       "interfaces": [
         {
@@ -9471,14 +9447,7 @@
       ],
       "name": "LiquidAI: LFM2.5-2.6B",
       "provider_model_id": "liquid/lfm-2.5-2.6b",
-      "status": "active"
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
-        "scope": "public",
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-      },
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -9502,6 +9471,13 @@
           }
         ],
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "LFM2.5-2.6B is a compact reasoning model from Liquid AI. It is suited for agent workflows, data extraction, RAG, and long-context processing. Liquid advises against using it for agentic coding or...",
       "interfaces": [
@@ -9530,7 +9506,31 @@
       ],
       "name": "LiquidAI: LFM2.5-2.6B (free)",
       "provider_model_id": "liquid/lfm-2.5-2.6b:free",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -9598,6 +9598,12 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
+      "description": "LFM2.5-Embedding-350M is a text embedding model from Liquid AI. It produces 1,024-dimensional embeddings for retrieval and semantic search. Successful OpenRouter requests and embeddings may be retained and used to train...",
+      "interfaces": [],
+      "model_types": [],
+      "name": "LiquidAI: LFM2.5-Embedding-350M (free)",
+      "provider_model_id": "liquid/lfm-2.5-embedding-350m:free",
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -9606,99 +9612,44 @@
           "/status": "catalog"
         },
         "owner": "catalog"
-      },
-      "description": "LFM2.5-Embedding-350M is a text embedding model from Liquid AI. It produces 1,024-dimensional embeddings for retrieval and semantic search. Successful OpenRouter requests and embeddings may be retained and used to train...",
-      "interfaces": [],
-      "model_types": [],
-      "name": "LiquidAI: LFM2.5-Embedding-350M (free)",
-      "provider_model_id": "liquid/lfm-2.5-embedding-350m:free",
-      "status": "active"
+      }
     },
     {
-      "provider_model_id": "liquid/lfm-3-1.7b",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "liquid/lfm-3-1.7b",
+      "description": "A compact 1.7B-parameter text model with a 256K-token context, post-trained for agents, tool calling, and structured outputs. It reasons before it answers. Prompts and outputs may be retained and used...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 262144
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "protocol": "chat_completions",
-            "operation": "generation",
-            "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
-              "/capabilities": "catalog",
-              "/limits": "catalog"
-            },
-            "protocol_profile": "default"
-          }
-        ]
-      },
-      "canonical_id": "liquid/lfm-3-1.7b",
-      "description": "A compact 1.7B-parameter text model with a 256K-token context, post-trained for agents, tool calling, and structured outputs. It reasons before it answers. Prompts and outputs may be retained and used...",
       "model_types": [
         "language"
       ],
       "name": "LiquidAI: LFM3-1.7B",
+      "provider_model_id": "liquid/lfm-3-1.7b",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "liquid/lfm-3-1.7b:free",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
-          "capabilities": [
-            "tools",
-            "reasoning",
-            "structured_outputs",
-            "logprobs"
-          ],
-          "limits": {
-            "context_window": 262144
-          }
-        }
-      ],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -9707,31 +9658,80 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "liquid/lfm-3-1.7b:free",
       "description": "A compact 1.7B-parameter text model with a 256K-token context, post-trained for agents, tool calling, and structured outputs. It reasons before it answers. Prompts and outputs may be retained and used...",
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs",
+            "logprobs"
+          ],
+          "input_modalities": [
+            "text"
+          ],
+          "limits": {
+            "context_window": 262144
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
+        }
+      ],
       "model_types": [
         "language"
       ],
       "name": "LiquidAI: LFM3-1.7B (free)",
+      "provider_model_id": "liquid/lfm-3-1.7b:free",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -10313,11 +10313,20 @@
       }
     },
     {
-      "provider_model_id": "meta/muse-ember",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "meta/muse-ember",
+      "description": "Muse Ember is the smallest and most efficient model from Meta that’s designed for complex reasoning execution and the work agents repeat all day: tool calls, coding agent subtasks, routing,...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs"
+          ],
           "input_modalities": [
             "text",
             "image",
@@ -10325,21 +10334,23 @@
             "file",
             "audio"
           ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
           "output_modalities": [
             "text"
           ],
-          "capabilities": [
-            "tools",
-            "reasoning",
-            "structured_outputs"
-          ],
-          "limits": {
-            "context_window": 1048576
-          }
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Meta: Muse Ember",
+      "provider_model_id": "meta/muse-ember",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -10348,31 +10359,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "meta/muse-ember",
-      "description": "Muse Ember is the smallest and most efficient model from Meta that’s designed for complex reasoning execution and the work agents repeat all day: tool calls, coding agent subtasks, routing,...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Meta: Muse Ember",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -11354,57 +11354,18 @@
       }
     },
     {
-      "provider_model_id": "minimax/minimax-h3-image",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
-      },
-      "canonical_id": "minimax/minimax-h3-image",
-      "description": "MiniMax H3 Image is MiniMax's image generation and editing model. It creates images from text prompts and edits or composes images from 1 to 16 reference images, with output up...",
-      "model_types": [],
-      "name": "MiniMax: MiniMax H3 Image",
-      "status": "active",
       "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "minimax/minimax-h3-image-highspeed",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
-      },
-      "canonical_id": "minimax/minimax-h3-image-highspeed",
-      "description": "MiniMax H3 Image Highspeed is the faster version of MiniMax's H3 Image model. It takes the same inputs and limits as MiniMax H3 Image: it creates images from text prompts...",
-      "model_types": [],
-      "name": "MiniMax: MiniMax H3 Image Highspeed",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "availability": {
-        "checked_at": "2026-11-02T11:27:06.955192Z",
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
+      "canonical_id": "minimax/minimax-h3-image",
+      "description": "MiniMax H3 Image is MiniMax's image generation and editing model. It creates images from text prompts and edits or composes images from 1 to 16 reference images, with output up...",
+      "interfaces": [],
+      "model_types": [],
+      "name": "MiniMax: MiniMax H3 Image",
+      "provider_model_id": "minimax/minimax-h3-image",
+      "status": "active",
       "sync": {
         "field_owners": {
           "/description": "catalog",
@@ -11412,22 +11373,37 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
         "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "minimax/minimax-h3-image-highspeed",
+      "description": "MiniMax H3 Image Highspeed is the faster version of MiniMax's H3 Image model. It takes the same inputs and limits as MiniMax H3 Image: it creates images from text prompts...",
+      "interfaces": [],
+      "model_types": [],
+      "name": "MiniMax: MiniMax H3 Image Highspeed",
+      "provider_model_id": "minimax/minimax-h3-image-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-02T11:27:06.955192Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "description": "MiniMax-M1 is a large-scale, open-weight reasoning model designed for extended context and high-efficiency inference. It leverages a hybrid Mixture-of-Experts (MoE) architecture paired with a custom \"lightning attention\" mechanism, allowing it...",
       "interfaces": [
@@ -11454,7 +11430,31 @@
       ],
       "name": "MiniMax: MiniMax M1",
       "provider_model_id": "minimax/minimax-m1",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -13422,210 +13422,210 @@
       }
     },
     {
-      "provider_model_id": "mongodb/rerank-2.5",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/rerank-2.5",
       "description": "rerank-2.5 is a cutting-edge reranker optimized for quality, delivering a 7.94% improvement in retrieval accuracy over Cohere Rerank v3.5 across 93 datasets. It also outperformed Cohere Rerank v3.5 by 12.70%...",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: rerank-2.5",
+      "provider_model_id": "mongodb/rerank-2.5",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/rerank-2.5-lite",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/rerank-2.5-lite",
       "description": "rerank-2.5-lite is a reranker optimized for both latency and quality, delivering a 7.16% improvement in retrieval accuracy over Cohere Rerank v3.5 across 93 datasets. It also outperformed Cohere Rerank v3.5...",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: rerank-2.5-lite",
+      "provider_model_id": "mongodb/rerank-2.5-lite",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/rerank-3",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/rerank-3",
       "description": "rerank-3 is a reranker optimized for quality and a drop-in upgrade to rerank-2.5, improving on it by 0.80% NDCG@10 on average across domain evaluations and by 3.35% on long-document evaluations,...",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: rerank-3",
+      "provider_model_id": "mongodb/rerank-3",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/rerank-3-lite",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/rerank-3-lite",
       "description": "rerank-3-lite is a reranker optimized for both latency and quality and a drop-in upgrade to rerank-2.5-lite, improving on it by 0.94% NDCG@10 on average across domain evaluations and by 1.86%...",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: rerank-3-lite",
+      "provider_model_id": "mongodb/rerank-3-lite",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/voyage-4",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/voyage-4",
       "description": "voyage-4 is a general-purpose (including multilingual) embedding model optimized for retrieval/search and AI applications. voyage-4 supports embedd about voyage-4 here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: voyage-4",
+      "provider_model_id": "mongodb/voyage-4",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/voyage-4-large",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/voyage-4-large",
       "description": "voyage-4-large is a state-of-the-art general-purpose and multilingual embedding optimized for retrieval quality. Enabled by Matryoshka learning and quantization-aware training, voyage-4-large supports embeddings  voyage-4-large here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: voyage-4-large",
+      "provider_model_id": "mongodb/voyage-4-large",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/voyage-4-lite",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/voyage-4-lite",
       "description": "voyage-4-lite is a lightweight, general-purpose embedding model optimized for low latency and cost. Enabled by Matryoshka learning and quantization-aware training, voyage-4-lite supports embeddings t voyage-4-lite here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: voyage-4-lite",
+      "provider_model_id": "mongodb/voyage-4-lite",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/voyage-code-4",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/voyage-code-4",
       "description": "voyage-code-4 is a code embedding model from Voyage AI, a MongoDB company. It is designed for coding agents and code retrieval, with Matryoshka embeddings at 2048t voyage-code-4 here: [mongodb.com/products/platform/ai-search-and-retrieval/models](https://www.mongodb.com/products/platform/ai-search-and-retrieval/models?utm_source=openrouter&utm_medium=referral)",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: voyage-code-4",
+      "provider_model_id": "mongodb/voyage-code-4",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "mongodb/voyage-multimodal-3.5",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "mongodb/voyage-multimodal-3.5",
       "description": "voyage-multimodal-3.5 is a state-of-the-art multimodal embedding model capable of vectorizing not only text, images, and video individually, but also content that interleaves all three modalities. It delivers excellent performance for...",
+      "interfaces": [],
       "model_types": [],
       "name": "VoyageAI by MongoDB: voyage-multimodal-3.5",
+      "provider_model_id": "mongodb/voyage-multimodal-3.5",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -13745,26 +13745,26 @@
       }
     },
     {
-      "provider_model_id": "moondream/parakeet-ultra",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "moondream/parakeet-ultra",
+      "description": "Parakeet Ultra is Moondream's post-trained version of NVIDIA's Parakeet TDT 0.6B v3 speech-to-text model, with the same architecture, tokenizer, and 0.6B parameters. It lowers word error rate on the Open...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Moondream: Parakeet Ultra",
+      "provider_model_id": "moondream/parakeet-ultra",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "moondream/parakeet-ultra",
-      "description": "Parakeet Ultra is Moondream's post-trained version of NVIDIA's Parakeet TDT 0.6B v3 speech-to-text model, with the same architecture, tokenizer, and 0.6B parameters. It lowers word error rate on the Open...",
-      "model_types": [],
-      "name": "Moondream: Parakeet Ultra",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -14479,53 +14479,64 @@
       }
     },
     {
-      "provider_model_id": "morph/reflex",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "morph/reflex",
+      "description": "Morph's decision model. Answers typed choice, noul and score questions about a state. The state is prefix-cached across requests, so repeat questions on the same state bill at the cached-input...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Morph: Reflex",
+      "provider_model_id": "morph/reflex",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "morph/reflex",
-      "description": "Morph's decision model. Answers typed choice, noul and score questions about a state. The state is prefix-cached across requests, so repeat questions on the same state bill at the cached-input...",
-      "model_types": [],
-      "name": "Morph: Reflex",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "motif-technologies/motif-3",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "motif-technologies/motif-3",
+      "description": "Motif 3 is a Mixture-of-Experts language model from Motif Technologies, with 314B total and 13.2B active parameters. It is a general-purpose multilingual model for English and Korean, particularly strong at...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 262144
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Motif Technologies: Motif 3",
+      "provider_model_id": "motif-technologies/motif-3",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -14534,31 +14545,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "motif-technologies/motif-3",
-      "description": "Motif 3 is a Mixture-of-Experts language model from Motif Technologies, with 314B total and 13.2B active parameters. It is a general-purpose multilingual model for English and Korean, particularly strong at...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Motif Technologies: Motif 3",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -14585,26 +14585,26 @@
       }
     },
     {
-      "provider_model_id": "nace-ai/drex-max-finance",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "nace-ai/drex-max-finance",
+      "description": "Drex Max Finance is a finance-tuned version of Nace.AI's Drex Max, a 27B multimodal decision model. Given a state as text, JSON, or images such as invoices, receipts, and statements,...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Nace.AI: Drex Max Finance",
+      "provider_model_id": "nace-ai/drex-max-finance",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "nace-ai/drex-max-finance",
-      "description": "Drex Max Finance is a finance-tuned version of Nace.AI's Drex Max, a 27B multimodal decision model. Given a state as text, JSON, or images such as invoices, receipts, and statements,...",
-      "model_types": [],
-      "name": "Nace.AI: Drex Max Finance",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -14775,31 +14775,42 @@
       }
     },
     {
-      "provider_model_id": "nex-agi/nex-n2.6",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "nex-agi/nex-n2.6",
+      "description": "Nex-N2.6 is an agentic model from Nex AGI, built on [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash-BF16) with about 321B parameters. It is suited for computer use, coding, and long-horizon tasks that involve tools. Compared with...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
           "limits": {
             "context_window": 262144
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Nex AGI: Nex-N2.6",
+      "provider_model_id": "nex-agi/nex-n2.6",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -14808,31 +14819,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "nex-agi/nex-n2.6",
-      "description": "Nex-N2.6 is an agentic model from Nex AGI, built on [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash-BF16) with about 321B parameters. It is suited for computer use, coding, and long-horizon tasks that involve tools. Compared with...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Nex AGI: Nex-N2.6",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -15458,30 +15458,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from Google Gemma-3-4B. It moderates both inputs to and responses from LLMs and VLMs, accepting...",
       "interfaces": [
         {
@@ -15507,7 +15483,31 @@
       ],
       "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
       "provider_model_id": "nvidia/nemotron-3.5-content-safety:free",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -19884,49 +19884,49 @@
       }
     },
     {
-      "provider_model_id": "openai/gpt-image-2.6-flare",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "openai/gpt-image-2.6-flare",
       "description": "GPT Image 2.6 Flare is OpenAI's image generation and editing model optimized for speed: fast iteration and interactive text-to-image and image-to-image workflows, generating about 50% faster than GPT Image 2.5....",
+      "interfaces": [],
       "model_types": [],
       "name": "OpenAI: GPT Image 2.6 Flare",
+      "provider_model_id": "openai/gpt-image-2.6-flare",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "openai/gpt-image-2.6-sunburst",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "openai/gpt-image-2.6-sunburst",
       "description": "GPT Image 2.6 Sunburst is OpenAI's image generation and editing model optimized for detail: dense compositions, text-heavy layouts, and edits that keep details consistent from one edit to the next...",
+      "interfaces": [],
       "model_types": [],
       "name": "OpenAI: GPT Image 2.6 Sunburst",
+      "provider_model_id": "openai/gpt-image-2.6-sunburst",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -20475,26 +20475,26 @@
       }
     },
     {
-      "provider_model_id": "openrouter/auto-code",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "openrouter/auto-code",
+      "description": "Auto Code is OpenRouter’s router built specifically for coding agents and harnesses. It uses the same routing engine as the [Auto Router](https://openrouter.ai/openrouter/auto), with every request treated as part of an...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Auto Code",
+      "provider_model_id": "openrouter/auto-code",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "openrouter/auto-code",
-      "description": "Auto Code is OpenRouter’s router built specifically for coding agents and harnesses. It uses the same routing engine as the [Auto Router](https://openrouter.ai/openrouter/auto), with every request treated as part of an...",
-      "model_types": [],
-      "name": "Auto Code",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -20729,26 +20729,26 @@
       }
     },
     {
-      "provider_model_id": "parallel/decisions-fast",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "parallel/decisions-fast",
+      "description": "Decisions Fast is Parallel's web-grounded Decisions model. Instead of generating text, it reads the content passed as `state` (text or JSON), researches the live web, and returns typed answers to...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Parallel: Decisions Fast",
+      "provider_model_id": "parallel/decisions-fast",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "parallel/decisions-fast",
-      "description": "Decisions Fast is Parallel's web-grounded Decisions model. Instead of generating text, it reads the content passed as `state` (text or JSON), researches the live web, and returns typed answers to...",
-      "model_types": [],
-      "name": "Parallel: Decisions Fast",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -20813,31 +20813,42 @@
       }
     },
     {
-      "provider_model_id": "particle-ai/particle-1:free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "particle-ai/particle-1:free",
+      "description": "Particle-1 is a token-efficient agentic coding model from Particle AI, post-trained on DeepSeek V4.1 Flash. It is suited for software engineering work such as terminal workflows, codebase changes, and data...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
           "limits": {
             "context_window": 1048576
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Particle AI: Particle-1 (free)",
+      "provider_model_id": "particle-ai/particle-1:free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -20846,31 +20857,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "particle-ai/particle-1:free",
-      "description": "Particle-1 is a token-efficient agentic coding model from Particle AI, post-trained on DeepSeek V4.1 Flash. It is suited for software engineering work such as terminal workflows, codebase changes, and data...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Particle AI: Particle-1 (free)",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -21019,26 +21019,26 @@
       }
     },
     {
-      "provider_model_id": "perplexity/pplx-decider-flash-v1.3:free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "perplexity/pplx-decider-flash-v1.3:free",
+      "description": "Decider Flash V1.3 is a decision model from Perplexity, a smaller, lower-cost sibling of [Decider V1.3](/perplexity/pplx-decider-v1.3) with the same API contract. Instead of generating text, it reads content passed as...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Perplexity: Decider Flash V1.3 (free)",
+      "provider_model_id": "perplexity/pplx-decider-flash-v1.3:free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "perplexity/pplx-decider-flash-v1.3:free",
-      "description": "Decider Flash V1.3 is a decision model from Perplexity, a smaller, lower-cost sibling of [Decider V1.3](/perplexity/pplx-decider-v1.3) with the same API contract. Instead of generating text, it reads content passed as...",
-      "model_types": [],
-      "name": "Perplexity: Decider Flash V1.3 (free)",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -21065,26 +21065,26 @@
       }
     },
     {
-      "provider_model_id": "perplexity/pplx-decider-v1.3:free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "perplexity/pplx-decider-v1.3:free",
+      "description": "Decider V1.3 is a decision model from Perplexity, succeeding [Decider V1.2](/perplexity/pplx-decider-v1.2). Instead of generating text, it reads content passed as `state` (text, JSON, or images) and returns typed, probabilistic answers...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Perplexity: Decider V1.3 (free)",
+      "provider_model_id": "perplexity/pplx-decider-v1.3:free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "perplexity/pplx-decider-v1.3:free",
-      "description": "Decider V1.3 is a decision model from Perplexity, succeeding [Decider V1.2](/perplexity/pplx-decider-v1.2). Instead of generating text, it reads content passed as `state` (text, JSON, or images) and returns typed, probabilistic answers...",
-      "model_types": [],
-      "name": "Perplexity: Decider V1.3 (free)",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -21605,30 +21605,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "Qwen2.5 7B is the latest series of Qwen large language models. Qwen2.5 brings the following improvements upon Qwen2: - Significantly more knowledge and has greatly improved capabilities in coding and...",
       "interfaces": [
         {
@@ -21654,7 +21630,31 @@
       ],
       "name": "Qwen: Qwen2.5 7B Instruct",
       "provider_model_id": "qwen/qwen-2.5-7b-instruct",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -22428,7 +22428,7 @@
     },
     {
       "availability": {
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "checked_at": "2026-11-16T03:29:37.622809704Z",
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
@@ -22437,8 +22437,7 @@
       "interfaces": [
         {
           "capabilities": [
-            "tools",
-            "structured_outputs"
+            "tools"
           ],
           "input_modalities": [
             "text"
@@ -22707,26 +22706,26 @@
       }
     },
     {
-      "provider_model_id": "qwen/qwen3-reranker-0.6b",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "qwen/qwen3-reranker-0.6b",
+      "description": "Qwen3 Reranker 0.6B is the smallest text reranking model from Alibaba Cloud in the Qwen3 Reranker series. Built on the Qwen3 architecture, it evaluates query-document pairs to produce relevance scores...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Qwen3 Reranker 0.6B",
+      "provider_model_id": "qwen/qwen3-reranker-0.6b",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "qwen/qwen3-reranker-0.6b",
-      "description": "Qwen3 Reranker 0.6B is the smallest text reranking model from Alibaba Cloud in the Qwen3 Reranker series. Built on the Qwen3 architecture, it evaluates query-document pairs to produce relevance scores...",
-      "model_types": [],
-      "name": "Qwen3 Reranker 0.6B",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -22878,7 +22877,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "canonical_id": "qwen/qwen3-vl-30b-a3b-thinking",
       "description": "Qwen3-VL-30B-A3B-Thinking is a multimodal model that unifies strong text generation with visual understanding for images and videos. Its Thinking variant enhances reasoning in STEM, math, and complex tasks. It excels...",
       "interfaces": [
         {
@@ -24836,6 +24834,68 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-16T03:29:37.622809704Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "qwen/qwen4-max",
+      "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text, with a 1M-token context window and reasoning enabled by default....",
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools",
+            "reasoning",
+            "structured_outputs",
+            "logprobs"
+          ],
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "limits": {
+            "context_window": 1000000
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
+        }
+      ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Qwen: Qwen4 Max",
+      "provider_model_id": "qwen/qwen4-max",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:19.269024984Z",
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -25088,49 +25148,49 @@
       }
     },
     {
-      "provider_model_id": "recraft/recraft-v4.1-flash-v2",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "recraft/recraft-v4.1-flash-v2",
       "description": "Recraft V4.1 Flash V2 is a text-to-image model from Recraft, an updated version of [Recraft V4.1 Flash](/recraft/recraft-v4.1-flash) in the speed tier of the V4.1 family. It is suited for rapid...",
+      "interfaces": [],
       "model_types": [],
       "name": "Recraft: Recraft V4.1 Flash V2",
+      "provider_model_id": "recraft/recraft-v4.1-flash-v2",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "recraft/recraft-v4.1-flash-v2:free",
-      "interfaces": [],
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "recraft/recraft-v4.1-flash-v2:free",
       "description": "Recraft V4.1 Flash V2 is a text-to-image model from Recraft, an updated version of [Recraft V4.1 Flash](/recraft/recraft-v4.1-flash) in the speed tier of the V4.1 family. It is suited for rapid...",
+      "interfaces": [],
       "model_types": [],
       "name": "Recraft: Recraft V4.1 Flash V2 (free)",
+      "provider_model_id": "recraft/recraft-v4.1-flash-v2:free",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -25692,30 +25752,41 @@
       }
     },
     {
-      "provider_model_id": "ricursiveai/ripple-65b-preview",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "ricursiveai/ripple-65b-preview",
+      "description": "Ripple-65B-Preview by ricursiveAI, a 65B model with native tool calling, served in BF16.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
+          "input_modalities": [
+            "text"
+          ],
           "limits": {
             "context_window": 1048576
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Ricursive: Ripple 65B Preview",
+      "provider_model_id": "ricursiveai/ripple-65b-preview",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -25724,31 +25795,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "ricursiveai/ripple-65b-preview",
-      "description": "Ripple-65B-Preview by ricursiveAI, a 65B model with native tool calling, served in BF16.",
-      "model_types": [
-        "language"
-      ],
-      "name": "Ricursive: Ripple 65B Preview",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -26546,26 +26606,26 @@
       }
     },
     {
-      "provider_model_id": "speechify/simba-3.5",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "speechify/simba-3.5",
+      "description": "Speechify's recommended streaming text-to-speech model, covering 48 languages including English under one model, with the language chosen per request.",
       "interfaces": [],
+      "model_types": [],
+      "name": "Speechify: Simba 3.5",
+      "provider_model_id": "speechify/simba-3.5",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "speechify/simba-3.5",
-      "description": "Speechify's recommended streaming text-to-speech model, covering 48 languages including English under one model, with the language chosen per request.",
-      "model_types": [],
-      "name": "Speechify: Simba 3.5",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -26574,7 +26634,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "canonical_id": "stepfun/step-3.5-flash",
       "description": "Step 3.5 Flash is StepFun's most capable open-source foundation model. Built on a sparse Mixture of Experts (MoE) architecture, it selectively activates only 11B of its 196B parameters per token....",
       "interfaces": [
         {
@@ -26779,7 +26838,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "canonical_id": "tencent/hunyuan-a13b-instruct",
       "description": "Hunyuan-A13B is a 13B active parameter Mixture-of-Experts (MoE) language model developed by Tencent, with a total parameter count of 80B and support for reasoning via Chain-of-Thought. It offers competitive benchmark...",
       "interfaces": [
         {
@@ -27024,26 +27082,26 @@
       }
     },
     {
-      "provider_model_id": "tencent/hy-world-2.1-panorama",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "tencent/hy-world-2.1-panorama",
+      "description": "HY-World 2.1 Panorama is a 360-degree panorama generation model from Tencent, part of the Hunyuan World family. It turns a single text prompt into one high-resolution equirectangular panorama suitable for...",
       "interfaces": [],
+      "model_types": [],
+      "name": "Tencent: HY-World 2.1 Panorama",
+      "provider_model_id": "tencent/hy-world-2.1-panorama",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "tencent/hy-world-2.1-panorama",
-      "description": "HY-World 2.1 Panorama is a 360-degree panorama generation model from Tencent, part of the Hunyuan World family. It turns a single text prompt into one high-resolution equirectangular panorama suitable for...",
-      "model_types": [],
-      "name": "Tencent: HY-World 2.1 Panorama",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -27164,30 +27222,41 @@
       }
     },
     {
-      "provider_model_id": "tencent/hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "tencent/hy4",
+      "description": "The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs"
           ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
           "limits": {
             "context_window": 1048576
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Tencent: Hy4",
+      "provider_model_id": "tencent/hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -27196,31 +27265,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "tencent/hy4",
-      "description": "The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Tencent: Hy4",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -27564,90 +27622,42 @@
       }
     },
     {
-      "provider_model_id": "thinkingmachines/inkling-2-small",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "thinkingmachines/inkling-2-small",
+      "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B active parameters out of 594B total. It is the first model in the second...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs",
             "logprobs"
           ],
-          "limits": {
-            "context_window": 1048576
-          }
-        }
-      ],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "protocol": "chat_completions",
-            "operation": "generation",
-            "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
-              "/capabilities": "catalog",
-              "/limits": "catalog"
-            },
-            "protocol_profile": "default"
-          }
-        ]
-      },
-      "canonical_id": "thinkingmachines/inkling-2-small",
-      "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B active parameters out of 594B total. It is the first model in the second...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Thinking Machines: Inkling 2 Small",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
-      }
-    },
-    {
-      "provider_model_id": "thinkingmachines/inkling-2-small:free",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "input_modalities": [
             "text",
             "image"
           ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
           "output_modalities": [
             "text"
           ],
-          "capabilities": [
-            "tools",
-            "reasoning"
-          ],
-          "limits": {
-            "context_window": 1048576
-          }
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Thinking Machines: Inkling 2 Small",
+      "provider_model_id": "thinkingmachines/inkling-2-small",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -27656,31 +27666,79 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
+        ],
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
       "canonical_id": "thinkingmachines/inkling-2-small:free",
       "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B active parameters out of 594B total. It is the first model in the second...",
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools",
+            "reasoning"
+          ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
+        }
+      ],
       "model_types": [
         "language"
       ],
       "name": "Thinking Machines: Inkling 2 Small (free)",
+      "provider_model_id": "thinkingmachines/inkling-2-small:free",
       "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -28053,28 +28111,39 @@
       }
     },
     {
-      "provider_model_id": "unbiased/pareto-26.10-preview",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "unbiased/pareto-26.10-preview",
+      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering frontier-level performance across a broad range of general-purpose tasks. This is a preview of the...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
           "input_modalities": [
             "text",
             "image"
           ],
+          "limits": {
+            "context_window": 1048576
+          },
+          "operation": "generation",
           "output_modalities": [
             "text"
           ],
-          "capabilities": [
-            "tools"
-          ],
-          "limits": {
-            "context_window": 1048576
-          }
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Pareto 26.10 Preview",
+      "provider_model_id": "unbiased/pareto-26.10-preview",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -28083,31 +28152,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "unbiased/pareto-26.10-preview",
-      "description": "Pareto is a multimodal composite model built for research, coding, and agentic workflows, while delivering frontier-level performance across a broad range of general-purpose tasks. This is a preview of the...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Pareto 26.10 Preview",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
@@ -29485,7 +29543,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "canonical_id": "x-ai/grok-stt-1.0",
       "description": "Grok STT is SpaceXAI's speech-to-text model, available via the REST /v1/stt endpoint. It supports transcription with word-level timestamps, optional speaker diarization, and multichannel audio.",
       "interfaces": [],
       "model_types": [],
@@ -29503,26 +29560,26 @@
       }
     },
     {
-      "provider_model_id": "x-ai/grok-stt-2.0",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "x-ai/grok-stt-2.0",
+      "description": "Grok STT 2.0 is a speech-to-text model from SpaceXAI and the successor to Grok STT 1.0. It is suited for transcription workloads that need word-level timestamps, optional speaker diarization, and...",
       "interfaces": [],
+      "model_types": [],
+      "name": "SpaceXAI: Grok STT 2.0",
+      "provider_model_id": "x-ai/grok-stt-2.0",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "canonical_id": "x-ai/grok-stt-2.0",
-      "description": "Grok STT 2.0 is a speech-to-text model from SpaceXAI and the successor to Grok STT 1.0. It is suited for transcription workloads that need word-level timestamps, optional speaker diarization, and...",
-      "model_types": [],
-      "name": "SpaceXAI: Grok STT 2.0",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -30064,30 +30121,6 @@
         "scope": "public",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
       },
-      "sync": {
-        "field_owners": {
-          "/description": "catalog",
-          "/model_types": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        },
-        "interface_owners": [
-          {
-            "field_owners": {
-              "/capabilities": "catalog",
-              "/input_modalities": "catalog",
-              "/limits": "catalog",
-              "/operation": "catalog",
-              "/output_modalities": "catalog",
-              "/protocol": "catalog"
-            },
-            "operation": "generation",
-            "protocol": "chat_completions",
-            "protocol_profile": "default"
-          }
-        ],
-        "owner": "catalog"
-      },
       "description": "Xing4.0-29B-A4B is an open-weight mixture-of-experts language model from China Telecom's AI team (TeleAI) and the successor to the TeleChat series. It has 29B total parameters with 4B active per token...",
       "interfaces": [
         {
@@ -30114,7 +30147,31 @@
       ],
       "name": "XingChen: Xing4.0 29B A4B (free)",
       "provider_model_id": "xingchen-agi/xing4.0-29b-a4b:free",
-      "status": "active"
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/model_types": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "interface_owners": [
+          {
+            "field_owners": {
+              "/capabilities": "catalog",
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
+            },
+            "operation": "generation",
+            "protocol": "chat_completions",
+            "protocol_profile": "default"
+          }
+        ],
+        "owner": "catalog"
+      }
     },
     {
       "availability": {
@@ -31169,31 +31226,42 @@
       }
     },
     {
-      "provider_model_id": "z-ai/glm-5.3-flashx-legal",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:19.269024984Z",
+        "scope": "public",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+      },
+      "canonical_id": "z-ai/glm-5.3-flashx-legal",
+      "description": "GLM-5.3-FlashX-Legal (GLM-Legal) is Z.ai's legal-domain variant of GLM-5.3-FlashX, a native multimodal model that accepts text, image, and video input and produces text. It adds legal-domain mid-training and post-training with reinforcement...",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "input_modalities": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output_modalities": [
-            "text"
-          ],
           "capabilities": [
             "tools",
             "reasoning",
             "structured_outputs"
           ],
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
           "limits": {
             "context_window": 1048576
-          }
+          },
+          "operation": "generation",
+          "output_modalities": [
+            "text"
+          ],
+          "protocol": "chat_completions"
         }
       ],
+      "model_types": [
+        "language"
+      ],
+      "name": "Z.ai: GLM 5.3 FlashX Legal",
+      "provider_model_id": "z-ai/glm-5.3-flashx-legal",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/model_types": "catalog",
@@ -31202,31 +31270,20 @@
         },
         "interface_owners": [
           {
-            "protocol": "chat_completions",
-            "operation": "generation",
             "field_owners": {
-              "/protocol": "catalog",
-              "/operation": "catalog",
-              "/input_modalities": "catalog",
-              "/output_modalities": "catalog",
               "/capabilities": "catalog",
-              "/limits": "catalog"
+              "/input_modalities": "catalog",
+              "/limits": "catalog",
+              "/operation": "catalog",
+              "/output_modalities": "catalog",
+              "/protocol": "catalog"
             },
+            "operation": "generation",
+            "protocol": "chat_completions",
             "protocol_profile": "default"
           }
-        ]
-      },
-      "canonical_id": "z-ai/glm-5.3-flashx-legal",
-      "description": "GLM-5.3-FlashX-Legal (GLM-Legal) is Z.ai's legal-domain variant of GLM-5.3-FlashX, a native multimodal model that accepts text, image, and video input and produces text. It adds legal-domain mid-training and post-training with reinforcement...",
-      "model_types": [
-        "language"
-      ],
-      "name": "Z.ai: GLM 5.3 FlashX Legal",
-      "status": "active",
-      "availability": {
-        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-        "checked_at": "2026-11-14T05:57:19.269024984Z",
-        "scope": "public"
+        ],
+        "owner": "catalog"
       }
     },
     {
