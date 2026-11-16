@@ -157,9 +157,20 @@ jobs:
     - name: Validate independent consumer lockfiles before compilation
       run: |
         cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
+    - name: Cache the pinned historical producer
+      id: pre_m0_cache
+      uses: actions/cache@v5
+      with:
+        # Cache only the executable and identity, never old workspace dependencies.
+        path: |
+          target/debug/examples/pre_m0_policy_producer
+          target/debug/examples/pre_m0_policy_producer.revision
+        key: pre-m0-producer-v1-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('.github/scripts/build-pre-m0-producer.sh', '.github/fixtures/pre-m0-terminal-export.patch') }}
     - name: Build tests and process fixtures once
       # Leave time for diagnostics upload if this bounded build is interrupted.
       timeout-minutes: 110
+      env:
+        PRE_M0_CACHE_HIT: ${{ steps.pre_m0_cache.outputs.cache-hit }}
       run: |
         set -euo pipefail
         mkdir -p ci-evidence
@@ -178,7 +189,11 @@ jobs:
         trap finish_build EXIT
         trap 'exit 143' TERM
         trap 'exit 130' INT
-        /usr/bin/time -v -o ci-evidence/build-pre-m0-producer.txt bash .github/scripts/build-pre-m0-producer.sh
+        if [[ "$PRE_M0_CACHE_HIT" != true ]]; then
+          /usr/bin/time -v -o ci-evidence/build-pre-m0-producer.txt bash .github/scripts/build-pre-m0-producer.sh
+        fi
+        [[ -x target/debug/examples/pre_m0_policy_producer ]]
+        [[ -s target/debug/examples/pre_m0_policy_producer.revision ]]
         /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
         /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
         # Archive without recompiling, including the now-built process fixtures.
