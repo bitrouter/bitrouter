@@ -4,7 +4,7 @@
 > [CLI reference](../CLI.md#bro-init-onboarding-wizard) and
 > [CLI and skills guide](../development/cli-and-skills.md).
 
-Status: **proposed — not yet implemented** · Author: Claude (with Spikel) ·
+Status: **superseded; retained as a historical proposal** · Author: Claude (with Spikel) ·
 Date: 2026-07-15 · Branch: `claude/cli-onboarding-flow`
 
 v1 is a **deterministic CLI wizard** (scripted prompts, no LLM, no Node, no
