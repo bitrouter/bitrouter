@@ -2,6 +2,8 @@
 
 mod admission;
 mod attempts;
+#[cfg(test)]
+mod contract_tests;
 mod finalization;
 pub(super) mod guard;
 mod lease;

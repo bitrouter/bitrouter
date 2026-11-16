@@ -33,6 +33,9 @@ activation/startup and execution reopening enforce the same result. Historical
 integrity inspection and paid-work recovery retain their authenticated decoder.
 The non-tenant local harness can still use its experimental runtime; the tenant
 service no longer qualifies its context/trajectory/optimization Policy artifacts.
+Shared gateway publication applies the same qualifier before changing the
+immutable configuration or authority head. Retaining trajectory records and
+terminal recovery does not authorize new guarded service execution.
 
 Before upgrading an installation with active old Policy artifacts, use the
 previous binary and existing management API to deactivate them by activating an
