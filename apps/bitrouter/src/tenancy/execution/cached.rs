@@ -316,7 +316,12 @@ impl Service {
         let revision = self
             .resources
             .open_execution(&retained)
-            .map_err(|_| self.unavailable())?;
+            .map_err(|code| match code {
+                // Authenticated history can be readable but unsupported for
+                // this execution. A rejected request must not fence storage.
+                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
+                _ => self.unavailable(),
+            })?;
         self.check_cached_revision(submission, &revision)?;
         let heap = revision.retained_heap_bytes().map_err(Failure::from)?;
         let key_heap = key.heap_bytes();
