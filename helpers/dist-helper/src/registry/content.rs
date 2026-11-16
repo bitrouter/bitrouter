@@ -292,7 +292,50 @@ pub(super) fn finalize(
             .get_mut(&candidate.manifest)
             .context("manifest")?["as_of"] = old.value()["as_of"].clone();
     }
-    if candidate.document()?.as_of() > now {
+    let final_document = candidate.document()?;
+    let as_of = final_document.as_of();
+    for model in final_document.models() {
+        if model
+            .pointer("/curation/checked_at")
+            .and_then(Value::as_str)
+            .and_then(timestamp)
+            .is_some_and(|t| t > as_of)
+        {
+            bail!("curation evidence exceeds publication evaluation time");
+        }
+    }
+    for provider in final_document.providers() {
+        for model in provider["models"].as_array().into_iter().flatten() {
+            if model
+                .pointer("/availability/checked_at")
+                .and_then(Value::as_str)
+                .and_then(timestamp)
+                .is_some_and(|t| t > as_of)
+            {
+                bail!("availability evidence exceeds publication evaluation time");
+            }
+        }
+    }
+    for entry in candidate.files[&candidate.identities]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if entry["observed_at"]
+            .as_str()
+            .and_then(timestamp)
+            .is_some_and(|t| t > now)
+            || entry["bindings"].as_array().into_iter().flatten().any(|b| {
+                b["verified_at"]
+                    .as_str()
+                    .and_then(timestamp)
+                    .is_some_and(|t| t > now)
+            })
+        {
+            bail!("identity evidence is in the future");
+        }
+    }
+    if as_of > now {
         bail!("clock rollback: candidate time exceeds current evaluation");
     }
     Ok(())

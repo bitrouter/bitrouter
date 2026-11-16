@@ -740,3 +740,34 @@ fn pending_new_binding_reuses_its_own_verification_time() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn pending_recommendation_sets_are_stable_and_future_evidence_is_rejected() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("models")?[0]["input_modalities"] =
+        json!(["text", "image"]);
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    content::finalize(&mut pending, &accepted, None, first)?;
+    let mut repeated = pending.clone();
+    repeated.files.get_mut(&path).context("models")?[0]["input_modalities"] =
+        json!(["image", "text"]);
+    repeated
+        .files
+        .get_mut(&repeated.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut repeated, &accepted, Some(&pending), later)?;
+    assert_eq!(repeated.digest()?, pending.digest()?);
+    pending.files.get_mut(&path).context("models")?[0]["curation"]["checked_at"] =
+        json!("2026-12-01T00:00:00Z");
+    let mut repeated = pending.clone();
+    assert!(content::finalize(&mut repeated, &accepted, Some(&pending), later).is_err());
+    Ok(())
+}
