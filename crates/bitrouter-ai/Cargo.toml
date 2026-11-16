@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 exclude = ["public-api-deps.txt"]
 
+[[example]]
+name = "policy_schema"
+required-features = ["schema"]
+
 [features]
 default = []
 # Pure observation-schema helpers for exporter conformance suites.

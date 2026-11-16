@@ -1,10 +1,7 @@
 //! A continuation pins its backend/route, while each new execution pins its own
 //! configuration and intersects the current policy-selected candidate set.
 use super::*;
-use crate::{
-    policy_lock::{PolicyDefinition, PolicyLock},
-    tenancy::{Service, command::Command, resources::Resources, store::StoredResponse},
-};
+use crate::tenancy::{Service, command::Command, resources::Resources, store::StoredResponse};
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::{Activation, ConfigurationRevision, ResourceRef},
@@ -27,27 +24,12 @@ async fn configured(provider: &Server) -> Result<(Ready, ResourceRef, ResourceRe
     let policy = reference(ResourceKind::Policy, "selected-policy")?;
     let first = reference(ResourceKind::Credential, "first-slot")?;
     let second = reference(ResourceKind::Credential, "second-slot")?;
-    let mut document = PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        PolicyDefinition {
-            tiers: [
-                (
-                    "economy".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("first:model-a".into()),
-                ),
-                (
-                    "strong".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("second:model-a".into()),
-                ),
-            ]
-            .into(),
-            default_tier: Some("economy".into()),
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into()],
-            ..Default::default()
-        },
-    );
+    let document = crate::model_policy::parse(&json!({
+        "spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{
+            "tiers":{"economy":{"model":"first:model-a"},"strong":{"model":"second:model-a"}},
+            "default_tier":"economy", "tool_use_tier":"strong", "tool_safe_tiers":["strong"]
+        }}
+    }))?;
     let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
     let credential = |reference: &ResourceRef| json!({"reference":reference,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}});
     resources.provision_bytes(&fixture.db, &serde_json::to_vec(&json!({

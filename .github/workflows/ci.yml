@@ -175,6 +175,7 @@ jobs:
         trap finish_build EXIT
         trap 'exit 143' TERM
         trap 'exit 130' INT
+        /usr/bin/time -v -o ci-evidence/build-pre-m0-producer.txt bash .github/scripts/build-pre-m0-producer.sh
         /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
         /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
         # Archive without recompiling, including the now-built process fixtures.
@@ -252,8 +253,8 @@ jobs:
           expected-tests: 3
           filter: kind(lib) & (test(=harness::agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause) | test(=harness::agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(=harness::service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery))
         - suite: recovery-experiment
-          expected-tests: 5
-          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort) | test(=offline::large::tests::dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget) | test(=tenancy::audit::recovery::v2::tests::runner::real_v2_runner_proves_closure_and_refuses_changed_approval_and_revoked_source_key) | test(=tenancy::audit::recovery::v2::tests::restore::real_restore_keeps_old_resource_revisions_and_rotated_oauth_and_refuses_corruption))
+          expected-tests: 4
+          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history) | test(=offline::large::tests::dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget) | test(=tenancy::audit::recovery::v2::tests::runner::real_v2_runner_proves_closure_and_refuses_changed_approval_and_revoked_source_key) | test(=tenancy::audit::recovery::v2::tests::restore::real_restore_keeps_old_resource_revisions_and_rotated_oauth_and_refuses_corruption))
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
@@ -386,6 +387,7 @@ jobs:
       timeout-minutes: 30
       shell: bash
       env:
+        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
       run: |
         for case in \
@@ -534,11 +536,11 @@ jobs:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
         bash .github/scripts/ci-test.sh db-12 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=trajectory::store::owned::tests::server_owned_trajectory_store_preserves_transaction_and_scope)'
-    - name: verify atomic trajectory and evaluation closure on the selected backend
+    - name: verify directory projections and receipt history on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-13 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(tenancy::tests::execution::evaluation::trajectory::server::)'
+        bash .github/scripts/ci-test.sh db-13 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(tenancy::tests::execution::evaluation::server::)'
     - name: verify Legacy capture and checkpoint isolation on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}

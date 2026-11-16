@@ -326,7 +326,7 @@ impl Accounting {
         self.totals = next;
         Ok(charged)
     }
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub fn physical_write_reserved(&self) -> u64 {
         self.physical_write_reserved
     }

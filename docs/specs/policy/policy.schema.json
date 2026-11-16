@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Document",
+  "description": "Portable policy source. Tenant identity, activation and revision live in the API envelope.",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "description": "Required, exact contract discriminator; never inferred from other fields.",
+      "$ref": "#/$defs/SpecVersion"
+    },
+    "policies": {
+      "description": "Named policies selected by explicit router bindings.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Policy"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "policies"
+  ],
+  "$defs": {
+    "SpecVersion": {
+      "description": "Closed discriminator: unsupported contracts cannot silently become defaults.",
+      "oneOf": [
+        {
+          "description": "Initial independently versioned model-only policy contract.",
+          "type": "string",
+          "const": "policy/1.0.0-beta.1"
+        }
+      ]
+    },
+    "Policy": {
+      "description": "Model selection without context transformations, agent execution or learning state.",
+      "type": "object",
+      "properties": {
+        "tiers": {
+          "description": "Named generation targets. A target is a model and optional reasoning effort.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Target"
+          }
+        },
+        "default_tier": {
+          "description": "Required fallback when no admitted classification matches.",
+          "type": "string"
+        },
+        "classifier_digest": {
+          "description": "Exact classifier configuration digest; required when routes are nonempty.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routes": {
+          "description": "Canonical `task-family|next-step|risk` classification to tier.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tool_use_tier": {
+          "description": "Tool-safe fallback when a tool-bearing request selects an unsafe tier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_safe_tiers": {
+          "description": "Tiers permitted for tool-bearing requests when a tool fallback is configured.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tiers",
+        "default_tier"
+      ]
+    },
+    "Target": {
+      "description": "A generation target. No field can request context rewriting or harness behavior.",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "Explicit model selector resolved inside the authorized routing source.",
+          "type": "string"
+        },
+        "effort": {
+          "description": "Absence preserves the caller's reasoning-effort constraint.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    }
+  }
+}

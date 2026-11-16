@@ -149,6 +149,65 @@ async fn resource_reads_reject_wrong_installation_and_reference() -> TestResult 
     Ok(())
 }
 
+async fn model_policy_roundtrip(version: Version, mode: HttpVersion) -> TestResult {
+    let mut pin = reference()?;
+    pin.resource_kind = bitrouter_ai::tenancy::authority::ResourceKind::Policy;
+    let document = json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"auto":{
+        "tiers":{"default":{"model":"mock:small"}},"default_tier":"default"
+    }}});
+    let mut state = status()?;
+    state["reference"] = serde_json::to_value(&pin)?;
+    let response = json!({"status":state,"document":document,"name":"auto"});
+    let mut wrong = response.clone();
+    wrong["status"]["reference"]["revision_id"] = json!("other");
+    let server = server::serve(version, vec![
+        Some(server::json(json!({"installation_id":"installation","spec_version":"policy/1.0.0-beta.1","classifier_digest":format!("sha256:{}", "a".repeat(64)),"provisioning_enabled":true}))?),
+        Some(server::json(response)?), Some(server::json(wrong)?),
+    ]).await?;
+    let client = TenancyClient::with_options(
+        &server.endpoint,
+        TOKEN,
+        TenancyOptions {
+            http_version: mode,
+            ..Default::default()
+        },
+    )?;
+    let installation = "installation".try_into()?;
+    let tenant = "tenant".try_into()?;
+    client.policy_capabilities(&installation).await?;
+    let read = client.policy_source(&installation, &tenant, &pin).await?;
+    assert_eq!(serde_json::to_value(read.document)?, document);
+    assert!(matches!(
+        client.policy_source(&installation, &tenant, &pin).await,
+        Err(Error::Response(_))
+    ));
+    let records = server.records.lock().await;
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].path, "/control/v1/tenancy/policy-capabilities");
+    assert!(
+        records[1]
+            .path
+            .starts_with("/control/v1/tenants/tenant/resources/policy?")
+    );
+    for record in records.iter() {
+        assert_eq!(record.version, version);
+        assert_eq!(record.headers["bitrouter-installation-id"], "installation");
+        assert_eq!(record.headers["authorization"], format!("Bearer {TOKEN}"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_source_http1_checks_exact_contract_and_revision() -> TestResult {
+    model_policy_roundtrip(Version::HTTP_11, HttpVersion::Http1Only).await
+}
+
+#[cfg(feature = "http2")]
+#[tokio::test]
+async fn policy_source_h2c_checks_exact_contract_and_revision() -> TestResult {
+    model_policy_roundtrip(Version::HTTP_2, HttpVersion::Http2PriorKnowledge).await
+}
+
 #[tokio::test]
 async fn lost_resource_write_is_unknown_and_never_resubmitted() -> TestResult {
     let server =

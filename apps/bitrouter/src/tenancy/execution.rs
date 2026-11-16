@@ -803,12 +803,6 @@ impl TenantExecution {
     pub(in crate::tenancy) fn trajectory_resources(&self) -> &super::resources::Resources {
         &self.service.resources
     }
-    #[cfg(all(test, feature = "core"))]
-    pub(in crate::tenancy) fn trajectory_observation(
-        &self,
-    ) -> Option<&Arc<super::eval::observation::RequiredObservation>> {
-        self.observation.get()
-    }
     #[cfg(feature = "core")]
     pub(in crate::tenancy) fn trajectory_sender(
         &self,

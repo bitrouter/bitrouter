@@ -11,6 +11,7 @@ mod discovery;
 mod experiment;
 mod input_count;
 mod server;
+mod verification;
 mod waits;
 use crate::harness::resources::{
     HarnessConfig,

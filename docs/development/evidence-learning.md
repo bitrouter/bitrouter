@@ -46,7 +46,14 @@ revisions or correlated forks do not create independent trials. Replacing a
 rubric/model or updating a policy does not retroactively rescore old evidence or
 reassign already accepted sessions. Unknown effects and unconfirmed costs must
 not be converted into positive reward. Policy file formats and guarded
-publication are defined in the [configuration contract](../specs/configuration/README.md#policy-lock-format-4).
+publication for the local harness are described in the
+[configuration contract](../specs/configuration/README.md#existing-local-harness-lock-artifact).
+The tenant service instead accepts the independent
+[model-only Policy contract](../specs/policy/README.md). Its executable
+qualification rejects old experimental Policy artifacts, including references
+from an imported manifest; authenticated historical inspection/recovery remains
+available. Evolution's retained experimental components do not imply service
+eligibility or permission to activate their output.
 
 The current code is organized under `harness/acp`, `acp_trajectory`,
 `storage/checkpoint` and `core/evolution` in the application. Keep dated campaigns,

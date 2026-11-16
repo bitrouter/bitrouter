@@ -360,23 +360,10 @@ async fn revoked_policy_lock_and_shared_profile_keys_cannot_change_family_after_
         &original,
         created.resource_revision.context("shared revision")?,
     );
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "only".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:model".into()),
-            )]
-            .into(),
-            default_tier: Some("only".into()),
-            ..Default::default()
-        },
-    );
     let mut policy = local_input(&fixture, "create-policy")?;
     policy.key.resource_id = "policy-lock".try_into()?;
     policy.definition = Definition::Policy {
-        document: serde_json::to_value(document)?,
+        document: serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
         name: "selected".into(),
         dependencies: Vec::new(),
     };

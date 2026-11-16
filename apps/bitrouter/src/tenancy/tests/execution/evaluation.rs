@@ -15,9 +15,9 @@ use std::{sync::atomic::AtomicUsize, time::Duration};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
-mod exploration;
 mod owned;
-mod trajectory;
+#[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
+mod server;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -59,19 +59,9 @@ async fn provider(State(state): State<Provider>, Json(body): Json<serde_json::Va
 }
 
 async fn policy_fixture(url: &str, mode: LearningMode) -> Result<(Fixture, RevisionId)> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "economy".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("mock:model-a".into()),
-            )]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":"mock:model-a"}},"default_tier":"economy"}}}),
+    )?;
     policy_fixture_with_document(url, mode, document, true).await
 }
 

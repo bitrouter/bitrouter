@@ -88,10 +88,6 @@ impl Fixture {
         self.services.push(service.clone());
     }
 
-    pub(super) fn backend(&self) -> DatabaseBackend {
-        self.backend
-    }
-
     pub(super) async fn connect(&mut self) -> Result<DatabaseConnection> {
         let db = connect(&self.url).await?;
         self.pools.push(db.clone());

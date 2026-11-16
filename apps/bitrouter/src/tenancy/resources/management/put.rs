@@ -196,7 +196,7 @@ impl Put<'_> {
                 name,
                 dependencies,
             } => Definition::Policy {
-                document: serde_json::from_value(document.clone())
+                document: crate::model_policy::parse(document)
                     .map_err(|_| ErrorCode::InvalidRequest)?,
                 name: name.clone(),
                 dependencies: dependencies.clone(),

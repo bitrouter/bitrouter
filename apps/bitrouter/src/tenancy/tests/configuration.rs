@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(not(feature = "core"))]
 mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
     Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,

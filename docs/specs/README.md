@@ -6,9 +6,47 @@ compatibility consequences. Admission and review follow the
 
 | Object | Canonical specification | Why it needs a maintained format contract |
 | --- | --- | --- |
-| Published model/provider registry | [Registry v1](registry-v1/README.md), beta `1.0.0-beta.7` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
-| Application and routing-policy configuration | [Configuration formats](configuration/README.md), beta `1.0.0-beta.2` | Existing YAML files, defaults, startup tenancy, routing weights, strict readers, explicit migration and policy artifact versions |
-| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), beta `1.0.0-beta.2` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+| Published model/provider registry | [Registry v1](registry-v1/README.md), `registry/1.0.0-beta.7` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
+| Application configuration | [Configuration formats](configuration/README.md), `configuration/1.0.0-beta.4` | Existing YAML files, defaults, startup tenancy, routing weights and strict readers |
+| Portable model-routing policy | [Policy](policy/README.md), `policy/1.0.0-beta.1` | Independently authored policy files, SDK submissions, retained source and model-only execution semantics |
+| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.4` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+
+## Contract identifiers and revision dimensions
+
+A normative contract is identified as `<namespace>/<SemVer>`, for example
+`policy/1.0.0-beta.1` or `registry/1.0.0-beta.7`. The complete string is a
+qualified contract identifier; only its suffix is a SemVer version. Namespaces
+are lowercase, exact and centrally listed here. Versions from different
+namespaces are unrelated. Build metadata MUST NOT select different semantics.
+Beta support is explicit: accepting beta.1 does not imply beta.2 or stable 1.0.0.
+An incompatible beta change increments `beta.N`; published semantics are not
+replaced under an existing identifier. Stable contracts state their compatible
+extension rules and follow SemVer. Editorial clarification does not change the
+contract's accepted data or behavior.
+
+New independently consumed artifacts carry a required `spec_version` with that
+qualified identifier. Missing, wrong-namespace and unsupported versions fail
+visibly. This convention does not silently change existing wire fields:
+Registry beta.7 still carries integer `version` and unqualified `spec_revision`;
+`registry/1.0.0-beta.7` is its qualified reference in prose. Changing its envelope
+requires its own reviewed beta revision, publisher, reader and cache tests.
+
+Keep these dimensions separate:
+
+- Contract identity/version specifies interpretation and compatibility.
+- Resource revisions, head CAS, authority revisions and configuration generations
+  identify mutable-management state; they are not SemVer versions.
+- Content digests identify bytes or a defined canonical representation. Each API
+  states whether it hashes public source or compiled internal representation.
+- Software and SDK packages retain their independent package-manager SemVer.
+- URL namespaces and message discriminators retain their own scoped semantics;
+  third-party protocols keep upstream versioning.
+- JSON Schema `$schema` identifies the validation dialect, while `$id` identifies
+  the schema resource. Neither replaces the artifact's `spec_version`.
+
+Do not duplicate a contract discriminator with another independently editable
+major/version field. A transport or feature is not a new contract namespace
+unless it owns a genuinely independent compatibility boundary.
 
 Each object has one specification. A transport, profile or feature is a section
 of that object's contract when it needs the same compatibility review; it does

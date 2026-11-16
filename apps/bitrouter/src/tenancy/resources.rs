@@ -53,6 +53,15 @@ use crate::{config::tenancy::TenancyConfig, runtime_crypto::DeploymentKey};
 
 use manifest::{Artifact, Definition, Manifest};
 
+fn qualify_model_policies(artifacts: &[Artifact]) -> std::result::Result<(), ErrorCode> {
+    for artifact in artifacts {
+        if let Definition::Policy { document, .. } = &artifact.definition {
+            crate::model_policy::source(document).map_err(|_| ErrorCode::CapabilityMismatch)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
 const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const SHARED_HEALTH_COMPILER_VERSION: &str = "tenancy-admission-v2";
@@ -242,6 +251,7 @@ impl Resources {
     ) -> std::result::Result<execution::RetainedExecutionRevision, ErrorCode> {
         let validated =
             validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        validated.require_capabilities()?;
         execution::RetainedExecutionRevision::new(
             self.installation.clone(),
             stored.revision.tenant_id.clone(),
@@ -584,6 +594,7 @@ impl Resources {
         {
             return Err(ErrorCode::Forbidden);
         }
+        qualify_model_policies(&artifacts)?;
         let routes = compiler::configuration_routes(document, &artifacts)?;
         let compiler_version = match Envelope::format(&artifacts) {
             6 => NATIVE_COMPILER_VERSION,

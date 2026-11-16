@@ -17,6 +17,32 @@ The [configuration validator](../../apps/bitrouter/src/config/tenancy.rs) and
 [file owner](../../apps/bitrouter/src/tenancy/ownership.rs) enforce eligibility.
 This profile does not establish distributed tenant authority or hosted capacity.
 
+## Model-only policy boundary and upgrades
+
+Public policy source uses [`policy/1.0.0-beta.1`](../specs/policy/README.md).
+`bitrouter-ai::policy` owns lightweight source types; application `model_policy`
+performs semantic validation and deterministic lowering into the current private
+`PolicyLock` IR. The inverse requires complete equality after recompilation,
+including the adapter identity and metadata. Preserved tier context alone is
+insufficient qualification. The service's classifier-contract digest and an
+assessment cohort digest have different meanings and are never substituted.
+
+Executable qualification covers all policy artifacts in the resolved closure,
+including hidden or otherwise unselected dependencies. Configuration creation,
+activation/startup and execution reopening enforce the same result. Historical
+integrity inspection and paid-work recovery retain their authenticated decoder.
+The non-tenant local harness can still use its experimental runtime; the tenant
+service no longer qualifies its context/trajectory/optimization Policy artifacts.
+
+Before upgrading an installation with active old Policy artifacts, use the
+previous binary and existing management API to deactivate them by activating an
+explicit policy-free configuration. After upgrade, submit newly authored Policy
+source, bind its exact revision in a route, and explicitly activate a replacement
+configuration. Old active artifacts fail startup qualification rather than being
+rewritten, relabeled or silently activated. Back up the installation and retain
+old immutable configurations and receipts for inspection/recovery. Upgrading
+does not reset tenant authority, credentials or historical evidence.
+
 | Component | Responsibility |
 | --- | --- |
 | `bitrouter-ai` | Public types, intrinsic validation, explicit stream endings and bounded framing; optional default-off Axum integration |
@@ -30,6 +56,26 @@ Consumers compose their own handlers and middleware with the optional AI Axum
 binding; the [SDK example](../../crates/bitrouter-sdk/examples/axum_gateway.rs)
 shows that composition. A framework adapter's protocol end does not itself prove
 that the service committed an execution receipt.
+
+## Historical recovery tests
+
+Native paid recovery uses a pinned pre-contract runtime to produce genuine
+accepted work, then the current runtime to reopen the original database. Build
+the producer before running the all-feature suite:
+
+```sh
+bash .github/scripts/build-pre-m0-producer.sh
+cargo build -p bitrouter --all-features --examples
+BITROUTER_TEST_EXAMPLES_DIR="$PWD/target/debug/examples" cargo nextest run --all-features
+```
+
+The historical dependency graph has its own target directory; sharing the
+current target can overwrite equal-version workspace artifacts. The checked-in
+adapter changes only an old test: it exports terminal history and activates a
+policy-free configuration through the old management API. It does not change
+the predecessor runtime. The producer revision sidecar and explicit export
+acknowledgement prevent an absent or unrelated fixture from passing. Reduced
+profile campaigns still use separately built current consumers.
 
 ## Runtime budgets and indexed authority
 

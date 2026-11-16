@@ -8,6 +8,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::sync::Arc;
 
 mod admission;
+mod model_policy;
 mod native_generate_content;
 mod profile_observation;
 mod shared_admission;

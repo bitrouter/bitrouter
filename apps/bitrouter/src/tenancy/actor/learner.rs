@@ -428,8 +428,6 @@ impl Worker {
                 .map_err(BudgetError::Rejected)?;
             budget.check()?;
             let write = store::write_in(&tx, &next, &[], &operation);
-            #[cfg(all(test, unix))]
-            let write = job.test.precommit_write(write);
             write.await?;
             ceiling
                 .check(&old, &input.tenant, &configured.dependencies)
@@ -464,8 +462,6 @@ impl Worker {
             self.proof.quarantine();
             return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
         }
-        #[cfg(all(test, unix))]
-        job.test.cross_final_deadline(job.deadline, None)?;
         self.finish_learner(job, budget, || {
             self.authority.read()?.check(&authority, |view| {
                 ceiling.check(view.facts(), &input.tenant, &[])

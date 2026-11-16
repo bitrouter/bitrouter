@@ -82,6 +82,7 @@ pub(crate) struct RetainedExecutionRevision {
 pub(super) struct ValidatedEnvelope {
     document: Configuration,
     learned_checkpoint: bool,
+    model_only_policies: bool,
     routes: HashMap<String, Arc<RouteData>>,
 }
 
@@ -100,6 +101,9 @@ impl ValidatedEnvelope {
     /// Create/activate/restore qualify every exposed route. Integrity-only
     /// reads keep the same authenticated decode without enabling execution.
     pub(super) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
+        if !self.model_only_policies {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
         if self.learned_checkpoint && !cfg!(feature = "core") {
             return Err(ErrorCode::CapabilityMismatch);
         }

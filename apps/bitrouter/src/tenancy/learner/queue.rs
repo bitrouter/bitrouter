@@ -44,8 +44,6 @@ pub(in crate::tenancy) struct Job {
     pub deadline: Instant,
     pub reply: oneshot::Sender<Result<Reply, Failure>>,
     pub read: OwnedSemaphorePermit,
-    #[cfg(all(test, unix))]
-    pub test: Arc<super::testing::Hooks>,
     pub lease: std::sync::OnceLock<Arc<crate::tenancy::admission::LearningLease>>,
 }
 
@@ -65,8 +63,6 @@ pub(in crate::tenancy) async fn request(
         .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?
         .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
     let (reply, receive) = oneshot::channel();
-    #[cfg(all(test, unix))]
-    let publication = matches!(&work, Work::Publish { .. });
     {
         let accepting = service
             .accepting
@@ -82,13 +78,7 @@ pub(in crate::tenancy) async fn request(
             reply,
             read,
             lease: Default::default(),
-            #[cfg(all(test, unix))]
-            test: service.learner_test.clone(),
         })));
-    }
-    #[cfg(all(test, unix))]
-    if publication {
-        service.learner_test.queued.notify_one();
     }
     tokio::time::timeout_at(deadline, receive)
         .await

@@ -100,10 +100,7 @@ pub enum Definition {
     /// Policy-as-code, interpreted and validated exclusively by the service.
     Policy {
         /// Explicit policy document; filesystem paths are not authority.
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "std::collections::BTreeMap<String, Value>")
-        )]
+        #[cfg_attr(feature = "schema", schemars(with = "crate::policy::Document"))]
         document: Value,
         /// Selected policy name in this document.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
@@ -114,6 +111,65 @@ pub enum Definition {
     },
 }
 redacted_contract_debug!(Definition);
+
+/// Authorized model-policy source at one exact immutable resource revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PolicySource {
+    /// Resource identity, lifecycle and authority stamp for this read.
+    pub status: ResourceStatus,
+    /// Portable model-only policy source; contains no provider credentials.
+    pub document: crate::policy::Document,
+    /// Selected named policy within the document.
+    pub name: String,
+}
+
+/// Installed model-policy support, separate from resource-envelope versions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PolicyCapabilities {
+    /// Persistent installation being addressed.
+    pub installation_id: InstallationId,
+    /// Exact supported model-policy contract.
+    pub spec_version: crate::policy::SpecVersion,
+    /// Serving classification rubric/configuration digest for explicit routes.
+    pub classifier_digest: String,
+    /// Immutable provisioning is available with the installation wrapping key.
+    pub provisioning_enabled: bool,
+}
+
+impl Validate for PolicyCapabilities {
+    fn validate(&self) -> Result<(), ValidationError> {
+        require(
+            self.classifier_digest
+                .strip_prefix("sha256:")
+                .is_some_and(|value| {
+                    value.len() == 64
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                }),
+            "policy classifier digest",
+        )
+    }
+}
+
+impl Validate for PolicySource {
+    fn validate(&self) -> Result<(), ValidationError> {
+        self.status.validate()?;
+        require(
+            self.status.reference.resource_kind == ResourceKind::Policy,
+            "policy source kind",
+        )?;
+        require(
+            self.document.policies.contains_key(&self.name),
+            "policy source name",
+        )?;
+        bytes(self, 2 * 1024 * 1024)
+    }
+}
 
 impl Definition {
     /// Resource class required for the addressed key.

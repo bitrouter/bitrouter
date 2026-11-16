@@ -101,6 +101,12 @@ impl ModelResolution {
 /// carrying an explicit policy binding.
 #[async_trait]
 pub trait ModelSelector: Send + Sync {
+    /// Require complete admitted context even when native execution pins a model
+    /// and bypasses selection. This is a constraint, not a context transformation.
+    fn preserves_context(&self) -> bool {
+        false
+    }
+
     /// Freeze and validate named-policy inputs after entry admission and before
     /// paid semantic inference. Selection must consume this same snapshot.
     async fn prepare_selection(
