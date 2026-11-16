@@ -274,10 +274,9 @@ pub fn assertion(model: &Value, feed_id: &str) -> Result<Value, RegistryError> {
                 | "/model_types"
                 | "/capabilities"
                 | "/requires"
-        ) {
-            if let Some(items) = value.as_array_mut() {
-                items.sort_by_key(Value::to_string);
-            }
+        ) && let Some(items) = value.as_array_mut()
+        {
+            items.sort_by_key(Value::to_string);
         }
     }
     for interface in &mut interfaces {
@@ -286,10 +285,9 @@ pub fn assertion(model: &Value, feed_id: &str) -> Result<Value, RegistryError> {
                 if matches!(
                     path.as_str(),
                     "/input_modalities" | "/output_modalities" | "/capabilities" | "/requires"
-                ) {
-                    if let Some(items) = value.as_array_mut() {
-                        items.sort_by_key(Value::to_string);
-                    }
+                ) && let Some(items) = value.as_array_mut()
+                {
+                    items.sort_by_key(Value::to_string);
                 }
             }
         }
