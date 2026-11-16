@@ -92,23 +92,23 @@
       }
     },
     {
-      "provider_model_id": "claude-fable-5.2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "claude-fable-5.2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:12.759128313Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -324,23 +324,43 @@
       }
     },
     {
-      "provider_model_id": "gemini-4-carbon",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:12.759128313Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
       "interfaces": [],
+      "name": "Gemini 4 Carbon",
+      "provider_model_id": "gemini-4-carbon",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
-      "name": "Gemini 4 Carbon",
-      "status": "staging",
+        },
+        "owner": "directory"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:12.759128313Z",
-        "scope": "public"
+        "checked_at": "2026-11-16T03:29:32.836888862Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
+      "interfaces": [],
+      "name": "Gemini 4 Hydrogen",
+      "provider_model_id": "gemini-4-hydrogen",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {
