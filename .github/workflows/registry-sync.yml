@@ -42,12 +42,12 @@ jobs:
         env:
           E2E: ${{ inputs.e2e }}
         run: |
-          if [ "$GITHUB_REF" = refs/heads/main ]; then
-            base=main
-            branch=automation/registry-sync
-          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$E2E" = true ]; then
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$E2E" = true ]; then
             base="$GITHUB_REF_NAME"
             branch=automation/registry-beta7-e2e
+          elif [ "$GITHUB_REF" = refs/heads/main ]; then
+            base=main
+            branch=automation/registry-sync
           else
             echo '::error::Non-main sync requires the explicit trusted E2E profile.'
             exit 1
