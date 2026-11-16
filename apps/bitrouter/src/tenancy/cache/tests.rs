@@ -22,6 +22,48 @@ fn budget<K, V>(entries: usize, heap_bytes: usize) -> usize {
 }
 
 #[test]
+fn optional_publication_preserves_candidates_and_pinned_residency_on_capacity() -> Result<()> {
+    let cache = Cache::<u8, Vec<u8>>::new(1, budget::<u8, Vec<u8>>(1, 32))?;
+    let resident = cache.insert(1, vec![1; 16], 16, 0)?;
+    let before = cache
+        .state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("cache lock"))?
+        .bytes;
+    let mut candidate = Some(vec![2; 16]);
+    ensure!(cache.insert_if_fits(2, &mut candidate, 16, 0)?.is_none());
+    ensure!(candidate.as_deref() == Some(&[2; 16][..]));
+    ensure!(*resident == [1; 16]);
+    ensure!(
+        cache
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("cache lock"))?
+            .bytes
+            == before
+    );
+    let duplicate = cache
+        .insert_if_fits(1, &mut candidate, 16, 0)?
+        .context("duplicate")?;
+    ensure!(*duplicate == [1; 16] && candidate.is_some());
+    drop(duplicate);
+    drop(resident);
+    let inserted = cache
+        .insert_if_fits(2, &mut candidate, 16, 0)?
+        .context("unpinned insert")?;
+    ensure!(candidate.is_none() && *inserted == [2; 16]);
+    let mut oversized = Some(vec![3; 33]);
+    ensure!(
+        cache
+            .insert_if_fits(3, &mut oversized, usize::MAX, 0)?
+            .is_none()
+    );
+    ensure!(oversized.as_ref().context("oversized candidate")?.len() == 33);
+    ensure!(cache.get(&2)?.is_some());
+    Ok(())
+}
+
+#[test]
 fn hits_refresh_lru_and_misses_do_not_evict() -> Result<()> {
     let cache = Cache::<u8, u8>::new(2, budget::<u8, u8>(2, 0))?;
     drop(cache.insert(1, 11, 0, 0)?);

@@ -145,6 +145,16 @@ fn bounded_json(value: &impl Serialize, limit: usize) -> Result<String> {
     String::from_utf8(writer.bytes).context("invalid configuration JSON encoding")
 }
 
+/// Exact service-local immutable cache binding, including ciphertext and every
+/// stored metadata/AAD input. It is never an authority or artifact digest.
+pub(super) fn execution_cache_binding(record: &StoredConfiguration) -> Result<Box<str>> {
+    // The reader separately bounds compiled/dependencies to 8 MiB each, the
+    // document to 1 MiB, and the remaining typed metadata to finite wire limits.
+    // Box<str> removes spare serialization capacity from retained accounting.
+    bounded_json(record, 2 * MAX_ENVELOPE_BYTES + MAX_DOCUMENT_BYTES + 4096)
+        .map(String::into_boxed_str)
+}
+
 fn canonical(value: &JsonValue, limit: usize) -> Result<String> {
     json_depth(value, 0)?;
     // Bound serialization before cloning the tree. Sort object keys only;

@@ -189,18 +189,44 @@ impl<K: Eq, V> Cache<K, V> {
         owned_bytes: usize,
         key_heap_bytes: usize,
     ) -> Result<Pin<V>, CacheError> {
+        self.insert_if_fits(key, &mut Some(value), owned_bytes, key_heap_bytes)?
+            .ok_or(CacheError::Capacity)
+    }
+
+    /// Try to publish without consuming a candidate rejected for capacity.
+    ///
+    /// A miss returning None leaves the candidate and cache unchanged, so an
+    /// already bounded loader can serve its original uncached value. A winner
+    /// consumes the candidate only when inserting it; a duplicate leaves the
+    /// losing candidate with its caller. Poisoning still fails closed.
+    ///
+    /// # Errors
+    /// Returns Unavailable for poisoning or an absent candidate. Capacity is
+    /// reported as None and never creates a wait for another pin to drop.
+    pub(crate) fn insert_if_fits(
+        &self,
+        key: K,
+        value: &mut Option<V>,
+        owned_bytes: usize,
+        key_heap_bytes: usize,
+    ) -> Result<Option<Pin<V>>, CacheError> {
+        if value.is_none() {
+            return Err(CacheError::Unavailable);
+        }
         let mut state = self.state.lock().map_err(|_| CacheError::Unavailable)?;
-        let bytes = size_of::<V>()
-            .checked_add(arc_allowance::<V>().ok_or(CacheError::Capacity)?)
+        let Some(bytes) = arc_allowance::<V>()
+            .and_then(|allowance| size_of::<V>().checked_add(allowance))
             .and_then(|bytes| bytes.checked_add(owned_bytes))
             .and_then(|bytes| bytes.checked_add(key_heap_bytes))
             .filter(|bytes| *bytes <= self.max_bytes - self.fixed_bytes)
-            .ok_or(CacheError::Capacity)?;
+        else {
+            return Ok(None);
+        };
         if let Some(index) = state.entries.iter().position(|entry| entry.key.eq(&key)) {
             let winner = state.entries[index].value.clone();
             state.entries[index..].rotate_left(1);
             drop(state);
-            return Ok(winner);
+            return Ok(Some(winner));
         }
 
         // Prove that eviction can succeed before changing anything. Pin counts
@@ -221,8 +247,11 @@ impl<K: Eq, V> Cache<K, V> {
             }
         }
         if !fits(remaining_entries, remaining_bytes) {
-            return Err(CacheError::Capacity);
+            return Ok(None);
         }
+        // Take only after the capacity proof, before mutating residency. This
+        // also leaves the original insert API's drop/error behavior unchanged.
+        let value = value.take().ok_or(CacheError::Unavailable)?;
         remaining_entries = state.entries.len();
         remaining_bytes = state.bytes;
         state.entries.retain(|entry| {
@@ -247,6 +276,6 @@ impl<K: Eq, V> Cache<K, V> {
             bytes,
         });
         state.bytes += bytes;
-        Ok(pin)
+        Ok(Some(pin))
     }
 }

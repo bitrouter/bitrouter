@@ -185,13 +185,8 @@ impl Service {
         .map_err(|_| self.unavailable())?
         .map_err(|_| self.unavailable())?
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-        let view = self
-            .resources
-            .open_execution(&stored)
-            .map_err(|_| self.unavailable())?;
-        let mut manifest = view
-            .candidate_manifest(reference, inbound, before.revision)
-            .map_err(Failure::from)?;
+        let mut manifest =
+            self.manifest_from_stored(&stored, before.revision, reference, inbound)?;
         if manifest.admission_mode != bitrouter_ai::tenancy::admission::AdmissionMode::ProfiledV1 {
             if self.current()?.revision != before.revision
                 || stored.authority_revision > before.revision
