@@ -7,10 +7,15 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(test)]
+mod tests;
+
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
+    identity::AuthorityRevision,
     operation::ErrorCode,
+    ordered::{CandidateManifestV1, GenerationProtocol},
 };
 
 use super::{Service, Submission, authorize_route};
@@ -94,17 +99,31 @@ impl Caches {
 }
 
 #[derive(PartialEq, Eq)]
-struct ExecutionKey {
-    authority_revision: u64,
-    tenant: Box<str>,
-    revision: Box<str>,
+enum ExecutionKey {
+    Dispatch {
+        authority_revision: u64,
+        tenant: Box<str>,
+        revision: Box<str>,
+    },
+    // Stored bytes, not just an ID or a digest: a same-revision ciphertext/AAD
+    // replacement must go through the authenticated decoder again. Service
+    // ownership fixes installation/store/wrapping-key/compiler context.
+    Control {
+        authority_revision: u64,
+        binding: Box<str>,
+    },
 }
 
 impl ExecutionKey {
     fn heap_bytes(&self) -> usize {
         // Validated identities have finite wire bounds; Box<str> has no spare
         // capacity. Inline key storage is charged by the cache's entry vector.
-        self.tenant.len() + self.revision.len()
+        match self {
+            Self::Dispatch {
+                tenant, revision, ..
+            } => tenant.len() + revision.len(),
+            Self::Control { binding, .. } => binding.len(),
+        }
     }
 }
 
@@ -130,6 +149,73 @@ struct StaticCredential {
 }
 
 impl Service {
+    fn with_control_cache<T>(
+        &self,
+        revision: AuthorityRevision,
+        access: impl FnOnce(&Cache<ExecutionKey, RetainedExecutionRevision>) -> Result<T, CacheError>,
+    ) -> Result<T, Failure> {
+        // Shutdown closes caches under the corresponding authority write gate.
+        // Neither this lookup/publication nor cache eviction performs I/O.
+        let authority = self.authority.read().map_err(Failure::from)?;
+        if !self.live.load(Ordering::Acquire) || self.caches.is_closed() {
+            return Err(ErrorCode::AuthorityUnavailable.into());
+        }
+        if authority.header().revision != revision {
+            return Err(ErrorCode::RevisionConflict.into());
+        }
+        access(&self.caches.executions).map_err(|error| self.cache_failure(error))
+    }
+
+    pub(in crate::tenancy) fn manifest_from_stored(
+        &self,
+        stored: &configuration_store::StoredConfiguration,
+        authority_revision: AuthorityRevision,
+        reference: &ResourceRef,
+        inbound: GenerationProtocol,
+    ) -> Result<CandidateManifestV1, Failure> {
+        let key = ExecutionKey::Control {
+            authority_revision: u64::from(authority_revision),
+            binding: configuration_store::execution_cache_binding(stored)
+                .map_err(|_| self.unavailable())?,
+        };
+        if let Some(view) = self.with_control_cache(authority_revision, |cache| cache.get(&key))? {
+            return view
+                .candidate_manifest(reference, inbound, authority_revision)
+                .map_err(Failure::from);
+        }
+        // The caller still owns the original fail-fast read permit. Duplicate
+        // misses are bounded by those eight slots, without a cache wait queue.
+        let view = self
+            .resources
+            .open_execution(stored)
+            .map_err(|_| self.unavailable())?;
+        let heap = match view.retained_heap_bytes() {
+            Ok(heap) => heap,
+            // Weight traversal has its own bounded-work limit. Failure to cache
+            // must not reject a previously valid, bounded management read.
+            Err(ErrorCode::CapacityExceeded) => {
+                return view
+                    .candidate_manifest(reference, inbound, authority_revision)
+                    .map_err(Failure::from);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let key_heap = key.heap_bytes();
+        let mut candidate = Some(view);
+        let cached = self.with_control_cache(authority_revision, |cache| {
+            cache.insert_if_fits(key, &mut candidate, heap, key_heap)
+        })?;
+        let view = match cached.as_deref().or(candidate.as_ref()) {
+            Some(view) => view,
+            None => return Err(self.unavailable()),
+        };
+        // DTO construction runs outside the authority/cache locks, and retains
+        // no Arc into the cached view. The ordered caller still performs its
+        // fresh principal, Extend, lease, observation and final authority fence.
+        view.candidate_manifest(reference, inbound, authority_revision)
+            .map_err(Failure::from)
+    }
+
     fn cache_failure(&self, error: CacheError) -> Failure {
         match error {
             CacheError::Capacity => ErrorCode::CapacityExceeded.into(),
@@ -189,7 +275,7 @@ impl Service {
         let authority_revision = self
             .with_dispatch_authority(submission, |state| Ok(u64::from(state.revision)))
             .map_err(Failure::from)?;
-        let key = ExecutionKey {
+        let key = ExecutionKey::Dispatch {
             authority_revision,
             tenant: submission.tenant.as_str().into(),
             revision: submission.binding.execution_revision.as_str().into(),

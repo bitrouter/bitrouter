@@ -58,6 +58,8 @@ use crate::{
 const TIMEOUT: Duration = Duration::from_secs(10);
 const SECRET: &str = "owned-upstream-secret";
 
+mod control;
+
 /// SDV for real cold dispatch and restart with a near-limit explicit grant.
 #[tokio::test]
 async fn large_scope_default_budget_keeps_cold_dispatch_and_revocation_after_restart() -> Result<()>
