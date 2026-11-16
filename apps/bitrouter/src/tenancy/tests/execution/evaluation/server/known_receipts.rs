@@ -39,6 +39,10 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         _ => anyhow::bail!("configuration missing"),
     };
     let credential = fixture.issue("known-receipt-key").await?;
+    fixture
+        .service
+        .dispatch_test_ready
+        .store(true, Ordering::Release);
     let headers = headers(
         &fixture,
         credential.secret.as_deref().context("secret")?,
