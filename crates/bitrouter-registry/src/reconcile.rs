@@ -522,13 +522,14 @@ fn apply_fields(
             let slot = interface_slot(model, source, create, id)?;
             let owners = interface_owners(model, source)?;
             let mut target = model["interfaces"][slot].clone();
-            let owners = update(
+            let owners = update_at(
                 &mut target,
                 &format!("/{relative}"),
                 value,
                 owners,
                 id,
                 changes,
+                true,
             )?;
             model["interfaces"][slot] = target;
             store_interface_owners(model, source, owners)?;
@@ -577,7 +578,15 @@ fn merge_interfaces(
             if matches!(name.as_str(), "protocol" | "operation" | "protocol_profile") {
                 continue;
             }
-            owners = update(&mut target, &format!("/{name}"), value, owners, id, changes)?;
+            owners = update_at(
+                &mut target,
+                &format!("/{name}"),
+                value,
+                owners,
+                id,
+                changes,
+                true,
+            )?;
         }
         model["interfaces"][slot] = target;
         store_interface_owners(model, source, owners)?;
@@ -783,15 +792,25 @@ fn update(
     target: &mut Value,
     path: &str,
     value: &Value,
+    owners: Value,
+    feed: &str,
+    changes: &mut Changes,
+) -> Result<Value, RegistryError> {
+    update_at(target, path, value, owners, feed, changes, false)
+}
+fn update_at(
+    target: &mut Value,
+    path: &str,
+    value: &Value,
     mut owners: Value,
     feed: &str,
     changes: &mut Changes,
+    interface: bool,
 ) -> Result<Value, RegistryError> {
     let prior = read(target, path)?;
     if let Some(old) = prior {
         let mut a = old.clone();
         let mut b = value.clone();
-        let interface = target.get("protocol").is_some();
         normalize_owned(&mut a, path, interface);
         normalize_owned(&mut b, path, interface);
         if equivalent(&a, &b)? {
@@ -814,13 +833,14 @@ fn update(
         && let Some(fields) = value.as_object()
     {
         for (key, child) in fields {
-            owners = update(
+            owners = update_at(
                 target,
                 &format!("{path}/{}", escape(key)),
                 child,
                 owners,
                 feed,
                 changes,
+                interface,
             )?;
         }
         return Ok(owners);
