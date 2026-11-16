@@ -266,6 +266,35 @@ pub fn assertion(model: &Value, feed_id: &str) -> Result<Value, RegistryError> {
         })
         .map(interface_key)
         .collect::<Vec<_>>();
+    for (path, value) in &mut result {
+        if matches!(
+            path.as_str(),
+            "/input_modalities"
+                | "/output_modalities"
+                | "/model_types"
+                | "/capabilities"
+                | "/requires"
+        ) {
+            if let Some(items) = value.as_array_mut() {
+                items.sort_by_key(Value::to_string);
+            }
+        }
+    }
+    for interface in &mut interfaces {
+        if let Some(fields) = interface["fields"].as_object_mut() {
+            for (path, value) in fields {
+                if matches!(
+                    path.as_str(),
+                    "/input_modalities" | "/output_modalities" | "/capabilities" | "/requires"
+                ) {
+                    if let Some(items) = value.as_array_mut() {
+                        items.sort_by_key(Value::to_string);
+                    }
+                }
+            }
+        }
+    }
+    interfaces.sort_by_key(|v| v["identity"].to_string());
     result.insert("preference".into(), json!(preference));
     result.insert("interfaces".into(), json!(interfaces));
     Ok(Value::Object(result))
@@ -907,6 +936,25 @@ mod tests {
     }
     fn at(_label: u64, hour: i64) -> Result<DateTime<Utc>, RegistryError> {
         DateTime::from_timestamp(hour * 3600, 0).ok_or_else(|| invalid("test time"))
+    }
+    #[test]
+    fn assertion_sets_are_unordered_but_interface_preference_is_content()
+    -> Result<(), RegistryError> {
+        let mut model = json!({"provider_model_id":"A","interfaces":[{"protocol":"messages","operation":"generation"},{"protocol":"chat_completions","operation":"generation"}],"input_modalities":["image","text"],"sync":{"owner":"list","field_owners":{"/input_modalities":"list"},"interface_owners":[{"protocol":"messages","operation":"generation","field_owners":{"/protocol":"list"}},{"protocol":"chat_completions","operation":"generation","field_owners":{"/protocol":"list"}}]}});
+        let before = assertion(&model, "list")?;
+        model["input_modalities"] = json!(["text", "image"]);
+        assert_eq!(before, assertion(&model, "list")?);
+        model["interfaces"]
+            .as_array_mut()
+            .ok_or_else(|| invalid("interfaces"))?
+            .reverse();
+        assert_ne!(before, assertion(&model, "list")?);
+        assert!(equivalent(
+            &json!(-1),
+            &crate::document::parse_json(b"-1.00")?
+        )?);
+        assert!(!equivalent(&json!(1), &json!({"number":"1"}))?);
+        Ok(())
     }
     #[test]
     fn snapshots_are_idempotent_and_withdraw_without_history() -> Result<(), RegistryError> {
