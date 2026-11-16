@@ -32,8 +32,13 @@ fn equal(a: &Value, b: &Value) -> Result<bool> {
     Ok(bitrouter_registry::reconcile::equivalent(a, b)?)
 }
 
-fn recommendation(value: &Value) -> Value {
+fn model_content(value: &Value) -> Value {
     let mut value = value.clone();
+    normalize_model(&mut value);
+    value
+}
+
+fn normalize_model(value: &mut Value) {
     for key in [
         "input_modalities",
         "output_modalities",
@@ -45,6 +50,27 @@ fn recommendation(value: &Value) -> Value {
             items.sort_by_key(Value::to_string);
         }
     }
+    for interface in value
+        .get_mut("interfaces")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        for key in [
+            "input_modalities",
+            "output_modalities",
+            "capabilities",
+            "requires",
+        ] {
+            if let Some(items) = interface.get_mut(key).and_then(Value::as_array_mut) {
+                items.sort_by_key(Value::to_string);
+            }
+        }
+    }
+}
+
+fn recommendation(value: &Value) -> Value {
+    let mut value = model_content(value);
     if let Some(map) = value["curation"].as_object_mut() {
         map.remove("checked_at");
     }
@@ -164,18 +190,34 @@ pub(super) fn finalize(
                     if let Some(time) = old.pointer("/availability/checked_at") {
                         model["availability"]["checked_at"] = time.clone();
                     }
+                    if equal(&model_content(old), &model_content(model))? {
+                        *model = old.clone();
+                    }
                     break;
                 }
             }
         }
     }
+    let policy_path = candidate
+        .manifest
+        .parent()
+        .context("parent")?
+        .join("model-discovery.yaml");
+    let pending_curation = match pending {
+        Some(prior)
+            if prior_file(prior, candidate, &policy_path)? == candidate.files.get(&policy_path) =>
+        {
+            Some(prior)
+        }
+        _ => None,
+    };
     let paths = candidate
         .records("models")
         .map(|(p, _)| p.clone())
         .collect::<Vec<_>>();
     for path in paths {
         let base = prior_file(accepted, candidate, &path)?.cloned();
-        let previous = pending
+        let previous = pending_curation
             .map(|p| prior_file(p, candidate, &path))
             .transpose()?
             .flatten()

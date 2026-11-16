@@ -181,7 +181,9 @@ pub fn apply(
             {
                 if let Some(time) = prior.pointer("/availability/checked_at") {
                     model["availability"]["checked_at"] = time.clone();
-                } else if let Some(availability) = model["availability"].as_object_mut() {
+                } else if let Some(availability) =
+                    model.get_mut("availability").and_then(Value::as_object_mut)
+                {
                     availability.remove("checked_at");
                 }
             } else {

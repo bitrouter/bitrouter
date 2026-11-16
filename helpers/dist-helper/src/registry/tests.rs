@@ -771,3 +771,50 @@ fn pending_recommendation_sets_are_stable_and_future_evidence_is_rejected() -> R
     assert!(content::finalize(&mut repeated, &accepted, Some(&pending), later).is_err());
     Ok(())
 }
+
+#[test]
+fn pending_provider_set_representation_and_policy_scope_are_respected() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/providers/test.yaml");
+    let model_path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let feed = json!({"id":"catalog","kind":"v1_models","writes":["models","metadata"],"request":{"url":"https://example.com/models","auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"merge","scope":"public","complete":false},"response":{"items_path":"/data","mapping":{"/id":"/provider_model_id"},"defaults":{"status":"active","interfaces":[]}}});
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("provider")?["auto_sync"] = json!({"feeds":[feed]});
+    pending.files.get_mut(&path).context("provider")?["models"].as_array_mut().context("models")?.push(json!({"provider_model_id":"B","status":"active","interfaces":[],"model_types":["language","decision"],"availability":{"source_url":"https://example.com/models","scope":"public","checked_at":first},"sync":{"owner":"catalog","field_owners":{"/status":"catalog","/model_types":"catalog"}}}));
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    let mut current_base = accepted.clone();
+    current_base.files.get_mut(&path).context("provider")?["auto_sync"] = json!({"feeds":[feed]});
+    let mut candidate = pending.clone();
+    candidate.files.get_mut(&path).context("provider")?["models"][1]["model_types"] =
+        json!(["decision", "language"]);
+    candidate.files.get_mut(&path).context("provider")?["models"][1]["availability"]["checked_at"] =
+        json!(later);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &current_base, Some(&pending), later)?;
+    assert_eq!(candidate.digest()?, pending.digest()?);
+    pending.files.get_mut(&model_path).context("models")?[0]["context_window"] = json!(8192);
+    pending.files.get_mut(&model_path).context("models")?[0]["curation"]["checked_at"] =
+        json!(first);
+    let mut candidate = pending.clone();
+    let policy = root.path().join("registry/model-discovery.yaml");
+    candidate.files.get_mut(&policy).context("policy")?["deprecation_days"] = json!(7);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &current_base, Some(&pending), later)?;
+    assert_eq!(
+        candidate.files[&model_path][0]["curation"]["checked_at"],
+        json!(later)
+    );
+    Ok(())
+}
