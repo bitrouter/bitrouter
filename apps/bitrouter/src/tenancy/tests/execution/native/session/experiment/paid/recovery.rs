@@ -11,6 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 mod integrity;
 pub(super) mod process;
 mod reduced;
+pub(super) mod terminal;
 use process::Child;
 const ROOT: &str = "BITROUTER_NATIVE_PAID_RECOVERY_ROOT";
 const MODE: &str = "BITROUTER_NATIVE_PAID_RECOVERY_MODE";
