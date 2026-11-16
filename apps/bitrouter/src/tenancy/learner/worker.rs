@@ -123,8 +123,6 @@ pub(in crate::tenancy) async fn pass(
                 continue;
             }
         };
-        #[cfg(all(test, unix))]
-        service.learner_test.before_publish().await;
         let storage_deadline = (Instant::now() + Duration::from_secs(5)).min(acquired.deadline);
         match queue::request(
             service,

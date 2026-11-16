@@ -309,6 +309,10 @@ pools and credential slots must be included in this seed. Configuration uses
 `format: 1`, explicit `routing`, embedded `policies`, optional `policy_lock`,
 credential bindings and `require_known_pricing`; it contains no process settings.
 Inputs are literal JSON, with no environment or file expansion inside the seed.
+An embedded `policy_lock` now carries `spec_version: policy/1.0.0-beta.1`
+model-only source. Numeric lockfiles and context/trajectory/optimization Policy
+fields are rejected during publish/bootstrap and retained-generation reload.
+`policies` remains the independent access-control policy collection.
 
 A minimal seed for verifying installation and replica readiness is:
 

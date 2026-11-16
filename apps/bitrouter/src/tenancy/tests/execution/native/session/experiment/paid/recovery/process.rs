@@ -13,7 +13,12 @@ impl Child {
         mode: &str,
         urls: Option<(&str, &str)>,
     ) -> Result<Self> {
-        let mut command = tokio::process::Command::new(std::env::current_exe()?);
+        let executable = if selector == "producer" {
+            historical_producer()?
+        } else {
+            std::env::current_exe()?
+        };
+        let mut command = tokio::process::Command::new(executable);
         command
             .args([
                 "--exact",
@@ -124,6 +129,30 @@ impl Child {
         ensure!(status.success() != kill, "{diagnostic}");
         Ok(())
     }
+}
+
+pub(in crate::tenancy) fn historical_producer() -> Result<PathBuf> {
+    const REVISION: &str = "79d46f4eb78533e7f8179b976c5def07da18bd67";
+    let path = std::env::var_os("BITROUTER_PRE_M0_LIBTEST")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("BITROUTER_TEST_EXAMPLES_DIR")
+                .map(|root| PathBuf::from(root).join("pre_m0_policy_producer"))
+        })
+        .context(
+            "supply the pinned pre-M0 producer using BITROUTER_PRE_M0_LIBTEST or prebuilt examples",
+        )?;
+    ensure!(
+        path.is_absolute() && path.is_file(),
+        "historical producer must be an explicit executable artifact"
+    );
+    let revision = std::fs::read_to_string(path.with_extension("revision"))
+        .context("historical producer source revision is missing")?;
+    ensure!(
+        revision.trim() == REVISION,
+        "historical producer revision mismatch"
+    );
+    Ok(path)
 }
 
 // Keep the original witness failure AND the strict length failure. A child

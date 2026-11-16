@@ -230,6 +230,7 @@ impl Configuration {
             policies.push(policy);
         }
         if let Some(document) = &self.policy_lock {
+            crate::model_policy::source(document)?;
             crate::policy_lock::validate_document(document)?;
             crate::policy_lock::validate_for_config(&config, document)?;
         } else {

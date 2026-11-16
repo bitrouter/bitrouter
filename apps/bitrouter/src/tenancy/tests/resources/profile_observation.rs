@@ -369,21 +369,8 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
     let mut policy = credential(&fixture, "nonprofile")?;
     policy.key = pin.key();
     policy.key.resource_id = "other-policy".try_into()?;
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [(
-                "only".into(),
-                bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:model".into()),
-            )]
-            .into(),
-            default_tier: Some("only".into()),
-            ..Default::default()
-        },
-    );
     policy.definition = Definition::Policy {
-        document: serde_json::to_value(document)?,
+        document: serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
         name: "selected".into(),
         dependencies: Vec::new(),
     };

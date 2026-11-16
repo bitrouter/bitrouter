@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
+Status: **beta, `service-api/1.0.0-beta.4`**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -557,6 +557,36 @@ historical absence of evidence. Clients may continue an explicitly optional
 receipt-only workflow; required provisioning or evidence must fail visibly.
 
 ### Resource provisioning
+
+Routing Policy `Definition.document` now uses
+[`policy/1.0.0-beta.1`](../policy/README.md). This is an explicitly incompatible
+beta change to document interpretation; provisioning envelope `format: 1`,
+resource revisions and `/control/v1` retain their separate meanings. Old
+`lockfileVersion` and experimental Policy documents are rejected rather than
+converted. Shared gateway `Publication.policy_lock` uses the same reader.
+
+`GET /control/v1/tenants/{tenant_id}/resources/policy` takes the same exact
+`ResourceRef` query and installation binding as resource-status reads. It
+requires live `resource.read` authority, loads authenticated immutable content,
+then revalidates authority before disclosure. Its response is
+[`PolicySource`](../../../crates/bitrouter-ai/src/tenancy/resources.rs):
+`status`, `document` and selected `name`. It returns only representable model
+Policy source. Other resource kinds are invalid requests; experimental artifacts
+return `capability_mismatch`. Generic resource-status reads remain nonsecret
+status only. Missing endpoints on older services are not a downgrade signal.
+
+`GET /control/v1/tenancy/policy-capabilities` uses the same installation binding
+and live capability authority as resource discovery. `PolicyCapabilities`
+returns `installation_id`, exact supported `spec_version`, installed
+`classifier_digest`, and `provisioning_enabled`. It neither authorizes a
+resource nor promises that a later mutation will succeed.
+
+Policy compatibility is checked over the complete reachable dependency closure
+when a managed route is submitted, a configuration is created, an active
+configuration is restored, and an execution view is opened. Referencing an
+operator-imported experimental policy does not bypass Policy admission.
+Authenticated historical configuration inspection and paid-work recovery can
+still decode old artifacts; that does not qualify them for new execution.
 
 Resource provisioning creates immutable upstream credential, route and policy
 revisions. These are service messages within this specification, not a separate

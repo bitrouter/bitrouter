@@ -2975,6 +2975,12 @@ impl PolicyRuntime {
 
 #[async_trait::async_trait]
 impl ModelSelector for PolicyRuntime {
+    fn preserves_context(&self) -> bool {
+        self.routing_snapshot()
+            .document()
+            .is_some_and(crate::model_policy::is_model_only)
+    }
+
     async fn prepare_selection(
         &self,
         policy: &str,
@@ -2982,6 +2988,12 @@ impl ModelSelector for PolicyRuntime {
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
         let snapshot = self.routing_snapshot();
+        if snapshot
+            .document()
+            .is_some_and(crate::model_policy::is_model_only)
+        {
+            ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
+        }
         let variant_policy = variant.map(|variant| format!("{policy}:{variant}"));
         if !variant_policy
             .as_deref()
@@ -3014,6 +3026,13 @@ impl ModelSelector for PolicyRuntime {
             .extension::<PolicyRoutingSnapshot>()
             .map(|snapshot| snapshot.0.clone())
             .unwrap_or_else(|| self.routing_snapshot().0);
+        if snapshot
+            .document
+            .as_ref()
+            .is_some_and(crate::model_policy::is_model_only)
+        {
+            ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
+        }
         let variant_policy = variant.map(|variant| format!("{policy}:{variant}"));
         let router = variant_policy
             .as_deref()

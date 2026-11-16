@@ -87,8 +87,8 @@ impl<'a> Prepared<'a> {
                     policies: config.policies.clone(),
                     policy_lock: config
                         .policy_lock
-                        .clone()
-                        .map(serde_json::from_value)
+                        .as_ref()
+                        .map(crate::model_policy::parse)
                         .transpose()?,
                     credentials: config
                         .credentials

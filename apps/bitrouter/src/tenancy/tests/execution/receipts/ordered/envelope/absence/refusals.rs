@@ -264,11 +264,7 @@ async fn envelope_v2_policy_lock_stays_unsupported_with_valid_binding_and_no_sen
         route["definition"]["policy"] = reference.clone();
         route["definition"]["selector"] = json!("bitrouter/locked");
         route["definition"]["routing"]["routers"] = json!({"locked":{"selection":{"kind":"policy","policy":"selected","base_model":"provider-0:model-0"}}});
-        let mut document = crate::policy_lock::PolicyLock::default();
-        document.policies.insert("selected".into(), crate::policy_lock::PolicyDefinition {
-            tiers: [("only".into(), bitrouter_ai::routing::PolicyModelTarget::model_only("provider-0:model-0".into()))].into(),
-            default_tier:Some("only".into()), ..Default::default()
-        });
+        let document = crate::model_policy::parse(&json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"only":{"model":"provider-0:model-0"}},"default_tier":"only"}}}))?;
         resources.push(json!({"reference":reference,"definition":{"kind":"policy","name":"selected","document":document}}));
         Ok(())
     }).await?;

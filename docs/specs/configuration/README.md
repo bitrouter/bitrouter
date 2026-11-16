@@ -1,9 +1,10 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.3**. This is the single
-format contract for `bitrouter.yaml`, its shared-process profile and the
-referenced `policy-lock.yaml`. These are related configuration artifacts; this
-document's revision does not add a version field to existing YAML.
+Status: **beta, `configuration/1.0.0-beta.4`**. This is the format contract for
+`bitrouter.yaml`, its shared-process profile and retained local harness
+configuration artifacts. Portable service routing policies have their own
+[Policy contract](../policy/README.md). This document's revision does not add
+a version field to existing application YAML.
 MUST, MUST NOT, SHOULD and MAY express requirements on readers and writers.
 
 ## Compatibility and validation
@@ -295,7 +296,21 @@ substituted. The deployment key is an environment-variable reference, not its
 secret value. The [shared gateway guide](../../../skills/bitrouter/references/shared-gateway.md)
 contains a complete deployment example and current feature restrictions.
 
-## Policy lock format 4
+## Service policy source
+
+Tenant Policy submission and shared gateway `Publication.policy_lock` use the
+independent [model-only Policy contract](../policy/README.md). They require
+`spec_version: policy/1.0.0-beta.1`; the historical `policy_lock` API field name
+does not select the old local lockfile decoder. Access-control
+`Publication.policies` is a separate collection and retains its existing meaning.
+
+## Existing local harness lock artifact
+
+The following format remains an implementation input of the combined local
+harness. It is not accepted as new public service Policy source, has no promised
+compatibility with `policy/1.0.0-beta.1`, and is not a migration target for the
+model-only contract. Its experimental context and learner behavior belongs to
+the harness boundary.
 
 `policy-lock.yaml` has its own discriminator, `lockfileVersion: 4`. Only version
 4 is accepted; versions 1–3, unknown fields in strict structures and scalar tier

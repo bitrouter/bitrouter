@@ -1414,6 +1414,10 @@ impl Pipeline {
                 Err(error) => {
                     if rebuild_round == 0
                         && can_rebuild
+                        && ctx
+                            .extension::<bitrouter_ai::routing::ContextStrategy>()
+                            .as_deref()
+                            != Some(&bitrouter_ai::routing::ContextStrategy::Preserve)
                         && let Some(messages) = control.rebuild_context(&plan).await?
                     {
                         ctx.replace_managed_messages(messages)?;
@@ -2480,6 +2484,14 @@ impl Pipeline {
                     Bypass::UnboundRoute
                 })?;
             }
+        }
+        if resolution.policy.is_some()
+            && self
+                .model_selectors
+                .iter()
+                .any(|selector| selector.supports(operation) && selector.preserves_context())
+        {
+            ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
         }
         if selection != Some(NativeModelSelection::Fixed)
             && let Some(policy) = resolution.policy.as_deref()

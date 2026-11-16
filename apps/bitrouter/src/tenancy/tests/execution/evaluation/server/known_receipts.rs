@@ -15,14 +15,42 @@ use sea_orm::{
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
-    let harness = harness::Harness::begin(database).await?;
-    let installation = harness.fixture.installation.clone();
-    let tenant = harness.fixture.tenant.clone();
-    let execution = harness.execution.id().clone();
-    let db = harness.fixture.db.clone();
-    harness.record().await?;
-    // The same real admitted receipt must COMMIT and release its custody.
-    harness.finish(false).await?;
+    let db = database.connect().await?;
+    let fixture = Fixture::with_database(db, &mut |service| database.retain(service)).await?;
+    let (fixture, route, _) = provision_protocol_with_fixture(
+        fixture,
+        "https://example.invalid/v1",
+        "chat_completions",
+        &mut |service| database.retain(service),
+    )
+    .await?;
+    let mut input = fixture.configuration_input("known-receipt-config")?;
+    input.document.routes = vec![route];
+    let revision = match fixture
+        .service
+        .execute(
+            fixture.operator.clone(),
+            Command::Configuration(fixture.tenant.clone(), input),
+        )
+        .await
+        .map_err(failure)?
+    {
+        StoredResponse::Configuration(saved) => saved.revision_id,
+        _ => anyhow::bail!("configuration missing"),
+    };
+    let credential = fixture.issue("known-receipt-key").await?;
+    let headers = headers(
+        &fixture,
+        credential.secret.as_deref().context("secret")?,
+        &revision,
+    )?;
+    let admitted = admitted(&fixture, &headers).await?;
+    let installation = fixture.installation.clone();
+    let tenant = fixture.tenant.clone();
+    let execution = admitted.id().clone();
+    let db = fixture.db.clone();
+    drop(admitted);
+    fixture.service.shutdown().await?;
     database.quiesce().await?;
     let original = store::lookup_candidate(&db, &installation, &tenant, &execution)
         .await?

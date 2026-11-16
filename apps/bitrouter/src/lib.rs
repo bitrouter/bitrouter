@@ -72,6 +72,7 @@ pub mod managed_task;
 pub mod mcp_config;
 pub mod mcp_registry;
 pub mod metering;
+mod model_policy;
 #[cfg(feature = "harness")]
 pub mod native_acp;
 pub mod thread_cli;

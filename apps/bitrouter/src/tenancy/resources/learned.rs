@@ -308,20 +308,3 @@ impl Resources {
         Ok(retained)
     }
 }
-
-#[cfg(all(test, unix))]
-impl Resources {
-    /// Read-only test witness for the actual authenticated retained artifact.
-    pub(crate) async fn native_learned_evidence_for_test(
-        &self,
-        db: &sea_orm::DatabaseConnection,
-        reference: &ResourceRef,
-    ) -> Result<serde_json::Value> {
-        let artifact = self.load(db, reference).await.map_err(Error::Rejected)?;
-        let Definition::Checkpoint { evidence } = artifact.definition else {
-            anyhow::bail!("expected actual learned checkpoint");
-        };
-        evidence.validate(reference)?;
-        Ok(serde_json::to_value(evidence)?)
-    }
-}

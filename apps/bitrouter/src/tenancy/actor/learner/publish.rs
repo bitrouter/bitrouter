@@ -137,8 +137,6 @@ impl Worker {
             budget.check()?;
             let changes = [store::Change::Configuration(configured)];
             let write = store::write_in(&tx, &next, &changes, &operation);
-            #[cfg(all(test, unix))]
-            let write = job.test.precommit_write(write);
             write.await?;
             acquired
                 .identity
@@ -174,9 +172,6 @@ impl Worker {
             self.proof.quarantine();
             return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
         }
-        #[cfg(all(test, unix))]
-        job.test
-            .cross_final_deadline(job.deadline, Some(acquired.deadline))?;
         self.finish_learner(job, budget, || {
             acquired.identity.check(&acquired.dependencies)
         })?;

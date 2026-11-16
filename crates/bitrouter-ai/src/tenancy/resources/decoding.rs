@@ -12,6 +12,22 @@ struct Tag {
 }
 
 #[derive(Deserialize)]
+enum PolicyTag {
+    #[serde(rename = "policy")]
+    Policy,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelPolicy {
+    #[serde(rename = "kind")]
+    _kind: PolicyTag,
+    document: crate::policy::Document,
+    name: String,
+    dependencies: Vec<ResourceRef>,
+}
+
+#[derive(Deserialize)]
 enum ProfileTag {
     #[serde(rename = "admission_profile")]
     Profile,
@@ -62,11 +78,6 @@ enum LegacyDefinition {
         policy: Option<ResourceRef>,
         credentials: Vec<CredentialBinding>,
     },
-    Policy {
-        document: Value,
-        name: String,
-        dependencies: Vec<ResourceRef>,
-    },
 }
 
 impl<'de> Deserialize<'de> for Definition {
@@ -74,6 +85,15 @@ impl<'de> Deserialize<'de> for Definition {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
         let tag: Tag = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
         match tag.kind.as_str() {
+            "policy" => {
+                let value: ModelPolicy =
+                    serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+                Ok(Self::Policy {
+                    document: serde_json::to_value(value.document).map_err(D::Error::custom)?,
+                    name: value.name,
+                    dependencies: value.dependencies,
+                })
+            }
             "admission_profile" => {
                 let value: Profile = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
                 Ok(Self::AdmissionProfile {

@@ -36,9 +36,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 
-#[path = "admission/guards.rs"]
-mod guards;
-
 #[path = "admission/authority.rs"]
 mod authority;
 
@@ -74,8 +71,6 @@ enum Campaign {
     #[cfg(feature = "http2")]
     Http2Concurrency,
     Identity,
-    Guards,
-    GuardCost,
 }
 
 #[tokio::test]
@@ -133,13 +128,7 @@ async fn campaign(
     let mut mock = Mock::start().await?;
     let mut requests = Requests::new();
     let result = async {
-        let world = match case {
-            Campaign::Guards => World::start_seeded(fixture, &mock.base, guards::seed_plan).await?,
-            Campaign::GuardCost => {
-                World::start_seeded(fixture, &mock.base, guards::cost_seed_plan).await?
-            }
-            _ => World::start(fixture, &mock.base).await?,
-        };
+        let world = World::start(fixture, &mock.base).await?;
         #[cfg(feature = "http2")]
         let world = {
             let mut world = world;
@@ -166,7 +155,7 @@ async fn campaign(
         for child in world.children {
             expected.insert(child, ExpectedExit::CleanServe);
         }
-        if !matches!(case, Campaign::Guards | Campaign::GuardCost) {
+        {
             world.configure_limits().await?;
         }
         match case {
@@ -174,10 +163,6 @@ async fn campaign(
             #[cfg(feature = "http2")]
             Campaign::Http2Concurrency => concurrency(&world, &mut mock, &mut requests).await?,
             Campaign::Identity => identity(&world, &mut mock, &mut requests, expected).await?,
-            Campaign::Guards => guards::campaign(fixture, &world, &mut mock, &mut requests).await?,
-            Campaign::GuardCost => {
-                guards::cost_campaign(fixture, &world, &mut mock, &mut requests).await?
-            }
         }
         ensure!(
             requests.is_empty(),

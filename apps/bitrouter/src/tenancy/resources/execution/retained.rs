@@ -54,6 +54,9 @@ pub(super) fn decode_with_operation(
         routes,
         artifacts,
     } = envelope;
+    // Integrity reads and paid-work recovery may inspect historical experiments.
+    // Executable entrypoints require this complete-closure qualification result.
+    let model_only_policies = super::super::qualify_model_policies(&artifacts).is_ok();
     ensure!(
         artifacts.len() <= MAX_CLOSURE && routes.len() <= 256,
         ExecutionCapacityExceeded
@@ -286,6 +289,7 @@ pub(super) fn decode_with_operation(
         }
     }
     Ok(ValidatedEnvelope {
+        model_only_policies,
         document,
         learned_checkpoint,
         routes: retained,

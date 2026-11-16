@@ -338,12 +338,11 @@ fn resource_envelope_keeps_explicit_variants_and_operator_profile_ownership() ->
             .validate()
             .is_err()
     );
-    let old: Definition = serde_json::from_value(
-        json!({"kind":"policy","document":{},"name":"old","dependencies":[]}),
-    )?;
-    assert_eq!(
-        serde_json::to_value(old)?,
-        json!({"kind":"policy","document":{},"name":"old","dependencies":[]})
+    assert!(
+        serde_json::from_value::<Definition>(
+            json!({"kind":"policy","document":{},"name":"old","dependencies":[]})
+        )
+        .is_err()
     );
     Ok(())
 }

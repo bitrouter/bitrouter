@@ -162,6 +162,8 @@ pub struct Publication {
     pub routing: serde_json::Value,
     #[serde(default)]
     pub policies: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_policy_source")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<crate::policy::Document>"))]
     pub policy_lock: Option<serde_json::Value>,
     pub credentials: Vec<CredentialBinding>,
     #[serde(default)]
@@ -175,6 +177,16 @@ pub struct PublicationPut {
     /// CAS checks config_generation; correlation-only rotation may coexist.
     pub expected_generation: u64,
     pub configuration: Publication,
+}
+
+fn deserialize_policy_source<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    let source = Option::<crate::policy::Document>::deserialize(deserializer)?;
+    source
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(serde::de::Error::custom)
 }
 
 /// A bounded, create-only seed for explicit local bootstrap. The service commits

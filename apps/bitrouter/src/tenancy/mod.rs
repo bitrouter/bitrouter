@@ -130,8 +130,6 @@ pub(crate) struct Service {
     hosts: Arc<hosts::Hosts>,
     #[cfg(all(feature = "core", feature = "harness"))]
     learning_worker: Arc<AtomicBool>,
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    learner_test: Arc<learner::testing::Hooks>,
     #[cfg(feature = "core")]
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
@@ -527,8 +525,6 @@ impl Service {
             hosts: Arc::new(hosts::Hosts::new()),
             #[cfg(all(feature = "core", feature = "harness"))]
             learning_worker: Arc::new(AtomicBool::new(false)),
-            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-            learner_test: Arc::default(),
             reads,
             resources,
             native_continuation: None,

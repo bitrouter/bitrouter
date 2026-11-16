@@ -73,11 +73,9 @@ async fn tier_and_exploration_selectors_resolve_once_and_keep_their_preferences(
         "api_base":"https://example.com/v1", "models":[{"id":"shared"}]
     });
     input["definition"]["exploration"] = json!(["@experiment:fast"]);
-    let mut policy = policy("tenant", "policy")?;
     // One suffix is a variant; the remaining ':fast' is a literal provider
     // model. A second Stage-0 pass would incorrectly retain model fixture.
-    policy["definition"]["document"]["policies"]["selected"]["tiers"]["economy"]["model"] =
-        json!("fixture:fast:fast");
+    let policy = policy_with_economy("tenant", "policy", "fixture:fast:fast")?;
     import(&resources, &db, vec![credential("tenant")?, policy, input]).await?;
     let doc = document(
         vec![reference("tenant", ResourceKind::Route, "choice")?],

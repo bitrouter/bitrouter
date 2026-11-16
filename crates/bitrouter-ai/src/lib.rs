@@ -34,6 +34,7 @@ pub mod extension;
 pub mod gateway;
 pub mod harness;
 pub mod observe;
+pub mod policy;
 pub mod protocol;
 pub mod routing;
 pub mod stream;

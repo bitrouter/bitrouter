@@ -4,8 +4,6 @@ pub(in crate::tenancy) mod queue;
 pub(in crate::tenancy) mod registration;
 pub(in crate::tenancy) mod source;
 pub(in crate::tenancy) mod store;
-#[cfg(all(test, unix))]
-pub(in crate::tenancy) mod testing;
 pub(crate) mod worker;
 
 use bitrouter_ai::tenancy::{

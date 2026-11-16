@@ -10,6 +10,84 @@ use std::sync::Mutex;
 
 struct CaptureTargets(Arc<Mutex<Vec<String>>>);
 
+#[tokio::test]
+async fn authentic_old_policy_remains_inspectable_but_cannot_be_reopened_for_execution()
+-> Result<()> {
+    let (db, resources) = fixture().await?;
+    let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
+    let mut input = route("tenant", "visible", "base")?;
+    input["definition"]["selector"] = json!("bitrouter/choice");
+    input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+    input["definition"]["routing"]["routers"] = json!({"choice": {
+        "selection":{"kind":"policy","policy":"selected","base_model":"fixture:base"}
+    }});
+    import(
+        &resources,
+        &db,
+        vec![credential("tenant")?, policy("tenant", "policy")?, input],
+    )
+    .await?;
+    let config = document(
+        vec![reference("tenant", ResourceKind::Route, "visible")?],
+        Some(policy_ref),
+    )?;
+    let compiled = compile(&resources, &db, &config).await?;
+    let mut envelope = decrypt(&resources, &config, &compiled)?;
+    let mut historical = validation::stored(config, compiled)?;
+    for artifact in &mut envelope.artifacts {
+        if let Definition::Policy { document, .. } = &mut artifact.definition {
+            document.artifact.as_mut().context("compiler")?.compiler.id =
+                "bitrouter-policy-compiler".into();
+            for policy in document.policies.values_mut() {
+                for target in policy.tiers.values_mut() {
+                    target.context = bitrouter_ai::routing::ContextStrategy::Evidence;
+                }
+            }
+        }
+    }
+    validation::reseal(
+        &resources,
+        &mut historical,
+        &serde_json::to_value(envelope)?,
+    )?;
+    checked(resources.validate_compiled(&historical))?;
+    #[cfg(all(feature = "core", feature = "harness"))]
+    {
+        let check = || Ok(());
+        let budget = crate::storage::operation_budget::OperationBudget::new(&check);
+        resources.open_paid_recovery(&historical, &budget)?;
+    }
+    assert!(matches!(
+        resources.validate_executable(&historical),
+        Err(ErrorCode::CapabilityMismatch)
+    ));
+    assert!(matches!(
+        resources.open_execution(&historical),
+        Err(ErrorCode::CapabilityMismatch)
+    ));
+
+    let mut legacy = policy("tenant", "legacy")?;
+    legacy["definition"]["document"]["artifact"]["compiler"]["id"] =
+        json!("bitrouter-policy-compiler");
+    import(&resources, &db, vec![legacy]).await?;
+    let hidden = document(
+        Vec::new(),
+        Some(reference("tenant", ResourceKind::Policy, "legacy")?),
+    )?;
+    assert!(matches!(
+        resources
+            .compile(
+                &db,
+                &"tenant".try_into()?,
+                &"legacy-config".try_into()?,
+                &hidden
+            )
+            .await,
+        Err(ErrorCode::CapabilityMismatch)
+    ));
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RouteHook for CaptureTargets {
     async fn resolve(
@@ -142,9 +220,7 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
         {"provider":"fixture", "service_id":"expensive"},
         {"provider":"fixture", "service_id":"cheap"}
     ]}});
-    let mut selected_policy = policy("tenant", "policy")?;
-    selected_policy["definition"]["document"]["policies"]["selected"]["tiers"]["economy"]["model"] =
-        json!(PUBLIC);
+    let selected_policy = policy_with_economy("tenant", "policy", PUBLIC)?;
     import(
         &resources,
         &db,

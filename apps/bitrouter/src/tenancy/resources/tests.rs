@@ -394,25 +394,13 @@ async fn configuration_ciphertext_binds_full_ids_revision_document_and_dependenc
 }
 
 fn policy(owner: &str, id: &str) -> Result<Value> {
-    let mut document = crate::policy_lock::PolicyLock::default();
-    document.policies.insert(
-        "selected".into(),
-        crate::policy_lock::PolicyDefinition {
-            tiers: [
-                (
-                    "economy".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:cheap".into()),
-                ),
-                (
-                    "strong".into(),
-                    bitrouter_ai::routing::PolicyModelTarget::model_only("fixture:strong".into()),
-                ),
-            ]
-            .into(),
-            default_tier: Some("economy".into()),
-            ..Default::default()
-        },
-    );
+    policy_with_economy(owner, id, "fixture:cheap")
+}
+
+fn policy_with_economy(owner: &str, id: &str, economy: &str) -> Result<Value> {
+    let document = crate::model_policy::parse(
+        &json!({"spec_version":"policy/1.0.0-beta.1", "policies":{"selected":{"tiers":{"economy":{"model":economy},"strong":{"model":"fixture:strong"}},"default_tier":"economy"}}}),
+    )?;
     Ok(
         json!({"reference":reference(owner, ResourceKind::Policy, id)?,
         "definition":{"kind":"policy", "name":"selected", "document":document}}),

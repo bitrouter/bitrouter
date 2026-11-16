@@ -35,11 +35,7 @@ mod receipts;
 mod retained_defaults;
 mod revision_policy;
 mod server;
-#[cfg(feature = "core")]
-mod sockets;
 mod store;
-#[cfg(feature = "core")]
-mod trajectory;
 #[cfg(unix)]
 mod unknown;
 
