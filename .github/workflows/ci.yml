@@ -122,7 +122,8 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Build both the pinned predecessor and current workspace before archiving.
+    timeout-minutes: 120
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
       CARGO_BUILD_JOBS: '1'
@@ -157,11 +158,13 @@ jobs:
       run: |
         cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
     - name: Build tests and process fixtures once
+      # Leave time for diagnostics upload if this bounded build is interrupted.
+      timeout-minutes: 110
       run: |
         set -euo pipefail
         mkdir -p ci-evidence
         command -v vmstat
-        vmstat -w -t 30 120 &
+        vmstat -w -t 30 220 &
         sampler_pid=$!
         finish_build() {
           result=$?
