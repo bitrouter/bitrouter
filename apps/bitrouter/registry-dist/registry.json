@@ -1,7 +1,7 @@
 {
-  "as_of": "2026-11-14T05:57:35.294067680Z",
+  "as_of": "2026-11-16T03:29:48.003363751Z",
   "version": 1,
-  "spec_revision": "1.0.0-beta.6",
+  "spec_revision": "1.0.0-beta.7",
   "data": {
     "models": [
       {
@@ -664,7 +664,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-16T03:29:48.003363751Z",
+          "expires_at": "2026-12-16T03:29:48.003363751Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -684,7 +685,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-16T03:29:48.003363751Z",
+          "expires_at": "2026-12-16T03:29:48.003363751Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -704,7 +706,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-16T03:29:48.003363751Z",
+          "expires_at": "2026-12-16T03:29:48.003363751Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -848,6 +851,25 @@
           "text"
         ],
         "release_date": "2026-09-21"
+      },
+      {
+        "context_window": 1000000,
+        "curation": {
+          "checked_at": "2026-11-16T03:29:48.003363751Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text, with a 1M-token context window and reasoning enabled by default....",
+        "id": "qwen/qwen4-max",
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "name": "Qwen: Qwen4 Max",
+        "output_modalities": [
+          "text"
+        ]
       },
       {
         "curation": {
@@ -12137,11 +12159,11 @@
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.1,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "chat_completions"
@@ -12296,12 +12318,12 @@
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.2,
-                    "cache_write": 2.0,
-                    "no_cache": 2.0
+                    "cache_write": 2,
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "chat_completions"
@@ -14086,6 +14108,18 @@
             "interfaces": [],
             "name": "Gemini 4 Carbon",
             "provider_model_id": "gemini-4-carbon",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-16T03:29:32.836888862Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
+            "interfaces": [],
+            "name": "Gemini 4 Hydrogen",
+            "provider_model_id": "gemini-4-hydrogen",
             "status": "staging"
           },
           {
@@ -19257,11 +19291,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "chat_completions",
@@ -19289,11 +19323,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "responses",
@@ -20105,6 +20139,18 @@
             ],
             "name": "Qwen3.8 Max",
             "provider_model_id": "qwen3.8-max",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-16T03:29:37.108432483Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/go/v1/models"
+            },
+            "description": "Flagship multimodal model for coding, office productivity, frontend design, and complex agentic tasks",
+            "interfaces": [],
+            "name": "Qwen4 Max",
+            "provider_model_id": "qwen4-max",
             "status": "active"
           },
           {
@@ -26269,11 +26315,11 @@
                   "input_tokens": {
                     "cache_read": 0.1,
                     "cache_write": 0.1875,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "chat_completions"
@@ -26285,11 +26331,11 @@
                   "input_tokens": {
                     "cache_read": 0.1,
                     "cache_write": 0.1875,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "responses"
@@ -26302,11 +26348,11 @@
                   "input_tokens": {
                     "cache_read": 0.1,
                     "cache_write": 0.1875,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "messages"
@@ -30646,11 +30692,11 @@
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.2,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "chat_completions"
@@ -30661,11 +30707,11 @@
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.2,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "responses"
@@ -30677,11 +30723,11 @@
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.2,
-                    "no_cache": 2.0
+                    "no_cache": 2
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 10.0
+                    "text": 10
                   }
                 },
                 "protocol": "messages"
@@ -34028,11 +34074,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "chat_completions"
@@ -34057,11 +34103,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "responses"
@@ -34087,11 +34133,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "messages"
@@ -34144,11 +34190,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "chat_completions"
@@ -34173,11 +34219,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "responses"
@@ -34203,11 +34249,11 @@
                   "input_tokens": {
                     "cache_read": 0.05,
                     "cache_write": 1.25,
-                    "no_cache": 1.0
+                    "no_cache": 1
                   },
                   "kind": "token",
                   "output_tokens": {
-                    "text": 5.0
+                    "text": 5
                   }
                 },
                 "protocol": "messages"
@@ -35890,7 +35936,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-16T03:29:37.622809704Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -35899,8 +35945,7 @@
             "interfaces": [
               {
                 "capabilities": [
-                  "tools",
-                  "structured_outputs"
+                  "tools"
                 ],
                 "input_modalities": [
                   "text"
@@ -36160,7 +36205,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "qwen/qwen3-vl-30b-a3b-thinking",
             "description": "Qwen3-VL-30B-A3B-Thinking is a multimodal model that unifies strong text generation with visual understanding for images and videos. Its Thinking variant enhances reasoning in STEM, math, and complex tasks. It excels...",
             "interfaces": [
               {
@@ -37582,6 +37626,44 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-16T03:29:37.622809704Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "qwen/qwen4-max",
+            "description": "Qwen4 Max is the flagship model in Alibaba's Qwen4 series. It accepts text, image, and video input and returns text, with a 1M-token context window and reasoning enabled by default....",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs",
+                  "logprobs"
+                ],
+                "input_modalities": [
+                  "text",
+                  "image",
+                  "video"
+                ],
+                "limits": {
+                  "context_window": 1000000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "Qwen: Qwen4 Max",
+            "provider_model_id": "qwen/qwen4-max",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -38627,7 +38709,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "stepfun/step-3.5-flash",
             "description": "Step 3.5 Flash is StepFun's most capable open-source foundation model. Built on a sparse Mixture of Experts (MoE) architecture, it selectively activates only 11B of its 196B parameters per token....",
             "interfaces": [
               {
@@ -38751,7 +38832,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "tencent/hunyuan-a13b-instruct",
             "description": "Hunyuan-A13B is a 13B active parameter Mixture-of-Experts (MoE) language model developed by Tencent, with a total parameter count of 80B and support for reasoning via Chain-of-Thought. It offers competitive benchmark...",
             "interfaces": [
               {
@@ -40497,7 +40577,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "x-ai/grok-stt-1.0",
             "description": "Grok STT is SpaceXAI's speech-to-text model, available via the REST /v1/stt endpoint. It supports transcription with word-level timestamps, optional speaker diarization, and multichannel audio.",
             "interfaces": [],
             "model_types": [],
@@ -45366,6 +45445,18 @@
             "interfaces": [],
             "name": "deepseek-ai/DeepSeek-V4-Pro",
             "provider_model_id": "deepseek-ai/DeepSeek-V4-Pro",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-16T03:29:41.104424342Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+            "interfaces": [],
+            "name": "DeepSeek V4.1 Flash",
+            "provider_model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
             "status": "staging"
           },
           {

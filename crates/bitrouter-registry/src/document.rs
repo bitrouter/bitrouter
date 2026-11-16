@@ -13,9 +13,9 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 /// Current normative prerelease. Stable support is deliberately opt-in.
-pub const SPEC_REVISION: &str = "1.0.0-beta.6";
+pub const SPEC_REVISION: &str = "1.0.0-beta.7";
 /// Promoted same-revision stream. Ordinary source PRs do not publish this branch.
-pub const DEFAULT_SOURCE_URL: &str = "https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json";
+pub const DEFAULT_SOURCE_URL: &str = "https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.7/registry.json";
 /// Bound applies to decoded JSON bytes, including caches and packaged data.
 pub const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 /// Nested JSON depth allowed before constructing a full value tree.

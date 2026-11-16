@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:16.581838591Z",
-          "sequence": 2
-        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -66,7 +61,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
         "owner": "directory"
       }
     },
@@ -87,7 +81,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
         "owner": "directory"
       }
     },
@@ -108,7 +101,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
         "owner": "directory"
       }
     },
@@ -129,7 +121,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
         "owner": "directory"
       }
     },
@@ -176,7 +167,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:16.581838591Z",
         "owner": "directory"
       }
     }

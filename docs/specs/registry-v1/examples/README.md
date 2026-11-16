@@ -1,7 +1,7 @@
 # Registry v1 worked examples
 
 These are informative synthetic examples for
-[`1.0.0-beta.6`](../README.md), not production records or claims about commercial
+[`1.0.0-beta.7`](../README.md), not production records or claims about commercial
 model support, prices, or credentials. The provider URLs and model identities
 are fictional. The identity-source request uses the real documented API shape;
 its response fixture is synthetic and establishes no live OpenRouter validity.
@@ -35,11 +35,11 @@ its response fixture is synthetic and establishes no live OpenRouter validity.
   Decision/future model types retain exact native IDs with staging status and
   empty interfaces. The deprecated row is excluded without removing old offers;
   the directory's canonical/pricing hints do not grant bindings or tariffs.
-- [`reconciliation.json`](reconciliation.json) illustrates absence observations
-  A(10), B(11), stale replay A(10), return C(12), and explicit status D(13).
-  With two missing runs and a 24-hour minimum, B withdraws the offer; replay A
-  changes nothing; C restores feed-owned active status through the declared
-  status default. Explicit mapped status wins; manual status stays authoritative.
+- [`reconciliation.json`](reconciliation.json) illustrates an incomplete snapshot,
+  one complete authoritative absence, an identical subsequent check, return, and
+  explicit withdrawal. One complete absence proposes withdrawal; an incomplete
+  listing preserves inventory. Repetition adds no timestamps or operational
+  state. Present rows restore only feed-owned status; manual overrides remain.
 - [`charges.json`](charges.json) gives exact proportional decision/request and
   disjoint-token arithmetic. Three decisions at USD 0.20 per 1000 cost USD 0.0006.
   No per-question/request rounding or started-block charging is implied.
@@ -47,6 +47,22 @@ its response fixture is synthetic and establishes no live OpenRouter validity.
   source-bound cache, a failed refresh, a successful unchanged download, and
   disabling automatic refresh. Its settings are the proposed v1 contract, not
   a claim of current CLI support; its URL is fictional and never fetched.
+
+[`content-timestamps.json`](content-timestamps.json) illustrates content-driven
+publication under [section 9.3](../README.md#93-content-comparison-and-timestamps):
+unchanged checks, isolated content changes, immediate snapshot withdrawal,
+reappearance and curation expiry. A separate pending-proposal case retains its
+first evidence time, `as_of` and editorial deadline across identical checks
+before merge. These abbreviated projections are not additional public documents
+or an operational state-store format. The retained beta 6 test fixture exercises
+explicit revision support independently of these beta 7 examples. The public
+schema is structurally unchanged.
+The pending-reversion case shows that restoring accepted active content must
+also retire the old withdrawal proposal, while preserving accepted timestamps.
+The changed-authority case requires new evidence when fresh values match an old
+proposal but its original authority/configuration scope no longer applies.
+The pending-expiry case retains an expired source record until its removal is
+accepted, so further checks cannot restart grace or reintroduce the recommendation.
 
 The mixed language/decision offer retains one native and canonical identity, with
 separate interfaces and rates. The judge illustrates `decisions/default` and two

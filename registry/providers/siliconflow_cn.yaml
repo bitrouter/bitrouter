@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:24.058115988Z",
-          "sequence": 2
-        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -66,7 +61,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -87,7 +81,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -108,7 +101,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -129,7 +121,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -150,7 +141,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -171,7 +161,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -192,7 +181,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -213,7 +201,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -234,7 +221,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -255,7 +241,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -276,7 +261,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -297,7 +281,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -318,7 +301,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -339,7 +321,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -360,7 +341,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -381,7 +361,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -402,7 +381,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -423,7 +401,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -444,7 +421,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -465,7 +441,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -486,7 +461,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -507,7 +481,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -528,7 +501,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -549,7 +521,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -570,7 +541,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -591,7 +561,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -612,7 +581,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -633,7 +601,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -654,7 +621,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -675,7 +641,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -696,7 +661,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -717,7 +681,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -738,7 +701,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -759,7 +721,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -780,7 +741,26 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-16T03:29:41.104424342Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash",
+      "provider_model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
         "owner": "directory"
       }
     },
@@ -801,7 +781,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -822,7 +801,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -843,7 +821,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -864,7 +841,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -885,7 +861,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -935,7 +910,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     },
@@ -956,7 +930,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:24.058115988Z",
         "owner": "directory"
       }
     }

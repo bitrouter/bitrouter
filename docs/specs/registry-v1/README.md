@@ -1,8 +1,8 @@
 # BitRouter Registry v1
 
-Status: **normative beta protocol, `1.0.0-beta.6`.**
+Status: **normative beta protocol, `1.0.0-beta.7`.**
 
-Date: 2026-10-23. Wire version: **`"version": 1`**.
+Date: 2026-11-16. Wire version: **`"version": 1`**.
 
 MUST and MUST NOT express mandatory requirements; SHOULD expresses a recommended
 practice with a justified exception; MAY expresses an optional behavior. The
@@ -14,11 +14,16 @@ synthetic examples. Publication of this contract does not assert implementation
 availability in a particular release.
 
 Beta revisions may change incompatibly; stable v1 has the compatibility
-commitments in section 3. Beta 6 adds explicit resource bounds and the structural schema. The BitRouter
-first-party consumption profile is in section 11. It retains one public document, JSON Pointer mappings,
+commitments in section 3. Beta 7 makes publication content-driven and replaces
+cross-run observation state with fresh snapshot reconciliation. The BitRouter
+first-party consumption profile is in section 11. It retains one public
+document, JSON Pointer mappings,
 explicit reconciliation, price arithmetic, and execution metadata. All published
 canonical IDs require a fresh complete OpenRouter audit; historical evidence
 cannot replace current validation.
+
+Beta 7 publication requires the explicit source and reader migration in section
+3.4. A protocol revision alone does not establish conformance for every role.
 
 ## 1. Scope and decisions
 
@@ -65,7 +70,7 @@ version directory:
 
 | Path | v1 content |
 | --- | --- |
-| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.6`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.7`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
 | `registry/models/<vendor>.yaml` | Sequence of curated model records |
 | `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
@@ -82,7 +87,7 @@ The public document has this envelope (example contains no records):
 ```json
 {
   "version": 1,
-  "spec_revision": "1.0.0-beta.6",
+  "spec_revision": "1.0.0-beta.7",
   "as_of": "2026-10-22T00:00:00Z",
   "requires": [],
   "data": {"models": [], "providers": []}
@@ -102,13 +107,13 @@ identical bytes for identical source inputs using the same build configuration;
 sorting and formatting are producer choices, not reader semantics. Array order
 is insignificant except where explicitly defined, such as interface preference.
 
-`as_of` is the source manifest's explicit publication evaluation time, copied
-unchanged into the public document. Curation/expiry validation uses it, never
-the builder's wall clock. A sync/publication transaction
-advances it explicitly and must not move it backward; it does not refresh any
-provider's individual availability evidence. A later rebuild with unchanged
-inputs remains identical even across an expiry boundary. Runtime expiry checks
-use the reader's current UTC time, so an expired cached entry is still excluded.
+`as_of` is the explicit evaluation time of the document's content revision,
+copied from the source manifest. An unchanged check retains it under section
+9.3; a changed candidate MUST NOT move it backward from the accepted baseline.
+Each sync evaluates lifecycle/curation at fresh explicit UTC before deciding
+whether content changed. An offline build instead uses stored `as_of`, never
+the builder's wall clock, and remains identical across an expiry boundary.
+Readers enforce explicit expiries against current UTC even with an old `as_of`.
 
 Readers MUST validate the whole document before replacing their current view.
 Truncated/invalid input, unsupported versions, and incompatible beta revisions
@@ -151,7 +156,7 @@ values reject the artifact; there is no v0/unversioned fallback in the v1 reader
 catalog snapshot. Its major MUST match `version`.
 
 During beta, readers MUST accept only explicitly supported prerelease revisions;
-support for `1.0.0-beta.6` does not imply support for `beta.7` or stable `1.0.0`.
+support for `1.0.0-beta.7` does not imply support for `beta.8` or stable `1.0.0`.
 An incompatible beta edit increments `spec_revision`, even though `version`
 remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
 
@@ -265,6 +270,33 @@ diagnostics; this is not a crash. The long-running host must contain the error
 at the refresh/request boundary. Do not use a blanket panic catcher to disguise
 internal bugs as compatibility errors. Conformance tests must assert process
 survival and continued service, not just that deserialization returns `Err`.
+
+### 3.4 Beta 6 to beta 7 migration
+
+Beta 7 changes evidence-time semantics and removes history-based absence
+reconciliation. Its public field shapes remain unchanged, so the structural
+schema needs no new fields; a schema pass alone does not establish beta 7
+support. A beta 6 reader rejects beta 7 normally with upgrade guidance, and a
+beta 7-only reader does not implicitly accept beta 6. Select the matching
+revision stream and cache under section 11; preserve earlier publication paths.
+
+Source migration MUST explicitly remove feed `checkpoint`, inventory
+`missing_runs`/`minimum_missing_hours`, and offer `sync.last_seen_at`,
+`sync.missing_since` and `sync.missing_runs`. Beta 7 source validation rejects
+these obsolete fields at these exact paths with migration guidance, before
+fetching; silently ignoring old delay controls would accelerate withdrawal.
+These are removed known fields, not a blanket restriction on unknown extensions.
+Keep ownership, native offers, identity history, prices and existing evidence
+times. Discard old operational history rather than moving it to another store.
+
+Migrating a snapshot feed explicitly accepts one-complete-snapshot withdrawal;
+select `merge` instead if its completeness/authority cannot justify that rule.
+Migration itself does not withdraw any offer: fresh beta 7 sync and all gates
+are still required. Changing the public `spec_revision` is a content revision
+and updates `as_of`; it MUST NOT restamp unchanged model evidence. Existing
+evidence times remain the baseline without claiming they were originally change
+times. Producer implementation, source migration and reader support must precede
+beta 7 stream publication; changing a revision label alone enables none of them.
 
 ## 4. Identity and the two catalogs
 
@@ -919,8 +951,6 @@ auto_sync:
         scope: public
         complete: true
         allow_empty: false
-        missing_runs: 2
-        minimum_missing_hours: 24
 ```
 
 The endpoint must actually document `deprecated` as still callable for that
@@ -990,7 +1020,8 @@ Destination pointers may target `provider_model_id`, `canonical_id`, `name`, `de
 members of `interfaces`. They MUST NOT target provider configuration, auth,
 feed configuration, curation, `requires`, ownership, or arbitrary filesystem
 paths. Future mapping destinations require importer support before use.
-`availability` is generated from the feed's request/scope and successful run.
+`availability` records the membership feed's request URL/scope. Its `checked_at`
+anchors the current owned assertion under section 9.3, not the latest poll.
 
 Mapping is simultaneous, not order-dependent. Duplicate destinations and
 ancestor/descendant collisions (such as `/interfaces` and
@@ -1117,17 +1148,22 @@ explicit supported adapter; declaring `none` is not a workaround.
 | `scope` | `public` provider inventory or credential-scoped `account` visibility |
 | `complete` | Explicit boolean assertion of complete coverage of this feed's owned inventory |
 | `allow_empty` | Default false; whether an observed empty complete listing is meaningful |
-| `missing_runs` | Positive integer, default 2 |
-| `minimum_missing_hours` | Nonnegative number, default 24 |
 
 `snapshot` withdrawals require `complete: true`, all pages and items interpreted,
 and a documented provider-authoritative membership source. An account-scoped
 listing is not evidence of global withdrawal. In this revision `scope: account`
 is restricted to `merge`; a separately scoped inventory can be introduced later.
 Feeds that cannot establish completeness must use `merge` and report that limit.
+This rule deliberately permits a withdrawal proposal from one complete snapshot.
+A provider's erroneous omission may therefore produce an erroneous proposal;
+there is no hidden multi-run confirmation guarantee. Source/artifact review and
+publication admission remain required. Filter exclusions authorize withdrawal
+only when their documented lifecycle meaning establishes nonavailability;
+editorial family, modality or recommendation filters cannot narrow an inventory
+and turn excluded offers into apparent retirements.
 
-Source-only offer `sync` records the membership `owner` feed ID, `last_seen_at`,
-and, when missing, `missing_since` and `missing_runs`. `sync.field_owners` maps model field
+Source-only offer `sync` records static ownership only: the membership `owner`
+feed ID, `field_owners`, and `interface_owners`. `sync.field_owners` maps model field
 paths to feed IDs; `sync.interface_owners` is an array of objects containing
 `protocol`, `operation`, effective `protocol_profile`, and their own
 `field_owners` map of interface-relative paths to feed IDs. Ownership paths use
@@ -1146,33 +1182,29 @@ These field-level exceptions let a manual name/limit or separately owned price
 coexist with other feed-owned metadata. An entire domain need not become manual.
 Do not add further ownership layers or mutable array-index identities.
 
-### 9.1 Observation order and replay
+### 9.1 Fresh runs and concurrent writes
 
-Each feed persists a source-only `checkpoint: {sequence, id, observed_at}` for
-its latest accepted successful observation. `sequence` is a positive integer at
-most 9007199254740991; `id` is a nonempty run label; `observed_at` is a UTC
-timestamp. No checkpoint means sequence zero. The sequence is the ordering and
-replay identity within `(provider, feed id)`; the label is diagnostic only.
+Each sync fetches fresh listings and reconciles them against the latest accepted
+source. It is not an event consumer: no checkpoint, observation sequence,
+last-seen time, absence counter or external synchronization database is required
+or maintained. Repeating the same effective inputs MUST be idempotent under
+section 9.3. Per-check run labels and heartbeat times belong only to logs/reports;
+they MUST NOT be committed as catalog source or published model metadata.
+Content-associated evidence times and `as_of` are retained under section 9.3.
 
-The coordinator serializes observations for that feed. It assigns a sequence
-greater than the accepted checkpoint to each new complete staged observation;
-retries/replays of that observation MUST retain its sequence, label, and time.
-Do not relabel old evidence as a fresh observation. Sequence exhaustion is an
-ordinary reported error, never wraparound. Before any reconciliation:
+The coordinator MUST serialize sync runs for a proposal target from source
+selection and fetching through the final conditional write. Capture both the
+accepted source revision and any existing proposal head. If either changes
+before writing, discard the candidate and restart with current source and fresh
+fetches. Never rebase an old observation onto newer source or unconditionally
+overwrite a changed branch. Validation and the global identity audit must pass
+before source and artifacts are committed together.
 
-- Lower sequence: ignore as stale with a diagnostic and no mutation.
-- Equal sequence and equal label/time: return unchanged as a replay.
-- Equal sequence but different label/time: reject as an observation conflict.
-- Higher sequence: accept only if `observed_at` is not earlier than the current
-  checkpoint, then apply the observation once.
-
-Persist the checkpoint and all corresponding offer changes atomically with the
-validated source transaction. Failed/incomplete feeds and failed publication
-gates do not advance it. A source reload must restore it before processing more
-observations. For A(10), B(11), replay A(10), the replay changes neither presence,
-absence counts, nor status. No unbounded ID history or per-offer replay ID is
-needed. Explicitly replacing a feed/owner resets its absence evidence through a
-reviewed source change; it must not accidentally reuse an old checkpoint scope.
+An interrupted run leaves no observation to resume. A retry starts fresh;
+previous response bodies, reports or run labels cannot authorize a later write.
+Completed catalog/proposal commits are ordinary content snapshots. No replay
+ledger or crash-recovery state store is needed. Failed writes report failure;
+accepted source and published artifacts remain intact.
 
 ### 9.2 Applying an observation
 
@@ -1188,21 +1220,17 @@ requires a reviewed change.
 For each feed, the importer MUST:
 
 1. Validate configuration, feature support, and environment prerequisites.
-2. Fetch and normalize the entire listing into a staged observation set, then
-   enforce the checkpoint ordering rule before applying any changes.
+2. Fetch and normalize the entire listing into a staged observation set within
+   the current run; do not reuse observations from earlier runs.
 3. Resolve exact native IDs and explicit canonical bindings; detect conflicts.
 4. Apply only owned field changes. Preserve unobserved, manually owned, and
    unknown data. Report conflicts instead of choosing an arbitrary winner.
-5. For a complete authoritative snapshot, count absence only for that feed's
-   owned offers. Withdraw only after both `missing_runs` and
-   `minimum_missing_hours` are satisfied by consecutive successful complete
-   runs in the sequence of successful complete observations. A failed/incomplete
-   run pauses that sequence without incrementing or clearing evidence; a
-   successfully observed present offer clears the window. Time elapsed during
-   failures cannot substitute for a new complete absence observation. Set
-   `missing_since` from the first accepted absent observation's `observed_at`;
-   measure elapsed hours at the current accepted observation's time, not the
-   sync machine's later wall clock. `last_seen_at` uses the same observation time.
+5. For a successful complete, public, provider-authoritative snapshot, set each
+   absent owned offer to `status: withdrawn` when the feed owns `/status`.
+   One such snapshot suffices: there is no count threshold or elapsed-time
+   grace period. Preserve the record and its other data. Merge-only or
+   account-scoped feeds cannot withdraw from absence; an explicitly mapped
+   lifecycle value remains subject to its declared authority and ownership.
 6. Validate the entire candidate provider, then publish its changes atomically.
 
 Withdrawal sets model `status: withdrawn`; it does not erase the record, identity,
@@ -1233,13 +1261,92 @@ and builds a complete registry document; it never deletes provider offers becaus
 of curation. Dry-run computes the same candidate
 and validation as write mode, without changing source/dist files.
 
-The machine-readable report includes provider/feed ID, observation sequence/label,
+The machine-readable report includes provider/feed ID, run label and fetch/evaluation times,
 outcome (`updated`,
 `unchanged`, `missing_secret`, `failed`, `unsupported`, `incomplete`), scope,
 completeness, counts, changed field paths, proposed withdrawals, and sanitized
-diagnostics. It never includes credentials or raw response bodies. Replay/stale
-outcomes are unchanged with an explicit diagnostic. Observation sequence, times,
-and labels belong to source sync state/reporting, not invented build timestamps.
+diagnostics. It never includes credentials or raw response bodies. `unchanged`
+means a successful check produced no content change, not a suppressed failure.
+Reports are diagnostic outputs; later sync runs MUST NOT depend on their retention.
+
+### 9.3 Content comparison and timestamps
+
+The latest accepted source is authoritative for configuration, ownership and
+whether a change needs proposing. Build desired content from it and this run's
+fresh observations. A previous unmerged sync proposal is only a reusable
+content snapshot, never accepted policy, feed configuration or fresh evidence.
+Failed feeds preserve their accepted data; a prior proposal does not turn a
+failed current fetch into success. No independent persistent sync state is needed.
+
+Compare normalized public content after ownership, identity and lifecycle rules,
+ignoring only top-level `as_of`, curated-model `curation.checked_at`, and
+provider-offer `availability.checked_at` at their defined locations. All other
+retained data counts, including unknown extensions, provenance URL/scope,
+`available_until`, curation reasons and `expires_at`. Unmapped upstream fields
+are not catalog changes. Object key order and formatting are insignificant;
+known unordered collections compare by their declared identities. Interface
+preference and opaque extension array order remain significant. Numbers compare
+exactly after declared normalization, without tolerance or string/ID coercion.
+Never ignore a nested unknown field merely because its name resembles a timestamp.
+
+| Evidence time | Assertion whose change permits an update |
+| --- | --- |
+| Offer `availability.checked_at` | Membership owner's effective owned public fields, provenance and derived lifecycle status |
+| Model `curation.checked_at` | Verified curation-owned recommendation fields, including its editorial deadline |
+| Source identity `observed_at` / binding `verified_at` | The identity/binding evidence record, excluding its own evidence time |
+
+For each assertion, preserve accepted evidence times when normalized content
+matches the accepted source. Otherwise preserve times from the existing sync
+proposal when the same assertion and authority/configuration scope still match
+and current validation succeeds. For newly changed assertions, record the
+actual responsible observation/verification time from this run. A different
+pricing authority or manual field edit MUST NOT renew membership evidence;
+an availability check MUST NOT renew editorial evidence. Pure timestamp edits
+MUST NOT create content revisions. Unchanged identities/bindings likewise MUST
+NOT receive new ledger timestamps merely because the audit ran again.
+
+Evaluate curation/expiry at fresh explicit UTC before comparison. A removal,
+withdrawal, reappearance or changed grace deadline is content. Retain an already
+accepted deadline, or the existing proposal's first deadline for the same
+still-valid retention transition under the same policy. Repeated checks before
+merge MUST NOT slide it; re-entry follows section 7. Use proposal deadlines only
+after current observations/policy independently establish that transition.
+When that deadline expires before the removal is accepted, retain the expired
+record and its deadline in the managed proposal's source while excluding it
+from the public artifact. Repeated runs can then preserve the same removal;
+they MUST NOT replace it with a newly started grace period. The expired source
+record may be pruned after its public removal is accepted. This is ordinary
+curation content, not a check timestamp or separate operational state.
+If the required deadline exists in neither accepted nor pending source, a new
+transition uses the current evaluation time.
+Loss of an unaccepted proposal cannot erase an accepted deadline or affect
+provider withdrawal; it may restart an unaccepted editorial grace period.
+
+If desired public content equals the accepted baseline, retain its timestamps
+and exact bytes with the same producer encoding. If an existing managed sync
+proposal still contains a superseded change, close/reset that proposal or block
+its obsolete head from merging; do not leave a stale withdrawal mergeable after
+fresh evidence restores the accepted active content. Removing a superseded
+proposal is a semantic correction, not timestamp churn. Conditional-write and
+audit gates still apply, and unrelated human edits must not be erased.
+If it still differs from accepted content, reuse proposal bytes only after the
+assertion/deadline rules above produce the same final fields, including evidence
+times, as the existing validated proposal except for `as_of`. The reused `as_of`
+must not precede the accepted baseline, and the bytes must still match the
+current validated source/build. A timestamp-excluding content match alone is
+insufficient when authority/configuration changes make old evidence ineligible.
+An eligible identical proposal remains needed without another commit.
+Otherwise set `as_of` to this run's explicit evaluation time, which MUST NOT
+precede the accepted baseline or reused evidence times; report clock rollback
+instead of fabricating time. Only newly changed assertions get new evidence.
+A changed accepted baseline invalidates stale writes under section 9.1.
+
+Source-only configuration/ownership edits may require a source PR without
+renewing public times. Intentional encoding-only migrations may change bytes
+without renewing content times. A run creates no source/dist commit or catalog
+PR update merely to record a check; run reports remain separate. Offline builds
+use stored `as_of`, while consumers still enforce expiry at current UTC and advance their
+local cache `checked_at` on every successful download under section 11.
 
 ## 10. CI and release contract
 
@@ -1249,6 +1356,8 @@ Every scheduled/manual sync and every promotion that writes new artifact bytes
 MUST fetch OpenRouter's full model list from
 `https://openrouter.ai/api/v1/models?output_modalities=all`, using the
 [documented list API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).
+This includes sync runs whose content comparison ultimately finds no changes;
+the byte-identical promotion shortcut in section 10.2 is not a sync shortcut.
 Require `output_modalities=all`: the API otherwise defaults to text output.
 Omit `offset`, `limit`, and every narrowing filter to request the complete list.
 Do not substitute a user-filtered catalog, a curated family subset, a provider's
@@ -1440,10 +1549,10 @@ A beta-only release pins its default stream to one declared exact protocol
 revision. For this revision the URL is:
 
 ```text
-https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json
+https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.7/registry.json
 ```
 
-That location MUST serve only `spec_revision: 1.0.0-beta.6`. Data-only catalog
+That location MUST serve only `spec_revision: 1.0.0-beta.7`. Data-only catalog
 updates may roll there; a breaking beta edit uses a new revision and path.
 The build emits one complete document at its revision path as well as the
 pre-stable v1 location; they are alternative sources, never paired inputs.

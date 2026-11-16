@@ -457,7 +457,7 @@ fn registered_adapter_discovers_verified_usable_and_curated_new_model() -> Resul
     let observed = bitrouter_registry::openrouter::observation(&feed, &snapshot)?;
     assert_eq!(ids.len(), 3);
     assert_eq!(observed.models.len(), 2);
-    let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "test".into(), Utc::now())?;
+    let stamp = Utc::now();
     let (mut next, _) =
         bitrouter_registry::reconcile::apply(&provider, "catalog", &observed, &stamp)?;
     let mut ledger = json!([]);
@@ -506,7 +506,7 @@ fn inherited_interface_supports_scoped_pricing_update_without_mutating_defaults(
     inherit_interfaces(&mut provider)?;
     let observation =
         bitrouter_registry::mapping::normalize(&price, &[json!({"data":[{"id":"A","cost":2}]})])?;
-    let stamp = bitrouter_registry::reconcile::next_stamp(&price, "test".into(), Utc::now())?;
+    let stamp = Utc::now();
     let (next, _) =
         bitrouter_registry::reconcile::apply(&provider, "prices", &observation, &stamp)?;
     assert_eq!(
@@ -524,7 +524,7 @@ fn explicit_unsupported_output_retracts_owned_text_interface() -> Result<()> {
         json!({"name":"openrouter","status":"active","models":[],"auto_sync":{"feeds":[feed]}});
     let initial = json!({"data":[{"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"endpoints":["/api/v1/chat/completions"]}]});
     let observation = bitrouter_registry::openrouter::observation(&feed, &initial)?;
-    let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "first".into(), Utc::now())?;
+    let stamp = Utc::now();
     let (one, _) =
         bitrouter_registry::reconcile::apply(&provider, "catalog", &observation, &stamp)?;
     assert_eq!(
@@ -533,11 +533,7 @@ fn explicit_unsupported_output_retracts_owned_text_interface() -> Result<()> {
     );
     let next = json!({"data":[{"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["image"]}}]});
     let observation = bitrouter_registry::openrouter::observation(&feed, &next)?;
-    let stamp = bitrouter_registry::reconcile::next_stamp(
-        &one["auto_sync"]["feeds"][0],
-        "second".into(),
-        Utc::now(),
-    )?;
+    let stamp = Utc::now();
     let (two, _) = bitrouter_registry::reconcile::apply(&one, "catalog", &observation, &stamp)?;
     assert_eq!(two["models"][0]["interfaces"], json!([]));
     assert_eq!(two["models"][0]["model_types"], json!([]));
@@ -593,7 +589,7 @@ fn endpoint_removal_retracts_owned_chat_but_missing_evidence_preserves_it() -> R
         json!({"name":"openrouter","status":"active","models":[],"auto_sync":{"feeds":[feed]}});
     let row = json!({"id":"org/model","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"endpoints":["/api/v1/chat/completions"]});
     let observation = bitrouter_registry::openrouter::observation(&feed, &json!({"data":[row]}))?;
-    let stamp = bitrouter_registry::reconcile::next_stamp(&feed, "first".into(), Utc::now())?;
+    let stamp = Utc::now();
     let (one, _) =
         bitrouter_registry::reconcile::apply(&provider, "catalog", &observation, &stamp)?;
     let mut cases = Vec::new();
@@ -622,11 +618,7 @@ fn endpoint_removal_retracts_owned_chat_but_missing_evidence_preserves_it() -> R
     for (next, preserve) in cases {
         let observation =
             bitrouter_registry::openrouter::observation(&feed, &json!({"data":[next]}))?;
-        let stamp = bitrouter_registry::reconcile::next_stamp(
-            &one["auto_sync"]["feeds"][0],
-            "second".into(),
-            Utc::now(),
-        )?;
+        let stamp = Utc::now();
         let (two, _) = bitrouter_registry::reconcile::apply(&one, "catalog", &observation, &stamp)?;
         if preserve {
             assert_eq!(
@@ -652,5 +644,225 @@ fn promotion_ordering_accepts_historical_beta_envelopes_without_executing_them()
         promoted_as_of(br#"{"version":2,"spec_revision":"2.0.0","as_of":"2026-10-22T00:00:00Z"}"#)
             .is_err()
     );
+    Ok(())
+}
+
+#[test]
+fn content_revision_and_pending_proposal_are_stable_across_fresh_checks() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("models")?[0]["context_window"] = json!(4096);
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    content::finalize(&mut pending, &accepted, None, first)?;
+    let mut repeated = pending.clone();
+    repeated
+        .files
+        .get_mut(&repeated.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    repeated.files.get_mut(&path).context("models")?[0]["curation"]["checked_at"] = json!(later);
+    content::finalize(&mut repeated, &accepted, Some(&pending), later)?;
+    assert_eq!(repeated.digest()?, pending.digest()?);
+    assert_eq!(
+        rendered(&repeated.document()?)?,
+        rendered(&pending.document()?)?
+    );
+    let mut changed = repeated.clone();
+    changed.files.get_mut(&path).context("models")?[0]["context_window"] = json!(8192);
+    changed
+        .files
+        .get_mut(&changed.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut changed, &accepted, Some(&pending), later)?;
+    assert_eq!(
+        changed.files[&path][0]["curation"]["checked_at"],
+        json!(later)
+    );
+    assert_ne!(
+        rendered(&changed.document()?)?,
+        rendered(&pending.document()?)?
+    );
+    let mut restored = accepted.clone();
+    restored
+        .files
+        .get_mut(&restored.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut restored, &accepted, Some(&pending), later)?;
+    assert_eq!(restored.digest()?, accepted.digest()?);
+    Ok(())
+}
+
+#[test]
+fn content_comparison_preserves_signed_unknown_numbers_and_exact_noop_bytes() -> Result<()> {
+    let root = fixture()?;
+    let mut accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/providers/test.yaml");
+    accepted.files.get_mut(&path).context("provider")?["future_number"] =
+        bitrouter_registry::document::parse_json(b"-1.00")?;
+    let mut candidate = accepted.clone();
+    let now: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    candidate.files.get_mut(&path).context("provider")?["future_number"] = json!(-1);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(now);
+    content::finalize(&mut candidate, &accepted, None, now)?;
+    assert_eq!(candidate.digest()?, accepted.digest()?);
+    assert_eq!(
+        rendered(&candidate.document()?)?,
+        rendered(&accepted.document()?)?
+    );
+    Ok(())
+}
+
+#[test]
+fn pending_new_binding_reuses_its_own_verification_time() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&pending.identities).context("ledger")?[0]["bindings"].as_array_mut().context("bindings")?.push(json!({"provider":"other","provider_model_id":"B","source_url":"https://example.com/evidence","verified_at":"2026-11-01T00:00:00Z"}));
+    let mut candidate = pending.clone();
+    let now: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    candidate
+        .files
+        .get_mut(&candidate.identities)
+        .context("ledger")?[0]["bindings"][1]["verified_at"] = json!(now);
+    content::finalize(&mut candidate, &accepted, Some(&pending), now)?;
+    assert_eq!(
+        candidate.files[&candidate.identities],
+        pending.files[&pending.identities]
+    );
+    Ok(())
+}
+
+#[test]
+fn pending_recommendation_sets_are_stable_and_future_evidence_is_rejected() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("models")?[0]["input_modalities"] =
+        json!(["text", "image"]);
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    content::finalize(&mut pending, &accepted, None, first)?;
+    let mut repeated = pending.clone();
+    repeated.files.get_mut(&path).context("models")?[0]["input_modalities"] =
+        json!(["image", "text"]);
+    repeated
+        .files
+        .get_mut(&repeated.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut repeated, &accepted, Some(&pending), later)?;
+    assert_eq!(repeated.digest()?, pending.digest()?);
+    pending.files.get_mut(&path).context("models")?[0]["curation"]["checked_at"] =
+        json!("2026-12-01T00:00:00Z");
+    let mut repeated = pending.clone();
+    assert!(content::finalize(&mut repeated, &accepted, Some(&pending), later).is_err());
+    Ok(())
+}
+
+#[test]
+fn pending_provider_set_representation_and_policy_scope_are_respected() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/providers/test.yaml");
+    let model_path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let feed = json!({"id":"catalog","kind":"v1_models","writes":["models","metadata"],"request":{"url":"https://example.com/models","auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"merge","scope":"public","complete":false},"response":{"items_path":"/data","mapping":{"/id":"/provider_model_id"},"defaults":{"status":"active","interfaces":[]}}});
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("provider")?["auto_sync"] = json!({"feeds":[feed]});
+    pending.files.get_mut(&path).context("provider")?["models"].as_array_mut().context("models")?.push(json!({"provider_model_id":"B","status":"active","interfaces":[],"model_types":["language","decision"],"availability":{"source_url":"https://example.com/models","scope":"public","checked_at":first},"sync":{"owner":"catalog","field_owners":{"/status":"catalog","/model_types":"catalog"}}}));
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    let mut current_base = accepted.clone();
+    current_base.files.get_mut(&path).context("provider")?["auto_sync"] = json!({"feeds":[feed]});
+    let mut candidate = pending.clone();
+    candidate.files.get_mut(&path).context("provider")?["models"][1]["model_types"] =
+        json!(["decision", "language"]);
+    candidate.files.get_mut(&path).context("provider")?["models"][1]["availability"]["checked_at"] =
+        json!(later);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &current_base, Some(&pending), later)?;
+    assert_eq!(candidate.digest()?, pending.digest()?);
+    pending.files.get_mut(&model_path).context("models")?[0]["context_window"] = json!(8192);
+    pending.files.get_mut(&model_path).context("models")?[0]["curation"]["checked_at"] =
+        json!(first);
+    let mut candidate = pending.clone();
+    let policy = root.path().join("registry/model-discovery.yaml");
+    candidate.files.get_mut(&policy).context("policy")?["deprecation_days"] = json!(7);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &current_base, Some(&pending), later)?;
+    assert_eq!(
+        candidate.files[&model_path][0]["curation"]["checked_at"],
+        json!(later)
+    );
+    Ok(())
+}
+
+#[test]
+fn unknown_root_arrays_remain_ordered_content() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("models")?[0]["capabilities"] = json!(["a", "b"]);
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    content::finalize(&mut pending, &accepted, None, first)?;
+    let mut candidate = pending.clone();
+    candidate.files.get_mut(&path).context("models")?[0]["capabilities"] = json!(["b", "a"]);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &accepted, Some(&pending), later)?;
+    assert_eq!(candidate.files[&path][0]["capabilities"], json!(["b", "a"]));
+    assert_eq!(
+        candidate.files[&path][0]["curation"]["checked_at"],
+        json!(later)
+    );
+    Ok(())
+}
+
+#[test]
+fn first_source_publication_is_already_stable_after_reload() -> Result<()> {
+    let root = fixture()?;
+    let original = Sources::load(root.path())?;
+    let mut candidate = original.clone();
+    let path = root.path().join("registry/models/org.yaml");
+    candidate.files.get_mut(&path).context("models")?[0]["curation"]["expires_at"] =
+        json!("2026-12-01T00:00:00Z");
+    candidate.files.get_mut(&path).context("models")?[0]["name"] = json!("New display name");
+    candidate.publish(&original, &build_outputs(root.path(), &candidate)?)?;
+    let first = fs::read(&path)?;
+    let reloaded = Sources::load(root.path())?;
+    assert_eq!(first, source::render(&reloaded.files[&path])?.into_bytes());
+    let outputs = build_outputs(root.path(), &reloaded)?;
+    reloaded.publish(&reloaded, &outputs)?;
+    assert_eq!(first, fs::read(path)?);
     Ok(())
 }

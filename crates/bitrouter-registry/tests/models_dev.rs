@@ -74,7 +74,7 @@ fn sdv_fallback_cannot_overwrite_manual_execution_data() -> TestResult {
         &feed(),
         &json!({"fixture":{"id":"fixture","models":{"Native":{"id":"Native","name":"New"}}}}),
     )?;
-    let stamp = reconcile::next_stamp(&feed(), "run".into(), "2026-11-01T00:00:00Z".parse()?)?;
+    let stamp = "2026-11-01T00:00:00Z".parse()?;
     let (next, _) = reconcile::apply(&provider, "fallback", &observation, &stamp)?;
     assert_eq!(
         next["models"][0]["interfaces"],

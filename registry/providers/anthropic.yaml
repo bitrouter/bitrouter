@@ -11,11 +11,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:06.834780527Z",
-          "sequence": 2
-        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -144,8 +139,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2",
@@ -210,7 +204,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
         "owner": "directory"
       }
     },
@@ -265,7 +258,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
         "owner": "directory"
       }
     },
@@ -286,7 +278,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
         "owner": "directory"
       }
     },
@@ -307,7 +298,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
         "owner": "directory"
       }
     },
@@ -328,7 +318,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:06.834780527Z",
         "owner": "directory"
       }
     },
@@ -518,7 +507,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-02T11:26:40.849969Z",
         "owner": "directory"
       }
     },

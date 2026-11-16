@@ -1,4 +1,4 @@
-//! Atomic source reconciliation, scoped ownership, and monotonic replay control.
+//! Atomic, idempotent snapshot reconciliation with scoped ownership.
 
 use registry_json as serde_json;
 use std::collections::BTreeSet;
@@ -7,25 +7,62 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::document::{RegistryError, integer, interface_key, timestamp};
+use crate::document::{RegistryError, interface_key};
 use crate::mapping::{Observation, ObservedModel, domain, read, tokens, write};
-use crate::pricing::decimal;
 
-/// A complete observation's stable identity. Replays must keep all three fields.
-#[derive(Clone, Debug, Serialize)]
-pub struct Stamp {
-    /// Strictly increasing within one provider/feed; safe JSON integer.
-    pub sequence: u64,
-    /// Diagnostic run label, never a substitute for sequence ordering.
-    pub id: String,
-    /// Time the successful complete observation was collected.
-    pub observed_at: DateTime<Utc>,
+fn signed_number(value: &str) -> Result<num_rational::BigRational, RegistryError> {
+    let unsigned = crate::pricing::decimal(value.strip_prefix('-').unwrap_or(value))?;
+    Ok(if value.starts_with('-') {
+        -unsigned
+    } else {
+        unsigned
+    })
+}
+
+/// Compare JSON with exact signed numeric equality, preserving opaque array order.
+///
+/// # Errors
+/// Numbers outside the document resource profile are rejected.
+// Exact typed equality: unknown objects cannot collide with a numeric surrogate.
+pub fn equivalent(a: &Value, b: &Value) -> Result<bool, RegistryError> {
+    Ok(match (a, b) {
+        (Value::Number(a), Value::Number(b)) => {
+            signed_number(&a.to_string())? == signed_number(&b.to_string())?
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            if a.len() != b.len() {
+                false
+            } else {
+                let mut same = true;
+                for (k, v) in a {
+                    if let Some(w) = b.get(k) {
+                        same &= equivalent(v, w)?;
+                    } else {
+                        same = false;
+                    }
+                }
+                same
+            }
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            if a.len() != b.len() {
+                false
+            } else {
+                let mut same = true;
+                for (v, w) in a.iter().zip(b) {
+                    same &= equivalent(v, w)?;
+                }
+                same
+            }
+        }
+        _ => a == b,
+    })
 }
 
 /// Diagnostics contain paths and identities, never response bodies or secrets.
 #[derive(Debug, Default, Serialize)]
 pub struct Changes {
-    /// Whether replay/stale suppression prevented all mutations.
+    /// Whether the normalized provider content is identical.
     pub unchanged: bool,
     /// Paths whose owned data changed.
     pub changed: Vec<String>,
@@ -35,53 +72,17 @@ pub struct Changes {
     pub withdrawn: Vec<String>,
 }
 
-/// Assign the next sequence from persisted state without wrapping.
-///
-/// # Errors
-/// Invalid/exhausted checkpoint data is not repaired by inventing a new epoch.
-pub fn next_stamp(
-    feed: &Value,
-    id: String,
-    observed_at: DateTime<Utc>,
-) -> Result<Stamp, RegistryError> {
-    let sequence = checkpoint_sequence(feed)?
-        .checked_add(1)
-        .filter(|n| *n <= 9_007_199_254_740_991)
-        .ok_or_else(|| invalid("Checkpoint sequence exhausted"))?;
-    Ok(Stamp {
-        sequence,
-        id,
-        observed_at,
-    })
-}
-
-fn checkpoint_sequence(feed: &Value) -> Result<u64, RegistryError> {
-    match feed.get("checkpoint") {
-        None => Ok(0),
-        Some(value) => {
-            if value["id"].as_str().is_none_or(str::is_empty)
-                || value["observed_at"].as_str().and_then(timestamp).is_none()
-            {
-                return Err(invalid("Invalid persisted checkpoint identity or time"));
-            }
-            integer(&value["sequence"])
-                .filter(|n| *n > 0 && *n <= 9_007_199_254_740_991)
-                .ok_or_else(|| invalid("Invalid checkpoint sequence"))
-        }
-    }
-}
-
 /// Reconcile into a private clone. The caller publishes it only after the global
-/// identity gate. Failures never alter the supplied provider or checkpoint.
+/// identity gate. Failures never alter the supplied provider.
 ///
 /// # Errors
-/// Rejects ordering conflicts, illegal authority, ambiguous interfaces, and
+/// Rejects obsolete state, illegal authority, ambiguous interfaces, and
 /// attempts to withdraw a manually controlled status.
 pub fn apply(
     provider: &Value,
     feed_id: &str,
     observation: &Observation,
-    stamp: &Stamp,
+    observed_at: &DateTime<Utc>,
 ) -> Result<(Value, Changes), RegistryError> {
     validate_provider(provider)?;
     let feeds = provider
@@ -94,35 +95,6 @@ pub fn apply(
         .ok_or_else(|| invalid("Unknown feed ID"))?;
     let feed = &feeds[index];
     crate::mapping::validate(feed)?;
-    let accepted = checkpoint_sequence(feed)?;
-    let checkpoint = &feed["checkpoint"];
-    if stamp.sequence == 0 || stamp.sequence > 9_007_199_254_740_991 || stamp.id.is_empty() {
-        return Err(invalid("Invalid observation stamp"));
-    }
-    if stamp.sequence < accepted
-        || (stamp.sequence == accepted
-            && checkpoint["id"] == stamp.id
-            && checkpoint["observed_at"].as_str().and_then(timestamp) == Some(stamp.observed_at))
-    {
-        return Ok((
-            provider.clone(),
-            Changes {
-                unchanged: true,
-                ..Changes::default()
-            },
-        ));
-    }
-    if stamp.sequence == accepted {
-        return Err(invalid("Conflicting checkpoint replay"));
-    }
-    if accepted > 0
-        && checkpoint["observed_at"]
-            .as_str()
-            .and_then(timestamp)
-            .is_none_or(|t| stamp.observed_at < t)
-    {
-        return Err(invalid("Observation time precedes persisted checkpoint"));
-    }
     let membership = feed["writes"]
         .as_array()
         .is_some_and(|w| w.iter().any(|v| v == "models"));
@@ -158,41 +130,16 @@ pub fn apply(
             apply_fields(model, observed, feed, feed_id, false, &mut changes)?;
         }
         if membership && model.pointer("/sync/owner").and_then(Value::as_str) == Some(feed_id) {
-            let sync = object(model, "sync")?;
-            sync.insert(
-                "last_seen_at".into(),
-                json!(
-                    stamp
-                        .observed_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-                ),
-            );
-            sync.remove("missing_since");
-            sync.remove("missing_runs");
             let availability = object(model, "availability")?;
             availability.insert("source_url".into(), feed["request"]["url"].clone());
             availability.insert(
                 "checked_at".into(),
-                json!(
-                    stamp
-                        .observed_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-                ),
+                json!(observed_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
             );
             availability.insert("scope".into(), feed["inventory"]["scope"].clone());
         }
     }
     if membership && feed["inventory"]["mode"] == "snapshot" {
-        let required = feed["inventory"]
-            .get("missing_runs")
-            .and_then(integer)
-            .unwrap_or(2);
-        let hours = decimal(
-            &feed["inventory"]
-                .get("minimum_missing_hours")
-                .unwrap_or(&json!(24))
-                .to_string(),
-        )?;
         for model in models.iter_mut() {
             let native = model["provider_model_id"]
                 .as_str()
@@ -203,36 +150,7 @@ pub fn apply(
             {
                 continue;
             }
-            let sync = object(model, "sync")?;
-            let count = sync
-                .get("missing_runs")
-                .and_then(integer)
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| invalid("Absence counter exhausted"))?;
-            let since = match sync.get("missing_since") {
-                None => stamp.observed_at,
-                Some(v) => v
-                    .as_str()
-                    .and_then(timestamp)
-                    .ok_or_else(|| invalid("Invalid missing_since"))?,
-            };
-            if since > stamp.observed_at {
-                return Err(invalid("Absence evidence is in the future"));
-            }
-            sync.insert(
-                "missing_since".into(),
-                json!(since.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
-            );
-            sync.insert("missing_runs".into(), json!(count));
-            let nanos = num_bigint::BigInt::from(stamp.observed_at.timestamp() - since.timestamp())
-                * 1_000_000_000u64
-                + num_bigint::BigInt::from(
-                    i64::from(stamp.observed_at.timestamp_subsec_nanos())
-                        - i64::from(since.timestamp_subsec_nanos()),
-                );
-            let elapsed = num_rational::BigRational::new(nanos, 3_600_000_000_000u64.into());
-            if count >= required && elapsed >= hours && model["status"] != "withdrawn" {
+            if model["status"] != "withdrawn" {
                 if owner(model.pointer("/sync/field_owners"), "/status")? != Some(feed_id) {
                     return Err(invalid("Cannot withdraw a manually owned status"));
                 }
@@ -246,22 +164,124 @@ pub fn apply(
             .as_str()
             .cmp(&b["provider_model_id"].as_str())
     });
-    let checkpoint = object(&mut candidate["auto_sync"]["feeds"][index], "checkpoint")?;
-    checkpoint.insert("sequence".into(), json!(stamp.sequence));
-    checkpoint.insert("id".into(), json!(stamp.id));
-    checkpoint.insert(
-        "observed_at".into(),
-        json!(
-            stamp
-                .observed_at
-                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-        ),
-    );
+    // Preserve evidence for the membership owner's unchanged assertion, including
+    // foreign/manual fields which this feed cannot verify.
+    for model in candidate["models"]
+        .as_array_mut()
+        .ok_or_else(|| invalid("models"))?
+    {
+        let prior = provider["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|old| old["provider_model_id"] == model["provider_model_id"]);
+        if model.pointer("/sync/owner").and_then(Value::as_str) == Some(feed_id) {
+            if let Some(prior) = prior
+                && assertion(prior, feed_id)? == assertion(model, feed_id)?
+            {
+                if let Some(time) = prior.pointer("/availability/checked_at") {
+                    model["availability"]["checked_at"] = time.clone();
+                } else if let Some(availability) =
+                    model.get_mut("availability").and_then(Value::as_object_mut)
+                {
+                    availability.remove("checked_at");
+                }
+            } else {
+                object(model, "availability")?.insert("checked_at".into(), json!(observed_at));
+            }
+        }
+    }
+    changes.unchanged = candidate == *provider;
     changes.changed.sort();
     changes.changed.dedup();
     changes.manual_conflicts.sort();
     changes.manual_conflicts.dedup();
     Ok((candidate, changes))
+}
+
+/// Effective public assertion owned by a feed, excluding observation time.
+///
+/// # Errors
+/// Invalid ownership pointers are rejected rather than guessed.
+pub fn assertion(model: &Value, feed_id: &str) -> Result<Value, RegistryError> {
+    let mut result = serde_json::Map::new();
+    if model.pointer("/sync/owner").and_then(Value::as_str) == Some(feed_id) {
+        result.insert(
+            "provider_model_id".into(),
+            model["provider_model_id"].clone(),
+        );
+        let mut availability = model.get("availability").cloned().unwrap_or(json!({}));
+        if let Some(map) = availability.as_object_mut() {
+            map.remove("checked_at");
+        }
+        result.insert("availability".into(), availability);
+    }
+    for (path, owner) in model
+        .pointer("/sync/field_owners")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        if owner == feed_id {
+            result.insert(
+                path.clone(),
+                model.pointer(path).cloned().unwrap_or(Value::Null),
+            );
+        }
+    }
+    let mut interfaces = Vec::new();
+    for owners in model
+        .pointer("/sync/interface_owners")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let interface = model["interfaces"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|i| interface_key(i) == interface_key(owners));
+        let mut fields = serde_json::Map::new();
+        for (path, owner) in owners["field_owners"].as_object().into_iter().flatten() {
+            if owner == feed_id {
+                fields.insert(
+                    path.clone(),
+                    interface
+                        .and_then(|i| i.pointer(path))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+            }
+        }
+        if !fields.is_empty() {
+            interfaces.push(json!({"identity":interface_key(owners),"fields":fields}));
+        }
+    }
+    let preference = model["interfaces"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| {
+            interfaces
+                .iter()
+                .any(|v| v["identity"] == json!(interface_key(i)))
+        })
+        .map(interface_key)
+        .collect::<Vec<_>>();
+    for (path, value) in &mut result {
+        normalize_owned(value, path, false);
+    }
+    for interface in &mut interfaces {
+        if let Some(fields) = interface["fields"].as_object_mut() {
+            for (path, value) in fields {
+                normalize_owned(value, path, true);
+            }
+        }
+    }
+    interfaces.sort_by_key(|v| v["identity"].to_string());
+    result.insert("preference".into(), json!(preference));
+    result.insert("interfaces".into(), json!(interfaces));
+    Ok(Value::Object(result))
 }
 
 fn validate_inventory(feed: &Value, membership: bool) -> Result<(), RegistryError> {
@@ -290,19 +310,19 @@ fn validate_inventory(feed: &Value, membership: bool) -> Result<(), RegistryErro
             "Snapshot withdrawals require complete public authority",
         ));
     }
-    if let Some(runs) = inventory.get("missing_runs")
-        && integer(runs).is_none_or(|n| n == 0)
-    {
-        return Err(invalid("missing_runs must be positive"));
-    }
-    if let Some(hours) = inventory.get("minimum_missing_hours") {
-        decimal(&hours.to_string())?;
-    }
     Ok(())
 }
 
 pub(crate) fn validate_state(feed: &Value) -> Result<(), RegistryError> {
-    checkpoint_sequence(feed)?;
+    if feed.get("checkpoint").is_some()
+        || feed.get("inventory").is_some_and(|v| {
+            v.get("missing_runs").is_some() || v.get("minimum_missing_hours").is_some()
+        })
+    {
+        return Err(invalid(
+            "Remove beta 6 checkpoints and absence controls before beta 7 sync",
+        ));
+    }
     if !matches!(
         feed["kind"].as_str(),
         Some("v1_models" | "openrouter_models")
@@ -360,20 +380,13 @@ pub fn validate_provider(provider: &Value) -> Result<(), RegistryError> {
                 return Err(invalid("Membership owner lacks models authority"));
             }
         }
-        for key in ["last_seen_at", "missing_since"] {
-            if sync
-                .get(key)
-                .is_some_and(|v| v.as_str().and_then(timestamp).is_none())
-            {
-                return Err(invalid("Invalid sync timestamp"));
-            }
-        }
-        if sync
-            .get("missing_runs")
-            .is_some_and(|v| integer(v).is_none_or(|n| n == 0))
-            || sync.contains_key("missing_runs") != sync.contains_key("missing_since")
+        if ["last_seen_at", "missing_since", "missing_runs"]
+            .iter()
+            .any(|key| sync.contains_key(*key))
         {
-            return Err(invalid("Invalid absence evidence"));
+            return Err(invalid(
+                "Remove beta 6 observation state before beta 7 sync",
+            ));
         }
         validate_owners(sync.get("field_owners"), &feed_ids)?;
         validate_owner_domains(sync.get("field_owners"), feeds, false)?;
@@ -509,13 +522,14 @@ fn apply_fields(
             let slot = interface_slot(model, source, create, id)?;
             let owners = interface_owners(model, source)?;
             let mut target = model["interfaces"][slot].clone();
-            let owners = update(
+            let owners = update_at(
                 &mut target,
                 &format!("/{relative}"),
                 value,
                 owners,
                 id,
                 changes,
+                true,
             )?;
             model["interfaces"][slot] = target;
             store_interface_owners(model, source, owners)?;
@@ -564,7 +578,15 @@ fn merge_interfaces(
             if matches!(name.as_str(), "protocol" | "operation" | "protocol_profile") {
                 continue;
             }
-            owners = update(&mut target, &format!("/{name}"), value, owners, id, changes)?;
+            owners = update_at(
+                &mut target,
+                &format!("/{name}"),
+                value,
+                owners,
+                id,
+                changes,
+                true,
+            )?;
         }
         model["interfaces"][slot] = target;
         store_interface_owners(model, source, owners)?;
@@ -741,15 +763,60 @@ fn owner<'a>(owners: Option<&'a Value>, path: &str) -> Result<Option<&'a str>, R
     }
     Ok(found)
 }
+fn normalize_owned(value: &mut Value, path: &str, interface: bool) {
+    let set = if interface {
+        matches!(
+            path,
+            "/input_modalities"
+                | "/output_modalities"
+                | "/question_types"
+                | "/capabilities"
+                | "/requires"
+                | "/reasoning_effort/levels"
+        )
+    } else {
+        matches!(path, "/model_types" | "/requires")
+    };
+    if set && let Some(items) = value.as_array_mut() {
+        items.sort_by_key(Value::to_string);
+    }
+    if interface
+        && path == "/reasoning_effort"
+        && let Some(items) = value.get_mut("levels").and_then(Value::as_array_mut)
+    {
+        items.sort_by_key(Value::to_string);
+    }
+}
+
 fn update(
+    target: &mut Value,
+    path: &str,
+    value: &Value,
+    owners: Value,
+    feed: &str,
+    changes: &mut Changes,
+) -> Result<Value, RegistryError> {
+    update_at(target, path, value, owners, feed, changes, false)
+}
+fn update_at(
     target: &mut Value,
     path: &str,
     value: &Value,
     mut owners: Value,
     feed: &str,
     changes: &mut Changes,
+    interface: bool,
 ) -> Result<Value, RegistryError> {
     let prior = read(target, path)?;
+    if let Some(old) = prior {
+        let mut a = old.clone();
+        let mut b = value.clone();
+        normalize_owned(&mut a, path, interface);
+        normalize_owned(&mut b, path, interface);
+        if equivalent(&a, &b)? {
+            return Ok(owners);
+        }
+    }
     let owning = owner(Some(&owners), path)?;
     let descendants = owners
         .as_object()
@@ -766,13 +833,14 @@ fn update(
         && let Some(fields) = value.as_object()
     {
         for (key, child) in fields {
-            owners = update(
+            owners = update_at(
                 target,
                 &format!("{path}/{}", escape(key)),
                 child,
                 owners,
                 feed,
                 changes,
+                interface,
             )?;
         }
         return Ok(owners);
@@ -879,36 +947,59 @@ mod tests {
     use super::*;
     use crate::mapping::normalize;
     fn fixture() -> Value {
-        json!({"name":"test","status":"active","models":[],"auto_sync":{"feeds":[{"id":"list","kind":"v1_models","writes":["models","metadata"],"request":{"url":"https://example.com/models","auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"snapshot","scope":"public","complete":true,"allow_empty":true,"missing_runs":2,"minimum_missing_hours":24},"response":{"items_path":"/data","mapping":{"/id":"/provider_model_id","/name":"/name"},"defaults":{"status":"active","interfaces":[]}}}]}})
+        json!({"name":"test","status":"active","models":[],"auto_sync":{"feeds":[{"id":"list","kind":"v1_models","writes":["models","metadata"],"request":{"url":"https://example.com/models","auth":{"kind":"none"}},"pagination":{"kind":"none"},"inventory":{"mode":"snapshot","scope":"public","complete":true,"allow_empty":true},"response":{"items_path":"/data","mapping":{"/id":"/provider_model_id","/name":"/name"},"defaults":{"status":"active","interfaces":[]}}}]}})
     }
-    fn at(sequence: u64, hour: i64) -> Result<Stamp, RegistryError> {
-        Ok(Stamp {
-            sequence,
-            id: format!("run-{sequence}"),
-            observed_at: DateTime::from_timestamp(hour * 3600, 0)
-                .ok_or_else(|| invalid("test time"))?,
-        })
+    fn at(_label: u64, hour: i64) -> Result<DateTime<Utc>, RegistryError> {
+        DateTime::from_timestamp(hour * 3600, 0).ok_or_else(|| invalid("test time"))
     }
     #[test]
-    fn presence_absence_replay_and_reactivation_are_transactional() -> Result<(), RegistryError> {
+    fn assertion_sets_are_unordered_but_interface_preference_is_content()
+    -> Result<(), RegistryError> {
+        let mut model = json!({"provider_model_id":"A","interfaces":[{"protocol":"messages","operation":"generation"},{"protocol":"chat_completions","operation":"generation"}],"model_types":["language","decision"],"sync":{"owner":"list","field_owners":{"/model_types":"list"},"interface_owners":[{"protocol":"messages","operation":"generation","field_owners":{"/protocol":"list"}},{"protocol":"chat_completions","operation":"generation","field_owners":{"/protocol":"list"}}]}});
+        let before = assertion(&model, "list")?;
+        model["model_types"] = json!(["decision", "language"]);
+        assert_eq!(before, assertion(&model, "list")?);
+        model["interfaces"]
+            .as_array_mut()
+            .ok_or_else(|| invalid("interfaces"))?
+            .reverse();
+        assert_ne!(before, assertion(&model, "list")?);
+        assert!(equivalent(
+            &json!(-1),
+            &crate::document::parse_json(b"-1.00")?
+        )?);
+        assert!(!equivalent(&json!(1), &json!({"number":"1"}))?);
+        Ok(())
+    }
+    #[test]
+    fn historical_absent_offer_does_not_acquire_null_availability() -> Result<(), RegistryError> {
+        let mut initial = fixture();
+        initial["models"] = json!([{"provider_model_id":"old","status":"withdrawn","interfaces":[],"sync":{"owner":"list","field_owners":{"/status":"list"}}}]);
+        let absent = normalize(&initial["auto_sync"]["feeds"][0], &[json!({"data":[]})])?;
+        let (next, report) = apply(&initial, "list", &absent, &at(1, 0)?)?;
+        assert_eq!(next, initial);
+        assert!(report.unchanged);
+        assert!(next["models"][0].get("availability").is_none());
+        Ok(())
+    }
+    #[test]
+    fn snapshots_are_idempotent_and_withdraw_without_history() -> Result<(), RegistryError> {
         let initial = fixture();
         let feed = &initial["auto_sync"]["feeds"][0];
-        let present = normalize(feed, &[json!({"data":[{"id":"Native/A","name":"first"}]})])?;
+        let present = normalize(feed, &[json!({"data":[{"id":"A","name":"first"}]})])?;
         let absent = normalize(feed, &[json!({"data":[]})])?;
         let (one, _) = apply(&initial, "list", &present, &at(1, 0)?)?;
-        let (two, _) = apply(&one, "list", &absent, &at(2, 1)?)?;
-        assert_eq!(two["models"][0]["status"], "active");
-        let (three, changes) = apply(&two, "list", &absent, &at(3, 25)?)?;
-        assert_eq!(changes.withdrawn, vec!["Native/A"]);
-        let (replay, report) = apply(&three, "list", &present, &at(1, 0)?)?;
+        let (same, report) = apply(&one, "list", &present, &at(2, 1)?)?;
+        assert_eq!(one, same);
         assert!(report.unchanged);
-        assert_eq!(replay, three);
-        let (four, _) = apply(&three, "list", &present, &at(4, 26)?)?;
-        assert_eq!(four["models"][0]["status"], "active");
-        assert!(four["models"][0]["sync"].get("missing_since").is_none());
-        let mut conflict = at(4, 26)?;
-        conflict.id = "different".into();
-        assert!(apply(&four, "list", &present, &conflict).is_err());
+        let (two, report) = apply(&one, "list", &absent, &at(3, 2)?)?;
+        assert_eq!(report.withdrawn, vec!["A"]);
+        assert_eq!(two["models"][0]["status"], "withdrawn");
+        let (same, report) = apply(&two, "list", &absent, &at(4, 3)?)?;
+        assert_eq!(same, two);
+        assert!(report.unchanged);
+        let (three, _) = apply(&two, "list", &present, &at(5, 4)?)?;
+        assert_eq!(three["models"][0]["status"], "active");
         Ok(())
     }
     #[test]
@@ -924,7 +1015,6 @@ mod tests {
             .ok_or_else(|| invalid("test owners"))?
             .remove("/name");
         one["models"][0]["availability"]["future"] = json!({"opaque":true});
-        one["auto_sync"]["feeds"][0]["checkpoint"]["future"] = json!(42);
         let (mut two, changes) = apply(&one, "list", &present, &at(2, 1)?)?;
         assert_eq!(two["models"][0]["name"], "manual");
         assert!(!changes.manual_conflicts.is_empty());
@@ -932,13 +1022,11 @@ mod tests {
             two["models"][0]["availability"]["future"],
             one["models"][0]["availability"]["future"]
         );
-        assert_eq!(two["auto_sync"]["feeds"][0]["checkpoint"]["future"], 42);
         two["models"][0]["sync"]["field_owners"]
             .as_object_mut()
             .ok_or_else(|| invalid("test owners"))?
             .remove("/status");
-        let (three, _) = apply(&two, "list", &absent, &at(3, 2)?)?;
-        assert!(apply(&three, "list", &absent, &at(4, 26)?).is_err());
+        assert!(apply(&two, "list", &absent, &at(3, 2)?).is_err());
         Ok(())
     }
     #[test]

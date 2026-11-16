@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "spec_revision": "1.0.0-beta.6",
+  "as_of": "2026-10-22T00:00:00Z",
+  "requires": [],
+  "data": {
+    "models": [
+      {
+        "curation": {
+          "checked_at": "2026-10-22T00:00:00Z",
+          "reason": "Synthetic current-generation candidate",
+          "source_url": "https://example.com/evidence/chat-2"
+        },
+        "id": "example/chat-2",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "model_types": [
+          "language",
+          "decision"
+        ],
+        "output_modalities": [
+          "text",
+          "structured"
+        ]
+      },
+      {
+        "curation": {
+          "checked_at": "2026-10-22T00:00:00Z",
+          "reason": "Synthetic decision-only candidate",
+          "source_url": "https://example.com/evidence/judge-1"
+        },
+        "id": "example/judge-1",
+        "model_types": [
+          "decision"
+        ]
+      }
+    ],
+    "providers": [
+      {
+        "access": "api_key",
+        "api_base": "https://api.example.com/v1",
+        "auth": {
+          "env": "EXAMPLE_API_KEY",
+          "kind": "bearer"
+        },
+        "billing": "usage",
+        "models": [
+          {
+            "extensions": {
+              "com.example": {
+                "quality_annotation": "unrated"
+              }
+            },
+            "interfaces": [
+              {
+                "input_modalities": [
+                  "text"
+                ],
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language",
+              "future_classification"
+            ],
+            "provider_model_id": "Vendor/Experimental:Beta%1",
+            "status": "active"
+          },
+          {
+            "canonical_id": "example/chat-1",
+            "interfaces": [
+              {
+                "input_modalities": [
+                  "text"
+                ],
+                "limits": {
+                  "max_input_tokens": 32000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "no_cache": 1
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 2
+                  }
+                },
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "provider_model_id": "chat-v1",
+            "status": "active"
+          },
+          {
+            "canonical_id": "example/chat-2",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning"
+                ],
+                "extensions": {
+                  "com.example": {
+                    "display_note": "chat only"
+                  }
+                },
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "no_cache": 1.25
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 3
+                  }
+                },
+                "protocol": "chat_completions",
+                "reasoning_effort": {
+                  "levels": [
+                    "low",
+                    "medium",
+                    "high"
+                  ],
+                  "default": "medium"
+                }
+              },
+              {
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "operation": "decisions",
+                "output_modalities": [
+                  "structured"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "no_cache": 0.1
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0
+                  }
+                },
+                "protocol": "decisions",
+                "question_types": [
+                  "predicate",
+                  "choice",
+                  "score"
+                ]
+              }
+            ],
+            "model_types": [
+              "language",
+              "decision"
+            ],
+            "provider_model_id": "chat-v2",
+            "status": "active"
+          },
+          {
+            "canonical_id": "example/judge-1",
+            "interfaces": [
+              {
+                "input_modalities": [
+                  "text"
+                ],
+                "operation": "decisions",
+                "output_modalities": [
+                  "structured"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "no_cache": 0.05
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0
+                  }
+                },
+                "protocol": "decisions",
+                "question_types": [
+                  "predicate",
+                  "choice",
+                  "score"
+                ]
+              },
+              {
+                "base_url": "https://decision.example.com/v1",
+                "input_modalities": [
+                  "text"
+                ],
+                "operation": "decisions",
+                "output_modalities": [
+                  "structured"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "kind": "metered",
+                  "meters": [
+                    {
+                      "amount": "0.20",
+                      "id": "answered_question",
+                      "quantity": 1000,
+                      "unit": "decision"
+                    }
+                  ],
+                  "requires": [
+                    "pricing.metered.v1"
+                  ]
+                },
+                "protocol": "systemone",
+                "protocol_profile": "vllm_systemone_v1",
+                "question_types": [
+                  "choice",
+                  "noul",
+                  "score"
+                ]
+              },
+              {
+                "base_url": "https://noulxp.example.com/v1",
+                "input_modalities": [
+                  "text"
+                ],
+                "operation": "decisions",
+                "output_modalities": [
+                  "structured"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "kind": "metered",
+                  "meters": [
+                    {
+                      "amount": "0.50",
+                      "id": "completed_request",
+                      "quantity": 1000,
+                      "unit": "request"
+                    }
+                  ],
+                  "requires": [
+                    "pricing.metered.v1"
+                  ]
+                },
+                "protocol": "systemone",
+                "protocol_profile": "noulxp_http_v1",
+                "question_types": [
+                  "choice",
+                  "noul"
+                ]
+              }
+            ],
+            "model_types": [
+              "decision"
+            ],
+            "provider_model_id": "judge-v1",
+            "status": "active"
+          },
+          {
+            "canonical_id": "example/paint-1",
+            "interfaces": [
+              {
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "operation": "image_generation",
+                "output_modalities": [
+                  "image"
+                ],
+                "pricing": {
+                  "currency": "USD",
+                  "kind": "metered",
+                  "meters": [
+                    {
+                      "amount": "0.04",
+                      "id": "image.standard",
+                      "quantity": 1,
+                      "unit": "image"
+                    }
+                  ],
+                  "requires": [
+                    "pricing.metered.v1"
+                  ]
+                },
+                "protocol": "images"
+              }
+            ],
+            "model_types": [
+              "image_generation"
+            ],
+            "provider_model_id": "paint-v1",
+            "status": "active"
+          }
+        ],
+        "name": "example",
+        "status": "active"
+      }
+    ]
+  },
+  "extensions": {
+    "com.example": {
+      "annotation": "preserve this metadata"
+    }
+  }
+}

@@ -6,7 +6,7 @@ compatibility consequences. Admission and review follow the
 
 | Object | Canonical specification | Why it needs a maintained format contract |
 | --- | --- | --- |
-| Published model/provider registry | [Registry v1](registry-v1/README.md), beta `1.0.0-beta.6` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
+| Published model/provider registry | [Registry v1](registry-v1/README.md), beta `1.0.0-beta.7` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
 | Application and routing-policy configuration | [Configuration formats](configuration/README.md), beta `1.0.0-beta.2` | Existing YAML files, defaults, startup tenancy, routing weights, strict readers, explicit migration and policy artifact versions |
 | BitRouter-owned service messages and APIs | [Service API](service-api/README.md), beta `1.0.0-beta.2` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
 

@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:10.951390928Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -64,8 +59,7 @@
         "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z"
+        }
       },
       "status": "active",
       "availability": {
@@ -87,7 +81,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -104,7 +97,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -121,7 +113,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -138,7 +129,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -155,7 +145,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -200,7 +189,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -217,7 +205,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -234,7 +221,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -251,7 +237,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -268,7 +253,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -285,7 +269,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -302,7 +285,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -319,7 +301,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -330,8 +311,7 @@
         "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z"
+        }
       },
       "status": "active",
       "availability": {
@@ -353,7 +333,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -370,7 +349,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -387,7 +365,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     },
@@ -404,7 +381,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.951390928Z",
         "owner": "catalog"
       }
     }

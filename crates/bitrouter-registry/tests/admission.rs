@@ -116,11 +116,15 @@ fn provider() -> Value {
 }
 
 #[test]
-fn accepts_worked_example_and_preserves_exact_unknown_information()
+fn accepts_beta6_fixture_and_preserves_exact_unknown_information()
 -> Result<(), Box<dyn std::error::Error>> {
-    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/specs/registry-v1/examples/registry.json");
-    let document = Document::parse(&std::fs::read(file)?, &ReaderPolicy::default())?;
+    let file =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/registry-beta6.json");
+    let policy = ReaderPolicy {
+        beta_revisions: ["1.0.0-beta.6".into()].into(),
+        ..ReaderPolicy::default()
+    };
+    let document = Document::parse(&std::fs::read(file)?, &policy)?;
     let mut original = document.into_value();
     original["data"]["providers"][0]["future"] = json!({"value":null,"as_of":"not a timestamp","available_until":17,"curation":{"checked_at":42}});
     original["data"]["providers"][0]["implementation_private_key"] =
@@ -128,9 +132,31 @@ fn accepts_worked_example_and_preserves_exact_unknown_information()
     original["data"]["providers"][0]["models"][0]["interfaces"][0]["future_rate"] =
         parse_json(b"0.100000000000000000000000000001")?;
     let bytes = serde_json::to_vec(&original)?;
-    let roundtrip = Document::parse(&bytes, &ReaderPolicy::default())?;
+    let roundtrip = Document::parse(&bytes, &policy)?;
     assert_eq!(roundtrip.value(), &original);
     assert!(serde_json::to_string(roundtrip.value())?.contains("0.100000000000000000000000000001"));
+    Ok(())
+}
+
+#[test]
+fn beta7_example_is_enabled_and_beta6_remains_opt_in() -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/specs/registry-v1/examples/registry.json");
+    let bytes = std::fs::read(file)?;
+    let value: ::serde_json::Value = ::serde_json::from_slice(&bytes)?;
+    let schema: ::serde_json::Value = ::serde_json::from_str(bitrouter_registry::document::SCHEMA)?;
+    let validator = jsonschema::validator_for(&schema)?;
+    assert!(validator.is_valid(&value));
+    assert_eq!(value["spec_revision"], "1.0.0-beta.7");
+    Document::parse(&bytes, &ReaderPolicy::default())?;
+    let policy = ReaderPolicy {
+        beta_revisions: ["1.0.0-beta.6".into()].into(),
+        ..ReaderPolicy::default()
+    };
+    let error = Document::parse(&bytes, &policy)
+        .err()
+        .ok_or_else(|| RegistryError::invalid("", "Unimplemented beta revision was admitted"))?;
+    assert_eq!(error.code, "registry.unsupported_revision");
     Ok(())
 }
 
@@ -147,7 +173,7 @@ fn version_revision_and_envelope_features_fail_with_upgrade_guidance() -> Result
         assert!(error.recovery.contains("Upgrade"));
     }
     value = minimal();
-    value["spec_revision"] = json!("1.0.0-beta.7");
+    value["spec_revision"] = json!("1.0.0-beta.8");
     assert!(Document::from_value(value.clone(), &ReaderPolicy::default()).is_err());
     value["spec_revision"] = json!("1.53.107+future");
     let policy = ReaderPolicy {

@@ -229,12 +229,6 @@ pub(super) fn apply(
                     json!(expiry.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
             }
         }
-        records.retain(|r| {
-            r.pointer("/curation/expires_at")
-                .and_then(Value::as_str)
-                .and_then(timestamp)
-                .is_none_or(|t| t > now)
-        });
         sources.files.insert(path, json!(records));
     }
     // A new curated record also needs reviewed identity evidence. Newly observed

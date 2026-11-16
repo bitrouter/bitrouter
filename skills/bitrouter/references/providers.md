@@ -57,7 +57,7 @@ Bare Claude models still do not auto-cascade onto a subscription provider.
 ## Provider registry (catalog + priority)
 
 BitRouter consumes one complete Registry v1 document. This beta defaults to
-`https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json`.
+`https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.7/registry.json`.
 Startup and ordinary reload use local data immediately: that exact source's
 valid cache, the source-bound packaged default, or an empty registry. Startup
 never waits for HTTP. A host-owned worker downloads compatible updates after

@@ -77,6 +77,9 @@ enum RegistryCommand {
         /// Stage missing canonical references as explicit repair proposals for review.
         #[arg(long)]
         propose_identity_repairs: bool,
+        /// Previous managed proposal snapshot, used only for content evidence reuse.
+        #[arg(long)]
+        previous_source: Option<PathBuf>,
         /// Write a machine-readable JSON sync and publication audit report.
         #[arg(long)]
         report: Option<PathBuf>,
@@ -114,8 +117,18 @@ async fn run(cli: Cli) -> Result<()> {
             RegistryCommand::Sync {
                 write,
                 propose_identity_repairs,
+                previous_source,
                 report,
-            } => registry::sync(&root, write, propose_identity_repairs, report.as_deref()).await,
+            } => {
+                registry::sync(
+                    &root,
+                    write,
+                    propose_identity_repairs,
+                    report.as_deref(),
+                    previous_source.as_deref(),
+                )
+                .await
+            }
         },
         Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {

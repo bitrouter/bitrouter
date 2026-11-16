@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:08.547365445Z",
-          "sequence": 2
-        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -67,7 +62,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -88,7 +82,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -109,7 +102,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -130,7 +122,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -249,8 +240,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2",
@@ -278,7 +268,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -352,7 +341,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -373,7 +361,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -394,7 +381,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -733,7 +719,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -754,7 +739,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -775,7 +759,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -796,7 +779,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -817,7 +799,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -838,7 +819,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -859,7 +839,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -880,7 +859,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -901,7 +879,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -922,7 +899,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -943,7 +919,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -964,7 +939,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -985,7 +959,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1006,7 +979,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1027,7 +999,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1048,7 +1019,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1069,7 +1039,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1090,7 +1059,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1111,7 +1079,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1132,7 +1099,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1153,7 +1119,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1174,7 +1139,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1195,7 +1159,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1216,7 +1179,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1237,7 +1199,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1258,7 +1219,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1279,7 +1239,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1300,7 +1259,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1321,7 +1279,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1342,7 +1299,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1363,7 +1319,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1384,7 +1339,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1405,7 +1359,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1426,7 +1379,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1447,7 +1399,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1460,8 +1411,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2 (Global)",
@@ -1489,7 +1439,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1510,7 +1459,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1531,7 +1479,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1552,7 +1499,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1573,7 +1519,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1594,7 +1539,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1615,7 +1559,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1636,7 +1579,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1657,7 +1599,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1678,7 +1619,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1699,7 +1639,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1720,7 +1659,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1733,8 +1671,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z"
+        }
       },
       "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
       "name": "Kimi K3.1 Pro Highspeed (Global)",
@@ -1762,7 +1699,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1783,7 +1719,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1804,7 +1739,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1825,7 +1759,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1846,7 +1779,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1867,7 +1799,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1888,7 +1819,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1909,7 +1839,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1930,7 +1859,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1951,7 +1879,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1972,7 +1899,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -1993,7 +1919,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2014,7 +1939,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2035,7 +1959,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2056,7 +1979,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2077,7 +1999,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2098,7 +2019,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2119,7 +2039,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2140,7 +2059,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2161,7 +2079,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2182,7 +2099,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2203,7 +2119,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2224,7 +2139,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2245,7 +2159,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2266,7 +2179,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2287,7 +2199,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2308,7 +2219,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2329,7 +2239,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2350,7 +2259,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2371,7 +2279,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2392,7 +2299,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2413,7 +2319,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2434,7 +2339,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2455,7 +2359,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2476,7 +2379,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2497,7 +2399,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2518,7 +2419,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2539,7 +2439,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2560,7 +2459,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2581,7 +2479,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -2973,7 +2870,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3043,7 +2939,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3064,7 +2959,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3085,7 +2979,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3106,7 +2999,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3127,7 +3019,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3148,7 +3039,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3169,7 +3059,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3190,7 +3079,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3211,7 +3099,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3232,7 +3119,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3253,7 +3139,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3274,7 +3159,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3295,7 +3179,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3316,7 +3199,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3337,7 +3219,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3358,7 +3239,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3379,7 +3259,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3400,7 +3279,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3413,8 +3291,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2 (US)",
@@ -3442,7 +3319,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3463,7 +3339,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3484,7 +3359,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3505,7 +3379,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3526,7 +3399,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3547,7 +3419,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3568,7 +3439,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3589,7 +3459,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3610,7 +3479,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3631,7 +3499,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3652,7 +3519,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3673,7 +3539,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3694,7 +3559,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3707,8 +3571,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z"
+        }
       },
       "description": "Multimodal Kimi model with a 1M-token context window and always-on reasoning, for coding, 3D creation and financial research",
       "name": "Kimi K3.1 Pro Highspeed (US)",
@@ -3736,7 +3599,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3757,7 +3619,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3778,7 +3639,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3799,7 +3659,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3820,7 +3679,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3841,7 +3699,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3862,7 +3719,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3883,7 +3739,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3904,7 +3759,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3925,7 +3779,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -3946,7 +3799,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     },
@@ -4069,7 +3921,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:08.547365445Z",
         "owner": "directory"
       }
     }
