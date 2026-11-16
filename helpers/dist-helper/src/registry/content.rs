@@ -34,6 +34,17 @@ fn equal(a: &Value, b: &Value) -> Result<bool> {
 
 fn recommendation(value: &Value) -> Value {
     let mut value = value.clone();
+    for key in [
+        "input_modalities",
+        "output_modalities",
+        "model_types",
+        "capabilities",
+        "requires",
+    ] {
+        if let Some(items) = value.get_mut(key).and_then(Value::as_array_mut) {
+            items.sort_by_key(Value::to_string);
+        }
+    }
     if let Some(map) = value["curation"].as_object_mut() {
         map.remove("checked_at");
     }
@@ -185,7 +196,7 @@ pub(super) fn finalize(
             .flatten()
             {
                 if equal(&recommendation(old), &recommendation(model))? {
-                    model["curation"]["checked_at"] = old["curation"]["checked_at"].clone();
+                    *model = old.clone();
                     reused = true;
                     break;
                 }

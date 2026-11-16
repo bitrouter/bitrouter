@@ -8,8 +8,27 @@ if [ "$current_base" != "$REGISTRY_BASE_SHA" ] || [ "$current_proposal" != "$REG
   echo '::error::Registry base or proposal changed during fetch; rerun with fresh observations.'
   exit 1
 fi
-pr="$(gh pr list --base "$REGISTRY_BASE" --head "$REGISTRY_BRANCH" --json number,isDraft --jq '.[0] // {}')"
+pr="$(gh pr list --base "$REGISTRY_BASE" --head "$REGISTRY_BRANCH" --json number,isDraft,headRefOid --jq '.[0] // {}')"
 pr_number="$(jq -r '.number // empty' <<< "$pr")"
+if [ -n "$pr_number" ] && [ "$(jq -r .headRefOid <<< "$pr")" != "$REGISTRY_PROPOSAL_SHA" ]; then
+  echo '::error::Proposal PR changed; rerun with fresh observations.'
+  exit 1
+fi
+if [ -n "$REGISTRY_PROPOSAL_SHA" ]; then
+  while IFS= read -r commit; do
+    identities="$(git show -s --format='%ae %ce' "$commit")"
+    expected='267229870+bitrouter-automation[bot]@users.noreply.github.com'
+    if [ "$identities" != "$expected $expected" ]; then
+      echo '::error::Managed proposal contains human edits; resolve manually before sync.'
+      exit 1
+    fi
+    while IFS= read -r path; do
+      case "$path" in registry/*|dist/registry/*|apps/bitrouter/registry-dist/*) ;;
+        *) echo '::error::Proposal contains unrelated changes; manual review required.'; exit 1 ;;
+      esac
+    done < <(git diff-tree --no-commit-id --name-only -r "$commit")
+  done < <(git rev-list "$REGISTRY_BASE_SHA..$REGISTRY_PROPOSAL_SHA")
+fi
 paths=(registry dist/registry apps/bitrouter/registry-dist)
 git add "${paths[@]}"
 if git diff --cached --quiet -- "${paths[@]}"; then
