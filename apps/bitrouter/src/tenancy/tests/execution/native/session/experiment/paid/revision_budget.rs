@@ -3,6 +3,19 @@ use super::*;
 use bitrouter_ai::tenancy::identity::{ExecutionId, InstallationId, TenantId};
 use tokio::io::AsyncReadExt;
 
+fn same_rows(mut actual: Vec<Value>, expected: &[Value]) -> Result<()> {
+    // The predecessor export has no SQL ordering contract. Compare complete
+    // rows as a multiset; retain duplicates and every persisted field.
+    let mut expected = expected.to_vec();
+    actual.sort_unstable_by_key(Value::to_string);
+    expected.sort_unstable_by_key(Value::to_string);
+    ensure!(
+        actual == expected,
+        "historical records changed across bootstrap"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn native_paid_revision_budget_survives_rotation_reactivation_and_two_revision_bootstrap()
 -> Result<()> {
@@ -43,8 +56,8 @@ async fn native_paid_revision_budget_survives_rotation_reactivation_and_two_revi
                 }, None,
             ).await?;
             let checked = async {
-                ensure!(recovery::rows(&db, "owned_judge_job").await? == *jobs);
-                ensure!(recovery::rows(&db, "owned_judge_budget").await? == *counters);
+                same_rows(recovery::rows(&db, "owned_judge_job").await?, jobs)?;
+                same_rows(recovery::rows(&db, "owned_judge_budget").await?, counters)?;
                 for kind in ["owned_judge_pending", "owned_judge_active_v3"] {
                     ensure!(recovery::rows(&db, kind).await?.is_empty());
                 }
