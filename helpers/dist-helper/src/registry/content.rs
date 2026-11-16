@@ -53,6 +53,7 @@ fn model_content(value: &Value) -> Value {
             "input_modalities",
             "output_modalities",
             "question_types",
+            "capabilities",
             "requires",
         ] {
             sort_set(interface.get_mut(key));

@@ -761,6 +761,7 @@ fn normalize_owned(value: &mut Value, path: &str, interface: bool) {
             "/input_modalities"
                 | "/output_modalities"
                 | "/question_types"
+                | "/capabilities"
                 | "/requires"
                 | "/reasoning_effort/levels"
         )
