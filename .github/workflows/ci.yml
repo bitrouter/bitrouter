@@ -633,7 +633,7 @@ jobs:
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::guard::tests::snapshot::)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::contract_tests::)'
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4

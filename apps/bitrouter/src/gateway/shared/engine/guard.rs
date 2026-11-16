@@ -1,8 +1,5 @@
 //! Shared guard decisions join execution binding and projection catch-up.
 
-#[cfg(test)]
-mod tests;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
