@@ -100,7 +100,7 @@ fn historic_payload(
     )
 }
 
-async fn read_http(ready: &Ready) -> Result<()> {
+async fn read_and_reject_candidates_http(ready: &Ready) -> Result<()> {
     let auth = crate::remote_control::auth::ControlAuth::from_lookup(
         &crate::config::ControlConfig {
             credentials: vec![crate::config::ControlCredentialConfig {
@@ -118,15 +118,41 @@ async fn read_http(ready: &Ready) -> Result<()> {
     ))
     .body(Body::empty())?;
     *request.headers_mut() = ready.headers.clone();
-    let response = crate::tenancy::http::router(ready.fixture.service.clone(), auth)
-        .oneshot(request)
-        .await?;
+    let router = crate::tenancy::http::router(ready.fixture.service.clone(), auth);
+    let response = router.clone().oneshot(request).await?;
     ensure!(
         response.status() == StatusCode::OK,
         "integrity-valid inactive revision must stay readable"
     );
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
     ensure!(serde_json::from_slice::<Value>(&bytes)? == serde_json::to_value(&ready.revision)?);
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("route_owner_kind", "tenant"),
+            ("route_owner_id", ready.route.owner_id.as_str()),
+            ("route_id", ready.route.resource_id.as_str()),
+            ("route_revision", ready.route.revision_id.as_str()),
+            ("inbound_protocol", "responses"),
+        ])
+        .finish();
+    let request = Request::get(format!(
+        "/control/v1/tenancy/tenants/{}/configurations/{}/candidates?{query}",
+        ready.fixture.tenant, ready.revision.revision_id,
+    ))
+    .header(
+        "authorization",
+        "Bearer http034-operator-token-at-least-32-bytes",
+    )
+    .header(
+        "Bitrouter-Installation-Id",
+        ready.fixture.installation.as_str(),
+    )
+    .body(Body::empty())?;
+    let response = router.oneshot(request).await?;
+    ensure!(response.status() == StatusCode::BAD_REQUEST);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
+    let error: bitrouter_ai::tenancy::operation::Error = serde_json::from_slice(&bytes)?;
+    ensure!(error.code == ErrorCode::InvalidRequest);
     ensure!(ready.fixture.service.current().is_ok());
     Ok(())
 }
@@ -169,7 +195,7 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
         let token = issued.secret.as_deref().context("issued secret")?;
         ready.headers = headers(&ready.fixture, token, &ready.revision.revision_id)?;
         let outcome: Result<()> = async {
-            read_http(&ready).await?;
+            read_and_reject_candidates_http(&ready).await?;
             // Both cold and cached retained reads, and both ingress wire kinds,
             // reject before rendering can smuggle a provider's raw identifier.
             for _ in 0..2 {
@@ -187,7 +213,7 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
             ensure!(matches!(ready.fixture.service.execute(ready.fixture.operator.clone(), activation(&ready, "reject-historic-activation")?).await, Err(error) if error.0.code == ErrorCode::InvalidRequest));
             ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
             ensure!(row_count(&ready).await? == 0);
-            read_http(&ready).await?;
+            read_and_reject_candidates_http(&ready).await?;
             let good_headers = headers(&ready.fixture, token, &good.revision_id)?;
             let (status, bytes) = send(&ready, good_headers, body(false, None)).await?;
             ensure!(status == StatusCode::OK);

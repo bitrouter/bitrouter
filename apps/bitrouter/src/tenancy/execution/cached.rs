@@ -188,7 +188,10 @@ impl Service {
         let view = self
             .resources
             .open_execution(stored)
-            .map_err(|_| self.unavailable())?;
+            .map_err(|code| match code {
+                ErrorCode::InvalidRequest | ErrorCode::CapabilityMismatch => code.into(),
+                _ => self.unavailable(),
+            })?;
         let heap = match view.retained_heap_bytes() {
             Ok(heap) => heap,
             // Weight traversal has its own bounded-work limit. Failure to cache
