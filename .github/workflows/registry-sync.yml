@@ -72,6 +72,9 @@ jobs:
           echo "REGISTRY_PROPOSAL_SHA=$proposal_sha" >> "$GITHUB_ENV"
           echo "REGISTRY_PREVIOUS=$previous" >> "$GITHUB_ENV"
 
+      - name: Test proposal lifecycle without network or credentials
+        run: node .github/scripts/registry-propose.test.cjs
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Stage feeds and audit the complete candidate
