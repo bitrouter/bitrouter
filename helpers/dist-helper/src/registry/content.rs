@@ -32,23 +32,16 @@ fn equal(a: &Value, b: &Value) -> Result<bool> {
     Ok(bitrouter_registry::reconcile::equivalent(a, b)?)
 }
 
-fn model_content(value: &Value) -> Value {
-    let mut value = value.clone();
-    normalize_model(&mut value);
-    value
+fn sort_set(value: Option<&mut Value>) {
+    if let Some(items) = value.and_then(Value::as_array_mut) {
+        items.sort_by_key(Value::to_string);
+    }
 }
 
-fn normalize_model(value: &mut Value) {
-    for key in [
-        "input_modalities",
-        "output_modalities",
-        "model_types",
-        "capabilities",
-        "requires",
-    ] {
-        if let Some(items) = value.get_mut(key).and_then(Value::as_array_mut) {
-            items.sort_by_key(Value::to_string);
-        }
+fn model_content(value: &Value) -> Value {
+    let mut value = value.clone();
+    for key in ["model_types", "requires"] {
+        sort_set(value.get_mut(key));
     }
     for interface in value
         .get_mut("interfaces")
@@ -59,18 +52,26 @@ fn normalize_model(value: &mut Value) {
         for key in [
             "input_modalities",
             "output_modalities",
-            "capabilities",
+            "question_types",
             "requires",
         ] {
-            if let Some(items) = interface.get_mut(key).and_then(Value::as_array_mut) {
-                items.sort_by_key(Value::to_string);
-            }
+            sort_set(interface.get_mut(key));
         }
+        sort_set(interface.pointer_mut("/reasoning_effort/levels"));
     }
+    value
 }
 
 fn recommendation(value: &Value) -> Value {
-    let mut value = model_content(value);
+    let mut value = value.clone();
+    for key in [
+        "model_types",
+        "input_modalities",
+        "output_modalities",
+        "requires",
+    ] {
+        sort_set(value.get_mut(key));
+    }
     if let Some(map) = value["curation"].as_object_mut() {
         map.remove("checked_at");
     }

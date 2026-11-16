@@ -818,3 +818,32 @@ fn pending_provider_set_representation_and_policy_scope_are_respected() -> Resul
     );
     Ok(())
 }
+
+#[test]
+fn unknown_root_arrays_remain_ordered_content() -> Result<()> {
+    let root = fixture()?;
+    let accepted = Sources::load(root.path())?;
+    let path = root.path().join("registry/models/org.yaml");
+    let first: chrono::DateTime<Utc> = "2026-11-01T00:00:00Z".parse()?;
+    let later: chrono::DateTime<Utc> = "2026-11-02T00:00:00Z".parse()?;
+    let mut pending = accepted.clone();
+    pending.files.get_mut(&path).context("models")?[0]["capabilities"] = json!(["a", "b"]);
+    pending
+        .files
+        .get_mut(&pending.manifest)
+        .context("manifest")?["as_of"] = json!(first);
+    content::finalize(&mut pending, &accepted, None, first)?;
+    let mut candidate = pending.clone();
+    candidate.files.get_mut(&path).context("models")?[0]["capabilities"] = json!(["b", "a"]);
+    candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?["as_of"] = json!(later);
+    content::finalize(&mut candidate, &accepted, Some(&pending), later)?;
+    assert_eq!(candidate.files[&path][0]["capabilities"], json!(["b", "a"]));
+    assert_eq!(
+        candidate.files[&path][0]["curation"]["checked_at"],
+        json!(later)
+    );
+    Ok(())
+}

@@ -269,28 +269,12 @@ pub fn assertion(model: &Value, feed_id: &str) -> Result<Value, RegistryError> {
         .map(interface_key)
         .collect::<Vec<_>>();
     for (path, value) in &mut result {
-        if matches!(
-            path.as_str(),
-            "/input_modalities"
-                | "/output_modalities"
-                | "/model_types"
-                | "/capabilities"
-                | "/requires"
-        ) && let Some(items) = value.as_array_mut()
-        {
-            items.sort_by_key(Value::to_string);
-        }
+        normalize_owned(value, path, false);
     }
     for interface in &mut interfaces {
         if let Some(fields) = interface["fields"].as_object_mut() {
             for (path, value) in fields {
-                if matches!(
-                    path.as_str(),
-                    "/input_modalities" | "/output_modalities" | "/capabilities" | "/requires"
-                ) && let Some(items) = value.as_array_mut()
-                {
-                    items.sort_by_key(Value::to_string);
-                }
+                normalize_owned(value, path, true);
             }
         }
     }
@@ -770,6 +754,30 @@ fn owner<'a>(owners: Option<&'a Value>, path: &str) -> Result<Option<&'a str>, R
     }
     Ok(found)
 }
+fn normalize_owned(value: &mut Value, path: &str, interface: bool) {
+    let set = if interface {
+        matches!(
+            path,
+            "/input_modalities"
+                | "/output_modalities"
+                | "/question_types"
+                | "/requires"
+                | "/reasoning_effort/levels"
+        )
+    } else {
+        matches!(path, "/model_types" | "/requires")
+    };
+    if set && let Some(items) = value.as_array_mut() {
+        items.sort_by_key(Value::to_string);
+    }
+    if interface
+        && path == "/reasoning_effort"
+        && let Some(items) = value.get_mut("levels").and_then(Value::as_array_mut)
+    {
+        items.sort_by_key(Value::to_string);
+    }
+}
+
 fn update(
     target: &mut Value,
     path: &str,
@@ -780,25 +788,11 @@ fn update(
 ) -> Result<Value, RegistryError> {
     let prior = read(target, path)?;
     if let Some(old) = prior {
-        let unordered = matches!(
-            path.rsplit('/').next(),
-            Some(
-                "input_modalities"
-                    | "output_modalities"
-                    | "model_types"
-                    | "capabilities"
-                    | "requires"
-            )
-        );
         let mut a = old.clone();
         let mut b = value.clone();
-        if unordered {
-            for v in [&mut a, &mut b] {
-                if let Some(items) = v.as_array_mut() {
-                    items.sort_by_key(Value::to_string);
-                }
-            }
-        }
+        let interface = target.get("protocol").is_some();
+        normalize_owned(&mut a, path, interface);
+        normalize_owned(&mut b, path, interface);
         if equivalent(&a, &b)? {
             return Ok(owners);
         }
@@ -940,9 +934,9 @@ mod tests {
     #[test]
     fn assertion_sets_are_unordered_but_interface_preference_is_content()
     -> Result<(), RegistryError> {
-        let mut model = json!({"provider_model_id":"A","interfaces":[{"protocol":"messages","operation":"generation"},{"protocol":"chat_completions","operation":"generation"}],"input_modalities":["image","text"],"sync":{"owner":"list","field_owners":{"/input_modalities":"list"},"interface_owners":[{"protocol":"messages","operation":"generation","field_owners":{"/protocol":"list"}},{"protocol":"chat_completions","operation":"generation","field_owners":{"/protocol":"list"}}]}});
+        let mut model = json!({"provider_model_id":"A","interfaces":[{"protocol":"messages","operation":"generation"},{"protocol":"chat_completions","operation":"generation"}],"model_types":["language","decision"],"sync":{"owner":"list","field_owners":{"/model_types":"list"},"interface_owners":[{"protocol":"messages","operation":"generation","field_owners":{"/protocol":"list"}},{"protocol":"chat_completions","operation":"generation","field_owners":{"/protocol":"list"}}]}});
         let before = assertion(&model, "list")?;
-        model["input_modalities"] = json!(["text", "image"]);
+        model["model_types"] = json!(["decision", "language"]);
         assert_eq!(before, assertion(&model, "list")?);
         model["interfaces"]
             .as_array_mut()
@@ -954,6 +948,17 @@ mod tests {
             &crate::document::parse_json(b"-1.00")?
         )?);
         assert!(!equivalent(&json!(1), &json!({"number":"1"}))?);
+        Ok(())
+    }
+    #[test]
+    fn historical_absent_offer_does_not_acquire_null_availability() -> Result<(), RegistryError> {
+        let mut initial = fixture();
+        initial["models"] = json!([{"provider_model_id":"old","status":"withdrawn","interfaces":[],"sync":{"owner":"list","field_owners":{"/status":"list"}}}]);
+        let absent = normalize(&initial["auto_sync"]["feeds"][0], &[json!({"data":[]})])?;
+        let (next, report) = apply(&initial, "list", &absent, &at(1, 0)?)?;
+        assert_eq!(next, initial);
+        assert!(report.unchanged);
+        assert!(next["models"][0].get("availability").is_none());
         Ok(())
     }
     #[test]
