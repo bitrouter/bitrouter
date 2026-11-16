@@ -1,6 +1,6 @@
 # BitRouter Registry v1
 
-Status: **beta protocol design preview, `1.0.0-beta.7` (implementation pending).**
+Status: **normative beta protocol, `1.0.0-beta.7`.**
 
 Date: 2026-11-16. Wire version: **`"version": 1`**.
 
@@ -22,9 +22,8 @@ explicit reconciliation, price arithmetic, and execution metadata. All published
 canonical IDs require a fresh complete OpenRouter audit; historical evidence
 cannot replace current validation.
 
-The requirements below define the beta 7 design, not current software support.
-The current publisher, runtime defaults and packaged data remain on beta 6 until
-implementation and explicit migration under section 3.4.
+Beta 7 publication requires the explicit source and reader migration in section
+3.4. A protocol revision alone does not establish conformance for every role.
 
 ## 1. Scope and decisions
 
@@ -297,7 +296,7 @@ are still required. Changing the public `spec_revision` is a content revision
 and updates `as_of`; it MUST NOT restamp unchanged model evidence. Existing
 evidence times remain the baseline without claiming they were originally change
 times. Producer implementation, source migration and reader support must precede
-beta 7 stream publication; this design preview alone enables none of them.
+beta 7 stream publication; changing a revision label alone enables none of them.
 
 ## 4. Identity and the two catalogs
 

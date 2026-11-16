@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:28.378138374Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -76,7 +71,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -97,7 +91,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -118,7 +111,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -172,7 +164,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -193,7 +184,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -297,7 +287,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -318,7 +307,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -363,8 +351,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z"
+        }
       },
       "description": "Moonshot's flagship multimodal MoE model, post-trained from Kimi K3 for long-horizon coding, agentic workflows, and knowledge work",
       "name": "Kimi K3.1 Pro",
@@ -392,7 +379,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -413,7 +399,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -434,7 +419,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -455,7 +439,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -476,7 +459,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -497,7 +479,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -518,7 +499,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -539,7 +519,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     },
@@ -560,7 +539,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:28.378138374Z",
         "owner": "catalog"
       }
     }

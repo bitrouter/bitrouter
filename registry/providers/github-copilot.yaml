@@ -14,11 +14,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:12.759128313Z",
-          "sequence": 7
-        },
         "id": "directory",
         "inventory": {
           "allow_empty": false,
@@ -105,8 +100,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:12.759128313Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2",
@@ -338,8 +332,7 @@
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        },
-        "last_seen_at": "2026-11-14T05:57:12.759128313Z"
+        }
       },
       "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
       "name": "Gemini 4 Carbon",
@@ -367,7 +360,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     },
@@ -388,7 +380,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     },
@@ -648,7 +639,6 @@
           "/name": "directory",
           "/status": "directory"
         },
-        "last_seen_at": "2026-11-14T05:57:12.759128313Z",
         "owner": "directory"
       }
     }

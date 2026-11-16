@@ -8,11 +8,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:10.628374661Z",
-          "sequence": 8
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -108,7 +103,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -145,7 +139,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -185,7 +178,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -222,7 +214,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -314,7 +305,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -351,7 +341,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -400,7 +389,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -450,7 +438,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -487,7 +474,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -523,7 +509,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -559,7 +544,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -595,7 +579,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -613,11 +596,11 @@
             "currency": "USD",
             "input_tokens": {
               "cache_read": 0.1,
-              "no_cache": 2.0
+              "no_cache": 2
             },
             "kind": "token",
             "output_tokens": {
-              "text": 10.0
+              "text": 10
             }
           },
           "protocol": "chat_completions"
@@ -631,7 +614,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -668,7 +650,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -704,7 +685,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -768,7 +748,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -804,7 +783,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -817,12 +795,12 @@
             "currency": "USD",
             "input_tokens": {
               "cache_read": 0.2,
-              "cache_write": 2.0,
-              "no_cache": 2.0
+              "cache_write": 2,
+              "no_cache": 2
             },
             "kind": "token",
             "output_tokens": {
-              "text": 10.0
+              "text": 10
             }
           },
           "protocol": "chat_completions"
@@ -884,7 +862,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -935,7 +912,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -986,7 +962,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1023,7 +998,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1060,7 +1034,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1097,7 +1070,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1134,7 +1106,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1153,7 +1124,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1190,7 +1160,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1227,7 +1196,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1262,7 +1230,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1299,7 +1266,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1336,7 +1302,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1373,7 +1338,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1412,7 +1376,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1448,7 +1411,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1540,7 +1502,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1576,7 +1537,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1612,7 +1572,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1648,7 +1607,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1684,7 +1642,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1720,7 +1677,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1756,7 +1712,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1792,7 +1747,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1828,7 +1782,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1864,7 +1817,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1900,7 +1852,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1936,7 +1887,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -1972,7 +1922,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     },
@@ -2009,7 +1958,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:10.628374661Z",
         "owner": "catalog"
       }
     }

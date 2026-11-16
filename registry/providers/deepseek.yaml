@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:11.409935636Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -75,7 +70,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:11.409935636Z",
         "owner": "catalog"
       }
     },
@@ -94,7 +88,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:11.409935636Z",
         "owner": "catalog"
       }
     }

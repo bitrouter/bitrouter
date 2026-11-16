@@ -2,6 +2,11 @@ name: Registry Sync
 
 on:
   workflow_dispatch:
+    inputs:
+      e2e:
+        description: Validate a trusted implementation branch using an isolated sync PR
+        type: boolean
+        default: false
   schedule:
     - cron: "0 22 * * *"
 
@@ -33,6 +38,39 @@ jobs:
           ref: ${{ github.sha }}
           token: ${{ steps.generate-token.outputs.token }}
 
+      - name: Select fresh accepted source and previous proposal
+        env:
+          E2E: ${{ inputs.e2e }}
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            base=main
+            branch=automation/registry-sync
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$E2E" = true ]; then
+            base="$GITHUB_REF_NAME"
+            branch=automation/registry-beta7-e2e
+          else
+            echo '::error::Non-main sync requires the explicit trusted E2E profile.'
+            exit 1
+          fi
+          git fetch origin "refs/heads/$base"
+          base_sha="$(git rev-parse FETCH_HEAD)"
+          git checkout --detach "$base_sha"
+          proposal_sha="$(git ls-remote origin "refs/heads/$branch" | awk '{print $1}')"
+          previous="$RUNNER_TEMP/registry-previous"
+          mkdir -p "$previous"
+          if [ -n "$proposal_sha" ]; then
+            git fetch origin "$proposal_sha"
+            # Read data only; never run code/configuration from a proposal.
+            if [ "$(git show "$proposal_sha:registry/registry.yaml" | jq -r .spec_revision)" = 1.0.0-beta.7 ]; then
+              git archive "$proposal_sha" registry | tar -x -C "$previous"
+            fi
+          fi
+          echo "REGISTRY_BASE=$base" >> "$GITHUB_ENV"
+          echo "REGISTRY_BRANCH=$branch" >> "$GITHUB_ENV"
+          echo "REGISTRY_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+          echo "REGISTRY_PROPOSAL_SHA=$proposal_sha" >> "$GITHUB_ENV"
+          echo "REGISTRY_PREVIOUS=$previous" >> "$GITHUB_ENV"
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Stage feeds and audit the complete candidate
@@ -50,7 +88,12 @@ jobs:
           XAI_REGISTRY_API_KEY: ${{ secrets.XAI_REGISTRY_API_KEY }}
           XIAOMI_REGISTRY_API_KEY: ${{ secrets.XIAOMI_REGISTRY_API_KEY }}
           ZAI_REGISTRY_API_KEY: ${{ secrets.ZAI_REGISTRY_API_KEY }}
-        run: cargo run -p dist-helper -- registry sync --write --propose-identity-repairs --report target/registry-sync.json
+        run: |
+          args=()
+          if [ -f "$REGISTRY_PREVIOUS/registry/registry.yaml" ]; then
+            args=(--previous-source "$REGISTRY_PREVIOUS")
+          fi
+          cargo run -p dist-helper -- registry sync --write --propose-identity-repairs --report target/registry-sync.json "${args[@]}"
 
       - name: Preserve public evidence and sanitized diagnostics
         if: always()
@@ -102,53 +145,10 @@ jobs:
           cargo run -p dist-helper -- check
 
       - name: Propose validated independent updates
-        if: github.ref == 'refs/heads/main' && steps.gate.outputs.passed == 'true' && steps.build.outcome == 'success'
+        if: steps.gate.outputs.passed == 'true' && steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
-          BRANCH: automation/registry-sync
-        run: |
-          if git diff --quiet -- registry dist/registry apps/bitrouter/registry-dist; then
-            echo "registry source and artifacts are unchanged"
-            exit 0
-          fi
-          jq -r '
-            "Refresh Registry v1 from explicitly configured provider feeds.\n\nIdentity audit: " + .audit.outcome
-            + "\n\nIdentity repair proposals requiring human review:\n"
-            + ([.identity_repairs[] | "- " + (.kind | @json) + " for " + (.canonical_id | @json)
-                + if has("provider") then " at provider " + (.provider | @json) + ", native ID " + (.provider_model_id | @json) else "" end] | join("\n"))
-            + "\n\nRepairs retain native offers and ledger history. Verify any same-model replacement separately."
-            + "\n\nRequired feed outcomes:\n"
-            + ([.feeds[] | "- " + .provider + "/" + .feed + ": " + .outcome] | join("\n"))
-            + "\n\nThe complete JSON report and public identity response are attached to the workflow run."
-          ' target/registry-sync.json > "$RUNNER_TEMP/registry-sync-pr.md"
-          title="chore: sync registry catalog"
-          draft_args=()
-          pr="$(gh pr list --head "$BRANCH" --json number,isDraft --jq '.[0] // {}')"
-          pr_number="$(jq -r '.number // empty' <<< "$pr")"
-          if jq -e '.identity_repairs | length > 0' target/registry-sync.json > /dev/null; then
-            title="chore: review registry identity repairs"
-            draft_args=(--draft)
-            # Convert before pushing repairs onto a previously ready PR.
-            # https://cli.github.com/manual/gh_pr_ready
-            if [ -n "$pr_number" ] && [ "$(jq -r '.isDraft' <<< "$pr")" = false ]; then
-              gh pr ready "$pr_number" --undo
-            fi
-          fi
-          git config user.name "bitrouter-automation[bot]"
-          git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
-          git add registry dist/registry apps/bitrouter/registry-dist
-          git commit -m "chore: sync registry catalog"
-          remote_sha="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
-          if [ -n "$remote_sha" ]; then
-            git push --force-with-lease="refs/heads/$BRANCH:$remote_sha" origin "HEAD:$BRANCH"
-          else
-            git push origin "HEAD:$BRANCH"
-          fi
-          if [ -n "$pr_number" ]; then
-            gh pr edit "$pr_number" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
-          else
-            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/registry-sync-pr.md" "${draft_args[@]}"
-          fi
+        run: bash .github/scripts/registry-propose.sh
 
       - name: Report required feed or global admission failures
         if: always()

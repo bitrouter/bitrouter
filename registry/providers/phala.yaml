@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:20.310111018Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -69,8 +64,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+        }
       },
       "description": "FLUX.2 [klein] 4B is Black Forest Labs' compact text-to-image model, built for fast, high-quality image generation in a single small architecture.",
       "name": "FLUX.2 klein 4B",
@@ -98,7 +92,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -119,7 +112,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -140,7 +132,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -161,7 +152,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -182,7 +172,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -203,7 +192,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -216,8 +204,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+        }
       },
       "description": "Voxtral Small 24B is Mistral AI's speech understanding model, transcribing audio in many languages with strong accuracy on long and noisy recordings.",
       "name": "Voxtral Small 24B",
@@ -245,7 +232,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -294,8 +280,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+        }
       },
       "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi K3, with a 1M-token context window. It is built for long-horizon coding, 3D creation, financial research, and end-to-end agentic knowledge work, with native image and video understanding.",
       "name": "MoonshotAI: Kimi K3.1 Pro",
@@ -323,7 +308,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -336,8 +320,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z"
+        }
       },
       "description": "Whisper large-v3 is OpenAI's speech recognition model, transcribing audio in nearly 100 languages into text.",
       "name": "Whisper Large v3",
@@ -365,7 +348,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -386,7 +368,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -407,7 +388,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -428,7 +408,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -449,7 +428,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -470,7 +448,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -491,7 +468,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -512,7 +488,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -533,7 +508,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -554,7 +528,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -609,7 +582,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     },
@@ -630,7 +602,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:20.310111018Z",
         "owner": "catalog"
       }
     }

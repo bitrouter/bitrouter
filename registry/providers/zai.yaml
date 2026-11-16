@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:33.944615813Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -69,7 +64,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -86,7 +80,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -103,7 +96,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -120,7 +112,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -137,7 +128,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -154,7 +144,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -171,7 +160,6 @@
         "field_owners": {
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z",
         "owner": "catalog"
       }
     },
@@ -424,8 +412,7 @@
         "owner": "catalog",
         "field_owners": {
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:33.944615813Z"
+        }
       },
       "status": "active",
       "availability": {

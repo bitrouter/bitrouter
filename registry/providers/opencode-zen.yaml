@@ -8,11 +8,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:18.809347795Z",
-          "sequence": 7
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -79,7 +74,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -100,7 +94,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -175,8 +168,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "name": "Claude Fable 5.2",
@@ -266,7 +258,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -287,7 +278,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -308,7 +298,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -546,7 +535,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -597,7 +585,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -618,7 +605,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -639,7 +625,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -660,7 +645,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -681,7 +665,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -784,8 +767,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
       "name": "Gemini 4 Carbon",
@@ -805,8 +787,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
       "name": "Gemini 4 Hydrogen",
@@ -834,7 +815,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -855,7 +835,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -966,7 +945,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -987,7 +965,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1008,7 +985,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1029,7 +1005,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1050,7 +1025,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1071,7 +1045,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1092,7 +1065,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1113,7 +1085,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1134,7 +1105,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1155,7 +1125,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1176,7 +1145,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1197,7 +1165,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1218,7 +1185,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1239,7 +1205,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1260,7 +1225,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1281,7 +1245,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1302,7 +1265,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1323,7 +1285,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1673,8 +1634,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Stealth model, free for a limited time",
       "name": "Iceman Free",
@@ -1694,8 +1654,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Inkling 2 Small, free for a limited time",
       "name": "Inkling 2 Small Free",
@@ -1723,7 +1682,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1744,7 +1702,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1817,8 +1774,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
       "name": "LongCat 2.5 Free",
@@ -1846,7 +1802,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1867,7 +1822,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1940,8 +1894,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
       "name": "MiniMax M3.1 Flash Free",
@@ -1969,7 +1922,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -1982,8 +1934,7 @@
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z"
+        }
       },
       "description": "Reasoning model from Meta with text, image, video and PDF input and tool use",
       "name": "Muse Ember 1.0",
@@ -2011,7 +1962,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -2032,7 +1982,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -2053,7 +2002,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -2074,7 +2022,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -2095,7 +2042,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },
@@ -2116,7 +2062,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:18.809347795Z",
         "owner": "catalog"
       }
     },

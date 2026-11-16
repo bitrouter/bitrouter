@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 mod agents;
+mod content;
 mod discovery;
 mod identity_repairs;
 
@@ -681,6 +682,7 @@ pub async fn sync(
     write: bool,
     propose_identity_repairs: bool,
     report_path: Option<&Path>,
+    previous_source: Option<&Path>,
 ) -> Result<()> {
     fs::create_dir_all(root.join("target"))?;
     let lock = fs::OpenOptions::new()
@@ -699,6 +701,10 @@ pub async fn sync(
     }
     let original = Sources::load(root)?;
     original.document()?;
+    let previous = previous_source.map(Sources::load).transpose()?;
+    if let Some(previous) = &previous {
+        previous.document()?;
+    }
     let before = original.digest()?;
     let mut candidate = Sources::load(root)?;
     let transport = feed::Transport::new([])?;
@@ -726,7 +732,7 @@ pub async fn sync(
                 let id=feed["id"].as_str().context("feed ID missing")?;
                 let staged=async {
                     let mut observation=transport.observe(&feed,|env|std::env::var(env).ok()).await?;
-                    let stamp=bitrouter_registry::reconcile::next_stamp(&feed,label.clone(),Utc::now())?;
+                    let stamp=Utc::now();
                     let pending=if feed["kind"]==bitrouter_registry::openrouter::KIND {vec![]} else {hold_unverified_bindings(&provider,&candidate.files[&candidate.identities],&ids,&mut observation)?};
                     let mut expanded=provider.clone();
                     inherit_interfaces(&mut expanded)?;
@@ -739,7 +745,7 @@ pub async fn sync(
                     Ok::<_,anyhow::Error>((next,ledger,changes,stamp,observation.models.len(),pending))
                 }.await;
                 let item=match staged {
-                    Ok((next,ledger,changes,stamp,count,pending))=>{candidate.files.insert(candidate.identities.clone(),ledger);provider=next;json!({"provider":provider["name"],"feed":id,"outcome":"updated","observation":stamp,"scope":feed["inventory"]["scope"],"complete":feed["inventory"]["complete"],"observed":count,"pending_bindings":pending,"changes":changes})},
+                    Ok((next,ledger,changes,stamp,count,pending))=>{candidate.files.insert(candidate.identities.clone(),ledger);provider=next;json!({"provider":provider["name"],"feed":id,"outcome":if changes.unchanged {"unchanged"} else {"updated"},"observed_at":stamp,"scope":feed["inventory"]["scope"],"complete":feed["inventory"]["complete"],"observed":count,"pending_bindings":pending,"changes":changes})},
                     Err(err)=>{failed=true; let diagnostic=err.downcast_ref::<bitrouter_registry::document::RegistryError>().map(|e|json!(e)).unwrap_or_else(||json!({"code":"registry.feed_failed","message":"Feed candidate failed validation; retain previous data"}));json!({"provider":provider["name"],"feed":id,"outcome":match diagnostic["code"].as_str() {Some("missing_secret")=>"missing_secret",Some("registry.sync_unsupported"|"registry.unsupported")=>"unsupported",Some("registry.incomplete"|"registry.sync_incomplete")=>"incomplete",_=>"failed"},"diagnostic":diagnostic})}
                 };
                 report["feeds"].as_array_mut().context("report feeds missing")?.push(item);
@@ -749,12 +755,13 @@ pub async fn sync(
         let evaluation_time=Utc::now();
         candidate.files.get_mut(&candidate.manifest).context("manifest missing")?["as_of"]=json!(evaluation_time);
         let mut curated=candidate.clone();
-        let discovery_result=(|| {discovery::apply(&mut curated,&snapshot,&ids,evaluation_time)?;reconcile_curated_availability(&mut curated)?;curated.document()?;Ok::<_,anyhow::Error>(())})();
+        let discovery_result=(|| {content::reuse_deadlines(&mut curated, &original, previous.as_ref())?;discovery::apply(&mut curated,&snapshot,&ids,evaluation_time)?;reconcile_curated_availability(&mut curated)?;curated.document()?;Ok::<_,anyhow::Error>(())})();
         match discovery_result {
             Ok(())=>{candidate=curated;report["curation"]=json!({"outcome":"updated"});},
             Err(_)=>{failed=true;report["curation"]=json!({"outcome":"failed","code":"curation_discovery_failed","message":"Retained prior recommendation membership; independent feed proposals still require complete global admission"});}
         }
         reconcile_curated_availability(&mut candidate)?;
+        content::finalize(&mut candidate, &original, previous.as_ref(), evaluation_time)?;
         let document=candidate.document()?;
         let checked=binding_report(&document,&candidate.files[&candidate.identities],Some(&ids))?;
         for (k,v) in checked.as_object().context("audit report object")? { report["audit"][k]=v.clone(); }
@@ -764,6 +771,7 @@ pub async fn sync(
         if Sources::load(root)?.digest()? != before { bail!("source changed while sync was running; candidate not published"); }
         let outputs=build_outputs(root,&candidate)?;
         if write { candidate.publish(&original,&outputs)?; }
+        report["content_changed"]=json!(candidate.document()?.value()!=original.document()?.value());
         report["candidate_ready"]=json!(true);
         if failed { bail!("one or more required feeds failed; independent validated changes were proposed"); }
         Ok(())
@@ -855,7 +863,7 @@ fn record_openrouter_bindings(
     ledger: &mut Value,
     provider: &Value,
     observation: &bitrouter_registry::mapping::Observation,
-    stamp: &bitrouter_registry::reconcile::Stamp,
+    stamp: &chrono::DateTime<Utc>,
     ids: &BTreeSet<String>,
 ) -> Result<()> {
     if provider["name"] != "openrouter" || provider["api_base"] != "https://openrouter.ai/api/v1" {
@@ -874,7 +882,7 @@ fn record_openrouter_bindings(
         let index = match entries.iter().position(|e| e["canonical_id"] == native) {
             Some(index) => index,
             None => {
-                entries.push(json!({"canonical_id":native,"source_url":bitrouter_registry::openrouter::URL,"observed_at":stamp.observed_at}));
+                entries.push(json!({"canonical_id":native,"source_url":bitrouter_registry::openrouter::URL,"observed_at":stamp}));
                 entries.len() - 1
             }
         };
@@ -889,7 +897,7 @@ fn record_openrouter_bindings(
             .iter()
             .any(|b| b["provider"] == "openrouter" && b["provider_model_id"] == native)
         {
-            bindings.push(json!({"provider":"openrouter","provider_model_id":native,"source_url":bitrouter_registry::openrouter::URL,"verified_at":stamp.observed_at}));
+            bindings.push(json!({"provider":"openrouter","provider_model_id":native,"source_url":bitrouter_registry::openrouter::URL,"verified_at":stamp}));
         }
     }
     entries.sort_by(|a, b| a["canonical_id"].as_str().cmp(&b["canonical_id"].as_str()));

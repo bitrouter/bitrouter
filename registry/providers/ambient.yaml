@@ -7,11 +7,6 @@
   "auto_sync": {
     "feeds": [
       {
-        "checkpoint": {
-          "id": "2026-11-14T05:57:00.509Z",
-          "observed_at": "2026-11-14T05:57:05.484313403Z",
-          "sequence": 6
-        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -76,7 +71,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },
@@ -97,7 +91,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },
@@ -182,7 +175,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },
@@ -203,7 +195,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },
@@ -224,7 +215,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },
@@ -279,7 +269,6 @@
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-14T05:57:05.484313403Z",
         "owner": "catalog"
       }
     },

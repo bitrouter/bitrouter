@@ -1,6 +1,6 @@
 # Registry v1 conformance
 
-Status: **beta 7 design requirements, `1.0.0-beta.7`; wire version `1`; implementation pending.**
+Status: **normative beta, `1.0.0-beta.7`; wire version `1`.**
 
 These observable requirements accompany the [Registry v1 protocol](README.md).
 Each case applies to the producer, reader, synchronizer, or publication role

@@ -70,10 +70,21 @@ Native offers and historical ledger evidence are retained. Review these changes
 or supply verified same-model migration evidence before merging. The complete
 repaired candidate must pass admission and artifact validation. Ordinary sync
 without this flag rejects missing references.
-Manual runs check out the selected commit, so a contributor can validate a
-configuration fix on its branch before merging. Only runs selected from `main`
-update `automation/registry-sync` and propose catalog changes; branch runs
-perform the same synchronization and checks without publishing a proposal.
+Sync is stateless across runs: unchanged normalized content preserves evidence
+and publication times and creates no commit. A complete authoritative public
+snapshot can propose withdrawal immediately; no missing-run counters or
+checkpoints are stored. Failed/incomplete listings preserve accepted inventory.
+The helper's internal `--previous-source <root>` accepts a source-only snapshot
+of the previous managed proposal for eligible evidence/deadline reuse, never
+for feed execution or configuration authority.
+
+The workflow resolves the latest selected base when a queued run starts and
+checks the captured base/proposal revisions before its conditional write.
+Main runs update `automation/registry-sync`. Explicit `workflow_dispatch`
+with `e2e: true` on a trusted implementation branch instead proposes against
+that branch using `automation/registry-beta7-e2e`, leaving the production sync
+proposal untouched. An identical pending proposal gets no new commit; fresh
+content reverting to accepted data closes its obsolete proposal.
 
 Promotion compares the candidate bytes with the versioned target and, when
 eligible, the unqualified target on `registry-v1`. Identical targets complete

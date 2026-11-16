@@ -54,9 +54,9 @@ unchanged checks, isolated content changes, immediate snapshot withdrawal,
 reappearance and curation expiry. A separate pending-proposal case retains its
 first evidence time, `as_of` and editorial deadline across identical checks
 before merge. These abbreviated projections are not additional public documents
-or an operational state-store format. Beta 7 behavior is a design preview; the
-current beta 6 reader uses its retained test fixture independently of these
-examples. The public schema is structurally unchanged.
+or an operational state-store format. The retained beta 6 test fixture exercises
+explicit revision support independently of these beta 7 examples. The public
+schema is structurally unchanged.
 The pending-reversion case shows that restoring accepted active content must
 also retire the old withdrawal proposal, while preserving accepted timestamps.
 The changed-authority case requires new evidence when fresh values match an old
