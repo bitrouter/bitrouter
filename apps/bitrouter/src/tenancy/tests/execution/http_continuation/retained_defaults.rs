@@ -158,6 +158,84 @@ async fn read_and_reject_candidates_http(ready: &Ready) -> Result<()> {
 }
 
 #[tokio::test]
+async fn warm_candidate_cache_rechecks_resealed_defaults_without_fencing() -> Result<()> {
+    use bitrouter_ai::tenancy::ordered::GenerationProtocol;
+
+    for field in ["previous_response_id", "conversation"] {
+        let mut provider = Server::start().await?;
+        let ready = ready(&provider).await?;
+        let checked: Result<()> = async {
+            let authority = ready.fixture.service.current().map_err(failure)?.revision;
+            for _ in 0..2 {
+                ready
+                    .fixture
+                    .service
+                    .candidate_manifest(
+                        &ready.fixture.operator,
+                        &ready.fixture.tenant,
+                        &ready.revision.revision_id,
+                        &ready.route,
+                        GenerationProtocol::Responses,
+                    )
+                    .await
+                    .map_err(failure)?;
+            }
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            ensure!(
+                ready
+                    .fixture
+                    .service
+                    .caches
+                    .observed()
+                    .into_iter()
+                    .next()
+                    .context("execution cache usage")?
+                    .map_err(|_| anyhow::anyhow!("cache usage unavailable"))?
+                    .entries
+                    > 0
+            );
+            let mut row = configuration_store::configuration(
+                &ready.fixture.db,
+                &ready.fixture.tenant,
+                &ready.revision.revision_id,
+            )
+            .await?
+            .context("stored revision")?;
+            row.compiled = historic_payload(&ready, &row, field)?;
+            ensure!(
+                ready
+                    .fixture
+                    .service
+                    .resources
+                    .validate_compiled(&row)
+                    .is_ok()
+            );
+            ensure!(
+                ready.fixture.service.resources.validate_executable(&row)
+                    == Err(ErrorCode::InvalidRequest)
+            );
+            replace(&ready, &row.compiled).await?;
+            // Keep the service, authority and resource reference unchanged. A
+            // warmed control view must miss on changed authenticated bytes and
+            // preserve an ordinary qualification rejection on both attempts.
+            for _ in 0..2 {
+                read_and_reject_candidates_http(&ready).await?;
+                ensure!(ready.fixture.service.current().map_err(failure)?.revision == authority);
+            }
+            ensure!(provider.state.calls.load(Ordering::SeqCst) == 0);
+            Ok(())
+        }
+        .await;
+        let shutdown = ready.fixture.service.shutdown().await;
+        let closed = provider.close().await;
+        checked?;
+        shutdown?;
+        closed?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate() -> Result<()> {
     for field in ["previous_response_id", "conversation"] {
         let mut provider = Server::start().await?;
