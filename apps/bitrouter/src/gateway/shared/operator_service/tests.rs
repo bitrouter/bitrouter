@@ -361,7 +361,7 @@ async fn publication_cases(authority: &Authority, policy_writer: &Router) -> Res
     let mutation = Mutation {
         operation_id: "publish-current-source".into(),
         command: Command::Publish(PublicationPut {
-            expected_generation: authority.head().await?.value.config_generation,
+            expected_generation: authority.head().await?.config_generation,
             configuration: configuration.clone(),
         }),
     };
@@ -400,8 +400,8 @@ async fn publication_cases(authority: &Authority, policy_writer: &Router) -> Res
     )
     .await?;
     ensure!(
-        revision.config_generation == head.value.config_generation
-            && revision.key_generation == head.value.key_generation
+        revision.config_generation == head.config_generation
+            && revision.key_generation == head.key_generation
     );
     ensure!(matches!(&receipt.outcome, Outcome::Published(actual) if *actual == revision));
     let credential: CredentialMetadata = decode(
@@ -487,7 +487,7 @@ async fn publication_cases(authority: &Authority, policy_writer: &Router) -> Res
         ensure!(matches!(lookup, OperationLookup::Unresolved { .. }));
         let current = authority.head().await?;
         ensure!(
-            serde_json::to_value(&current.value)? == serde_json::to_value(&head.value)?,
+            serde_json::to_value(&current)? == serde_json::to_value(&head)?,
             "rejection changed publication head: {case}"
         );
         ensure!(

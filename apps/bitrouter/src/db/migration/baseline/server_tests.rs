@@ -141,6 +141,10 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
     .await;
     fixture.finish(checked).await?;
 
+    if backend == DatabaseBackend::Postgres {
+        postgres_unvalidated_not_null_refusal().await?;
+    }
+
     let mut corruptions = vec![
         "ALTER TABLE tenancy_execution_receipts ALTER COLUMN receipt_format SET DEFAULT 2".to_owned(),
         "ALTER TABLE tenancy_execution_receipts DROP COLUMN receipt_format".to_owned(),
@@ -206,4 +210,74 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         fixture.finish(checked).await?;
     }
     Ok(())
+}
+
+async fn postgres_unvalidated_not_null_refusal() -> Result<()> {
+    let fixture = OwnedServer::new(DatabaseBackend::Postgres).await?;
+    let checked = async {
+        let db = &fixture.database;
+        let version = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT current_setting('server_version_num')::integer AS version",
+            ))
+            .await?
+            .context("PostgreSQL version")?
+            .try_get::<i32>("", "version")?;
+        if version < 180_000 {
+            return Ok(());
+        }
+        super::super::Migrator::up(db, None).await?;
+        db.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'not-null-owner',$1,7,0,0,false,'2026-11-18T00:00:00Z')",
+            [crate::tenancy::AUTHORITY_SCHEMA_VERSION.into()],
+        )).await?;
+        // PG18 retains attnotnull=true even while existing NULL rows have not
+        // been validated. A column-flag-only validator would accept this shape.
+        db.execute_unprepared(
+            "ALTER TABLE users ALTER COLUMN created_at DROP NOT NULL;
+             INSERT INTO users(id,created_at) VALUES ('unvalidated-user',NULL);
+             ALTER TABLE users ADD CONSTRAINT fixture_created_at_not_null NOT NULL created_at NOT VALID",
+        ).await?;
+        let state = db.query_one(Statement::from_string(DatabaseBackend::Postgres,
+            "SELECT a.attnotnull,k.convalidated FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace n ON n.oid=t.relnamespace JOIN pg_constraint k ON k.conrelid=t.oid AND a.attnum=ANY(k.conkey) WHERE n.nspname=current_schema() AND t.relname='users' AND a.attname='created_at' AND k.contype='n'"
+        )).await?.context("not-null constraint")?;
+        ensure!(state.try_get::<bool>("", "attnotnull")?);
+        ensure!(!state.try_get::<bool>("", "convalidated")?);
+        let ledger = super::super::Migrator::get_migration_models(db).await?;
+        let authority = postgres_authority_snapshot(db).await?;
+        let error = super::super::Migrator::up(db, None)
+            .await
+            .err()
+            .context("unvalidated not-null constraint selected a current dataset")?;
+        ensure!(error.to_string().contains("unsupported table storage or mutation hooks: users"));
+        ensure!(super::super::Migrator::get_migration_models(db).await? == ledger);
+        ensure!(postgres_authority_snapshot(db).await? == authority);
+        let row = db.query_one(Statement::from_string(DatabaseBackend::Postgres,
+            "SELECT created_at FROM users WHERE id='unvalidated-user'"
+        )).await?.context("retained NULL row disappeared")?;
+        ensure!(row.try_get::<Option<String>>("", "created_at")?.is_none());
+        // A repaired and validated not-null constraint remains supported.
+        db.execute_unprepared(
+            "DELETE FROM users WHERE id='unvalidated-user';
+             ALTER TABLE users VALIDATE CONSTRAINT fixture_created_at_not_null",
+        ).await?;
+        super::super::Migrator::up(db, None).await?;
+        ensure!(super::super::Migrator::get_migration_models(db).await? == ledger);
+        ensure!(postgres_authority_snapshot(db).await? == authority);
+        Ok(())
+    }.await;
+    fixture.finish(checked).await
+}
+
+async fn postgres_authority_snapshot(db: &DatabaseConnection) -> Result<String> {
+    db.query_one(Statement::from_string(
+        DatabaseBackend::Postgres,
+        "SELECT row_to_json(i)::text AS authority FROM tenancy_installation i",
+    ))
+    .await?
+    .context("authority snapshot")?
+    .try_get("", "authority")
+    .map_err(Into::into)
 }

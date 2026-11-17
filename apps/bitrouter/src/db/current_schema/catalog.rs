@@ -15,6 +15,10 @@ CASE WHEN t.relkind='r' AND t.relpersistence='p' AND NOT t.relispartition
  AND NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=t.oid)
  AND NOT EXISTS(SELECT 1 FROM pg_rewrite r WHERE r.ev_class=t.oid)
  AND NOT EXISTS(SELECT 1 FROM pg_class shadow WHERE shadow.relnamespace=pg_my_temp_schema() AND shadow.relname=t.relname)
+ AND NOT EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=t.oid
+  AND (NOT k.convalidated OR k.condeferrable OR k.condeferred
+   OR NOT COALESCE((to_jsonb(k)->>'conenforced')::boolean,true)
+   OR COALESCE((to_jsonb(k)->>'conperiod')::boolean,false)))
 THEN 'yes' ELSE 'no' END AS compatible
 FROM pg_class t JOIN pg_namespace n ON n.oid=t.relnamespace
 WHERE n.nspname=current_schema() AND t.relkind IN ('r','p','v','m','f')
