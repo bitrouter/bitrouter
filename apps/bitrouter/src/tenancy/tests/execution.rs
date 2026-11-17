@@ -52,6 +52,7 @@ async fn provision_protocol_with_fixture(
         url,
         protocol,
         started,
+        None,
         (crate::telemetry::receipt_latency::Sink::default(), None),
     )
     .await
@@ -62,6 +63,7 @@ async fn provision_protocol_observed(
     url: &str,
     protocol: &str,
     started: &mut impl FnMut(&Service),
+    wrapping_key_env: Option<&str>,
     observation: (
         crate::telemetry::receipt_latency::Sink,
         Option<crate::tenancy::ownership::Lease>,
@@ -69,8 +71,11 @@ async fn provision_protocol_observed(
 ) -> Result<(Fixture, ResourceRef, ResourceRef)> {
     let (observer, owner) = observation;
     fixture.service.shutdown().await?;
-    let resources =
-        super::super::resources::Resources::with_key(fixture.installation.clone(), [29; 32])?;
+    use super::super::resources::Resources;
+    let resources = match wrapping_key_env {
+        Some(name) => Resources::fixture_key(&fixture.installation, Some(name))?,
+        None => Resources::with_key(fixture.installation.clone(), [29; 32])?,
+    };
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {
             owner_kind: OwnerKind::Tenant,

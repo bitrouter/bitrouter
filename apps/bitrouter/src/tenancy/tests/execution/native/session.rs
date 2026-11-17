@@ -52,13 +52,14 @@ async fn file_fixture(
     provider: &Provider,
     directory: &std::path::Path,
 ) -> Result<(Fixture, ResourceRef)> {
-    file_fixture_profile(provider, directory, false).await
+    file_fixture_profile(provider, directory, false, None).await
 }
 
 async fn file_fixture_profile(
     provider: &Provider,
     directory: &std::path::Path,
     count: bool,
+    wrapping_key_env: Option<&str>,
 ) -> Result<(Fixture, ResourceRef)> {
     let database = directory.join("owned.db");
     let url = format!("sqlite://{}", database.display());
@@ -67,18 +68,19 @@ async fn file_fixture_profile(
     // Provision the encrypted resources on this leased file from the start.
     // An in-memory connection's VACUUM INTO can retain SQLITE_OPEN_MEMORY.
     let fixture = Fixture::with_database(db, &mut |_| {}).await?;
-    let (mut fixture, route, slot) =
-        crate::tenancy::tests::execution::provision_protocol_with_fixture(
-            fixture,
-            &provider.url,
-            if count {
-                "responses"
-            } else {
-                "chat_completions"
-            },
-            &mut |_| {},
-        )
-        .await?;
+    let (mut fixture, route, slot) = crate::tenancy::tests::execution::provision_protocol_observed(
+        fixture,
+        &provider.url,
+        if count {
+            "responses"
+        } else {
+            "chat_completions"
+        },
+        &mut |_| {},
+        wrapping_key_env,
+        (crate::telemetry::receipt_latency::Sink::default(), None),
+    )
+    .await?;
     let route = if count {
         revised_route(
             &mut fixture,
@@ -128,7 +130,7 @@ async fn file_fixture_profile(
         fixture.db.clone(),
         Some(owner),
         snapshot,
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+        fixture.service.resources.clone(),
     )
     .await?;
     Ok((fixture, route))
