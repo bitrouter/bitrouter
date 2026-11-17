@@ -83,6 +83,7 @@ pub(super) fn indexes(backend: DatabaseBackend) -> &'static str {
         DatabaseBackend::Postgres => {
             r#"
 SELECT t.relname AS table_name,x.relname AS index_name,a.attname AS column_name,
+NULL::bigint AS prefix_length,
 CASE WHEN i.indisunique THEN 'yes' ELSE 'no' END AS unique_value,
 CASE WHEN i.indisprimary THEN 'yes' ELSE 'no' END AS primary_value,
 CASE WHEN i.indisvalid AND i.indisready AND i.indimmediate AND NOT i.indisexclusion
@@ -103,9 +104,10 @@ ORDER BY t.relname,x.relname,k.position LIMIT 8193"#
         DatabaseBackend::MySql => {
             r#"
 SELECT TABLE_NAME AS table_name,INDEX_NAME AS index_name,COLUMN_NAME AS column_name,
+CAST(SUB_PART AS SIGNED) AS prefix_length,
 CASE WHEN NON_UNIQUE=0 THEN 'yes' ELSE 'no' END AS unique_value,
 CASE WHEN INDEX_NAME='PRIMARY' THEN 'yes' ELSE 'no' END AS primary_value,
-CASE WHEN INDEX_TYPE='BTREE' AND COLLATION='A' AND SUB_PART IS NULL
+CASE WHEN INDEX_TYPE='BTREE' AND COLLATION='A'
  AND COLUMN_NAME IS NOT NULL AND EXPRESSION IS NULL AND IS_VISIBLE='YES'
  THEN 'yes' ELSE 'no' END AS compatible
 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()

@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
-    configuration::{Configuration, ConfigurationRevision, ResourceRef},
+    configuration::{Configuration, ConfigurationRevision, GenerationDefaults, ResourceRef},
 };
 use bitrouter_ai::types::{ApiProtocol, ModelOperation};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
@@ -140,7 +140,8 @@ async fn qualify_current_profiles(
     ] {
         let document: Configuration = serde_json::from_value(json!({
             "routes": [reference(ResourceKind::Route, name)?], "policy": null,
-            "generation_defaults": {}, "learning": {"mode": "off", "max_evaluations": 0},
+            "generation_defaults": GenerationDefaults { max_output_tokens: 128, temperature: 0.5 },
+            "learning": {"mode": "off", "max_evaluations": 0},
             "limits": {"active_executions": 1, "queued_work": 1, "learning_jobs": 0}
         }))?;
         let tenant = "scope-tenant".try_into()?;

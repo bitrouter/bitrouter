@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn assembled_revision_serves_pinned_routes_and_withdraws_inherited_adoption() -> Result<()> {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register("local", definition("coding", "candidate"))

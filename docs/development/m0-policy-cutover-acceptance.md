@@ -1,7 +1,7 @@
-# M0 Policy 契约切换：剩余实施计划与验收标准
+# M0 Policy 契约切换：实施与验收标准
 
-状态：**待实施的验收计划，不是当前能力声明，也不是验收通过记录。**
-本文按本轮明确要求保存剩余计划；正式格式仍只在 `docs/specs/` 定义，测试日志和审查原始记录留在 PR / CI。
+本文定义 M0 的交付范围和验收门槛，不代替验收证据。
+实现、最终候选的测试及独立审查结论见 PR [#1055](https://github.com/bitrouter/bitrouter/pull/1055)；正式格式只在 `docs/specs/` 定义，测试日志和审查原始记录留在 PR / CI。
 
 核查基线：PR [#1055](https://github.com/bitrouter/bitrouter/pull/1055) 的
 `a8d48f313ad3237443342d8cf8bbc7aeb4f238d3`，基于 main
@@ -18,7 +18,7 @@ M0 要交付一个贯通默认值、文件、CLI、SDK、API 和持久化的 mod
 - context 改写、agent 编排、试验性探索和学习算法归 BRO。旧实现可以删除；保留的实验实现须有显式 harness 入口和独立所有权，不能继续读写旧 Policy 契约。
 - 本阶段完成必要的模块与入口隔离；大规模 crate / binary 拆包留到下一阶段。
 - `bitrouter-ai` 保存轻量契约；应用保存校验、编译、执行和存储实现；SDK 是服务客户端。
-- 本轮只产出计划和验收文档，不修改生产代码、数据、云部署或已发布的规范含义。
+- 实施包含契约、生产代码和测试的同步切换；不修改用户数据或云部署，不覆写已发布规范的含义。
 - P1 多实例新能力、压力测试、性能调优与性能结论不在本阶段。已有 shared gateway 是本次契约切换的现有消费者，必须一起覆盖。
 
 “不兼容旧版本”不等于可以丢失当前版本的事务保障：租户授权、不可变引用、CAS、撤销、幂等、未知用量、流式取消、崩溃恢复仍是必须满足的当前行为。
@@ -108,8 +108,8 @@ Eval subject 的新 schema 2 使用**封闭的身份 profile**，不是把 model
 | 对象 | 本次要求 |
 | --- | --- |
 | `policy/1.0.0-beta.1` | 当前 PR 尚未合并且 source 字段不变时保留该标识；若实施改变已发布 source 含义，必须递增 beta，不覆写已发布语义 |
-| `configuration/1.0.0-beta.4` | 默认路径、模式/别名和旧路由配置删除是破坏性变化，准备下一 beta；以实施时最新已发布 revision 为基准分配，不与并行工作抢号 |
-| `service-api/1.0.0-beta.4` | `model_policy` 字段、控制能力发现、Policy 展示和持久化身份变化统一准备下一 beta，DTO、SDK、schema、能力信息同步 |
+| `configuration/1.0.0-beta.5` | 默认路径、模式/别名和旧路由配置删除是破坏性变化；配置类型、schema、模板和拒绝用例同步切换 |
+| `service-api/1.0.0-beta.5` | `model_policy` 字段、控制能力发现、Policy 展示和持久化身份变化统一切换，DTO、SDK、schema、能力信息同步 |
 | `registry/1.0.0-beta.7` | 保留当前有效契约；其 integer `version` 和 `spec_revision` 是已定义 envelope，本次不因命名不同重做 registry |
 | 存储格式 | 在现有配置/服务 spec 中定义当前 store format 与拒绝边界；不用 package version、Policy SemVer 或 migration 个数推断是否可打开 |
 | 上游协议、resource revision、CAS、classifier/内容摘要 | 保持各自含义，不批量改为 Policy 版本、不新造 transport 专属 spec |
@@ -207,7 +207,7 @@ S5 必须逐个替换的 Policy 解码链包括：`tenancy/resources/manifest/de
 
 ## 7. 验收矩阵
 
-所有条目均为**未验收**。实施 PR 为每个 ID 附上实际测试定位及同一候选 HEAD 的结果；本文不预填通过状态。
+验收状态由实施 PR 为每个 ID 提供的实际测试定位及同一最终候选 HEAD 的结果确定；本文不保存逐次运行状态。
 
 | ID / 对应发现 | 验收场景 | 通过判据 |
 | --- | --- | --- |

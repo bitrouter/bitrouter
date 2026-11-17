@@ -1,21 +1,33 @@
-//! Reopen unchanged pre-refactor data through three real application profiles.
+//! Refuse old datasets; preserve independently produced current BRO history.
 
 use super::*;
+use bitrouter::agent_store::DatabaseExecutionStore;
 use bitrouter::client::agent_local::{self, Operation, ReplyError, ReplyResult};
-use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::harness::{
+    agent::AgentConfigExt,
+    storage::{AcceptedKey, ExecutionRecord, ExecutionStore, RUNTIME_FORMAT_VERSION},
+};
+use bitrouter_ai::harness::{
+    agent::AgentConfig,
+    runtime::{ErrorCode, OwnerClaim},
+    thread::{PermissionProfile, ThreadChange, ThreadEvent, ThreadSnapshot, ThreadStatus},
+};
+use bitrouter_ai::types::{Message, Role};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
-use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
+use wiremock::MockServer;
 
-const THREAD: &str = "1149fbda-eb06-43b7-8d0e-108e857d9c2d";
-const OWNER: &str = "46c9adc1-3b84-42b3-8495-24d9b26e9e5f";
-const TABLES: [(&str, usize); 6] = [
-    ("bro_executions", 1),
-    ("bro_execution_index", 1),
-    ("bro_execution_records", 284),
-    ("bro_acceptance_keys", 2),
-    ("bro_managed_sessions", 0),
-    ("requests", 2),
+const OLD_OWNER: &str = "46c9adc1-3b84-42b3-8495-24d9b26e9e5f";
+const THREAD: &str = "current-profile-thread";
+const OWNER: &str = "current-profile-fixture-owner";
+const TABLES: [&str; 6] = [
+    "bro_executions",
+    "bro_execution_index",
+    "bro_execution_records",
+    "bro_acceptance_keys",
+    "bro_managed_sessions",
+    "requests",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,263 +46,12 @@ impl StoredState {
             && self.rows == original.rows
             && self.original_owner == original.original_owner
             && self.schema == original.schema
-    }
-
-    fn check_additive_migrations(&self, original: &Self) -> Result<()> {
-        ensure!(
-            self.rows == original.rows && self.original_owner == original.original_owner,
-            "migration changed historical records or the stopped owner"
-        );
-        for historical in &original.ledger {
-            ensure!(
-                self.ledger.contains(historical),
-                "migration rewrote historical ledger metadata"
-            );
-        }
-        let mut expected = bitrouter::db::migration::Migrator::migrations()
-            .iter()
-            .map(|migration| migration.name().to_owned())
-            .collect::<Vec<_>>();
-        expected.sort();
-        ensure!(
-            self.ledger
+            && original
+                .owners
                 .iter()
-                .map(|(version, _)| version)
-                .eq(expected.iter()),
-            "migration ledger differs from the registered migrations"
-        );
-        for entry in &original.schema {
-            let expected = additive_schema_definition(entry)?;
-            ensure!(
-                self.schema.contains(&expected),
-                "migration changed historical schema beyond the allowed nullable ownership columns: {entry}"
-            );
-        }
-        Ok(())
+                .all(|owner| self.owners.contains(owner))
     }
 }
-
-fn additive_schema_definition(entry: &str) -> Result<String> {
-    let mut definition: (String, String, String, Option<String>) = serde_json::from_str(entry)?;
-    if definition.0 != "table"
-        || ![
-            "eval_subjects",
-            "eval_results",
-            "eval_admission_events",
-            "eval_snapshots",
-            "trajectory_episodes",
-            "trajectory_events",
-            "trajectory_requests",
-            "trajectory_prefix_index",
-            "trajectory_outbox",
-            "acp_capture_connections",
-            "acp_canonical_sessions",
-            "acp_capture_events",
-            "checkpoint_evolution",
-            "acp_checkpoints",
-            "acp_checkpoint_members",
-            "acp_resource_observations",
-            "acp_assessment_revisions",
-            "acp_effective_assessments",
-            "provider_continuations",
-            "bro_managed_sessions",
-        ]
-        .contains(&definition.1.as_str())
-    {
-        return Ok(entry.to_owned());
-    }
-    // Independently allow only migration030/032/033/034/036's exact nullable additions. Keep
-    // every byte of the old column/constraint definitions and all old indexes.
-    // Do not derive the allowance from the migration being tested.
-    let sql = definition
-        .3
-        .as_deref()
-        .context("historical scoped table has no SQL definition")?;
-    // SQLite inserts added columns before an existing table-level primary key.
-    // Preserve that historical constraint, including its original whitespace.
-    let suffix = match definition.1.as_str() {
-        "trajectory_prefix_index" => ", PRIMARY KEY (\"owner_user_id\", \"full_input_digest\") )",
-        "acp_assessment_revisions" => ", PRIMARY KEY (\"revision_id\") )",
-        "acp_canonical_sessions" => ", PRIMARY KEY (\"session_key\") )",
-        "acp_capture_connections" => ", PRIMARY KEY (\"connection_id\") )",
-        "acp_capture_events" => ", PRIMARY KEY (\"connection_id\", \"sequence\") )",
-        "acp_checkpoint_members" => ", PRIMARY KEY (\"checkpoint_id\", \"session_key\") )",
-        "acp_checkpoints" => ", PRIMARY KEY (\"checkpoint_id\") )",
-        "acp_effective_assessments" => ", PRIMARY KEY (\"session_key\") )",
-        "acp_resource_observations" => ", PRIMARY KEY (\"observation_id\") )",
-        "provider_continuations" => {
-            ", CHECK (\"publication_state\" IN ('provisional', 'delivering', 'active')), CHECK (\"publication_generation\" <> ''), CHECK (\"publication_instance_id\" <> ''), CHECK (\"publication_lease_until\" <> '') )"
-        }
-        _ => ")",
-    };
-    let prefix = sql
-        .strip_suffix(suffix)
-        .context("historical scoped table has an unexpected closing definition")?;
-    let logical_identity = if [
-        "trajectory_episodes",
-        "trajectory_requests",
-        "trajectory_prefix_index",
-        "trajectory_outbox",
-    ]
-    .contains(&definition.1.as_str())
-    {
-        ", \"logical_identity_json\" varchar(8192) COLLATE BINARY"
-    } else {
-        ""
-    };
-    // The pinned v7 managed-session table has an inline primary key, so its
-    // original closing suffix remains ")". Only this table gets migration036's five
-    // additional columns after the three common nullable ownership columns.
-    let native_identity = if definition.1 == "bro_managed_sessions" {
-        ", \"session_principal_id\" varchar(128) COLLATE BINARY, \
-         \"logical_name\" varchar(128) COLLATE BINARY, \
-         \"harness_id\" varchar(128) COLLATE BINARY, \
-         \"session_id\" varchar(128) COLLATE BINARY, \
-         \"execution_revision\" varchar(128) COLLATE BINARY"
-    } else {
-        ""
-    };
-    definition.3 = Some(format!(
-        "{prefix}, \"installation_id\" varchar(128) COLLATE BINARY, \
-         \"tenant_id\" varchar(128) COLLATE BINARY, \
-         \"creator_principal_id\" varchar(128) COLLATE BINARY{logical_identity}{native_identity}{suffix}"
-    ));
-    Ok(serde_json::to_string(&definition)?)
-}
-
-#[test]
-fn native036_schema_allowance_is_exact_and_preserves_historical_definition() -> Result<()> {
-    // Literal SQL from the hash-pinned v7 artifact, not from migration036 or
-    // additive_schema_definition. The first comma preserves the old trailing
-    // space; SQLite inserts at the original closing parenthesis here.
-    const ORIGINAL: &str = r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL )"#;
-    const EXPECTED: &str = concat!(
-        r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL , "#,
-        r#""installation_id" varchar(128) COLLATE BINARY, "#,
-        r#""tenant_id" varchar(128) COLLATE BINARY, "#,
-        r#""creator_principal_id" varchar(128) COLLATE BINARY, "#,
-        r#""session_principal_id" varchar(128) COLLATE BINARY, "#,
-        r#""logical_name" varchar(128) COLLATE BINARY, "#,
-        r#""harness_id" varchar(128) COLLATE BINARY, "#,
-        r#""session_id" varchar(128) COLLATE BINARY, "#,
-        r#""execution_revision" varchar(128) COLLATE BINARY)"#,
-    );
-    let bytes = zstd::stream::decode_all(
-        include_bytes!("../fixtures/baseline-runtime-v7/database.sqlite.zst").as_slice(),
-    )?;
-    ensure!(
-        hex::encode(Sha256::digest(&bytes))
-            == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
-    );
-    ensure!(
-        bytes
-            .windows(ORIGINAL.len())
-            .any(|part| part == ORIGINAL.as_bytes())
-    );
-    let entry = |kind: &str, name: &str, sql: &str| -> Result<String> {
-        Ok(serde_json::to_string(&(kind, name, name, Some(sql)))?)
-    };
-    let original = entry("table", "bro_managed_sessions", ORIGINAL)?;
-    let expected = entry("table", "bro_managed_sessions", EXPECTED)?;
-    ensure!(additive_schema_definition(&original)? == expected);
-
-    // Satisfy the unchanged ledger guard without executing any migration. Only
-    // registry names are used here; expected DDL above is independent.
-    let mut ledger = bitrouter::db::migration::Migrator::migrations()
-        .iter()
-        .map(|migration| (migration.name().to_owned(), 17))
-        .collect::<Vec<_>>();
-    ledger.sort();
-    let before = StoredState {
-        ledger: ledger.clone(),
-        rows: vec![],
-        original_owner: OWNER.into(),
-        schema: vec![original],
-        owners: vec![],
-        authority: vec![],
-    };
-    let mut after = StoredState {
-        ledger,
-        rows: vec![],
-        original_owner: OWNER.into(),
-        schema: vec![expected],
-        owners: vec![],
-        authority: vec![],
-    };
-    // A positive control precedes every negative: unrelated fixture failure
-    // cannot masquerade as rejection of a malformed schema addition.
-    after.check_additive_migrations(&before)?;
-    for (from, to) in [
-        (r#", "session_id" varchar(128) COLLATE BINARY"#, ""),
-        (
-            r#""execution_revision" varchar(128) COLLATE BINARY)"#,
-            r#""execution_revision" varchar(128) COLLATE BINARY, "extra" text)"#,
-        ),
-        (
-            r#""session_id" varchar(128) COLLATE BINARY"#,
-            r#""session_id" varchar(128) COLLATE BINARY NOT NULL"#,
-        ),
-        (
-            r#""session_id" varchar(128) COLLATE BINARY"#,
-            r#""session_id" varchar(128) COLLATE BINARY DEFAULT NULL"#,
-        ),
-        (
-            r#""logical_name" varchar(128)"#,
-            r#""logical_name" varchar(129)"#,
-        ),
-        (
-            r#""harness_id" varchar(128) COLLATE BINARY"#,
-            r#""harness_id" varchar(128) COLLATE NOCASE"#,
-        ),
-        (r#""session_principal_id""#, r#""Session_principal_id""#),
-        (
-            r#""session_principal_id" varchar(128) COLLATE BINARY, "logical_name" varchar(128) COLLATE BINARY"#,
-            r#""logical_name" varchar(128) COLLATE BINARY, "session_principal_id" varchar(128) COLLATE BINARY"#,
-        ),
-        (
-            r#""session_id" varchar(128) COLLATE BINARY"#,
-            r#""session_id" varchar(128) COLLATE BINARY UNIQUE"#,
-        ),
-        (
-            r#""session_id" varchar(128) COLLATE BINARY"#,
-            r#""session_id" varchar(128) COLLATE BINARY CHECK (length(session_id) > 0)"#,
-        ),
-        (
-            r#""session_id" varchar(128) COLLATE BINARY"#,
-            r#""session_id" varchar(128) COLLATE BINARY REFERENCES bro_executions(id)"#,
-        ),
-        (r#""payload" text NOT NULL "#, r#""payload" blob NOT NULL "#),
-    ] {
-        let malformed = EXPECTED.replacen(from, to, 1);
-        ensure!(
-            malformed != EXPECTED,
-            "negative fixture did not change its target"
-        );
-        after.schema = vec![entry("table", "bro_managed_sessions", &malformed)?];
-        ensure!(
-            after.check_additive_migrations(&before).is_err(),
-            "accepted malformed native schema: {from} -> {to}"
-        );
-    }
-    for (kind, name) in [
-        ("table", "bro_managed_sessions_extra"),
-        ("table", "Bro_managed_sessions"),
-        ("index", "bro_managed_sessions"),
-    ] {
-        let other = entry(kind, name, ORIGINAL)?;
-        ensure!(additive_schema_definition(&other)? == other);
-    }
-    ensure!(
-        additive_schema_definition(&entry(
-            "table",
-            "bro_managed_sessions",
-            "CREATE TABLE broken(id);"
-        )?)
-        .is_err()
-    );
-    Ok(())
-}
-
 async fn strings(db: &DatabaseConnection, sql: String) -> Result<Vec<String>> {
     db.query_all(Statement::from_string(DbBackend::Sqlite, sql))
         .await?
@@ -329,151 +90,149 @@ pub(super) async fn table_rows(db: &DatabaseConnection, table: &str) -> Result<V
     .await
 }
 
-async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
-    let ledger = db
-        .query_all(Statement::from_string(
-            DbBackend::Sqlite,
-            "SELECT version, applied_at FROM seaql_migrations ORDER BY version",
-        ))
-        .await?
-        .into_iter()
-        .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
-        .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
-    let mut rows = Vec::new();
-    for (table, count) in TABLES {
-        let values = table_rows(db, table).await?;
-        ensure!(values.len() == count, "baseline {table} row count changed");
-        rows.push(values);
-    }
-    let owner = db.query_one(Statement::from_sql_and_values(
-        DbBackend::Sqlite,
-        "SELECT json_array(generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_owners WHERE server_instance_id = ?",
-        [OWNER.into()],
-    )).await?.context("baseline stopped owner missing")?;
-    Ok(StoredState {
-        ledger,
-        rows,
-        original_owner: owner.try_get("", "value")?,
-        schema: strings(db, "SELECT json_array(type,name,tbl_name,sql) AS value FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY value".into()).await?,
-        owners: strings(db, "SELECT json_array(generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_owners ORDER BY generation".into()).await?,
-        authority: strings(db, "SELECT json_array(id,generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_ownership ORDER BY id".into()).await?,
-    })
-}
-
-fn snapshot(fixture: &Fixture) -> Result<StoredState> {
-    database_snapshot(fixture, "profiles.db", false)
-}
-
-fn database_snapshot(fixture: &Fixture, name: &str, migrate: bool) -> Result<StoredState> {
-    let url = format!("sqlite://{}", fixture.directory.path().join(name).display());
-    fixture.runtime.block_on(async {
-        tokio::time::timeout(COMMAND_TIMEOUT, async {
-            let db = bitrouter::db::connect(&url).await?;
-            let result = async {
-                if migrate {
-                    bitrouter::db::run_migrations(&db).await?;
-                }
-                read_state(&db).await
-            }
-            .await;
-            let closed = db.close().await;
-            let state = result?;
-            closed?;
-            Ok(state)
-        })
-        .await
-        .context("profile database snapshot timed out")?
-    })
-}
-
-fn inspect_harness(fixture: &Fixture, native: bool) -> Result<()> {
-    let socket = agent_local::socket_path(&fixture.socket);
-    fixture.runtime.block_on(async {
-        tokio::time::timeout(COMMAND_TIMEOUT, async {
-            let reply = agent_local::request(&socket, Operation::Capabilities).await?;
-            let ReplyResult::Capabilities {
-                runtime,
-                operations,
-            } = reply
-            else {
-                bail!("missing harness capabilities");
-            };
-            ensure!(runtime.native_execution == native);
-            if native {
-                let discovery = runtime
-                    .startup_discovery
-                    .context("missing startup discovery")?;
-                ensure!(discovery.complete && discovery.error.is_none());
-                ensure!(discovery.inspected_roots == 1 && discovery.index_cutoff == 1);
-            } else {
-                ensure!(runtime.startup_discovery.is_none());
-                ensure!(runtime.execution_ownership.is_none());
-                ensure!(!operations.iter().any(|op| op == "start_turn"));
-            }
-            let client = agent_local::ThreadClient::connect(&socket).await?;
-            // The historical workspace has no grant in this private host.
-            // Opening its database must not implicitly authorize that path.
-            // The separate baseline database/recovery tests decode its complete
-            // journal offline; no recorded path is opened or rewritten here.
-            let rejected = client
-                .request(Operation::ReadThread {
-                    thread_id: THREAD.into(),
-                })
-                .await
-                .err()
-                .context("cold inspection bypassed the workspace grant")?;
-            ensure!(
-                rejected
-                    .downcast_ref::<ReplyError>()
-                    .is_some_and(|error| error.code == ErrorCode::Unauthorized)
-            );
-            if !native {
-                let rejected = client
-                    .request(Operation::StartTurn {
-                        thread_id: THREAD.into(),
-                        prompt: "must not execute".into(),
-                        idempotency_key: "profile-native-unavailable".into(),
-                    })
-                    .await
-                    .err()
-                    .context("harness-only profile admitted native execution")?;
-                ensure!(
-                    rejected
-                        .downcast_ref::<ReplyError>()
-                        .is_some_and(|error| error.code == ErrorCode::UnsupportedCapability)
-                );
-            }
-            Ok(())
-        })
-        .await
-        .context("baseline harness inspection timed out")?
-    })
-}
-
 pub(super) fn identity(fixture: &mut Fixture, binary: &Path) -> Result<ArtifactIdentity> {
     let mut command = fixture.command(binary);
     command.args(["--json", "build-info"]);
     fixture.run(command)?.json()
 }
 
-fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<()> {
+async fn read_state(db: &DatabaseConnection, owner: &str) -> Result<StoredState> {
+    let ledger = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT version,applied_at FROM seaql_migrations ORDER BY version",
+        ))
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
+    let mut rows = Vec::new();
+    for table in TABLES {
+        rows.push(table_rows(db, table).await?);
+    }
+    let original_owner = db.query_one(Statement::from_sql_and_values(DbBackend::Sqlite,
+        "SELECT json_array(generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_owners WHERE server_instance_id=?", [owner.into()])).await?.context("original stopped owner missing")?.try_get("", "value")?;
+    Ok(StoredState {
+        ledger, rows, original_owner,
+        schema: strings(db,"SELECT json_array(type,name,tbl_name,sql) AS value FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY value".into()).await?,
+        owners: strings(db,"SELECT json_array(generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_owners ORDER BY generation".into()).await?,
+        authority: strings(db,"SELECT json_array(id,generation,server_instance_id,stopped_at_ms) AS value FROM bro_runtime_ownership ORDER BY id".into()).await?,
+    })
+}
+
+fn snapshot(fixture: &Fixture, owner: &str) -> Result<StoredState> {
+    let url = format!(
+        "sqlite://{}?mode=ro",
+        fixture.directory.path().join("profiles.db").display()
+    );
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(COMMAND_TIMEOUT, async {
+            // The independent read-only history reader may inspect an old
+            // dataset. It must never install a ledger or run migrations.
+            let db = bitrouter::db::connect(&url).await?;
+            let observed = read_state(&db, owner).await;
+            let closed = db.close().await;
+            let observed = observed?;
+            closed?;
+            Ok(observed)
+        })
+        .await
+        .context("profile database observation timed out")?
+    })
+}
+
+fn artifacts(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<[ArtifactIdentity; 3]> {
     let full = identity(fixture, binaries[0])?;
-    let gateway = identity(fixture, binaries[1])?;
+    let minimum = identity(fixture, binaries[1])?;
     let harness = identity(fixture, binaries[2])?;
     ensure!(full.profile == DistributionProfile::Full);
-    ensure!(gateway.profile == DistributionProfile::Gateway && gateway.features.is_empty());
+    ensure!(minimum.profile == DistributionProfile::Gateway && minimum.features.is_empty());
     ensure!(
         harness.profile == DistributionProfile::Custom && harness.features == ["harness", "mcp"]
     );
     ensure!(full.source_revision.is_some());
-    for artifact in [&gateway, &harness] {
+    for other in [&minimum, &harness] {
         ensure!(
-            artifact.source_revision == full.source_revision
-                && artifact.version == full.version
-                && artifact.target == full.target
+            other.source_revision == full.source_revision
+                && other.version == full.version
+                && other.target == full.target
         );
-        ensure!(artifact.handoff_build_id != full.handoff_build_id);
+        ensure!(other.handoff_build_id != full.handoff_build_id);
     }
+    Ok([full, minimum, harness])
+}
+
+fn provider_idle(fixture: &Fixture, provider: &MockServer) -> Result<()> {
+    fixture.runtime.block_on(async {
+        ensure!(
+            provider
+                .received_requests()
+                .await
+                .context("provider observation missing")?
+                .is_empty(),
+            "profile lifecycle dispatched a provider request"
+        );
+        Ok(())
+    })
+}
+
+fn providers(upstream: &str) -> String {
+    format!(
+        "providers:\n  fixture:\n    api_base: '{upstream}'\n    api_key: profile-fixture-only\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: profile-model}}]\n"
+    )
+}
+
+fn reject_old(fixture: &mut Fixture, binary: &Path, listen: std::net::SocketAddr) -> Result<()> {
+    let mut command = fixture.selected_command(binary, "serve");
+    command.arg("--managed-child");
+    let index = fixture.spawn(command, true)?;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        ensure!(
+            !fixture.socket.exists() && !agent_local::socket_path(&fixture.socket).exists(),
+            "old dataset published a serving socket"
+        );
+        ensure!(
+            !matches!(
+                fixture.control(&DaemonCommand::Status),
+                Ok(DaemonResponse::Status { .. })
+            ),
+            "old dataset reached readiness"
+        );
+        ensure!(
+            std::net::TcpStream::connect_timeout(&listen, CONTROL_TIMEOUT).is_err(),
+            "old dataset bound the inference listener"
+        );
+        let process = &mut fixture.processes[index];
+        if let Some(status) = process.child.try_wait()? {
+            let output = CliOutput {
+                status,
+                stdout: fs::read(&process.stdout)?,
+                diagnostic: process.diagnostic(),
+            };
+            return output.rejected("store format");
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "old dataset refusal timed out: {}",
+            process.diagnostic()
+        );
+        std::thread::sleep(POLL);
+    }
+}
+
+fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<()> {
+    artifacts(fixture, binaries)?;
+    let provider = fixture.runtime.block_on(MockServer::start());
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let listen = listener.local_addr()?;
+    let config = format!(
+        "inherit_defaults: false\nregistry: {{enabled: false}}\nserver:\n  listen: '{listen}'\n  control_socket: control.sock\n  skip_auth: true\ndatabase: {{url: 'sqlite://profiles.db?mode=rwc'}}\nagent_api: {{enabled: false}}\n{}",
+        providers(&provider.uri())
+    );
+    fs::write(&fixture.config, &config)?;
+    fs::set_permissions(&fixture.config, fs::Permissions::from_mode(0o600))?;
+    drop(listener);
     let bytes = zstd::stream::decode_all(
         include_bytes!("../fixtures/baseline-runtime-v7/database.sqlite.zst").as_slice(),
     )?;
@@ -481,54 +240,244 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
         hex::encode(Sha256::digest(&bytes))
             == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
     );
-    fs::write(fixture.directory.path().join("profiles.db"), &bytes)?;
-    let before = snapshot(fixture)?;
-    ensure!(
-        before.ledger.len() == 26,
-        "baseline migration ledger changed"
+    let path = fixture.directory.path().join("profiles.db");
+    fs::write(&path, &bytes)?;
+    let original = snapshot(fixture, OLD_OWNER)?;
+    ensure!(original.ledger.len() == 26);
+    for (rows, expected) in original.rows.iter().zip([1, 1, 284, 2, 0, 2]) {
+        ensure!(rows.len() == expected);
+    }
+    for binary in binaries {
+        reject_old(fixture, binary, listen)?;
+        provider_idle(fixture, &provider)?;
+        ensure!(
+            fs::read(&path)? == bytes,
+            "refusal rewrote the old database"
+        );
+        ensure!(
+            snapshot(fixture, OLD_OWNER)? == original,
+            "refusal changed old ledger/history/ownership"
+        );
+        ensure!(
+            !path.with_extension("db-wal").exists(),
+            "refusal created a writable WAL"
+        );
+        ensure!(!fixture.socket.exists() && !agent_local::socket_path(&fixture.socket).exists());
+        ensure!(fs::read_to_string(&fixture.config)? == config);
+    }
+    Ok(())
+}
+
+fn seed_current_history(fixture: &Fixture) -> Result<()> {
+    let workspace = fixture.directory.path().join("ungranted-history");
+    fs::create_dir(&workspace)?;
+    let url = format!(
+        "sqlite://{}",
+        fixture.directory.path().join("profiles.db").display()
     );
-    // Derive the exact allowed schema additions on an independent fixture copy.
-    // The real binaries must apply migrations themselves to the untouched copy.
-    fs::write(fixture.directory.path().join("expected.db"), bytes)?;
-    let expected = database_snapshot(fixture, "expected.db", true)?;
-    expected.check_additive_migrations(&before)?;
-    let (config, first_pid) = fixture.configure_and_start_full(binaries[0])?;
-    let migrated = snapshot(fixture)?;
-    migrated.check_additive_migrations(&before)?;
-    ensure!(
-        migrated.schema == expected.schema,
-        "startup schema differs from the registered migration result"
-    );
-    // Two transitions share exactly the same historical database and config.
-    // None submits new work or changes the old workspace paths/record payloads.
-    for (step, index) in [0, 1, 0, 2, 0].into_iter().enumerate() {
-        let artifact = [&full, &gateway, &harness][index];
-        let previous = snapshot(fixture)?;
-        let pid = if step == 0 {
-            first_pid
-        } else {
-            fixture.start(binaries[index])?
+    fixture.runtime.block_on(async {
+        let db = bitrouter::db::connect(&url).await?;
+        let store = DatabaseExecutionStore::new(db.clone());
+        let OwnerClaim::Acquired { owner } =
+            store.claim_owner(OWNER).await.map_err(anyhow::Error::msg)?
+        else {
+            bail!("current fixture could not claim the stopped full owner");
         };
-        let status = fixture.status(binaries[index], artifact, artifact, pid)?;
-        fixture.health(&status)?;
+        let snapshot = ThreadSnapshot {
+            server_instance_id: OWNER.into(),
+            thread_id: THREAD.into(),
+            status: ThreadStatus::Idle,
+            workspace,
+            model: "fixture:profile-model".into(),
+            permission_profile: PermissionProfile::ReadOnly,
+            context_version: 0,
+            cursor: 0,
+            active_turn_id: None,
+            queued: Vec::new(),
+            pause_reason: None,
+            waiting_for_capacity: false,
+        };
+        let mut checkpoint = snapshot.clone();
+        checkpoint.cursor = 4;
+        let records = vec![
+            ExecutionRecord::ThreadCreated {
+                caller: CallerContext::local(),
+                snapshot,
+                config: Box::new(AgentConfig::fixed("fixture:profile-model", None).read_only()),
+                verification_command: None,
+            },
+            ExecutionRecord::AcceptedKey {
+                entry: AcceptedKey {
+                    scope: "current-profile-scope".into(),
+                    key: "current-profile-key".into(),
+                    fingerprint: "c".repeat(64),
+                    thread_id: THREAD.into(),
+                    turn_id: None,
+                },
+            },
+            ExecutionRecord::ThreadCheckpoint {
+                snapshot: checkpoint.clone(),
+                messages: vec![Message::text(Role::User, "current profile history")],
+            },
+            ExecutionRecord::ThreadEvent {
+                event: ThreadEvent {
+                    server_instance_id: OWNER.into(),
+                    thread_id: THREAD.into(),
+                    seq: 4,
+                    timestamp_ms: 1,
+                    changes: vec![ThreadChange::Checkpoint {
+                        snapshot: checkpoint,
+                    }],
+                },
+            },
+        ];
+        ensure!(
+            store
+                .commit_owned(&owner, THREAD, 0, &records)
+                .await
+                .map_err(anyhow::Error::msg)?
+                == 4
+        );
+        let stopped = store.stop_owner(&owner).await.map_err(anyhow::Error::msg)?;
+        ensure!(stopped.stopped_at_ms.is_some());
+        let stored = store
+            .load(THREAD)
+            .await
+            .map_err(anyhow::Error::msg)?
+            .context("current fixture history missing")?;
+        ensure!(stored.format_version == RUNTIME_FORMAT_VERSION && stored.version == 4);
+        ensure!(serde_json::to_value(&stored.records)? == serde_json::to_value(&records)?);
+        drop(store);
+        db.close().await?;
+        Ok(())
+    })
+}
+
+fn inspect_harness(fixture: &Fixture, native: bool) -> Result<()> {
+    let socket = agent_local::socket_path(&fixture.socket);
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(COMMAND_TIMEOUT, async {
+            let ReplyResult::Capabilities {
+                runtime,
+                operations,
+            } = agent_local::request(&socket, Operation::Capabilities).await?
+            else {
+                bail!("missing harness capabilities");
+            };
+            ensure!(runtime.native_execution == native);
+            if native {
+                let discovery = runtime
+                    .startup_discovery
+                    .context("missing current startup discovery")?;
+                ensure!(discovery.complete && discovery.writer_fenced && discovery.error.is_none());
+                ensure!(
+                    discovery.inspected_roots == 1
+                        && discovery.index_cutoff == 1
+                        && discovery.scanned_records == 4
+                        && discovery.blocked_workspaces == 0
+                );
+            } else {
+                ensure!(
+                    runtime.startup_discovery.is_none() && runtime.execution_ownership.is_none()
+                );
+                ensure!(!operations.iter().any(|operation| operation == "start_turn"));
+            }
+            let client = agent_local::ThreadClient::connect(&socket).await?;
+            let denied = client
+                .request(Operation::ReadThread {
+                    thread_id: THREAD.into(),
+                })
+                .await
+                .err()
+                .context("cold history bypassed its absent workspace grant")?;
+            ensure!(
+                denied
+                    .downcast_ref::<ReplyError>()
+                    .is_some_and(|error| error.code == ErrorCode::Unauthorized)
+            );
+            if !native {
+                let denied = client
+                    .request(Operation::StartTurn {
+                        thread_id: THREAD.into(),
+                        prompt: "must not execute".into(),
+                        idempotency_key: "profile-native-unavailable".into(),
+                    })
+                    .await
+                    .err()
+                    .context("harness-only profile admitted native work")?;
+                ensure!(
+                    denied
+                        .downcast_ref::<ReplyError>()
+                        .is_some_and(|error| error.code == ErrorCode::UnsupportedCapability)
+                );
+            }
+            Ok(())
+        })
+        .await
+        .context("current harness inspection timed out")?
+    })
+}
+
+fn owner_head(state: &StoredState) -> Result<(u64, String, Option<u64>)> {
+    ensure!(
+        state.authority.len() == 1,
+        "native authority singleton changed"
+    );
+    let (id, generation, instance, stopped): (u64, u64, Option<String>, Option<u64>) =
+        serde_json::from_str(&state.authority[0])?;
+    ensure!(id == 1 && generation > 0);
+    Ok((
+        generation,
+        instance.context("native authority owner absent")?,
+        stopped,
+    ))
+}
+
+fn exercise_current_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<()> {
+    let identities = artifacts(fixture, binaries)?;
+    let provider = fixture.runtime.block_on(MockServer::start());
+    // The actual full artifact creates the fresh dataset and initial owner.
+    let (config, pid) = fixture.configure_and_start_full(binaries[0])?;
+    let report = fixture.status(binaries[0], &identities[0], &identities[0], pid)?;
+    fixture.health(&report)?;
+    fixture.stop_resident(pid)?;
+    // Append a small, known current local journal with the original writer and
+    // real claim/stop APIs. No historical rows or fabricated owner SQL is used.
+    seed_current_history(fixture)?;
+    let config = format!("{config}{}", providers(&provider.uri()));
+    fs::write(&fixture.config, &config)?;
+    let original = snapshot(fixture, OWNER)?;
+    ensure!(
+        original.ledger.len() == 1 && original.ledger[0].0 == "m20261118_000001_model_policy_store"
+    );
+    for (rows, expected) in original.rows.iter().zip([1, 1, 4, 1, 0, 0]) {
+        ensure!(rows.len() == expected);
+    }
+    for (step, index) in [0, 1, 0, 2, 0].into_iter().enumerate() {
+        let previous = snapshot(fixture, OWNER)?;
+        let pid = fixture.start(binaries[index])?;
+        let report =
+            fixture.status(binaries[index], &identities[index], &identities[index], pid)?;
+        fixture.health(&report)?;
         if index == 1 {
             ensure!(
                 !agent_local::socket_path(&fixture.socket).exists(),
-                "minimum profile created a harness listener"
+                "minimum profile published a harness listener"
             );
         } else {
             inspect_harness(fixture, index == 0)?;
         }
-        let running = snapshot(fixture)?;
+        provider_idle(fixture, &provider)?;
+        let running = snapshot(fixture, OWNER)?;
         ensure!(
-            running.preserved(&migrated),
-            "profile step {step} changed stored facts while running"
+            running.preserved(&original),
+            "profile step {step} changed current history or its original owner"
         );
         fixture.stop_resident(pid)?;
-        let after = snapshot(fixture)?;
+        let after = snapshot(fixture, OWNER)?;
         ensure!(
-            after.preserved(&migrated),
-            "profile step {step} changed stored facts on shutdown"
+            after.preserved(&original),
+            "profile step {step} changed current history on shutdown"
         );
         if index != 0 {
             ensure!(
@@ -536,32 +485,76 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
                     && running.authority == previous.authority
                     && after.owners == previous.owners
                     && after.authority == previous.authority,
-                "core-free profile acquired execution ownership"
+                "core-free profile acquired or changed native ownership"
+            );
+        } else {
+            let before_owner = owner_head(&previous)?;
+            let live_owner = owner_head(&running)?;
+            let stopped_owner = owner_head(&after)?;
+            ensure!(
+                before_owner.2.is_some()
+                    && live_owner.0 == before_owner.0 + 1
+                    && live_owner.1 != before_owner.1
+                    && live_owner.2.is_none()
+            );
+            ensure!(
+                stopped_owner.0 == live_owner.0
+                    && stopped_owner.1 == live_owner.1
+                    && stopped_owner.2.is_some()
+            );
+            ensure!(
+                running.owners.len() == previous.owners.len() + 1
+                    && after.owners.len() == running.owners.len()
             );
         }
         ensure!(
             fs::read_to_string(&fixture.config)? == config,
             "profile step {step} changed saved configuration"
         );
+        provider_idle(fixture, &provider)?;
     }
     Ok(())
 }
 
+fn binaries() -> Result<[PathBuf; 3]> {
+    let binaries = [
+        artifact_path("BITROUTER_TEST_FULL_BINARY")?,
+        artifact_path("BITROUTER_TEST_GATEWAY_BINARY")?,
+        artifact_path("BITROUTER_TEST_HARNESS_BINARY")?,
+    ];
+    ensure!(binaries[0] != binaries[1] && binaries[0] != binaries[2] && binaries[1] != binaries[2]);
+    Ok(binaries)
+}
+
 #[test]
-#[ignore = "requires separately built full, gateway and harness-only artifacts"]
-fn baseline_records_survive_full_gateway_harness_transitions() -> Result<()> {
-    let full = artifact_path("BITROUTER_TEST_FULL_BINARY")?;
-    let gateway = artifact_path("BITROUTER_TEST_GATEWAY_BINARY")?;
-    let harness = artifact_path("BITROUTER_TEST_HARNESS_BINARY")?;
-    ensure!(full != gateway && full != harness && gateway != harness);
+#[ignore = "requires separately built full, minimum and harness-only artifacts"]
+fn historical_dataset_is_refused_by_full_minimum_and_harness_artifacts() -> Result<()> {
+    let binaries = binaries()?;
     let mut fixture = Fixture::new()?;
-    let result = exercise_transitions(&mut fixture, [&full, &gateway, &harness]);
+    let result = exercise_old_refusal(&mut fixture, [&binaries[0], &binaries[1], &binaries[2]]);
     let cleanup = fixture.cleanup();
     result.with_context(|| {
         format!(
-            "baseline profile transition failed\n{}",
+            "historical dataset refusal failed\n{}",
             fixture.diagnostics()
         )
     })?;
-    cleanup.with_context(|| format!("baseline profile cleanup failed\n{}", fixture.diagnostics()))
+    cleanup
+}
+
+#[test]
+#[ignore = "requires separately built full, minimum and harness-only artifacts"]
+fn current_records_survive_full_minimum_full_harness_full_transitions() -> Result<()> {
+    let binaries = binaries()?;
+    let mut fixture = Fixture::new()?;
+    let result =
+        exercise_current_transitions(&mut fixture, [&binaries[0], &binaries[1], &binaries[2]]);
+    let cleanup = fixture.cleanup();
+    result.with_context(|| {
+        format!(
+            "current profile transition failed\n{}",
+            fixture.diagnostics()
+        )
+    })?;
+    cleanup
 }

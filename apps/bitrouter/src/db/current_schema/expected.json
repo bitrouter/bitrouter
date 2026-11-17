@@ -40,7 +40,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "installation_id",
@@ -381,7 +382,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "captured_at",
@@ -536,7 +538,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "watermark",
@@ -697,7 +700,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "revision",
@@ -1351,7 +1355,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "installation_id",
@@ -1568,7 +1573,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "installation_id",
@@ -1796,7 +1802,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       }
     ],
     "primary": [
@@ -2905,7 +2912,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "expires_at",
@@ -2913,7 +2921,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "management_owner",
@@ -2997,7 +3006,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "compiler_version",
@@ -3021,7 +3031,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "dependencies_json",
@@ -3029,7 +3040,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "creator_principal_id",
@@ -3194,7 +3206,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "scope_json",
@@ -3202,7 +3215,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "expires_at",
@@ -3210,7 +3224,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "created_at",
@@ -3218,7 +3233,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       }
     ],
     "primary": [
@@ -3319,7 +3335,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "content_digest",
@@ -3397,7 +3414,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "content_digest",
@@ -3413,7 +3431,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "byte_count",
@@ -3534,7 +3553,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       }
     ],
     "primary": [
@@ -3622,7 +3642,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "payload_json",
@@ -3630,28 +3651,13 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "content_digest",
         "kind": "varchar(64)",
         "nullable": false,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "pending_tenant_id",
-        "kind": "varchar(128)",
-        "nullable": true,
-        "binary": true,
-        "automatic": false,
-        "default": null
-      },
-      {
-        "name": "pending_execution_id",
-        "kind": "varchar(128)",
-        "nullable": true,
         "binary": true,
         "automatic": false,
         "default": null
@@ -3664,16 +3670,6 @@
     "foreign": [],
     "checks": [],
     "indexes": [
-      {
-        "name": "idx_tenancy_oauth_execution",
-        "columns": [
-          "installation_id",
-          "pending_tenant_id",
-          "pending_execution_id",
-          "slot_key"
-        ],
-        "unique": false
-      },
       {
         "name": "idx_tenancy_oauth_pending",
         "columns": [
@@ -3734,7 +3730,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "hash_version",
@@ -3758,7 +3755,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "response_json",
@@ -3766,7 +3764,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "created_at",
@@ -3774,7 +3773,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "safety",
@@ -3836,7 +3836,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       }
     ],
     "primary": [
@@ -3893,7 +3894,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "evidence_digest",
@@ -4067,7 +4069,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "dependency_json",
@@ -4075,7 +4078,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "content_digest",
@@ -4139,7 +4143,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       }
     ],
     "primary": [
@@ -4207,7 +4212,8 @@
         "nullable": false,
         "binary": false,
         "automatic": false,
-        "default": null
+        "default": null,
+        "mysql_kind": "longtext"
       },
       {
         "name": "byte_count",
@@ -4366,7 +4372,10 @@
           "tenant_id",
           "last_captured_at"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "last_captured_at": 64
+        }
       },
       {
         "name": "idx_trajectory_episodes_owner_correlation",
@@ -4493,7 +4502,10 @@
           "episode_id",
           "sequence"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "episode_id": 64
+        }
       },
       {
         "name": "idx_trajectory_events_episode_sequence",
@@ -4621,7 +4633,11 @@
           "attempts",
           "created_at"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "delivered_at": 64,
+          "created_at": 64
+        }
       },
       {
         "name": "idx_trajectory_outbox_delivery_order",
@@ -4642,7 +4658,11 @@
           "created_at",
           "outbox_id"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "delivered_at": 64,
+          "created_at": 64
+        }
       }
     ]
   },
@@ -4862,7 +4882,10 @@
           "tenant_id",
           "full_input_digest"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "full_input_digest": 64
+        }
       },
       {
         "name": "idx_traj32_requests_episode",
@@ -4871,7 +4894,10 @@
           "tenant_id",
           "episode_id"
         ],
-        "unique": false
+        "unique": false,
+        "mysql_prefixes": {
+          "episode_id": 64
+        }
       },
       {
         "name": "idx_trajectory_requests_owner_episode",

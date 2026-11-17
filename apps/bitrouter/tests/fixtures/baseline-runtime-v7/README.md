@@ -28,8 +28,9 @@ matches the original database plus WAL. The main-file and WAL hashes are retaine
 separately; the original main file alone is not a usable fixture. Compression
 only packages the files; it does not change runtime format fields or record data.
 
-The database regression reopens a private copy twice, reapplies migrations and
-checks ledger timestamps, raw record bytes, decoded records, bounded record and
+The database regression refuses writable adoption of the old dataset, then opens
+a private copy twice through a read-only history connection. It checks unchanged
+ledger timestamps, raw record bytes, decoded records, bounded record and
 public-history pages, acceptance keys and stopped-owner evidence. Offline native
 replay and complete Thread reconstruction consume the original journal with and
 without core; no test opens its recorded workspace or executes its tools.
@@ -40,15 +41,21 @@ Corrupt checkpoint digests remain rejected. These reader checks do not establish
 live scheduler restoration or formats 2–6. The current-writer fixture in
 `../native-replay` remains separate.
 
-The separately selected `artifact_profiles` test copies this same database
-through full → minimum → full → harness-only → full process starts and stops.
-It compares every column in the migration ledger, execution roots/index/records,
-acceptance keys, managed-session table and two original request rows, plus the
-original stopped owner and application schema. Core-free processes must leave
-both ownership tables unchanged. The original workspace has no grant in the
-private host: live inspection must remain unauthorized, and harness-only native
-start must remain unavailable. This preserves authority as well as data; it does
-not claim successful authorized live recovery or policy/outbox payload coverage.
+The separately selected `artifact_profiles` refusal campaign attempts to serve
+this old dataset with the actual full, minimum and harness-only executables.
+Each attempt must reject it before readiness or provider dispatch, preserving
+the database bytes, ledger, schema, history and ownership. The old dataset is
+never migrated or given a replacement marker.
+
+A separate campaign has the current full executable create a fresh dataset,
+then appends a small known current thread journal with the current execution
+writer and its real claim/stop APIs. It runs full → minimum → full → harness-only
+→ full against that dataset, preserving every ledger/history field, acceptance
+key, public history event, checkpoint, schema definition and preexisting stopped
+owner. Full processes must acquire and stop a new owner correctly; core-free
+processes must leave both ownership tables unchanged. The private history
+workspace has no grant, and harness-only native start must remain unavailable.
+These campaigns do not claim active-turn recovery or policy/outbox coverage.
 CI supplies separate immutable executables from one revision on Linux/macOS.
 
 To capture deliberately on macOS, build the pinned historical source, verify its

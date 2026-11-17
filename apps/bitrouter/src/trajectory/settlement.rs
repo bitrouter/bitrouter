@@ -721,6 +721,128 @@ mod tests {
 
     #[cfg(feature = "core")]
     #[tokio::test]
+    async fn independent_observation_settles_and_publishes_one_episode_without_guard_intent()
+    -> anyhow::Result<()> {
+        use crate::metering::{
+            pricing::PricingTable, recorder::MeteringRecorder, store::MeteringStore,
+        };
+
+        let (db, store) = store().await?;
+        let key = CorrelationKey::from_bytes(rand::random())?;
+        let observer = TrajectoryRuntime::new(store.clone(), Canonicalizer::new(key.clone()));
+        let prompt = Prompt {
+            model: "provider:model".into(),
+            system: None,
+            system_provider_metadata: BTreeMap::new(),
+            messages: vec![Message::text(
+                Role::User,
+                "Observe this request without a guard.",
+            )],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let correlated = observer
+            .begin_request(
+                "owner-a",
+                "external-request",
+                ApiProtocol::ChatCompletions,
+                &prompt,
+                "2026-08-01T00:00:00Z",
+            )
+            .await?;
+        let eval_store = EvalStore::new(db.clone());
+        let pending = PendingEvalDecisionStore::default();
+        let recorder = PolicySettlementRecorder::new(
+            pending.clone(),
+            Some(TrajectorySettlementRecorder::new(store.clone(), None, key)),
+            Some(Arc::new(EvalSettlementRecorder::new(
+                eval_store.clone(),
+                pending,
+            ))),
+        );
+        let mut settlement = context("external-request");
+        settlement.prompt_tokens = 10;
+        settlement.completion_tokens = 5;
+        settlement.usage_origin = UsageOrigin::ProviderReported;
+        settlement.raw_usage = Some(serde_json::json!({
+            "prompt_tokens":10, "completion_tokens":5, "total_tokens":15
+        }));
+        recorder.record(&mut settlement).await?;
+        assert!(store.pending_outbox("owner-a").await?.is_empty());
+        assert!(
+            eval_store
+                .list_subjects_for_owner("owner-a")
+                .await?
+                .is_empty()
+        );
+        // The actual metering writer, rather than a fabricated settlement event,
+        // supplies the authority consumed by the trajectory settlement bridge.
+        MeteringRecorder::new(MeteringStore::new(db), Arc::new(PricingTable::new()))
+            .record(&mut settlement)
+            .await?;
+        recorder.record(&mut settlement).await?;
+        let events = store
+            .events_for_episode("owner-a", &correlated.episode_id)
+            .await?;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, TrajectoryEventKind::RequestStarted);
+        assert_eq!(events[1].kind, TrajectoryEventKind::RequestSettled);
+        assert_eq!(
+            events[1].request_id.as_deref(),
+            Some(correlated.request_id.as_str())
+        );
+        assert_eq!(
+            events[1].evidence.structural.get("settlement.total_tokens"),
+            Some(&15)
+        );
+        assert!(
+            !events[1]
+                .evidence
+                .structural
+                .contains_key("settlement.cost_micro_usd")
+        );
+        assert_eq!(store.pending_outbox("owner-a").await?.len(), 1);
+        let publisher = TrajectoryOutboxPublisher::new(
+            store.clone(),
+            eval_store.clone(),
+            EvalConfig::default(),
+            10,
+        )?;
+        let published = publisher.drain_pending().await?;
+        assert_eq!(
+            (published.attempted, published.delivered, published.failed),
+            (1, 1, 0)
+        );
+        let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].scope, bitrouter_ai::eval::EvalScope::Episode);
+        assert_eq!(subjects[0].subject_id, correlated.episode_id);
+        assert!(subjects[0].decisions.is_empty());
+        assert!(matches!(
+            subjects[0].identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
+        assert!(store.pending_outbox("owner-a").await?.is_empty());
+        recorder.record(&mut settlement).await?;
+        assert_eq!(publisher.drain_pending().await?.attempted, 0);
+        assert_eq!(
+            eval_store.list_subjects_for_owner("owner-a").await?,
+            subjects
+        );
+        assert_eq!(
+            store
+                .events_for_episode("owner-a", &correlated.episode_id)
+                .await?,
+            events
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "core")]
+    #[tokio::test]
     async fn eval_recorder_uses_exactly_one_owner_and_preserves_pending_on_storage_failure()
     -> anyhow::Result<()> {
         let (db, store) = store().await?;

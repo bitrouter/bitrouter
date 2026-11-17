@@ -15,6 +15,7 @@ struct JudgeFacts {
 }
 
 fn facts(fixture: &Fixture, request_id: &str, job_id: &str) -> Result<JudgeFacts> {
+    seed::assert_no_blocks(fixture)?;
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
         let owner = EvolutionStore::new(db.clone(), "local")?;
@@ -45,7 +46,9 @@ fn facts(fixture: &Fixture, request_id: &str, job_id: &str) -> Result<JudgeFacts
 fn seed_judge(fixture: &Fixture, raw: &str) -> Result<JudgeJob> {
     fixture.runtime.block_on(async {
         let config = bitrouter::config::parse_with(raw, |_| None)?;
-        let assembled = bitrouter::assemble::build_app_with_path(&config, Some(&fixture.config)).await?;
+        let assembled = Box::pin(bitrouter::assemble::build_app_with_path(
+            &config, Some(&fixture.config),
+        )).await?;
         let identity = session("judge");
         let history = PersistedHistory::new(assembled.db.clone(), FixtureScope {
             owner: identity.owner.clone(), source: identity.source.clone(),
@@ -109,6 +112,7 @@ fn exercise_judge(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Result<
         upstream
     });
     let raw = seed::configuration(fixture, &upstream.uri(), false)?;
+    seed::assert_no_blocks(fixture)?;
     let job = seed_judge(fixture, &raw)?;
     let id = job
         .request_ids

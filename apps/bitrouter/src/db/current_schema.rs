@@ -26,6 +26,7 @@ struct Table {
 struct Column {
     name: String,
     kind: String,
+    mysql_kind: Option<String>,
     nullable: bool,
     binary: bool,
     automatic: bool,
@@ -46,10 +47,13 @@ struct Index {
     name: String,
     columns: Vec<String>,
     unique: bool,
+    #[serde(default)]
+    mysql_prefixes: BTreeMap<String, u32>,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ObservedIndex {
     columns: Vec<String>,
+    prefixes: Vec<Option<i64>>,
     unique: bool,
     primary: bool,
 }
@@ -139,6 +143,7 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
         index.unique = row.try_get::<String>("", "unique_value")? == "yes";
         index.primary = row.try_get::<String>("", "primary_value")? == "yes";
         index.columns.push(row.try_get("", "column_name")?);
+        index.prefixes.push(row.try_get("", "prefix_length")?);
     }
     let mut constraints: BTreeMap<String, BTreeMap<String, Constraint>> = BTreeMap::new();
     for row in rows(db, catalog::constraints(backend)).await? {
@@ -183,7 +188,7 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
             table.name
         );
         for (column, row) in table.columns.iter().zip(&observed) {
-            validate_column(backend, table, column, row)
+            validate_column(backend, column, row)
                 .with_context(|| format!("column {}.{}", table.name, column.name))?;
         }
         validate_constraints(
@@ -256,32 +261,27 @@ async fn shared_composition(
     #[cfg(not(feature = "multi-instance"))]
     anyhow::bail!("shared schema composition requires the shared gateway profile")
 }
-fn kind(backend: DatabaseBackend, table: &str, column: &Column) -> String {
+fn kind(backend: DatabaseBackend, column: &Column) -> String {
     if backend == DatabaseBackend::Postgres {
         return column.kind.replacen("varchar", "character varying", 1);
+    }
+    if let Some(kind) = &column.mysql_kind {
+        return kind.clone();
     }
     match column.kind.as_str() {
         "integer" => "int".into(),
         "boolean" => "tinyint(1)".into(),
         "varchar" => "varchar(255)".into(),
-        "text" if table.starts_with("tenancy_") || table == "eval_import_provenance" => {
-            "longtext".into()
-        }
         other => other.into(),
     }
 }
-fn validate_column(
-    backend: DatabaseBackend,
-    table: &Table,
-    column: &Column,
-    row: &QueryResult,
-) -> Result<()> {
+fn validate_column(backend: DatabaseBackend, column: &Column, row: &QueryResult) -> Result<()> {
     ensure!(
         row.try_get::<String>("", "column_name")? == column.name,
         "column order/name differs"
     );
     ensure!(
-        row.try_get::<String>("", "kind")? == kind(backend, &table.name, column),
+        row.try_get::<String>("", "kind")? == kind(backend, column),
         "column type differs"
     );
     ensure!(
@@ -351,8 +351,20 @@ fn validate_indexes(
         let observed = actual
             .remove(&expected.name)
             .with_context(|| format!("missing index {}", expected.name))?;
+        let prefixes = expected
+            .columns
+            .iter()
+            .map(|column| {
+                if backend == DatabaseBackend::MySql {
+                    expected.mysql_prefixes.get(column).copied().map(i64::from)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         ensure!(
             observed.columns == expected.columns
+                && observed.prefixes == prefixes
                 && observed.unique == expected.unique
                 && !observed.primary,
             "index changed: {}",
@@ -362,6 +374,12 @@ fn validate_indexes(
     let mut primary = !table.primary.is_empty();
     let mut unique = table.unique.clone();
     for (name, observed) in actual {
+        ensure!(
+            observed.prefixes.iter().all(Option::is_none),
+            "unexpected prefix on constraint or foreign-key index: {}/{}",
+            table.name,
+            name
+        );
         if observed.primary && primary {
             ensure!(
                 observed.unique && observed.columns == table.primary,

@@ -312,10 +312,9 @@ pub(crate) fn reduce_prefix(
                     anyhow::anyhow!("settlement references unknown request '{request_id}'")
                 })?;
                 match phase {
-                    RequestPhase::Started => anyhow::bail!(
-                        "trajectory request '{request_id}' settles before route intent"
-                    ),
-                    RequestPhase::Routed | RequestPhase::RoutedGuarded => {
+                    RequestPhase::Started | RequestPhase::Routed | RequestPhase::RoutedGuarded => {
+                        // Independent observers need no Policy/guard decision to
+                        // retain the real request's authoritative settlement.
                         *phase = RequestPhase::Settled;
                     }
                     RequestPhase::Settled => {
@@ -972,11 +971,11 @@ mod tests {
         ];
         assert!(reduce(&duplicate_route, &BTreeSet::new()).is_err());
 
-        let settlement_before_intent = vec![
+        let settlement_for_unknown_request = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            settled(2, "r1", Some(1), Some(1))?,
+            settled(2, "r2", Some(1), Some(1))?,
         ];
-        assert!(reduce(&settlement_before_intent, &BTreeSet::new()).is_err());
+        assert!(reduce(&settlement_for_unknown_request, &BTreeSet::new()).is_err());
 
         let intent_after_settlement = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,

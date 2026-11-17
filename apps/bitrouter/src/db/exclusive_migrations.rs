@@ -2,6 +2,7 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use sea_orm::Statement;
+use sea_orm::sqlx::{self, Connection as _, Row as _};
 use std::cell::Cell;
 
 async fn fixture() -> Result<(tempfile::TempDir, OwnedDatabase)> {
@@ -47,32 +48,35 @@ async fn new_schema_refusal_precedes_even_migration_ledger_creation() -> Result<
 #[tokio::test]
 async fn pending_migration_estimates_the_current_wal_visible_image_before_writing() -> Result<()> {
     let (_directory, owned) = fixture().await?;
-    owned
-        .db
-        .execute_unprepared("PRAGMA wal_autocheckpoint=0")
-        .await?;
-    owned
-        .db
-        .query_one(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "PRAGMA wal_checkpoint(PASSIVE)",
-        ))
-        .await?
-        .context("checkpoint result")?;
-    owned
-        .db
-        .execute_unprepared("CREATE TABLE preflight_payload (payload BLOB NOT NULL)")
-        .await?;
-    owned
-        .db
-        .execute_unprepared("INSERT INTO preflight_payload VALUES (zeroblob(1048576))")
-        .await?;
-    // Leave a genuinely empty catalog with a large WAL-visible freelist. The
-    // current baseline remains pending without constructing an older schema.
-    owned
-        .db
-        .execute_unprepared("DROP TABLE preflight_payload")
-        .await?;
+    {
+        let mut connection = owned.db.get_sqlite_connection_pool().acquire().await?;
+        // Finalize connector catalog statements before checkpointing. Keep the
+        // checkpoint uncached and consume it through SQLITE_DONE before DDL;
+        // an active SQLite cursor can otherwise lock this same connection.
+        connection.clear_cached_statements().await?;
+        sqlx::raw_sql("PRAGMA wal_autocheckpoint=0")
+            .execute(&mut *connection)
+            .await?;
+        let checkpoint = sqlx::raw_sql("PRAGMA wal_checkpoint(PASSIVE)")
+            .fetch_all(&mut *connection)
+            .await
+            .context("draining checkpoint before WAL fixture writes")?;
+        ensure!(checkpoint.len() == 1 && checkpoint[0].try_get::<i64, _>("busy")? == 0);
+        drop(checkpoint);
+        // Leave a genuinely empty catalog with a large WAL-visible freelist.
+        // No checkpoint follows these writes: the current baseline is pending
+        // without constructing or adopting an older schema.
+        for sql in [
+            "CREATE TABLE preflight_payload (payload BLOB NOT NULL)",
+            "INSERT INTO preflight_payload VALUES (zeroblob(1048576))",
+            "DROP TABLE preflight_payload",
+        ] {
+            sqlx::raw_sql(sql)
+                .execute(&mut *connection)
+                .await
+                .with_context(|| format!("building WAL fixture: {sql}"))?;
+        }
+    }
     ensure!(store_format::inspect(&owned.db).await? == store_format::State::Empty);
     let row = owned.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
         "SELECT page_count AS pages,page_size AS size FROM pragma_page_count(),pragma_page_size()"))

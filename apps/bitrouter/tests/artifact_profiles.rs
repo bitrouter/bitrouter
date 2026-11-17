@@ -3,7 +3,7 @@
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
 //! no application features. This test never builds or substitutes an artifact.
-//! The historical-data transition test additionally requires
+//! The current-data transition and historical-dataset refusal tests also require
 //! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
 //! Gateway transitions use a core-enabled test harness for publication fixtures
 //! and the original judge dispatch. Serving and replay HTTP requests use only

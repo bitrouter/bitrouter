@@ -1,10 +1,14 @@
-//! Shared recorded-session and live-upstream fixtures; no learning runtime setup.
+//! Recorded-session fixtures with separate Gateway and explicit BRO assembly.
+
+#![cfg(feature = "core")]
 
 use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::config::Config;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::types::PipelineRequest;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::allocation::BanditConfig;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule};
 use crate::policy_lock::deterministic_yaml;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
@@ -26,12 +30,30 @@ pub(crate) struct Fixture {
     pub(crate) _home: tempfile::TempDir,
 }
 
-#[cfg(feature = "core")]
 pub(crate) async fn fixture(named: bool) -> Result<Fixture> {
-    fixture_with_persistence(named, false).await
+    fixture_with_scope(named, false, crate::assemble::AssemblyScope::Gateway).await
 }
 
-pub(crate) async fn fixture_with_persistence(named: bool, persistent: bool) -> Result<Fixture> {
+#[cfg(feature = "harness")]
+pub(crate) async fn bro_fixture(named: bool) -> Result<Fixture> {
+    bro_fixture_with_persistence(named, false).await
+}
+
+#[cfg(feature = "harness")]
+pub(crate) async fn bro_fixture_with_persistence(named: bool, persistent: bool) -> Result<Fixture> {
+    fixture_with_scope(
+        named,
+        persistent,
+        crate::assemble::AssemblyScope::BroHarness,
+    )
+    .await
+}
+
+async fn fixture_with_scope(
+    named: bool,
+    persistent: bool,
+    scope: crate::assemble::AssemblyScope,
+) -> Result<Fixture> {
     let upstream = MockServer::start().await;
     for model in ["strong", "cheap"] {
         Mock::given(method("POST")).and(path("/chat/completions"))
@@ -58,6 +80,7 @@ pub(crate) async fn fixture_with_persistence(named: bool, persistent: bool) -> R
             r#"
 inherit_defaults: false
 server:
+  listen: "127.0.0.1:0"
   skip_auth: true
 database:
   url: "sqlite::memory:"
@@ -119,6 +142,7 @@ routers:
         );
     }
     if named {
+        config.policy.path = Some("policy.yaml".into());
         let mut document = Document {
             spec_version: SpecVersion::Beta1,
             policies: BTreeMap::new(),
@@ -172,7 +196,13 @@ routers:
         )
         .await?;
     }
-    let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
+    let assembled = Box::pin(crate::assemble::build_scoped_app(
+        &config,
+        Some(&config_path),
+        |_| Ok(()),
+        scope,
+    ))
+    .await?;
     Ok(Fixture {
         assembled,
         upstream,
@@ -249,6 +279,7 @@ pub(crate) async fn recording(
     Ok((identity, recorder))
 }
 
+#[cfg(feature = "harness")]
 pub(crate) fn definition(selector: &str, challenger: &str) -> BlockDefinition {
     BlockDefinition {
         block_id: "coding-block".into(),

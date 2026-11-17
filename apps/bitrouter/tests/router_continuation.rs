@@ -529,7 +529,16 @@ async fn current_source_continuation_pins_hidden_or_uncommitted_history_and_deta
             };
             assert_eq!(forwarded["input"], expected_input);
             assert_eq!(forwarded["instructions"], "repository rules");
-            assert_eq!(forwarded["tools"], tools);
+            // The provider adapter renders an omitted optional description as
+            // null; the complete tool schema and its order remain intact.
+            let mut expected_tools = tools.clone();
+            for tool in expected_tools
+                .as_array_mut()
+                .context("fixture tools must be an array")?
+            {
+                tool["description"] = Value::Null;
+            }
+            assert_eq!(forwarded["tools"], expected_tools);
             assert_eq!(forwarded["tool_choice"], "auto");
             assert_eq!(forwarded["parallel_tool_calls"], false);
             assert_eq!(

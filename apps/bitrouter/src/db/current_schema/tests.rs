@@ -9,7 +9,7 @@ fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
             .iter()
             .map(|table| table.columns.len())
             .sum::<usize>()
-            == 451
+            == 449
     );
     for name in ["tenancy_execution_receipts", "tenancy_dispatch_intents"] {
         let table = tables
@@ -25,6 +25,26 @@ fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
                 .all(|column| column.binary && !column.nullable)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<()> {
+    let tables = expected()?;
+    let slots = tables
+        .iter()
+        .find(|table| table.name == "tenancy_oauth_slots")
+        .context("OAuth slot table")?;
+    // m043 adds these lookup projections only on SQLite. Servers retain the
+    // m037 slot columns and state index; the baseline never runs m043 there.
+    ensure!(slots.columns.len() == 11);
+    ensure!(slots.columns.iter().all(|column| !matches!(
+        column.name.as_str(),
+        "pending_tenant_id" | "pending_execution_id"
+    )));
+    ensure!(slots.indexes.len() == 1);
+    ensure!(slots.indexes[0].name == "idx_tenancy_oauth_pending");
+    ensure!(slots.indexes[0].columns == ["installation_id", "state", "slot_key"]);
     Ok(())
 }
 #[test]
@@ -74,6 +94,7 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
     let column = Column {
         name: "active".into(),
         kind: "integer".into(),
+        mysql_kind: None,
         nullable: false,
         binary: false,
         automatic: false,
@@ -107,5 +128,120 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
             Some(changed)
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn mysql_content_types_follow_explicit_backend_ddl() -> Result<()> {
+    let tables = expected()?;
+    // m019, m020 and m027 widen only these non-tenancy content fields.
+    for (table, column) in [
+        ("acp_capture_events", "event_json"),
+        ("acp_checkpoints", "manifest_json"),
+        ("acp_resource_observations", "observation_json"),
+        ("acp_assessment_revisions", "revision_json"),
+        ("checkpoint_evolution", "body"),
+        ("bro_managed_sessions", "payload"),
+    ] {
+        let field = tables
+            .iter()
+            .find(|candidate| candidate.name == table)
+            .and_then(|table| table.columns.iter().find(|field| field.name == column))
+            .context("backend content field")?;
+        ensure!(kind(DatabaseBackend::MySql, field) == "longtext");
+        ensure!(kind(DatabaseBackend::Postgres, field) == "text");
+    }
+    // Adjacent JSON and timestamp fields retain their original TEXT declaration.
+    for (table, column) in [
+        ("acp_capture_connections", "metadata_json"),
+        ("acp_resource_observations", "observed_at"),
+    ] {
+        let field = tables
+            .iter()
+            .find(|candidate| candidate.name == table)
+            .and_then(|table| table.columns.iter().find(|field| field.name == column))
+            .context("unchanged text field")?;
+        ensure!(kind(DatabaseBackend::MySql, field) == "text");
+    }
+    Ok(())
+}
+
+fn outbox_index_fixture() -> BTreeMap<String, ObservedIndex> {
+    [
+        (
+            "idx_traj32_outbox_pending",
+            vec![
+                "installation_id",
+                "tenant_id",
+                "delivered_at",
+                "attempts",
+                "created_at",
+            ],
+            vec![None, None, Some(64), None, Some(64)],
+            false,
+        ),
+        (
+            "idx_trajectory_outbox_delivery_order",
+            vec!["delivered_at", "attempts", "created_at", "outbox_id"],
+            vec![None, None, None, None],
+            false,
+        ),
+        (
+            "idx_trajectory_outbox_pending",
+            vec![
+                "owner_user_id",
+                "delivered_at",
+                "attempts",
+                "created_at",
+                "outbox_id",
+            ],
+            vec![None, Some(64), None, Some(64), None],
+            false,
+        ),
+        ("PRIMARY", vec!["outbox_id"], vec![None], true),
+    ]
+    .into_iter()
+    .map(|(name, columns, prefixes, primary)| {
+        (
+            name.into(),
+            ObservedIndex {
+                columns: columns.into_iter().map(str::to_owned).collect(),
+                prefixes,
+                unique: primary,
+                primary,
+            },
+        )
+    })
+    .collect()
+}
+
+#[test]
+fn mysql_index_prefixes_are_exact_and_do_not_apply_to_postgres() -> Result<()> {
+    let table = expected()?
+        .into_iter()
+        .find(|table| table.name == "trajectory_outbox")
+        .context("outbox table")?;
+    let current = outbox_index_fixture();
+    validate_indexes(DatabaseBackend::MySql, &table, current.clone())?;
+    for (name, ordinal, prefix) in [
+        ("idx_traj32_outbox_pending", 2, None),
+        ("idx_traj32_outbox_pending", 2, Some(63)),
+        ("idx_traj32_outbox_pending", 2, Some(65)),
+        ("idx_trajectory_outbox_pending", 1, None),
+        ("idx_trajectory_outbox_delivery_order", 0, Some(64)),
+        ("PRIMARY", 0, Some(64)),
+    ] {
+        let mut changed = current.clone();
+        changed.get_mut(name).context("fixture index")?.prefixes[ordinal] = prefix;
+        ensure!(
+            validate_indexes(DatabaseBackend::MySql, &table, changed).is_err(),
+            "accepted altered prefix on {name}"
+        );
+    }
+    let mut postgres = current;
+    for index in postgres.values_mut() {
+        index.prefixes.fill(None);
+    }
+    validate_indexes(DatabaseBackend::Postgres, &table, postgres)?;
     Ok(())
 }

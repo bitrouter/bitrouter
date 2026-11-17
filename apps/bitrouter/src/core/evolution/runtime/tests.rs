@@ -1,15 +1,19 @@
 use super::*;
 use crate::auth::events::ApiPrincipalEstablished;
+#[cfg(feature = "harness")]
 use crate::gateway::observability::binding::CanonicalSelection;
 use crate::gateway::observability::inventory::{
     BeginResult, GatewayInventory, GatewayRequest, InventoryBinding,
 };
 use crate::gateway::pipeline::context::PipelineContext;
-use crate::gateway::pipeline::hooks::{PreRequestHook, RouteHook};
+use crate::gateway::pipeline::hooks::PreRequestHook;
+#[cfg(feature = "harness")]
+use crate::gateway::pipeline::hooks::RouteHook;
 use crate::storage::execution::{ExecutionOutcome, ExecutionSettlement};
 mod execution_guards;
 mod judge_costs;
 mod resource_coverage;
+#[cfg(feature = "harness")]
 mod revisions;
 use crate::gateway::caller::CallerContext;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
@@ -21,16 +25,21 @@ use wiremock::{
 
 use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::fixtures::FixtureScope;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::allocation::Arm;
 
-use crate::gateway::routing::blocks::control::{BlockStatus, EvolutionMode};
+#[cfg(feature = "harness")]
+use crate::gateway::routing::blocks::control::BlockStatus;
+use crate::gateway::routing::blocks::control::EvolutionMode;
+#[cfg(feature = "harness")]
 use crate::gateway::routing::blocks::store::{CONTROL_KEY, CONTROL_KIND};
 use crate::session_identity::{RequestSessionContext, SessionContextHook};
 
-use crate::gateway::routing::blocks::fixtures::{
-    Fixture, definition, fixture, recording, request, session,
-};
+use crate::gateway::routing::blocks::fixtures::{Fixture, fixture, recording, request, session};
+#[cfg(feature = "harness")]
+use crate::gateway::routing::blocks::fixtures::{bro_fixture, definition};
 
+#[cfg(feature = "harness")]
 async fn adopt_fixture(runtime: &EvolutionRuntime) -> Result<()> {
     let store = runtime.service("local")?.store;
     let (revision, _): (_, ControlState) = store
@@ -50,12 +59,13 @@ async fn adopt_fixture(runtime: &EvolutionRuntime) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn operator_restore_changes_actual_dispatch_for_existing_and_new_sessions_while_off()
 -> Result<()> {
     // The adopted setup is a controlled state fixture; this test establishes
     // withdrawal and actual dispatch, not promotion from empirical feedback.
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register("local", definition("coding", "candidate"))
@@ -120,9 +130,10 @@ async fn operator_restore_changes_actual_dispatch_for_existing_and_new_sessions_
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn assembled_requests_apply_sticky_arms_and_record_actual_execution_once() -> Result<()> {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register("local", definition("coding", "candidate"))
@@ -200,9 +211,10 @@ async fn assembled_requests_apply_sticky_arms_and_record_actual_execution_once()
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn named_candidate_keeps_router_defaults_and_tool_safety_selection() -> Result<()> {
-    let fixture = fixture(true).await?;
+    let fixture = bro_fixture(true).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register(
@@ -302,9 +314,10 @@ async fn fallback_cost_is_unknown_even_when_the_final_attempt_was_priced() -> Re
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn dependency_scope_ignores_unrelated_routes_but_dispatch_fences_aba_reload() -> Result<()> {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     let definition = definition("coding", "candidate");
     runtime.register("local", definition.clone()).await?;
@@ -422,6 +435,7 @@ async fn canonical_binding_requires_authenticated_scope_and_unambiguous_recorded
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 fn binding_hook(
     fixture: &Fixture,
 ) -> crate::gateway::observability::binding::CanonicalRequestBinding {
@@ -432,6 +446,7 @@ fn binding_hook(
     )
 }
 
+#[cfg(feature = "harness")]
 fn block_hook(fixture: &Fixture) -> crate::gateway::routing::blocks::runtime::BlockPolicyRouter {
     crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
         fixture.assembled.db.clone(),

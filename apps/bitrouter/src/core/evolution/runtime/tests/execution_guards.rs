@@ -1,10 +1,11 @@
 use super::*;
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn binding_retains_the_learning_snapshot_when_reload_precedes_record_creation() -> Result<()>
 {
     for reload_policy in [false, true] {
-        let fixture = fixture(false).await?;
+        let fixture = bro_fixture(false).await?;
         let runtime = &fixture.assembled.evolution;
         runtime
             .register("local", definition("coding", "candidate"))
@@ -60,9 +61,10 @@ async fn binding_retains_the_learning_snapshot_when_reload_precedes_record_creat
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn request_capability_guard_records_the_original_intent_and_actual_fallback() -> Result<()> {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let mut config = fixture.assembled.routing_table.snapshot_config();
     let provider = config
         .providers
@@ -123,10 +125,11 @@ async fn request_capability_guard_records_the_original_intent_and_actual_fallbac
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[tokio::test]
 async fn mode_changes_fence_a_prepared_request_and_session_overrides_keep_precedence() -> Result<()>
 {
-    let fixture = fixture(false).await?;
+    let fixture = bro_fixture(false).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
         .register("local", definition("coding", "candidate"))
