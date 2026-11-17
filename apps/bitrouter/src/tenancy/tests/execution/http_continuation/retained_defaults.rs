@@ -162,7 +162,7 @@ async fn warm_candidate_cache_rechecks_resealed_defaults_without_fencing() -> Re
     use bitrouter_ai::tenancy::ordered::GenerationProtocol;
 
     for field in ["previous_response_id", "conversation"] {
-        let mut provider = Server::start().await?;
+        let provider = Server::start().await?;
         let ready = ready(&provider).await?;
         let checked: Result<()> = async {
             let authority = ready.fixture.service.current().map_err(failure)?.revision;
