@@ -4465,7 +4465,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_rejects_settlement_before_intent_without_persisting() -> anyhow::Result<()> {
+    async fn store_rejects_settlement_of_unstarted_request_without_persisting() -> anyhow::Result<()>
+    {
         let store = store().await?;
         store
             .begin_request("owner-a", begin("episode-1", "request-1"))
@@ -4475,7 +4476,7 @@ mod tests {
             store
                 .settle_request(
                     "owner-a",
-                    settlement_at("episode-1", "request-1", 2, "event-settle-1")
+                    settlement_at("episode-1", "unstarted-request", 2, "event-settle-1")
                 )
                 .await
                 .is_err()

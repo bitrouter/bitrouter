@@ -502,6 +502,9 @@ mod tests {
 
         let mut corrupt = prefix.clone();
         corrupt[0].content_digest = canonical_digest(&"different-content")?;
+        let mut unrelated_start = prefix[0].clone();
+        unrelated_start.request_id = Some("request-2".into());
+        unrelated_start.content_digest = unrelated_start.semantic_digest()?;
         for (events, sequence, timestamp, expected_error) in [
             (current, 5, "2026-08-01T00:00:01Z", "settles more than once"),
             (
@@ -517,10 +520,10 @@ mod tests {
                 "timestamps regress",
             ),
             (
-                prefix[..1].to_vec(),
+                vec![unrelated_start],
                 2,
                 "2026-08-01T00:00:01Z",
-                "settles before route intent",
+                "settlement references unknown request",
             ),
             (
                 corrupt,
