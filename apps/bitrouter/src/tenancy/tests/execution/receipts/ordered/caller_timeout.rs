@@ -115,7 +115,7 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
     }));
     timeout(Duration::from_secs(2), gate.entered.notified()).await?;
     // The Beginning gate precedes the counter increment, so this baseline also
-    // excludes the held management command's eventual SQL BEGIN.
+    // excludes both the held management command's read and write BEGINs.
     let before = service.cleanup.sql_counts_for_test();
     let before_queue = service.commands.capacity();
     let start = Instant::now();
@@ -228,9 +228,10 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
             .0
             == 0
     );
+    let after = service.cleanup.sql_counts_for_test();
     ensure!(
-        service.cleanup.sql_counts_for_test().0 == before.0 + 3,
-        "expected held management, one intent, and one terminal cleanup BEGIN"
+        after.0 == before.0 + 4,
+        "expected management read/write, one intent, and one terminal cleanup BEGIN; before={before:?}, after={after:?}"
     );
     ensure!(
         service.admission.receipts_ready() && service.current().is_ok() && h.observed()?.is_empty()
