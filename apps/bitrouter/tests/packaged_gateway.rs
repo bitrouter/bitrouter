@@ -821,6 +821,7 @@ async fn shipped_coding_template_starts_and_submits_its_cli_output_through_servi
 
 #[cfg(unix)]
 async fn shipped_template_service_case(name: &str) -> Result<()> {
+    use base64::Engine;
     use bitrouter_ai::{
         policy::Document,
         tenancy::{
@@ -837,6 +838,7 @@ async fn shipped_template_service_case(name: &str) -> Result<()> {
     let home = tempfile::tempdir()?;
     let logs = tempfile::tempdir()?;
     let token = format!("template-operator-{}", uuid::Uuid::new_v4());
+    let wrapping_key = base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 32]>());
     let inference = TcpListener::bind("127.0.0.1:0")?;
     let control = TcpListener::bind("127.0.0.1:0")?;
     let inference_address = inference.local_addr()?;
@@ -884,7 +886,7 @@ async fn shipped_template_service_case(name: &str) -> Result<()> {
             include_str!("../../../templates/auto-router/policy.yaml"),
         )?;
     }
-    std::fs::write(&config_path, serde_json::to_vec_pretty(&config)?)?;
+    std::fs::write(&config_path, serde_saphyr::to_string(&config)?)?;
     if name == "coding" {
         let mut init = OwnedChild::spawn(
             host_command(binary, home.path(), &token)
@@ -903,7 +905,9 @@ async fn shipped_template_service_case(name: &str) -> Result<()> {
             logs.path(),
             "template-init",
         )?;
-        init.success(Duration::from_secs(15)).await?;
+        init.success(Duration::from_secs(15))
+            .await
+            .context("coding template policy init")?;
     }
     let mut check = OwnedChild::spawn(
         host_command(binary, home.path(), &token)
@@ -928,10 +932,7 @@ async fn shipped_template_service_case(name: &str) -> Result<()> {
     drop((inference, control));
     let mut child = OwnedChild::spawn(
         host_command(binary, home.path(), &token)
-            .env(
-                "BITROUTER_TEMPLATE_WRAP",
-                "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
-            )
+            .env("BITROUTER_TEMPLATE_WRAP", wrapping_key)
             .args(["serve", "--config"])
             .arg(&config_path),
         logs.path(),
