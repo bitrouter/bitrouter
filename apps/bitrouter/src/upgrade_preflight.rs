@@ -263,36 +263,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_column_fails_on_snapshot_before_live_migration() -> Result<()> {
+    async fn current_schema_conflict_fails_on_snapshot_without_changing_live_database() -> Result<()>
+    {
         let home = tempfile::tempdir()?;
         let source = ConfigSource::Default {
             home: home.path().to_path_buf(),
         };
         let path = home.path().join("bitrouter.db");
         let db = crate::db::connect(&format!("sqlite://{}?mode=rwc", path.display())).await?;
-        let before_router_identity = u32::try_from(
-            Migrator::migrations()
-                .iter()
-                .position(|migration| {
-                    migration.name() == "m20240101_000021_add_router_request_identity"
-                })
-                .context("router identity migration is missing")?,
-        )?;
-        Migrator::up(&db, Some(before_router_identity)).await?;
+        crate::db::run_migrations(&db).await?;
+        // The sole current marker is valid, but its current authority catalog
+        // is damaged. Detect this on the candidate's private copy, without
+        // treating a retired migration as a repair program for the live file.
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "ALTER TABLE requests ADD COLUMN router_id TEXT".to_string(),
+            "ALTER TABLE tenancy_resource_lifecycle ADD COLUMN unexpected_current_column TEXT"
+                .to_string(),
+        ))
+        .await?;
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO users(id,created_at) VALUES ('preflight-sentinel','2026-11-18T00:00:00Z')"
+                .to_string(),
         ))
         .await?;
         let prior = applied(&db).await?;
         db.close().await?;
+        let original = std::fs::read(&path)?;
         let error = Preflight::check(&source)
             .await
             .err()
             .context("preflight accepted a conflicting schema")?;
-        assert!(format!("{error:#}").contains("duplicate column name: router_id"));
+        let detail = format!("{error:#}");
+        assert!(
+            detail.contains("snapshot migration preflight failed"),
+            "{detail}"
+        );
+        assert!(
+            detail.contains("incompatible current authority schema"),
+            "{detail}"
+        );
+        assert_eq!(std::fs::read(&path)?, original);
         let live = read_only(&path).await?;
         assert_eq!(applied(&live).await?, prior);
+        assert!(
+            live.query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT id FROM users WHERE id='preflight-sentinel'".to_string()
+            ))
+            .await?
+            .is_some()
+        );
+        assert!(live.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT name FROM pragma_table_info('tenancy_resource_lifecycle') WHERE name='unexpected_current_column'".to_string())).await?.is_some());
+        live.close().await?;
+        assert_eq!(std::fs::read(&path)?, original);
         Ok(())
     }
 

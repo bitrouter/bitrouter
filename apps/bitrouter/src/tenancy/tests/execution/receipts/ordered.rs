@@ -392,7 +392,7 @@ impl OrderedHarness {
             route_definition["definition"]["attachments"] = json!(attachments);
         }
         edit(&mut definitions)?;
-        // A retained route PolicyLock must match the configuration policy before
+        // A retained route's model Policy must match the configuration policy before
         // an ordered request can reach its capability refusal boundary.
         let policy = serde_json::from_value(
             definitions
@@ -404,7 +404,11 @@ impl OrderedHarness {
         // Import prerequisites before the route without exceeding one import's
         // 256-resource limit. The tested route itself still retains all ordinals.
         definitions.sort_by_key(|entry| entry["reference"]["resource_kind"] == "route");
-        let import_format = if definitions
+        let import_format = if definitions.iter().any(|entry| {
+            entry["definition"]["kind"] == "policy" || !entry["definition"]["policy"].is_null()
+        }) {
+            4
+        } else if definitions
             .iter()
             .any(|entry| entry["definition"]["kind"] == "admission_profile_v2")
         {

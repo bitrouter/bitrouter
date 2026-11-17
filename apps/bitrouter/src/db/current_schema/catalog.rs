@@ -1,6 +1,6 @@
 //! Backend catalogs. Every query is bounded and read-only.
-//! https://www.postgresql.org/docs/current/catalog-pg-index.html
-//! https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html
+//! <https://www.postgresql.org/docs/current/catalog-pg-index.html>
+//! <https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html>
 use sea_orm::DatabaseBackend;
 
 pub(super) fn tables(backend: DatabaseBackend) -> &'static str {

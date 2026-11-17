@@ -18,7 +18,6 @@ pub(in crate::tenancy) mod admission;
 pub(crate) mod block;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod bro;
-mod checkpoint;
 mod compiler;
 mod core_choice;
 pub(crate) mod execution;
@@ -109,10 +108,10 @@ impl Envelope {
     }
 
     fn format(artifacts: &[Artifact]) -> u32 {
-        if artifacts.iter().any(|artifact| {
-            artifact.definition.requires_envelope_v2()
-                || matches!(artifact.definition, Definition::Checkpoint { .. })
-        }) {
+        if artifacts
+            .iter()
+            .any(|artifact| artifact.definition.requires_envelope_v2())
+        {
             return 8;
         }
         if artifacts

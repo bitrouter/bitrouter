@@ -37,9 +37,6 @@ enum SourceDefinition {
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
     },
-    Checkpoint {
-        evidence: super::super::checkpoint::Evidence,
-    },
     Credential {
         credential: Credential,
         #[serde(default)]

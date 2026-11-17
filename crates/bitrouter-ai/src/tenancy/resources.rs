@@ -346,12 +346,9 @@ impl Validate for Definition {
                 require(document.policies.contains_key(name), "policy name")?;
                 unique(dependencies, 0, 256)?;
                 require(
-                    dependencies.iter().all(|r| {
-                        matches!(
-                            r.resource_kind,
-                            ResourceKind::Credential | ResourceKind::Checkpoint
-                        )
-                    }),
+                    dependencies
+                        .iter()
+                        .all(|r| matches!(r.resource_kind, ResourceKind::Credential)),
                     "policy dependency kind",
                 )
             }

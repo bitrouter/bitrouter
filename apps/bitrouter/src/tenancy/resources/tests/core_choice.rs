@@ -199,7 +199,7 @@ async fn choice_child_cannot_be_exposed_and_minimal_profile_cannot_execute_it() 
 
 #[cfg(all(feature = "core", feature = "harness"))]
 #[tokio::test]
-async fn mixed_profiled_format_keeps_hidden_choice_projection_and_legacy_root() -> Result<()> {
+async fn current_bro_format_keeps_hidden_choice_projection_and_profiled_root() -> Result<()> {
     use bitrouter_ai::types::{ApiProtocol, ModelOperation};
     let (db, _) = fixture().await?;
     let authority = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
@@ -221,7 +221,10 @@ async fn mixed_profiled_format_keeps_hidden_choice_projection_and_legacy_root() 
         None,
     )?;
     let compiled = compile(&resources, &db, &doc).await?;
-    ensure!(compiled.compiler_version == PROFILED_COMPILER_VERSION);
+    ensure!(compiled.compiler_version == BRO_OBLIGATION_COMPILER_VERSION);
+    let envelope = decrypt(&resources, &doc, &compiled)?;
+    ensure!(envelope.format == 8);
+    envelope.validate_format()?;
     let row = validation::stored(doc, compiled)?;
     let view = resources
         .open_execution(&row)

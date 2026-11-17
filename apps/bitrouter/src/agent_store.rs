@@ -1853,72 +1853,68 @@ mod discovery_tests {
     }
 
     #[tokio::test]
-    async fn migration_and_owner_transfer_cover_roots_from_older_writers() -> anyhow::Result<()> {
+    async fn owner_transfer_discovers_independent_bro_roots_from_older_writers()
+    -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let migrations = crate::db::migration::Migrator::migrations();
-        let position = migrations
-            .iter()
-            .position(|migration| migration.name() == "m20240101_000025_create_bro_execution_index")
-            .ok_or_else(|| anyhow::anyhow!("index migration missing"))?;
-        crate::db::migration::Migrator::up(&db, Some(u32::try_from(position)?)).await?;
-        // Emulate the pre-format writer without referencing the new column.
+        crate::db::run_migrations(&db).await?;
+        let store = DatabaseExecutionStore::new(db.clone());
+        let OwnerClaim::Acquired { owner: older } = store
+            .claim_owner("older")
+            .await
+            .map_err(anyhow::Error::msg)?
+        else {
+            anyhow::bail!("missing original BRO owner");
+        };
+        // Independent BRO root discovery still recognizes an older cooperating
+        // writer. The database itself already has the current baseline. Format
+        // zero remains discoverable metadata, never permission to decode/run it.
         let insert = sea_orm::sea_query::Query::insert()
             .into_table(execution::Entity)
             .columns([execution::Column::Id, execution::Column::Version])
-            .values(["before-migration".into(), 1_i64.into()])?
+            .values(["before-index".into(), 1_i64.into()])?
             .to_owned();
         db.execute(db.get_database_backend().build(&insert)).await?;
-        crate::db::migration::Migrator::up(&db, None).await?;
-        let old_root = execution::Entity::find_by_id("before-migration")
-            .one(&db)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("old root missing"))?;
-        assert_eq!(old_root.format_version, 0);
-        let store = DatabaseExecutionStore::new(db.clone());
+        assert!(
+            store
+                .read_index(0, None, 128, 4096)
+                .await
+                .map_err(anyhow::Error::msg)?
+                .entries
+                .is_empty()
+        );
+        assert!(
+            matches!(store.claim_owner("older").await.map_err(anyhow::Error::msg)?, OwnerClaim::Acquired { owner } if owner == older)
+        );
         let page = store
             .read_index(0, None, 128, 4096)
             .await
             .map_err(anyhow::Error::msg)?;
         assert_eq!(page.entries.len(), 1);
-        assert_eq!(page.entries[0].execution_id, "before-migration");
-        // Set up a clean owner proof, then emulate an old writer that knows the
-        // root table and owner fence but predates the new discovery index.
-        runtime_ownership::Entity::update_many()
-            .col_expr(
-                runtime_ownership::Column::Generation,
-                sea_orm::sea_query::Expr::value(1_i64),
-            )
-            .col_expr(
-                runtime_ownership::Column::ServerInstanceId,
-                sea_orm::sea_query::Expr::value("older"),
-            )
-            .col_expr(
-                runtime_ownership::Column::StoppedAtMs,
-                sea_orm::sea_query::Expr::value(1_i64),
-            )
-            .exec(&db)
-            .await?;
-        runtime_owner::ActiveModel {
-            generation: Set(1),
-            server_instance_id: Set("older".into()),
-            stopped_at_ms: Set(Some(1)),
-        }
-        .insert(&db)
-        .await?;
+        assert_eq!(page.entries[0].execution_id, "before-index");
+        assert_eq!(page.entries[0].format_version, 0);
         execution::ActiveModel {
             format_version: Set(0),
-            id: Set("after-migration".into()),
+            id: Set("before-transfer".into()),
             version: Set(1),
         }
         .insert(&db)
         .await?;
-        assert!(matches!(
+        let stopped = store.stop_owner(&older).await.map_err(anyhow::Error::msg)?;
+        let OwnerClaim::Acquired { owner: newer } = store
+            .claim_owner("newer")
+            .await
+            .map_err(anyhow::Error::msg)?
+        else {
+            anyhow::bail!("stopped BRO owner did not transfer");
+        };
+        assert_eq!(newer.generation, older.generation + 1);
+        assert_eq!(
             store
-                .claim_owner("newer")
+                .read_owner("older")
                 .await
                 .map_err(anyhow::Error::msg)?,
-            OwnerClaim::Acquired { .. }
-        ));
+            Some(stopped)
+        );
         let all = store
             .read_index(0, None, 128, 4096)
             .await
@@ -1928,8 +1924,16 @@ mod discovery_tests {
         assert!(
             all.entries
                 .iter()
-                .any(|entry| entry.execution_id == "after-migration")
+                .any(|entry| entry.execution_id == "before-transfer" && entry.format_version == 0)
         );
+        for id in ["before-index", "before-transfer"] {
+            let root = execution::Entity::find_by_id(id)
+                .one(&db)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("independent BRO root disappeared"))?;
+            assert_eq!(root.format_version, 0);
+            assert_eq!(root.version, 1);
+        }
         Ok(())
     }
     #[tokio::test]

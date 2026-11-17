@@ -201,11 +201,14 @@ async fn assembled_requests_apply_sticky_arms_and_record_actual_execution_once()
 }
 
 #[tokio::test]
-async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Result<()> {
+async fn named_candidate_keeps_router_defaults_and_tool_safety_selection() -> Result<()> {
     let fixture = fixture(true).await?;
     let runtime = &fixture.assembled.evolution;
     runtime
-        .register("local", definition("@coding", "@candidate"))
+        .register(
+            "local",
+            definition("bitrouter/coding", "bitrouter/candidate"),
+        )
         .await?;
     adopt_fixture(runtime).await?;
     let pipeline = fixture
@@ -215,10 +218,10 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
         .context("pipeline missing")?;
     let plain = session(&fixture, "plain", "fixture").await?;
     pipeline
-        .execute(request(&plain, "plain-request", "@coding")?)
+        .execute(request(&plain, "plain-request", "bitrouter/coding")?)
         .await?;
     let tools = session(&fixture, "tools", "fixture").await?;
-    let mut with_tools = request(&tools, "tool-request", "@coding")?;
+    let mut with_tools = request(&tools, "tool-request", "bitrouter/coding")?;
     with_tools
         .input
         .generation_prompt_mut()
@@ -234,15 +237,15 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
         .received_requests()
         .await
         .context("requests unavailable")?;
+    assert_eq!(requests.len(), 2);
     let plain_body: Value = serde_json::from_slice(&requests[0].body)?;
     let tool_body: Value = serde_json::from_slice(&requests[1].body)?;
     assert_eq!(plain_body["model"], "cheap");
     assert_eq!(tool_body["model"], "strong");
-    assert_eq!(plain_body["temperature"], 0.2);
-    assert_eq!(
-        plain_body["messages"][0]["content"],
-        "Use recorded requirements."
-    );
+    for body in [&plain_body, &tool_body] {
+        assert_eq!(body["temperature"], 0.2);
+        assert_eq!(body["messages"][0]["content"], "Use recorded requirements.");
+    }
     let execution = runtime
         .executions(&tools)
         .await?
@@ -254,7 +257,7 @@ async fn named_candidate_keeps_preset_defaults_and_tool_safety_selection() -> Re
             .as_ref()
             .context("intent missing")?
             .selected_route,
-        "@candidate"
+        "bitrouter/candidate"
     );
     assert_eq!(
         execution

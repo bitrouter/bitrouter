@@ -27,21 +27,35 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
     }
     let catalog = match backend {
         DatabaseBackend::Sqlite => {
-            "SELECT name,type FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
+            "SELECT name,type FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
         }
         DatabaseBackend::Postgres => {
-            "SELECT c.relname AS name,c.relkind::text AS type FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','v','m','f','S') ORDER BY c.relname"
+            "SELECT c.relname AS name,c.relkind::text AS type FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r','p','v','m','f','S')"
         }
         DatabaseBackend::MySql => {
-            "SELECT TABLE_NAME AS name,TABLE_TYPE AS type FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME"
+            "SELECT TABLE_NAME AS name,TABLE_TYPE AS type FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE()"
         }
     };
-    let objects = db
-        .query_all(Statement::from_string(backend, catalog))
-        .await?;
-    if objects.is_empty() {
+    if db
+        .query_one(Statement::from_string(
+            backend,
+            format!("SELECT 1 FROM ({catalog}) AS catalog LIMIT 1"),
+        ))
+        .await?
+        .is_none()
+    {
         return Ok(State::Empty);
     }
+    // Format selection needs six fixed names, not the complete schema inventory.
+    // Bound this working set for borrowed audit readers; full schema validation
+    // remains with the baseline validators. The extra row detects duplicates.
+    let objects = db
+        .query_all(Statement::from_string(
+            backend,
+            format!("SELECT name,type FROM ({catalog}) AS catalog WHERE name IN ('seaql_migrations','tenancy_installation','tenancy_configurations','tenancy_resource_revisions','tenancy_execution_receipts','tenancy_dispatch_intents') ORDER BY name LIMIT 7"),
+        ))
+        .await?;
+    ensure!(objects.len() <= 6, "duplicate store format catalog entries");
     let ledger = objects
         .iter()
         .find(|row| {

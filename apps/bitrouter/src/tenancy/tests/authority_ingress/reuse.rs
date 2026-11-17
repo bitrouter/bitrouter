@@ -32,8 +32,8 @@ async fn unbound_ingress_keeps_its_probe_fallback_but_cannot_clear_a_fence() -> 
 /// Observe actual SQL through the existing driver's callback; count admitted
 /// authority jobs and acknowledged transactions independently. No provider I/O.
 #[tokio::test]
-async fn warm_exact_route_uses_zero_selects_zero_transactions_and_one_authority_job() -> Result<()>
-{
+async fn warm_exact_route_uses_one_content_read_zero_transactions_and_one_authority_job()
+-> Result<()> {
     let queries = Arc::new(AtomicUsize::new(0));
     let ready = Ready::with_queries(false, Some(queries.clone())).await?;
     let service = &ready.fixture.service;
@@ -52,8 +52,8 @@ async fn warm_exact_route_uses_zero_selects_zero_transactions_and_one_authority_
     let before_jobs = service.authority.read_jobs.load(Ordering::Relaxed);
     let warm = ready.execution().await?;
     ensure!(
-        queries.load(Ordering::Relaxed) == before_queries,
-        "warm authority performed SELECT"
+        queries.load(Ordering::Relaxed) == before_queries + 1,
+        "warm configuration content fence must use exactly one bounded SELECT"
     );
     ensure!(
         service.cleanup.sql_counts_for_test() == before_tx,
@@ -63,7 +63,7 @@ async fn warm_exact_route_uses_zero_selects_zero_transactions_and_one_authority_
     // Final authorization remains live even though the facts came from retention.
     first.revalidate().map_err(code)?;
     warm.revalidate().map_err(code)?;
-    eprintln!("warm_authority SELECT=0 BEGIN=0 ROLLBACK=0 JOB=1 (driver/Proof/actor counters)");
+    eprintln!("warm_authority SELECT=1 BEGIN=0 ROLLBACK=0 JOB=1 (driver/Proof/actor counters)");
     let warm_owner = warm.receipt_owner()?.clone();
     tokio::time::timeout(TIMEOUT, warm_owner.finish(Outcome::Failed))
         .await?

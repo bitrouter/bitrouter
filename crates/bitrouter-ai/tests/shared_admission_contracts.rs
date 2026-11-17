@@ -25,11 +25,7 @@ fn shared_health_schemas_are_separate_closed_versioned_contracts() -> TestResult
         assert_eq!(value["additionalProperties"], false);
         let rendered = format!("{}\n", serde_json::to_string_pretty(&schema)?);
         let path = directory.join(name);
-        // Bootstrap only new schema artifacts. Existing compatibility fixtures
-        // cannot be overwritten by this switch.
-        if std::env::var("BITROUTER_WRITE_SHARED_HEALTH_SCHEMAS").as_deref() == Ok("1")
-            && !path.exists()
-        {
+        if std::env::var("BITROUTER_BLESS").as_deref() == Ok("1") {
             std::fs::create_dir_all(&directory)?;
             std::fs::write(&path, &rendered)?;
         }

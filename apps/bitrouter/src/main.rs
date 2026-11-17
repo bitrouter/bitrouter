@@ -1892,8 +1892,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 | Command::Spawn { .. }
         )
     );
-    if matches!(cli.command, Some(Command::Serve { .. })) {
-        // `Command::Serve` defers its init — handled inside `serve()`.
+    if defers_tracing_to_host(cli.command.as_ref()) {
+        // Both host entries install tracing after constructing their exporter.
     } else if is_acp && (cfg!(feature = "harness") || cli.command.is_some()) {
         // Any `acp` subcommand: stderr so stdout stays pristine, plus a
         // per-session file so the substrate's log and the agent child's
@@ -3405,6 +3405,15 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 }
 
 // ===== tracing subscriber init =====
+
+fn defers_tracing_to_host(command: Option<&Command>) -> bool {
+    match command {
+        Some(Command::Serve { .. }) => true,
+        #[cfg(all(feature = "core", feature = "harness"))]
+        Some(Command::HarnessHost { .. }) => true,
+        _ => false,
+    }
+}
 
 /// Install a basic fmt-only tracing subscriber. Used for every command
 /// except `serve` and the `acp` subcommands — see
@@ -5698,6 +5707,7 @@ mod tests {
                 "owned.yaml",
                 "--managed-child",
             ])?;
+            assert!(defers_tracing_to_host(cli.command.as_ref()));
             assert!(matches!(cli.command, Some(Command::HarnessHost {
                     config: Some(path), managed_child: true,
                 }) if path == Path::new("owned.yaml")));
@@ -5709,6 +5719,7 @@ mod tests {
         }
         let serve =
             Cli::try_parse_from(["bro", "serve", "--config", "owned.yaml", "--managed-child"])?;
+        assert!(defers_tracing_to_host(serve.command.as_ref()));
         assert!(matches!(serve.command, Some(Command::Serve {
                 config: Some(path), managed_child: true,
             }) if path == Path::new("owned.yaml")));

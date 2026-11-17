@@ -3,20 +3,21 @@ use super::*;
 const V1: &str = r#"{"version":1,"job":"job","session":"session","configuration":"configuration","route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"judge","revision_id":"r1"},"checkpoint":"checkpoint","prefix_digest":"prefix","input_digest":"input","expected_revision":null,"execution":"execution","status":"failed","accepted_at":"2026-10-26T00:00:00Z","output":null,"assessment":null}"#;
 
 #[test]
-fn terminal_v1_keeps_its_original_bytes_but_unreserved_acceptance_is_not_adopted() -> Result<()> {
+fn retired_v1_and_unreserved_records_cannot_become_current_obligations() -> Result<()> {
     let mut value: Record = serde_json::from_str(V1)?;
-    ensure!(valid_record(&value));
-    ensure!(
-        io::json(&value, RECORD_BYTES)? == V1,
-        "the optional new field changed terminal v1 encoding"
-    );
+    ensure!(!valid_record(&value), "retired terminal v1 was accepted");
     value.status = Status::Accepted;
     ensure!(
         !valid_record(&value),
         "unreserved v1 acceptance became a v2 obligation"
     );
-    value.version = 3;
-    ensure!(!valid_record(&value), "future recovery format was guessed");
+    for version in [2, 3, 4] {
+        value.version = version;
+        ensure!(
+            !valid_record(&value),
+            "an unreserved record acquired current recovery authority"
+        );
+    }
     Ok(())
 }
 

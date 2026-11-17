@@ -32,8 +32,6 @@ pub enum ResourceKind {
     Policy,
     /// An upstream credential slot.
     Credential,
-    /// A learned policy checkpoint.
-    Checkpoint,
     /// A framework configuration.
     Configuration,
     /// An execution record.

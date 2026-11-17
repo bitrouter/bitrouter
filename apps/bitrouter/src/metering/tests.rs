@@ -1232,19 +1232,12 @@ async fn spend_isolates_by_api_key() -> Result<()> {
     Ok(())
 }
 
-/// Regression for the OSS-refactor column rename: a database that
-/// was created by the pre-refactor code has `final_charge_micro_usd`.
-/// After `migrate()` runs on it, the column is renamed in place and
-/// the new recorder writes work end-to-end.
+/// Old metering stores are refused without renaming or rewriting money fields.
 #[tokio::test]
-async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
-    let pool = db::connect("sqlite::memory:").await.unwrap();
-    // Stand up the pre-refactor schema (final_charge_micro_usd, no
-    // cache_read/write columns — the renamer only handles the legacy
-    // column; missing columns elsewhere would require a full v2
-    // migration which v1.0 doesn't ship). Raw DDL is used here only to
-    // fabricate a *pre-migration* database; production schema is all
-    // sea-orm migration code.
+async fn old_metering_store_is_refused_without_mutation_and_current_baseline_records_spend()
+-> anyhow::Result<()> {
+    use anyhow::Context;
+    let pool = db::connect("sqlite::memory:").await?;
     pool.execute(Statement::from_string(
         DatabaseBackend::Sqlite,
         "CREATE TABLE requests (\
@@ -1266,10 +1259,9 @@ async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
             created_at                      TEXT NOT NULL\
          )",
     ))
-    .await
-    .unwrap();
+    .await?;
 
-    // Seed one row using the legacy column.
+    // A rejection fixture retains the original integer money field.
     pool.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO requests VALUES (\
@@ -1277,20 +1269,62 @@ async fn migrate_renames_legacy_final_charge_column() -> Result<()> {
          )",
         [chrono::Utc::now().to_rfc3339().into()],
     ))
-    .await
-    .unwrap();
+    .await?;
 
-    // Run the migrations — migration 3 should detect the legacy column and
-    // rename it in place without losing the row.
-    db::run_migrations(&pool).await?;
-
-    // Verify the row is reachable through the new column name.
-    let store = MeteringStore::new(pool);
-    let spend = store.get_spend("k", TimeWindow::ThisMonth).await?;
-    assert_eq!(spend, 42, "legacy row's spend is preserved across rename");
+    let before = pool
+        .query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name",
+        ))
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String>("", "type")?,
+                row.try_get::<String>("", "name")?,
+                row.try_get::<String>("", "tbl_name")?,
+                row.try_get::<Option<String>>("", "sql")?,
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    for _ in 0..2 {
+        assert!(db::run_migrations(&pool).await.is_err());
+        let after = pool
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name",
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<String>("", "type")?,
+                    row.try_get::<String>("", "name")?,
+                    row.try_get::<String>("", "tbl_name")?,
+                    row.try_get::<Option<String>>("", "sql")?,
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        assert_eq!(after, before);
+        let row = pool.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT final_charge_micro_usd,prompt_tokens,completion_tokens FROM requests WHERE request_id='r-legacy'")).await?.context("original money row disappeared")?;
+        assert_eq!(row.try_get::<i64>("", "final_charge_micro_usd")?, 42);
+        assert_eq!(row.try_get::<i64>("", "prompt_tokens")?, 1);
+        assert_eq!(row.try_get::<i64>("", "completion_tokens")?, 2);
+    }
+    pool.close().await?;
+    let current = db::connect("sqlite::memory:").await?;
+    db::run_migrations(&current).await?;
+    let store = MeteringStore::new(current.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    recorder.record(&mut ctx("current", 10, 5)).await?;
+    assert_eq!(store.get_spend("current", TimeWindow::ThisMonth).await?, 70);
+    db::run_migrations(&current).await?;
+    assert_eq!(store.get_spend("current", TimeWindow::ThisMonth).await?, 70);
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::LegacyUnknown);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].final_charge_micro_usd, Some(70));
+    current.close().await?;
     Ok(())
 }
 

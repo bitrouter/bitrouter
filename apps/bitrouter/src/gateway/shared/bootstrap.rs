@@ -98,10 +98,10 @@ mod tests {
             .err()
             .context("accepted oversized plan")?;
         ensure!(error.to_string() == "bootstrap plan exceeds 2 MiB");
-        let valid = br#"{"configuration":{"format":1,"routing":{},"policies":[],"policy_lock":null,"credentials":[],"require_known_pricing":false}}"#;
+        let valid = br#"{"configuration":{"format":2,"routing":{},"model_policy":null,"credentials":[],"require_known_pricing":false}}"#;
         let mut boundary = valid.to_vec();
         boundary.resize(MAX_PLAN_BYTES as usize, b' ');
-        ensure!(read_plan(&boundary[..]).await?.configuration.format == 1);
+        ensure!(read_plan(&boundary[..]).await?.configuration.format == 2);
         Ok(())
     }
 

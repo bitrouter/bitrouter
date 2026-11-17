@@ -593,7 +593,7 @@ fn remote_response(scenario: RemoteScenario, request: &RemoteRequest) -> (u16, &
     match (request.method.as_str(), target) {
         ("GET", "/control/v1/capabilities") => (
             200,
-            r#"{"protocol":"bitrouter-control","protocol_version":1,"server_version":"REMOTE_A12_CAPABILITIES","actions":["status","models","route_preview","requests"]}"#,
+            r#"{"protocol":"bitrouter-control","protocol_version":2,"server_version":"REMOTE_A12_CAPABILITIES","server_instance_id":"47da0290-4510-4f39-ab53-a0b09ba707c2","scopes":["control:read"],"action_descriptors":{"status":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}},"list_models":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"route":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"requests":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}}}}"#,
         ),
         ("GET", "/control/v1/status") => (
             200,

@@ -246,11 +246,16 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
     server.wire().await?;
     let (crypto, original) = retained(&ready, &public).await?;
     ready.fixture.service.shutdown().await?;
-    ready
-        .fixture
-        .db
+    // Model catalog source loss without leaving orphan lifecycle metadata.
+    // The retained configuration, continuation row and epoch remain unchanged.
+    let transaction = ready.fixture.db.begin().await?;
+    transaction
+        .execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
+        .await?;
+    transaction
         .execute_unprepared("DELETE FROM tenancy_resource_revisions")
         .await?;
+    transaction.commit().await?;
     let initial = crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?;
     let import = serde_json::to_vec(
         &json!({"format":1,"installation_id":ready.fixture.installation,"resources":[{

@@ -69,12 +69,17 @@ async fn warm_admission_and_terminal_have_separate_sql_proof_and_volume_observat
         let warm = ready.execution().await?;
         let sql_admitted = statements.snapshot();
         let probes_admitted = service.admission.volume_probes_for_test().map_err(code)?;
-        ensure!(sql_admitted == sql_before, "warm admission performed SQL");
+        let mut expected_admission = sql_before;
+        expected_admission[0] += 1;
+        ensure!(
+            sql_admitted == expected_admission,
+            "warm admission must perform only its bounded configuration content read: {sql_before:?} -> {sql_admitted:?}"
+        );
         ensure!(service.cleanup.sql_counts_for_test() == proof_before);
         ensure!(service.authority.read_jobs.load(Ordering::Relaxed) == jobs_before + 1);
         ensure!(probes_admitted.0 > probes_before.0 && probes_admitted.1 == probes_before.1);
         eprintln!(
-            "warm_cost phase=admission SQL=0 BEGIN=0 ROLLBACK=0 AUTHORITY_JOB=1 bound_volume_refreshes={} probe_errors=0",
+            "warm_cost phase=admission SQL_SELECT=1 BEGIN=0 ROLLBACK=0 AUTHORITY_JOB=1 bound_volume_refreshes={} probe_errors=0",
             probes_admitted.0 - probes_before.0,
         );
 

@@ -582,6 +582,12 @@ head; otherwise it MUST equal that head. The service assigns a new immutable
 revision. Rotation MUST NOT rewrite old definitions or retarget configurations
 that selected them. A manifest-only resource has no managed head; a managed
 create of the same key leaves its existing manifest revisions unchanged.
+Resource kinds are `route`, `policy`, `credential`, `configuration` and
+`execution`. The retired learned-policy `checkpoint` resource/evidence envelope
+is unsupported. ACP and managed execution checkpoint messages retain their
+independent contracts. Model Policy resource dependencies accept credentials;
+they cannot import experimental learning evidence.
+
 Resource identity includes owner kind, owner ID, resource kind and resource ID;
 an exact reference additionally includes revision ID. Authority revision and
 content revision are distinct and MUST NOT be substituted for each other.

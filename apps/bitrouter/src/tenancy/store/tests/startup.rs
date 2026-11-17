@@ -175,7 +175,7 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
     capacity(loader::load_header_in(&db, Budget { rows: 1, bytes: 1 }).await)?;
     sql(
         &db,
-        "UPDATE tenancy_installation SET schema_version=2,operation_ids=4294967296, safety_operation_ids=2147483648",
+        "UPDATE tenancy_installation SET schema_version=5,operation_ids=4294967296, safety_operation_ids=2147483648",
     )
     .await?;
     let loaded = loader::read_header_in(&db, ROW_BYTES)
@@ -194,7 +194,7 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
     assert!(loader::load_header_in(&db, budget(3)).await.is_err());
     sql(
         &db,
-        "UPDATE tenancy_installation SET schema_version=1,created_at=zeroblob(1000000)",
+        "UPDATE tenancy_installation SET schema_version=5,created_at=zeroblob(1000000)",
     )
     .await?;
     let error = loader::read_header_in(&db, bytes)
@@ -206,23 +206,55 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
 }
 
 #[tokio::test]
-async fn v1_header_enforces_historical_counts_and_missing_latch_only() -> Result<()> {
+async fn current_header_preserves_counts_and_stop_latch_and_refuses_v1() -> Result<()> {
     let db = database().await?;
     seed(&db).await?;
-    for (ordinary, safety, saturated, valid) in [
-        (99_487, 511, false, true),
-        (99_488, 512, true, true),
-        (99_488, 512, false, false),
-        (99_489, 512, true, false),
-        (99_487, 513, true, false),
-        // A different stop cause remains readable but cannot qualify for reset.
-        (1, 0, true, true),
+    sql(&db, "UPDATE tenancy_installation SET schema_version=1,operation_ids=99487,safety_operation_ids=511,saturated=0").await?;
+    assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
+    let row = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT schema_version,operation_ids,safety_operation_ids,saturated FROM tenancy_installation")).await?.context("old rejection fixture disappeared")?;
+    assert_eq!(row.try_get::<i32>("", "schema_version")?, 1);
+    assert_eq!(row.try_get::<i64>("", "operation_ids")?, 99487);
+    assert_eq!(row.try_get::<i64>("", "safety_operation_ids")?, 511);
+    assert!(!row.try_get::<bool>("", "saturated")?);
+    sql(&db, "UPDATE tenancy_installation SET schema_version=5").await?;
+    // Current counters have no historical fixed-capacity ceiling. The header
+    // preserves both counters and every existing stop cause exactly.
+    for (ordinary, safety, saturated) in [
+        (99_487_u64, 511_u64, false),
+        (99_488, 512, true),
+        (99_488, 512, false),
+        (99_489, 513, true),
+        (4_294_967_296, 2_147_483_648, false),
     ] {
         sql(&db, &format!("UPDATE tenancy_installation SET operation_ids={ordinary},safety_operation_ids={safety},saturated={}", i32::from(saturated))).await?;
-        assert_eq!(loader::read_header_in(&db, ROW_BYTES).await.is_ok(), valid);
+        let loaded = loader::read_header_in(&db, ROW_BYTES)
+            .await?
+            .context("current header")?;
+        assert_eq!(loaded.format, Format::V5);
+        assert_eq!(loaded.header.operation_ids, ordinary);
+        assert_eq!(loaded.header.safety_operation_ids, safety);
+        assert_eq!(loaded.header.saturated, saturated);
+        // The full reader still rejects counters that differ from actual rows.
+        assert!(loader::load_header_in(&db, budget(3)).await.is_err());
     }
-    sql(&db, "UPDATE tenancy_installation SET schema_version=2,operation_ids=100001,safety_operation_ids=513,saturated=0").await?;
-    assert!(loader::read_header_in(&db, ROW_BYTES).await?.is_some());
+    for saturated in [false, true] {
+        sql(&db, &format!("UPDATE tenancy_installation SET operation_ids=1,safety_operation_ids=0,saturated={}", i32::from(saturated))).await?;
+        let loaded = loader::load_header_in(&db, budget(3))
+            .await?
+            .context("current count proof")?;
+        assert_eq!(loaded.header.operation_ids, 1);
+        assert_eq!(loaded.header.safety_operation_ids, 0);
+        assert_eq!(loaded.header.saturated, saturated);
+    }
+    for invalid in [
+        "UPDATE tenancy_installation SET operation_ids=-1",
+        "UPDATE tenancy_installation SET operation_ids=1,safety_operation_ids=-1",
+        "UPDATE tenancy_installation SET safety_operation_ids=0,saturated=2",
+    ] {
+        sql(&db, invalid).await?;
+        assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
+    }
     Ok(())
 }
 

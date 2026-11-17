@@ -896,7 +896,6 @@ async fn charged_lookup_preserves_logical_callbacks_and_refusal() -> Result<()> 
             .map(|s| s.len())
             .sum::<usize>();
         let mut expected = vec![
-            (1, 256),
             (0, 0),
             (1, 256),
             (1, bytes * 3),

@@ -67,8 +67,10 @@ async fn bundle(home: &Path) -> Result<(PathBuf, String)> {
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
     crate::db::run_migrations(&db).await?;
-    db.execute(Statement::from_string(DatabaseBackend::Sqlite,
-        "INSERT INTO tenancy_installation(singleton,schema_version,installation_id,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,2,'audit-budget',0,0,0,0,'2026-01-01T00:00:00Z')"
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO tenancy_installation(singleton,schema_version,installation_id,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,'audit-budget',0,0,0,0,'2026-01-01T00:00:00Z')",
+        [crate::tenancy::AUTHORITY_SCHEMA_VERSION.into()],
     )).await?;
     db.close().await?;
     drop(owner);

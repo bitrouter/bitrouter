@@ -39,7 +39,6 @@
             "route",
             "policy",
             "credential",
-            "checkpoint",
             "configuration",
             "execution"
           ]
@@ -1513,7 +1512,6 @@
             "route",
             "policy",
             "credential",
-            "checkpoint",
             "configuration",
             "execution"
           ]

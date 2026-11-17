@@ -100,8 +100,9 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
         .await
         .map_err(failure)?;
 
-    // The unrelated management transaction has a longer deadline than the caller.
-    let gate = service.cleanup.hold(Phase::Committing);
+    // Hold the authority actor before acquiring SQL. The caller must finish its
+    // bounded content read, then queue an intent behind this unrelated command.
+    let gate = service.cleanup.hold(Phase::Beginning);
     let _release = ReleaseGate(service.cleanup.clone());
     let blocking_service = service.clone();
     let operator = h.fixture.operator.clone();

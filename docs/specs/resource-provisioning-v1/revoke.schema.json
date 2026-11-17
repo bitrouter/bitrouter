@@ -69,7 +69,6 @@
             "route",
             "policy",
             "credential",
-            "checkpoint",
             "configuration",
             "execution"
           ]

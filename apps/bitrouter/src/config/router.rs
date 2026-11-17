@@ -120,7 +120,7 @@ pub enum RouterSelection {
     },
     /// Let one existing policy choose the effective model.
     Policy {
-        /// Policy name in `policy-lock.yaml`.
+        /// Literal Policy name in the current `policy.yaml` source.
         policy: String,
         /// Exact base-model input retained by the current policy runtime.
         base_model: String,

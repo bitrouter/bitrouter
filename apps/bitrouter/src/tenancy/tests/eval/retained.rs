@@ -14,10 +14,11 @@ use std::{os::unix::fs::PermissionsExt, path::Path};
 const KEY_ENV: &str = "BITROUTER_TEST_RECOVERY_KEY";
 
 async fn open_keyed(
-    db: sea_orm::DatabaseConnection,
+    database: crate::db::OwnedDatabase,
     installation: &InstallationId,
     key_env: Option<&str>,
 ) -> Result<Service> {
+    let (db, owner, claim) = database.claim()?;
     let resources = if let Some(key_env) = key_env {
         super::super::super::resources::Resources::load_key(
             installation,
@@ -30,12 +31,18 @@ async fn open_keyed(
         super::super::super::resources::Resources::with_key(installation.clone(), [43; 32])?
     };
     let initial = super::super::super::store::load(&db, Utc::now()).await?;
-    Service::start_resources(
+    Service::start_resources_with_continuations(
         db,
-        None,
+        Some(owner),
         initial,
         std::sync::Arc::new(resources),
-        None,
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: Some(claim),
+            receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await
@@ -154,21 +161,35 @@ async fn seed_model_policy(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
-async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Fixture> {
+struct Seeded {
+    installation: InstallationId,
+    gateway: EvalSubject,
+}
+
+async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     std::fs::File::create(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    let db = crate::db::connect(&format!("sqlite://{}?mode=rwc", path.display())).await?;
+    let database =
+        crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rwc", path.display())).await?;
+    database.migrate().await?;
+    let db = database.database().clone();
     let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     fixture.service.shutdown().await?;
-    fixture.service = open_keyed(fixture.db.clone(), &fixture.installation, key_env).await?;
+    fixture.service = open_keyed(database, &fixture.installation, key_env).await?;
     seed_generic(&fixture).await?;
     seed_model_policy(&fixture).await?;
     seed_gateway(&fixture).await?;
+    let seeded = Seeded {
+        installation: fixture.installation.clone(),
+        gateway: gateway_subject(&fixture)?,
+    };
     fixture.service.shutdown().await?;
-    // Close the shared pool while retaining the fixture's immutable identities.
-    // Callers open fresh connections to the stopped file for startup/restore.
-    fixture.db.clone().close().await?;
-    Ok(fixture)
+    let db = fixture.db.clone();
+    // Both the Service claim and the final pool clone retain the acquisition.
+    // Return only facts so stopped-file readers can acquire a fresh owner.
+    drop(fixture);
+    db.close().await?;
+    Ok(seeded)
 }
 
 fn gateway_router(db: sea_orm::DatabaseConnection) -> Router {
@@ -212,8 +233,7 @@ async fn seed_gateway(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
-async fn read_gateway(db: sea_orm::DatabaseConnection, fixture: &Fixture) -> Result<()> {
-    let expected = gateway_subject(fixture)?;
+async fn read_gateway(db: sea_orm::DatabaseConnection, expected: &EvalSubject) -> Result<()> {
     let found: EvalSubject = json(
         gateway_router(db)
             .oneshot(
@@ -224,7 +244,7 @@ async fn read_gateway(db: sea_orm::DatabaseConnection, fixture: &Fixture) -> Res
             .await?,
     )
     .await?;
-    ensure!(found == expected);
+    ensure!(&found == expected);
     Ok(())
 }
 
@@ -261,7 +281,9 @@ fn options(home: &Path) -> crate::offline::large::Options {
 }
 
 async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
-    let db = crate::db::connect(&format!("sqlite://{}", path.display())).await?;
+    let database =
+        crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
+    let db = database.database().clone();
     let row = db
         .query_one(Statement::from_string(
             db.get_database_backend(),
@@ -309,8 +331,8 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
             .await?;
         }
     }
-    let closed = db.close().await;
-    closed?;
+    drop(database);
+    db.close().await?;
     Ok(())
 }
 
@@ -339,8 +361,9 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
             std::fs::copy(&path, &source)?;
             corrupt(&source, *gateway, expression).await?;
             let original = std::fs::read(&source)?;
-            let db = crate::db::connect(&format!("sqlite://{}", source.display())).await?;
-            let opened = open_keyed(db.clone(), &fixture.installation, None).await;
+            let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", source.display())).await?;
+            let db = database.database().clone();
+            let opened = open_keyed(database, &fixture.installation, None).await;
             if let Ok(service) = opened {
                 service.shutdown().await?;
                 anyhow::bail!("invalid retained Eval subject started: {expression}");
@@ -348,10 +371,12 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
             db.close().await?;
             ensure!(std::fs::read(&source)? == original, "failed startup mutated original {expression}");
         }
-        let db = crate::db::connect(&format!("sqlite://{}", path.display())).await?;
-        let service = open_keyed(db.clone(), &fixture.installation, None).await?;
-        read_gateway(db.clone(), &fixture).await?;
+        let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
+        let db = database.database().clone();
+        let service = open_keyed(database, &fixture.installation, None).await?;
+        read_gateway(db.clone(), &fixture.gateway).await?;
         service.shutdown().await?;
+        drop(service);
         db.close().await?;
         Ok::<_, anyhow::Error>(())
     }).await?
@@ -389,10 +414,14 @@ async fn actual_restore_rejects_isolated_old_subject_and_preserves_current_mixed
         .await?;
         ensure!(std::fs::read(&source)? == original);
         ensure!(std::fs::read(&restored)? == original);
-        let db = crate::db::connect(&format!("sqlite://{}", restored.display())).await?;
-        let service = open_keyed(db.clone(), &fixture.installation, Some(KEY_ENV)).await?;
-        read_gateway(db.clone(), &fixture).await?;
+        let database =
+            crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", restored.display()))
+                .await?;
+        let db = database.database().clone();
+        let service = open_keyed(database, &fixture.installation, Some(KEY_ENV)).await?;
+        read_gateway(db.clone(), &fixture.gateway).await?;
         service.shutdown().await?;
+        drop(service);
         db.close().await?;
         let bad = home.path().join("old.sqlite");
         std::fs::copy(&source, &bad)?;

@@ -83,7 +83,7 @@ pub(super) async fn indexes_on(db: &impl ConnectionTrait) -> Result<(), DbErr> {
             "SELECT 1 AS present FROM sqlite_schema WHERE type='trigger' AND tbl_name='tenancy_usage_evidence' UNION ALL SELECT 1 AS present FROM temp.sqlite_schema WHERE type='trigger' AND tbl_name='tenancy_usage_evidence' LIMIT 1"
         }
         DatabaseBackend::Postgres => {
-            "SELECT 1 AS present FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname='tenancy_usage_evidence' AND (c.relrowsecurity OR c.relforcerowsecurity OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid=c.oid AND NOT g.tgisinternal) OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype<>'p')) LIMIT 1"
+            "SELECT 1 AS present FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname='tenancy_usage_evidence' AND (c.relrowsecurity OR c.relforcerowsecurity OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid=c.oid AND NOT g.tgisinternal) OR EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype NOT IN ('p','n'))) LIMIT 1"
         }
         DatabaseBackend::MySql => {
             "SELECT 1 AS present FROM information_schema.table_constraints WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='tenancy_usage_evidence' AND CONSTRAINT_TYPE<>'PRIMARY KEY' UNION ALL SELECT 1 AS present FROM information_schema.triggers WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='tenancy_usage_evidence' LIMIT 1"
