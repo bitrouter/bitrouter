@@ -303,12 +303,10 @@ enum Policy {
     CredentialRead,
     Receipt,
     TerminalReceipt,
-    #[cfg(feature = "core")]
     OwnedEval,
 }
 impl Policy {
     fn expired(self, disposition: Disposition, fenced: bool) -> ErrorCode {
-        #[cfg(feature = "core")]
         if matches!(self, Self::OwnedEval)
             && !fenced
             && matches!(
@@ -380,29 +378,35 @@ impl Worker {
                         loaded.header.safety_operation_ids,
                         totals,
                     ));
-                    let migrate = loaded.format == crate::tenancy::store::startup::Format::V1
-                        && !loaded.header.saturated;
-                    if migrate {
-                        control.reserve_write(4096, true)?;
-                        crate::tenancy::store::startup::upgrade_format_in(&tx, &loaded)
-                            .await
-                            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                    }
-                    Ok::<_, Failure>(migrate)
+                    let check = || {
+                        control
+                            .check_read()
+                            .map_err(|_| anyhow::anyhow!("startup validation cancelled"))
+                    };
+                    self.resources
+                        .inspect_all_retained_in(
+                            &tx,
+                            self.authority.load_budget().saturating_mul(3),
+                            &check,
+                        )
+                        .await
+                        .map_err(|error| self.directory_failure(error))?;
+                    crate::eval::store::retained::validate_retained_subjects_in(
+                        &tx,
+                        &initial.installation,
+                        self.authority.load_budget().saturating_mul(3),
+                        &check,
+                    )
+                    .await
+                    .map_err(|error| self.directory_failure(error))?;
+                    Ok::<_, Failure>(())
                 }
                 .await;
-                match validated {
-                    Ok(true) => control.commit(tx).await,
-                    result => {
-                        control
-                            .rollback(tx)
-                            .await
-                            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                        result?;
-                        Ok(())
-                    }
-                }
-                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                control
+                    .rollback(tx)
+                    .await
+                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                validated?;
                 tracing::info!(
                     phase = "continuation",
                     outcome = "started",
@@ -717,8 +721,6 @@ impl Worker {
                 control.with_test_target(match &job {
                     Job::Eval(_) => Some(JobTarget::Eval),
                     Job::Settlement(_) => Some(JobTarget::Settlement),
-                    Job::TrajectoryBegin(_) => Some(JobTarget::TrajectoryBegin),
-                    Job::TrajectoryTerminal(_) => Some(JobTarget::TrajectoryTerminal),
                     #[cfg(feature = "harness")]
                     Job::Native(message)
                         if matches!(
@@ -925,87 +927,6 @@ impl Worker {
                     // The registry retains the immutable candidate and its reservation
                     // after a confirmed rollback; an ambiguous actor never releases either.
                     drop(owner);
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::Learner(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_learner(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    // Keep the original work/read/learning owners outside the
-                    // supervised continuation until consuming COMMIT is known.
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    let crate::tenancy::learner::queue::Job {
-                        work, read, reply, ..
-                    } = *message;
-                    if reply.send(result).is_err() {
-                        tracing::debug!("owned learner waiter disconnected");
-                    }
-                    drop((work, read));
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::ExperimentRead(message) => {
-                    let result = self
-                        .supervise(
-                            self.read_experiment(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    let crate::tenancy::experiment::queue::ReadJob {
-                        binding,
-                        profile,
-                        root,
-                        reply,
-                        permit,
-                        command,
-                        ..
-                    } = *message;
-                    if reply.send(result).is_err() {
-                        tracing::debug!("native cohort completed without its response receiver");
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((binding, profile, root, permit, command));
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::Experiment(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_experiment(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    let crate::tenancy::experiment::queue::Job {
-                        execution,
-                        origin,
-                        profile,
-                        permit,
-                        reply,
-                        ..
-                    } = *message;
-                    if reply.send(result).is_err() {
-                        tracing::debug!(
-                            "native experiment enrollment completed without a response receiver"
-                        );
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((execution, origin, profile, permit));
                 }
                 #[cfg(all(feature = "core", feature = "harness"))]
                 Job::Learning(message) => {
@@ -1246,7 +1167,6 @@ impl Worker {
                     }
                     drop((origin, work));
                 }
-                #[cfg(feature = "core")]
                 Job::Eval(message) => {
                     let result = self
                         .supervise(
@@ -1284,76 +1204,6 @@ impl Worker {
                             tracing::debug!("evaluation completed without a response receiver");
                         }
                     }
-                }
-                #[cfg(feature = "core")]
-                Job::TrajectoryBegin(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_trajectory_begin(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    if result.is_err() {
-                        if matches!(
-                            self.proof.disposition(),
-                            Disposition::NoTransaction | Disposition::RolledBack
-                        ) {
-                            message.observation.no_start(self.proof.disposition());
-                        } else {
-                            message.observation.fail();
-                        }
-                    }
-                    let crate::tenancy::trajectory::Begin {
-                        reply,
-                        execution,
-                        observation,
-                        input,
-                        evidence,
-                        ..
-                    } = *message;
-                    if reply.send(result).is_err() {
-                        tracing::debug!("trajectory begin completed without a response receiver");
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((execution, observation, input, evidence));
-                }
-                #[cfg(feature = "core")]
-                Job::TrajectoryTerminal(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_trajectory_terminal(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    message.observation.transaction(self.proof.disposition());
-                    if result.is_err() {
-                        message.observation.fail();
-                    }
-                    let crate::tenancy::trajectory::Terminal {
-                        reply,
-                        execution,
-                        observation,
-                        start,
-                        facts,
-                        ..
-                    } = *message;
-                    if reply.send(result).is_err() {
-                        tracing::debug!(
-                            "trajectory terminal completed without a response receiver"
-                        );
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((execution, observation, start, facts));
                 }
                 #[cfg(feature = "core")]
                 Job::Settlement(message) => {
@@ -1448,7 +1298,6 @@ impl Worker {
                             #[cfg(all(feature = "core", feature = "harness"))]
                             Policy::Native => matches!(control.phase(), Phase::Committing)
                                 || self.proof.disposition() == Disposition::Committed,
-                            #[cfg(feature = "core")]
                             Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
                                 || self.proof.disposition() == Disposition::Committed,
                         };
@@ -1590,36 +1439,6 @@ impl Job {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
             }
             #[cfg(all(feature = "core", feature = "harness"))]
-            Self::Learner(message) => {
-                if message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
-                    .is_err()
-                {
-                    tracing::debug!("rejected learner waiter disconnected");
-                }
-            }
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::ExperimentRead(message) => {
-                if message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
-                    .is_err()
-                {
-                    tracing::debug!("rejected native cohort has no response receiver");
-                }
-            }
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::Experiment(message) => {
-                if message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
-                    .is_err()
-                {
-                    tracing::debug!("rejected native experiment had no response receiver");
-                }
-            }
-            #[cfg(all(feature = "core", feature = "harness"))]
             Self::Learning(message) => {
                 // An already quarantined actor cannot attest the pending H phase.
                 message.work.settled(Disposition::Ambiguous);
@@ -1656,7 +1475,6 @@ impl Job {
                     tracing::debug!("rejected tenancy command had no response receiver");
                 }
             }
-            #[cfg(feature = "core")]
             Self::Eval(message) => {
                 if message
                     .reply
@@ -1675,28 +1493,6 @@ impl Job {
                     .is_err()
                 {
                     tracing::debug!("rejected observation had no response receiver");
-                }
-            }
-            #[cfg(feature = "core")]
-            Self::TrajectoryBegin(message) => {
-                message.observation.no_start(Disposition::NoTransaction);
-                if message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
-                    .is_err()
-                {
-                    tracing::debug!("rejected trajectory begin had no response receiver");
-                }
-            }
-            #[cfg(feature = "core")]
-            Self::TrajectoryTerminal(message) => {
-                message.observation.fail();
-                if message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
-                    .is_err()
-                {
-                    tracing::debug!("rejected trajectory terminal had no response receiver");
                 }
             }
             Self::Continuation(message) => {

@@ -14,7 +14,6 @@ use bitrouter::core::adequacy::reliability::{
     ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
 };
 use bitrouter::core::adequacy::store::AdequacyStore;
-use bitrouter::core::eval::store::EvalStore;
 use bitrouter::core::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
@@ -28,6 +27,7 @@ use bitrouter::core::workflow_state::real_trace::{
 use bitrouter::core::workflow_state::replay::ReplayEvaluator;
 use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
 use bitrouter::core::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter::eval::store::EvalStore;
 use bitrouter::gateway::routing::workflow::decision::{
     PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
 };
@@ -209,20 +209,23 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
     let config_path = root.join("bitrouter.yaml");
     let first_output = root.join("reliability-first.json");
     let second_output = root.join("reliability-second.json");
-    std::fs::write(&config_path, "policy:\n  path: './policy-lock.yaml'\n")?;
-    let mut lock = bitrouter::policy_lock::PolicyLock::default();
-    let mut policy = bitrouter::policy_lock::PolicyDefinition::default();
-    policy.tiers.insert("strong".into(), "mock:strong".into());
-    policy.default_tier = Some("strong".into());
-    policy.adequacy.enabled = true;
-    policy.adequacy.reliability_window_size = 23;
-    policy.adequacy.reliability_consecutive_failures = 2;
-    policy.adequacy.reliability_error_rate_percent = 35;
-    policy.adequacy.reliability_cooldown_secs = 300;
-    lock.policies.insert("auto".into(), policy);
     std::fs::write(
-        root.join("policy-lock.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&lock)?,
+        &config_path,
+        "inherit_defaults: false\npolicy:\n  path: './policy.yaml'\n",
+    )?;
+    let source: bitrouter_ai::policy::Document = serde_saphyr::from_str(
+        r#"
+spec_version: policy/1.0.0-beta.1
+policies:
+  auto:
+    tiers:
+      strong: {model: mock:strong}
+    default_tier: strong
+"#,
+    )?;
+    std::fs::write(
+        root.join("policy.yaml"),
+        bitrouter::policy_lock::deterministic_yaml(&source)?,
     )?;
     let db = bitrouter::db::connect(&database_url).await?;
     bitrouter::db::run_migrations(&db).await?;

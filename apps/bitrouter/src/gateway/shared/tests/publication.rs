@@ -15,14 +15,14 @@ use crate::runtime_crypto::{DeploymentKey, SealedSecret};
 
 fn candidate() -> Configuration {
     Configuration {
-        format: 1,
+        format: 2,
         routing: json!({"providers": {"fixture": {
             "api_base": "https://example.com/v1",
             "headers": {"x-fixture": "${LITERAL_NOT_AN_ENV_REFERENCE}"},
             "models": [{"id": "fixture-model"}]
         }}}),
         policies: vec![json!({"id":"models", "allowed_models":["fixture-model"]})],
-        policy_lock: None,
+        model_policy: None,
         credentials: vec![CredentialBinding {
             provider: "fixture".into(),
             account: "default".into(),

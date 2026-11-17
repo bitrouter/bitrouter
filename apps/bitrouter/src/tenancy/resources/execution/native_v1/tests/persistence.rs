@@ -168,13 +168,18 @@ pub(super) fn sealed(
             }
         }
     }
+    let compiler_version = if envelope.format == 7 {
+        super::super::super::super::MODEL_POLICY_COMPILER_VERSION
+    } else {
+        COMPILER_VERSION
+    };
     let sealed = resources.key.as_ref().context("fixture key")?.seal_bound(
         "configuration",
         &(
             &resources.installation,
             &tenant,
             &revision,
-            COMPILER_VERSION,
+            compiler_version,
             &envelope.document,
             &dependencies,
         ),
@@ -184,7 +189,7 @@ pub(super) fn sealed(
         envelope.document.clone(),
         revision,
         CompiledConfiguration {
-            compiler_version: COMPILER_VERSION.into(),
+            compiler_version: compiler_version.into(),
             payload: json!({"kind":"sealed","sealed":sealed}),
             dependencies,
         },

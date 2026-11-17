@@ -76,7 +76,8 @@ async fn campaign(
     // A completely new pool and actual actor bootstrap, not a row-only reload.
     let reopened = database.connect().await?;
     let snapshot = store::load(&reopened, Utc::now()).await?;
-    let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+    let resources =
+        Resources::with_key(ready.fixture.installation.clone(), [29; 32])?.for_bro_capture();
     let service =
         Service::start_prepared(reopened.clone(), None, snapshot, Arc::new(resources)).await?;
     database.retain(&service);

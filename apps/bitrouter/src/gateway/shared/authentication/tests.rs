@@ -60,13 +60,13 @@ pub(crate) async fn exercise(first: &Store, second: &Store) -> anyhow::Result<()
         credential_account: slot.account.clone(),
     });
     let publication = super::super::publication::Configuration {
-        format: 1,
+        format: 2,
         routing: serde_json::json!({"providers": {
             "fixture": {"api_base": "https://example.invalid/v1", "auto_discover": false},
             "alias": {"derives": "fixture", "api_base": "https://example.invalid/v1", "auto_discover": false}
         }}),
         policies: vec![],
-        policy_lock: None,
+        model_policy: None,
         credentials: bindings.to_vec(),
         require_known_pricing: false,
     };
@@ -170,14 +170,14 @@ async fn subscription_aliases(
         "anthropic",
     ] {
         let publication = super::super::publication::Configuration {
-            format: 1,
+            format: 2,
             routing: serde_json::json!({"providers": {
                 mechanism: {"api_base": "https://example.invalid/v1", "auto_discover": false},
                 "middle": {"derives": mechanism, "api_base": "https://example.invalid/v1", "auto_discover": false},
                 "alias": {"derives": "middle", "api_base": "https://example.invalid/v1", "auto_discover": false}
             }}),
             policies: vec![],
-            policy_lock: None,
+            model_policy: None,
             require_known_pricing: false,
             credentials: [mechanism, "middle", "alias"]
                 .map(|provider| CredentialBinding {

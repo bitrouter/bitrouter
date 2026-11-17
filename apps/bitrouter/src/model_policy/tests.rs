@@ -1,4 +1,5 @@
 use super::*;
+use bitrouter_ai::routing::ContextStrategy;
 use serde_json::{Value, json};
 
 fn source() -> Value {
@@ -9,41 +10,74 @@ fn source() -> Value {
 }
 
 #[test]
-fn public_source_round_trips_without_context_or_learned_evidence() -> Result<()> {
+fn public_source_compiles_without_context_or_learned_evidence() -> Result<()> {
     let value = source();
-    let compiled = parse(&value)?;
-    assert_eq!(serde_json::to_value(super::source(&compiled)?)?, value);
-    assert!(compiled.policies.values().all(|policy| {
-        policy
-            .tiers
-            .values()
-            .all(|target| target.context == ContextStrategy::Preserve)
-    }));
-    assert!(compiled.certificates.is_empty());
+    let document = parse(&value)?;
+    let compiled = compile(&document)?;
+    assert_eq!(serde_json::to_value(compiled.source())?, value);
+    assert_eq!(compiled.digest(), source_digest(&document)?);
+    assert_eq!(
+        compiled.selections()["auto"].tiers["economy"].model,
+        "fixture:small"
+    );
+    assert!(compiled.selections()["auto"].routes.is_empty());
     Ok(())
 }
 
 #[test]
-fn classification_requires_an_explicit_supported_classifier_and_valid_class() -> Result<()> {
+fn source_digest_matches_recursively_sorted_utf8_json_vector() -> Result<()> {
+    // Object keys are sorted at every level; the model remains literal UTF-8.
+    // Typed omission rules exclude empty routes, tool lists and absent options.
+    const CANONICAL: &str = r#"{"policies":{"auto":{"default_tier":"strong","tiers":{"strong":{"effort":"high","model":"fixture:雪"}}}},"spec_version":"policy/1.0.0-beta.1"}"#;
+    const EXPECTED: &str =
+        "sha256:2e9697fd93ee9ddd5ddb9ceed480a658c964d72ab608e6bdba385b36a6679cae";
+    let document = decode(CANONICAL)?;
+
+    assert_eq!(source_digest(&document)?, EXPECTED);
+    assert_eq!(compile(&document)?.digest(), EXPECTED);
+    assert_eq!(crate::policy_lock::semantic_digest(&document)?, EXPECTED);
+    Ok(())
+}
+
+#[test]
+fn source_digest_ignores_field_order_but_preserves_array_order() -> Result<()> {
+    let first = decode(
+        r#"{"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{"tiers":{"strong":{"model":"fixture:large","effort":"high"},"economy":{"model":"fixture:small"}},"default_tier":"economy","tool_use_tier":"strong","tool_safe_tiers":["strong","economy"]}}}"#,
+    )?;
+    let mut reordered = decode(
+        r#"{"policies":{"auto":{"tool_safe_tiers":["strong","economy"],"tool_use_tier":"strong","default_tier":"economy","tiers":{"economy":{"model":"fixture:small"},"strong":{"effort":"high","model":"fixture:large"}}}},"spec_version":"policy/1.0.0-beta.1"}"#,
+    )?;
+    assert_eq!(first, reordered);
+    assert_eq!(source_digest(&first)?, source_digest(&reordered)?);
+
+    reordered
+        .policies
+        .get_mut("auto")
+        .context("fixture auto missing")?
+        .tool_safe_tiers
+        .reverse();
+    assert_ne!(source_digest(&first)?, source_digest(&reordered)?);
+    Ok(())
+}
+
+#[test]
+fn classification_requires_supported_classifier_valid_class_and_existing_target() -> Result<()> {
     let mut value = source();
     value["policies"]["auto"]["routes"] = json!({"code:debugging|verify|normal":"strong"});
     assert!(parse(&value).is_err());
     value["policies"]["auto"]["classifier_digest"] =
         json!(compiled_predictor_contract().config_digest);
-    let compiled = parse(&value)?;
-    assert_eq!(serde_json::to_value(super::source(&compiled)?)?, value);
-    let policy = &compiled.policies["auto"];
+    let compiled = compile(&parse(&value)?)?;
     assert_eq!(
-        policy
+        compiled.selections()["auto"]
             .routes
             .get("semantic_route/v1|code:debugging|verify|normal")
             .map(String::as_str),
         Some("strong")
     );
-    let cert = &compiled.certificates["auto"]["semantic_route/v1|code:debugging|verify|normal"];
-    assert_eq!(cert.owner, RouteOwner::Operator);
-    assert_eq!(cert.eligible_episodes, 0);
     value["policies"]["auto"]["routes"] = json!({"code:debugging|future|normal":"strong"});
+    assert!(parse(&value).is_err());
+    value["policies"]["auto"]["routes"] = json!({"code:debugging|verify|normal":"missing"});
     assert!(parse(&value).is_err());
     Ok(())
 }
@@ -71,26 +105,100 @@ fn unsupported_contracts_and_experimental_fields_fail_closed() {
         value["policies"]["auto"][field] = json!({});
         assert!(parse(&value).is_err());
     }
-    let mut value = source();
-    value["policies"]["auto"]["tiers"]["economy"]["context"] = json!("preserve");
-    assert!(parse(&value).is_err());
-    let mut value = source();
-    value["policies"]["auto"]["default_tier"] = json!("missing");
-    assert!(parse(&value).is_err());
+    for context in ["preserve", "evidence", "summary"] {
+        let mut value = source();
+        value["policies"]["auto"]["tiers"]["economy"]["context"] = json!(context);
+        assert!(parse(&value).is_err());
+    }
 }
 
 #[test]
-fn experimental_runtime_state_cannot_be_exported_as_service_policy() -> Result<()> {
-    let mut compiled = parse(&source())?;
-    compiled
-        .policies
-        .get_mut("auto")
-        .context("auto")?
-        .tiers
-        .get_mut("economy")
-        .context("tier")?
-        .context = ContextStrategy::Evidence;
-    assert!(super::source(&compiled).is_err());
+fn invalid_references_duplicate_targets_and_recursive_selectors_are_rejected() {
+    let mut missing_default = source();
+    missing_default["policies"]["auto"]["default_tier"] = json!("missing");
+    let mut missing_tool = source();
+    missing_tool["policies"]["auto"]["tool_use_tier"] = json!("missing");
+    let mut unsafe_tool = source();
+    unsafe_tool["policies"]["auto"]["tool_safe_tiers"] = json!(["economy"]);
+    let mut missing_safe = source();
+    missing_safe["policies"]["auto"]["tool_safe_tiers"] = json!(["strong", "missing"]);
+    let mut duplicate = source();
+    duplicate["policies"]["auto"]["tiers"]["clone"] =
+        duplicate["policies"]["auto"]["tiers"]["economy"].clone();
+    for value in [
+        missing_default,
+        missing_tool,
+        unsafe_tool,
+        missing_safe,
+        duplicate,
+    ] {
+        assert!(parse(&value).is_err());
+    }
+    for model in [
+        "@auto",
+        "bitrouter/auto",
+        "bitrouter/other",
+        "bitrouter:auto",
+        "bitrouter:fusion",
+    ] {
+        let mut value = source();
+        value["policies"]["auto"]["tiers"]["economy"]["model"] = json!(model);
+        assert!(parse(&value).is_err());
+    }
+}
+
+#[test]
+fn raw_duplicate_mappings_are_rejected_before_value_conversion() {
+    for raw in [
+        r#"{"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{"tiers":{"one":{"model":"fixture:one"},"one":{"model":"fixture:two"}},"default_tier":"one"}}}"#,
+        "spec_version: policy/1.0.0-beta.1\npolicies:\n  auto: {tiers: {one: {model: 'fixture:one'}}, default_tier: one}\n  auto: {tiers: {two: {model: 'fixture:two'}}, default_tier: two}\n",
+        "spec_version: policy/1.0.0-beta.1\npolicies: {auto: {tiers: {one: {model: 'fixture:one', model: 'fixture:two'}}, default_tier: one}}\n",
+        "spec_version: policy/1.0.0-beta.1\npolicies: {auto: {tiers: {one: {model: 'fixture:one'}}, default_tier: one, default_tier: one}}\n",
+    ] {
+        assert!(decode(raw).is_err(), "accepted duplicate mapping: {raw}");
+    }
+}
+
+#[tokio::test]
+async fn selection_uses_literal_names_and_missing_suffix_never_falls_back() -> Result<()> {
+    use crate::gateway::{
+        caller::CallerContext,
+        pipeline::{context::PipelineContext, routing::ModelSelector, types::PipelineRequest},
+    };
+    let mut value = source();
+    let mut cost = value["policies"]["auto"].clone();
+    cost["default_tier"] = json!("strong");
+    value["policies"]["auto:cost"] = cost;
+    let config = crate::config::Config {
+        inherit_defaults: false,
+        ..Default::default()
+    };
+    let runtime = crate::policy_lock::PolicyRuntime::from_document(
+        &config,
+        Some(parse(&value)?),
+        Default::default(),
+        None,
+    )?;
+    for (selected, expected) in [("auto", "fixture:small"), ("auto:cost", "fixture:large")] {
+        let input = crate::gateway::http::parse_input(
+            &bitrouter_ai::types::ApiProtocol::ChatCompletions,
+            json!({"model":"bitrouter/auto","messages":[{"role":"user","content":"complete context"}]}),
+        )?;
+        let mut ctx = PipelineContext::new(PipelineRequest::new(
+            "bitrouter/auto",
+            CallerContext::local(),
+            input.generation_prompt().context("prompt")?.clone(),
+        ));
+        runtime.prepare_selection(selected, &mut ctx).await?;
+        runtime.select_policy(selected, &mut ctx).await?;
+        assert_eq!(ctx.model(), expected);
+        assert!(
+            runtime
+                .prepare_selection("auto:missing", &mut ctx)
+                .await
+                .is_err()
+        );
+    }
     Ok(())
 }
 
@@ -145,8 +253,8 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
             CallerContext::local(),
             prompt,
         ));
-        runtime.prepare_selection("auto", None, &mut ctx).await?;
-        runtime.select_variant("auto", None, &mut ctx).await?;
+        runtime.prepare_selection("auto", &mut ctx).await?;
+        runtime.select_policy("auto", &mut ctx).await?;
         assert_eq!(ctx.model(), expected_model);
         assert_eq!(
             ctx.extension::<ContextStrategy>().as_deref(),

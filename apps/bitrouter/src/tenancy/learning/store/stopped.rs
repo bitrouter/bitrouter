@@ -34,26 +34,8 @@ pub(in crate::tenancy) async fn retain(
     // Every member is checked before the first update. The same H transaction
     // later CASes both mirrors; no waiter can attest that these writes settled.
     let mut writes = Vec::new();
-    let mut native_writes = Vec::new();
     for member in proof.owners() {
-        let binding = match &member.binding {
-            crate::tenancy::learning::source::Binding::Native(_) => {
-                if let Some(write) = super::native::cleanup::stop_member(
-                    tx,
-                    member,
-                    &origin,
-                    &members,
-                    &set_digest,
-                    budget,
-                )
-                .await?
-                {
-                    native_writes.push(write);
-                }
-                continue;
-            }
-            crate::tenancy::learning::source::Binding::Capture(binding) => binding,
-        };
+        let crate::tenancy::learning::source::Binding::Capture(binding) = &member.binding;
         let a = binding.association();
         let (connection, state) = a.connection_in(tx, budget).await?;
         let cleanup = state
@@ -129,10 +111,6 @@ pub(in crate::tenancy) async fn retain(
     for (a, row, pending, value) in writes {
         save(tx, a, &row, &value, budget).await?;
         save(tx, a, &pending, &value, budget).await?;
-    }
-    for (ns, row, pending, value) in native_writes {
-        save(tx, &ns, &row, &value, budget).await?;
-        save(tx, &ns, &pending, &value, budget).await?;
     }
     Ok(())
 }

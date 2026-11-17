@@ -78,7 +78,8 @@ fn control_keys_compare_all_stored_facts_and_separate_dispatch_and_authority() -
             != ExecutionKey::Dispatch {
                 authority_revision: 1,
                 tenant: "tenant".into(),
-                revision: "revision".into()
+                revision: "revision".into(),
+                binding: execution_cache_binding(&original)?,
             }
     );
     Ok(())

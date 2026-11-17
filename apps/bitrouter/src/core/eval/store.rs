@@ -13,15 +13,15 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(all(test, feature = "core"))]
+mod authority_tests;
 mod codec;
-mod imported;
 mod io;
-pub(crate) mod migration;
 mod owned;
 #[cfg(test)]
 mod owned_tests;
+pub(crate) mod retained;
 mod snapshots;
-mod trajectory;
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use io::Budget;
 
@@ -113,29 +113,6 @@ pub struct EvalStore {
 }
 
 impl EvalStore {
-    #[cfg(feature = "harness")]
-    pub(crate) fn for_paid_recovery(
-        identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
-    ) -> Self {
-        let (scope, provenance) = Scope::for_paid_recovery(identity);
-        Self {
-            db: identity.database().clone(),
-            scope,
-            provenance,
-            storage_budget: None,
-        }
-    }
-    #[cfg(feature = "harness")]
-    pub(crate) fn for_learner(identity: &crate::tenancy::learner::identity::ReadIdentity) -> Self {
-        let (scope, provenance) = Scope::for_learner(identity);
-        Self {
-            db: identity.database().clone(),
-            scope,
-            provenance,
-            storage_budget: None,
-        }
-    }
-
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,
@@ -153,6 +130,7 @@ impl EvalStore {
         self
     }
 
+    #[cfg(feature = "core")]
     pub(crate) fn for_execution(
         db: DatabaseConnection,
         execution: &crate::tenancy::execution::TenantExecution,
@@ -170,19 +148,6 @@ impl EvalStore {
         let (scope, provenance) = Scope::for_eval(identity);
         Self {
             db: identity.database().clone(),
-            scope,
-            provenance,
-            storage_budget: None,
-        }
-    }
-
-    #[cfg(feature = "harness")]
-    pub(crate) fn for_native_session(
-        authority: &crate::tenancy::execution::session::Authority,
-    ) -> Self {
-        let (scope, provenance) = Scope::for_session(authority);
-        Self {
-            db: authority.database().clone(),
             scope,
             provenance,
             storage_budget: None,
@@ -253,6 +218,7 @@ impl EvalStore {
             .await
     }
 
+    #[cfg(feature = "core")]
     pub(super) async fn insert_settlement_subject_owned(
         &self,
         subject: &EvalSubject,
@@ -307,7 +273,9 @@ impl EvalStore {
                 owner_user_id: Set(owner.to_owned()),
                 subject_id: Set(subject.subject_id.clone()),
                 scope: Set(scope_name(subject.scope).into()),
-                policy_digest: Set(subject.policy_digest.clone()),
+                identity_digest: Set(crate::storage::evaluation::identity_digest(
+                    &subject.identity,
+                )?),
                 holdout: Set(subject.holdout),
                 content_digest: Set(content_digest),
                 subject_json: Set(subject_json),
@@ -785,7 +753,7 @@ fn parse_admission_status(value: &str) -> Result<AdmissionStatus> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "core"))]
 #[path = "store/scope_tests.rs"]
 mod scope_tests;
 #[cfg(test)]

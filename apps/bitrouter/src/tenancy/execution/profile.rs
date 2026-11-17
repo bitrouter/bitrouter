@@ -192,80 +192,28 @@ impl TenantExecution {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
             }
-            // A selected experimental policy needs the actual committed native
-            // assignment. Bare native/HTTP and paid children have no such witness.
-            #[cfg(all(feature = "core", feature = "harness"))]
-            let enrolled = self
-                .experiment_for_routing()
-                .map_err(|code| self.reject(code))?
-                .is_some();
-            #[cfg(not(all(feature = "core", feature = "harness")))]
-            let enrolled = false;
-            if policy
-                .document()
-                .policies
-                .get(policy.name())
-                .and_then(|definition| definition.optimization.as_ref())
-                .and_then(|optimization| optimization.active.as_ref())
-                .is_some()
-                && !enrolled
-            {
-                return Err(
-                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
-                );
-            }
             let config = policy.configuration().map_err(|code| self.reject(code))?;
-            let guarded = crate::tenancy::trajectory_profile::guarded(
-                &config,
-                policy.document(),
-                policy.name(),
-            )
-            .map_err(|_| {
-                self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
-            })?;
             let pending =
                 crate::gateway::observability::decision::PendingEvalDecisionStore::default();
             #[cfg(feature = "core")]
-            let observation = if guarded
-                || self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off
-            {
-                let observation = crate::tenancy::eval::observation::RequiredObservation::new(
-                    self.service.eval.clone(),
-                    Arc::downgrade(self),
-                );
-                self.observation.set(observation.clone()).map_err(|_| {
-                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
-                })?;
-                Some(observation)
-            } else {
-                None
-            };
-            #[cfg(feature = "core")]
-            let trajectory = if guarded {
-                let observation = observation.as_ref().ok_or_else(|| {
-                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable)
-                })?;
-                Some(
-                    crate::tenancy::trajectory::Adapter::new(self, observation.clone()).map_err(
-                        |_| {
-                            self.reject(
-                                bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
-                            )
-                        },
-                    )?,
-                )
-            } else {
-                None
-            };
-            #[cfg(not(feature = "core"))]
-            let _ = guarded;
+            let observation =
+                if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
+                    let observation = crate::tenancy::eval::observation::RequiredObservation::new(
+                        self.service.eval.clone(),
+                        Arc::downgrade(self),
+                    );
+                    self.observation.set(observation.clone()).map_err(|_| {
+                        self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                    })?;
+                    Some(observation)
+                } else {
+                    None
+                };
             let runtime = crate::policy_lock::PolicyRuntime::from_retained_document(
                 &config,
                 policy.document().clone(),
                 pending.clone(),
                 policy.name(),
-                #[cfg(feature = "core")]
-                trajectory,
             )
             .map_err(|_| {
                 self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
@@ -282,25 +230,14 @@ impl TenantExecution {
                         ),
                     );
                 }
-                if guarded {
-                    builder.settlement_recorder_for(
-                        crate::tenancy::trajectory::Recorder::new(
-                            self,
-                            observation,
-                            pending.clone(),
-                        ),
-                        OperationScope::Both,
-                    );
-                } else {
-                    builder.settlement_recorder_for(
-                        crate::core::eval::settlement::EvalSettlementRecorder::for_execution(
-                            self,
-                            pending.clone(),
-                            observation,
-                        ),
-                        OperationScope::Both,
-                    );
-                }
+                builder.settlement_recorder_for(
+                    crate::eval::settlement::EvalSettlementRecorder::for_execution(
+                        self,
+                        pending.clone(),
+                        observation,
+                    ),
+                    OperationScope::Both,
+                );
             }
             builder.observe_hook(PolicyCompletion {
                 pending,

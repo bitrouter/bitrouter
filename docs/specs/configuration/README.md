@@ -1,9 +1,9 @@
 # BitRouter configuration formats
 
-Status: **accepted M0 revision, implementation pending, `configuration/1.0.0-beta.5`**.
+Status: **accepted, `configuration/1.0.0-beta.5`**.
 This is the format contract for
 `bitrouter.yaml`, its shared-process profile and Policy source loading.
-The beta.5 cutover is pending parser/schema/DTO and conformance implementation.
+The beta.5 cutover requires matching parser, schema, DTO and conformance behavior.
 Portable service routing policies have their own
 [Policy contract](../policy/README.md). This document's revision does not add
 a version field to existing application YAML.

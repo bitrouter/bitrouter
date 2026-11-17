@@ -1,18 +1,10 @@
-lockfileVersion: 4
-artifact:
-  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  source_snapshot_time_unix_ms: 0
-  compiler:
-    id: bitrouter-policy-compiler
-    version: 2
-    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+spec_version: policy/1.0.0-beta.1
 policies:
   auto:
-    key_strategy: agent_trace
     tiers:
-      balanced: { model: "bitrouter:moonshotai/kimi-k3", context: evidence }
-      economy: { model: "bitrouter:deepseek/deepseek-v4-pro", context: evidence }
-      strong: { model: "openai-codex:gpt-5.6-sol", context: evidence }
+      balanced: {model: "bitrouter:moonshotai/kimi-k3"}
+      economy: {model: "bitrouter:deepseek/deepseek-v4-pro"}
+      strong: {model: "openai-codex:gpt-5.6-sol"}
     routes: {}
     default_tier: strong
     tool_use_tier: strong

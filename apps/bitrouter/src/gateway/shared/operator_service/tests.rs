@@ -121,10 +121,10 @@ async fn postgres_operator_http_authorization_receipts_and_deadlines() -> Result
             .publish(
                 0,
                 &Configuration {
-                    format: 1,
+                    format: 2,
                     routing: json!({}),
                     policies: vec![],
-                    policy_lock: None,
+                    model_policy: None,
                     credentials: vec![],
                     require_known_pricing: false,
                 },

@@ -387,7 +387,6 @@ impl CliReport for RouteReport {
         if let Some(router) = &self.router {
             let source = match self.router_source {
                 Some(bitrouter_ai::control::models::RouterSource::User) => "user",
-                Some(bitrouter_ai::control::models::RouterSource::Legacy) => "legacy",
                 Some(bitrouter_ai::control::models::RouterSource::Default) => "default",
                 None => "unknown",
             };

@@ -2,9 +2,8 @@
 //!
 //! SQLite always runs against a temporary file. The ignored server test requires
 //! an explicit BITROUTER_TEST_DATABASE_URL pointing to a DEDICATED TEST DATABASE.
-//! It applies all pending migrations and writes fixtures: never use a production
-//! database. Existing migrated test databases and the known partially applied
-//! migration-12/28 states are supported; other interrupted migrations are not covered.
+//! It initializes or validates the current schema and writes fixtures: never use
+//! a production database. Old and partially initialized stores are refused.
 //! No database is dropped, no table is truncated, and existing fixtures are not
 //! deleted. Each invocation uses UUID-scoped identities and leaves server fixtures
 //! intact, so repeated runs do not depend on an empty database.
@@ -21,7 +20,6 @@ use anyhow::{Context, Result, ensure};
 use bitrouter::auth::db::{self as auth_db, NewApiKey};
 use bitrouter::auth::entities::users;
 use bitrouter::auth::keys::hash_key;
-use bitrouter::db::migration::m20240101_000012_create_trajectory_ledger;
 use bitrouter::db::{self, migration::Migrator};
 use bitrouter::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
 use bitrouter::metering::entities::requests;
@@ -40,7 +38,7 @@ use bitrouter::trajectory::types::{
 use bitrouter_ai::types::{Usage, UsageOrigin};
 use chrono::Utc;
 use sea_orm::{DatabaseConnection, EntityTrait};
-use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
+use sea_orm_migration::MigratorTrait;
 use uuid::Uuid;
 
 #[path = "database_backends/tenancy.rs"]
@@ -125,17 +123,6 @@ async fn exercise(database_url: &str) -> Result<()> {
         let trajectory = read_trajectory(&connection, &fixture).await?;
         check_trajectory(&trajectory, &fixture)?;
         tenancy::exercise(&connection).await?;
-
-        // Invoke the migration itself: the ledger would otherwise skip its index
-        // existence checks. In particular, MySQL cannot rely on CREATE INDEX
-        // IF NOT EXISTS. This must preserve already populated trajectory tables.
-        m20240101_000012_create_trajectory_ledger::Migration
-            .up(&SchemaManager::new(&connection))
-            .await?;
-        ensure!(
-            read_trajectory(&connection, &fixture).await? == trajectory,
-            "direct migration 12 rerun changed trajectory records"
-        );
 
         db::run_migrations(&connection).await?;
         ensure!(

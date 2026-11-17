@@ -57,6 +57,19 @@ pub(super) struct ApprovedTarget {
 }
 
 pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
+    import.definition.require_service()?;
+    prepare_current_route(import, policy)
+}
+
+pub(super) fn prepare_bro_capture_route(
+    import: &Import,
+    policy: Option<&Artifact>,
+) -> Result<RouteEnvelope> {
+    import.definition.require_bro_capture()?;
+    prepare_current_route(import, policy)
+}
+
+fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
     let (routing, selector, policy_ref, credentials, exploration, block) = match &import.definition
     {
         Definition::Route {
@@ -127,22 +140,14 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
             let Definition::Policy { document, name, .. } = &artifact.definition else {
                 anyhow::bail!("policy definition required");
             };
-            let variant = resolution
-                .variant
-                .as_ref()
-                .map(|v| format!("{selected}:{v}"));
-            let effective = variant
-                .as_deref()
-                .filter(|name| document.policies.contains_key(*name))
-                .unwrap_or(selected);
-            ensure!(effective == name, "selected policy name mismatch");
+            ensure!(selected == name, "selected policy name mismatch");
             crate::policy_lock::validate_for_config(&config, document)
                 .map_err(|_| anyhow::anyhow!("policy routing validation failed"))?;
             let definition = document
                 .policies
                 .get(name)
                 .context("selected policy missing")?;
-            crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
+
             ensure!(
                 definition.tiers.len() <= 256,
                 "policy tier capacity exceeded"
@@ -364,8 +369,6 @@ fn routing_config_scoped(
             "providers"
                 | "models"
                 | "routers"
-                | "presets"
-                | "variants"
                 | "policy"
                 | "upstream"
                 | "trajectory"
@@ -421,10 +424,7 @@ fn routing_config_scoped(
         "policy file access is not retained authority"
     );
     ensure!(
-        config.models.len() <= 256
-            && config.routers.len() <= 256
-            && config.presets.len() <= 256
-            && config.variants.len() <= 256,
+        config.models.len() <= 256 && config.routers.len() <= 256,
         "routing catalog capacity exceeded"
     );
     for provider in config.providers.values() {

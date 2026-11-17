@@ -8,7 +8,7 @@ const PAGE_ROWS: u64 = 64;
 async fn preflight(db: &impl ConnectionTrait, installation: &InstallationId) -> Result<()> {
     // On SQLite this verifies the complete archive profile as well as the two
     // original tables; server databases retain the exact inline usage schema.
-    crate::db::migration::m20240101_000040_usage_evidence::validate(db).await?;
+    crate::db::migration::validate_usage_evidence(db).await?;
     let backend = db.get_database_backend();
     for table in [TABLE, "tenancy_usage_evidence", "tenancy_receipt_auxiliary"] {
         let query = Query::select()

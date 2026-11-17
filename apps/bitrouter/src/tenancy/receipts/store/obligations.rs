@@ -4,7 +4,6 @@ use super::*;
 use archive::Charge;
 use chrono::{DateTime, Utc};
 use sea_orm::{Statement, Value};
-mod bootstrap;
 mod io;
 #[cfg(test)]
 mod server_known;
@@ -20,13 +19,6 @@ const PENDING: u8 = 4;
 const PAGE: usize = 32;
 /// Maximum small keys/records in one validation page, not total scan work.
 pub(in crate::tenancy) const VALIDATION_PAGE_ROWS: usize = PAGE;
-
-/// Migration043 only: backfill canonical obligations before its schema/ledger
-/// transaction commits. Never call from normal startup or an empty-table probe.
-/// Requires the existing exclusive database/migration owner; no format flip.
-pub(crate) async fn backfill_migration(tx: &DatabaseTransaction) -> Result<()> {
-    bootstrap::run(tx).await
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::tenancy) struct Key {

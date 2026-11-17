@@ -114,7 +114,7 @@
       "description": "Write-only resource definition. Debug output deliberately omits all contents.",
       "oneOf": [
         {
-          "description": "Installation-managed operational profile, independent of PolicyLock.",
+          "description": "Installation-managed operational profile, independent of routing Policy.",
           "type": "object",
           "properties": {
             "profile": {

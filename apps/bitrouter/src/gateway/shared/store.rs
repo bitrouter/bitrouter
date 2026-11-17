@@ -61,7 +61,6 @@ pub(super) enum Kind {
     Instance,
     Outbox,
     Credential,
-    EpisodeFence,
     ContinuationProducer,
     OperatorReceipt,
     ProjectionReceipt,
@@ -80,7 +79,6 @@ impl Kind {
             Self::Instance => "instance",
             Self::Outbox => "outbox",
             Self::Credential => "credential",
-            Self::EpisodeFence => "episode_fence",
             Self::ContinuationProducer => "continuation_producer",
             Self::OperatorReceipt => "operator_receipt",
             Self::ProjectionReceipt => "projection_receipt",
@@ -292,6 +290,83 @@ impl Store {
             .one(connection)
             .await?;
         row.map(|row| self.decode(kind, key, row)).transpose()
+    }
+
+    /// One bounded keyset page of every retained publication, regardless of status.
+    pub(super) async fn publication_page<T: DeserializeOwned>(
+        &self,
+        tx: &DatabaseTransaction,
+        after: &str,
+    ) -> Result<Vec<Stored<T>>> {
+        let rows = tx.query_all(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            "SELECT id,namespace,kind,CASE WHEN octet_length(key)<=256 THEN key ELSE NULL END AS key,revision,status,due_at_ms,updated_at_ms,CASE WHEN octet_length(body)<=$3 THEN body ELSE NULL END AS body FROM gateway_shared_records WHERE namespace=$1 AND kind='authority' AND key LIKE 'configuration/%' AND key>$2 ORDER BY key,id LIMIT 32",
+            [self.namespace.as_str().into(), after.into(), i64::try_from(MAX_RECORD_BYTES)?.into()]
+        )).await?;
+        rows.into_iter()
+            .map(|row| {
+                let row = entity::Model {
+                    id: row.try_get("", "id")?,
+                    namespace: row.try_get("", "namespace")?,
+                    kind: row.try_get("", "kind")?,
+                    key: row.try_get("", "key")?,
+                    revision: row.try_get("", "revision")?,
+                    status: row.try_get("", "status")?,
+                    due_at_ms: row.try_get("", "due_at_ms")?,
+                    updated_at_ms: row.try_get("", "updated_at_ms")?,
+                    body: row.try_get("", "body")?,
+                };
+                let key = row.key.clone();
+                self.decode(Kind::Authority, &key, row)
+            })
+            .collect()
+    }
+
+    /// Inspect every retained row of one kind, including terminal history.
+    /// SQL bounds each body before transfer; a corrupt row is rejected, never skipped.
+    pub(super) async fn record_page<T: DeserializeOwned>(
+        &self,
+        tx: &DatabaseTransaction,
+        kind: Kind,
+        after: &str,
+    ) -> Result<Vec<Stored<T>>> {
+        let rows = tx.query_all(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            "SELECT id,namespace,kind,CASE WHEN octet_length(key)<=256 THEN key ELSE NULL END AS key,revision,status,due_at_ms,updated_at_ms,CASE WHEN octet_length(body)<=$4 THEN body ELSE NULL END AS body FROM gateway_shared_records WHERE namespace=$1 AND kind=$2 AND ($3='' OR key>$3) ORDER BY key,id LIMIT 32",
+            [self.namespace.as_str().into(), kind.as_str().into(), after.into(), i64::try_from(MAX_RECORD_BYTES)?.into()]
+        )).await?;
+        rows.into_iter()
+            .map(|row| {
+                let row = entity::Model {
+                    id: row.try_get("", "id")?,
+                    namespace: row.try_get("", "namespace")?,
+                    kind: row.try_get("", "kind")?,
+                    key: row.try_get("", "key")?,
+                    revision: row.try_get("", "revision")?,
+                    status: row.try_get("", "status")?,
+                    due_at_ms: row.try_get("", "due_at_ms")?,
+                    updated_at_ms: row.try_get("", "updated_at_ms")?,
+                    body: row.try_get("", "body")?,
+                };
+                let key = row.key.clone();
+                self.decode(kind, &key, row)
+            })
+            .collect()
+    }
+
+    /// Retired guard records cannot be made current by replacing a store marker.
+    /// Ordinary trajectory observations and their schema remain independent.
+    pub(super) async fn reject_retired_guard_records(
+        &self,
+        tx: &DatabaseTransaction,
+    ) -> Result<()> {
+        let row = tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            "SELECT EXISTS(SELECT 1 FROM gateway_shared_records WHERE namespace=$1 AND kind='episode_fence') OR EXISTS(SELECT 1 FROM gateway_shared_trajectory_events WHERE namespace=$1 AND (kind IN ('route_intent_recorded','guard_activated') OR event_json::jsonb->>'kind' IN ('route_intent_recorded','guard_activated'))) AS retired",
+            [self.namespace.as_str().into()]
+        )).await?.context("missing shared guard preflight")?;
+        ensure!(
+            !row.try_get::<bool>("", "retired")?,
+            "retired shared guard history"
+        );
+        Ok(())
     }
 
     /// A pooled read still needs a server deadline: dropping a client future

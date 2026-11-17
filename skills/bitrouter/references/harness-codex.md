@@ -58,7 +58,7 @@ With an active `openai-codex` provider, no model pin is needed: the ACP adapter
 keeps the Codex CLI's native default and model picker. BitRouter maps its
 declared native model names to the Codex subscription at gateway ingress.
 Generic API calls still require an explicit subscription route; canonical ids,
-provider-qualified routes, presets, and user-defined virtual models retain
+provider-qualified routes, named routers, and user-defined virtual models retain
 their normal routing behavior. A daemon reload updates this mapping too.
 
 `init --model ID` saves the default model. `run codex PROMPT --model ID` overrides it

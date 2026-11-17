@@ -11,6 +11,8 @@ use chrono::Utc;
 
 use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
+#[cfg(all(unix, feature = "core", feature = "harness"))]
+mod assembly_scope;
 mod authority;
 mod authority_ingress;
 mod capacity_directory;
@@ -19,7 +21,6 @@ mod capacity_history;
 mod configuration;
 mod conformance;
 mod directory;
-#[cfg(feature = "core")]
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;

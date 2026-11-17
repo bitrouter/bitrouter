@@ -521,8 +521,6 @@ impl Service {
         let super::manifest::Definition::Policy { document, name, .. } = artifact.definition else {
             return Err(ErrorCode::InvalidRequest.into());
         };
-        let document = crate::model_policy::source(&document)
-            .map_err(|_| Failure::from(ErrorCode::CapabilityMismatch))?;
         Ok(bitrouter_ai::tenancy::resources::PolicySource {
             status,
             document,

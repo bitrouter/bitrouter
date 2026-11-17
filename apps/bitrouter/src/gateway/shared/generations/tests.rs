@@ -90,10 +90,10 @@ impl Fixture {
             .publish(
                 head.config_generation,
                 &Configuration {
-                    format: 1,
+                    format: 2,
                     routing: serde_json::json!({}),
                     policies: Vec::new(),
-                    policy_lock: None,
+                    model_policy: None,
                     credentials: Vec::new(),
                     require_known_pricing: false,
                 },
@@ -113,7 +113,7 @@ impl Fixture {
             correlation_key: keys.active_correlation()?,
             auth_appliers: AuthAppliers::new(),
             policies: Vec::new(),
-            policy_lock: None,
+            model_policy: None,
         })
     }
 

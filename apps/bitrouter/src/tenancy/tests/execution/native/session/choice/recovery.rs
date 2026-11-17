@@ -90,7 +90,7 @@ impl Spec {
                 && Path::new(&mains[0]).canonicalize()? == file,
             "connector did not open the actual leased file"
         );
-        let service = Service::open_owned_profile_observed(
+        let service = Service::open_owned_bro_profile_observed(
             database,
             &crate::config::tenancy::TenancyConfig {
                 enabled: true,

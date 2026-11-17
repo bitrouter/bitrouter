@@ -101,10 +101,6 @@ impl Service {
         >,
     ) -> Result<PipelineResponse> {
         let outcome = async {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            if let Some(step) = step {
-                execution.enroll_experiment(step).await?;
-            }
             if let Err(code) = execution.prepare_count_profile(&prompt) {
                 let error = execution.reject(code);
                 execution

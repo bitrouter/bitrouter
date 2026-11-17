@@ -1,7 +1,6 @@
 //! Bootstrap-only immutable audit and repair; no live scope or dispatch is created.
 mod audit;
 mod closure;
-mod native;
 mod projection;
 mod write;
 
@@ -35,7 +34,6 @@ pub(in crate::tenancy) struct Plan {
     at: Timestamp,
 }
 pub(in crate::tenancy) struct Access<'a> {
-    pub(in crate::tenancy) database: &'a sea_orm::DatabaseConnection,
     pub(in crate::tenancy) state: &'a AuthorityHeader,
     pub(in crate::tenancy) origin: &'a StartupOwner,
     pub(in crate::tenancy) proof: &'a Arc<Proof>,

@@ -5,8 +5,9 @@ use crate::capture_fixture::{FixtureScope, PersistedHistory};
 use bitrouter::config::Config;
 use bitrouter::gateway::routing::blocks::allocation::BanditConfig;
 use bitrouter::gateway::routing::blocks::control::{BlockDefinition, BlockRule, BlockStatus};
-use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+use bitrouter::policy_lock::deterministic_yaml;
 use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
+use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use std::collections::BTreeMap;
 
 pub(super) fn configuration(fixture: &Fixture, upstream: &str, named: bool) -> Result<String> {
@@ -25,8 +26,6 @@ database:
   url: "{}"
 agent_api:
   enabled: false
-policy:
-  mode: frozen
 providers:
   fixture:
     api_base: "{upstream}"
@@ -53,39 +52,63 @@ models:
     endpoints:
       - provider: fixture
         service_id: cheap
-presets:
+routers:
   coding:
-    model: "fixture:strong"
-    system_prompt: "Use recorded requirements."
+    selection:
+      kind: model
+      model: "fixture:strong"
+    defaults:
+      system_prompt: "Use recorded requirements."
   candidate:
-    model: "fixture:cheap"
-    system_prompt: "Use recorded requirements."
-    params:
-      temperature: 0.2
+    selection:
+      kind: model
+      model: "fixture:cheap"
+    defaults:
+      system_prompt: "Use recorded requirements."
+      params:
+        temperature: 0.2
 "#,
         database_url(fixture)
     ))?;
     if named {
-        let mut lock = PolicyLock::default();
+        let mut source = Document {
+            spec_version: SpecVersion::Beta1,
+            policies: BTreeMap::new(),
+        };
         for (name, tier) in [("coding", "strong"), ("candidate", "cheap")] {
-            document["presets"][name]["policy"] = json!(name);
-            lock.policies.insert(
+            document["routers"][name]["selection"] = json!({
+                "kind": "policy", "policy": name, "base_model": format!("fixture:{tier}"),
+            });
+            source.policies.insert(
                 name.into(),
-                PolicyDefinition {
+                Policy {
                     tiers: BTreeMap::from([
-                        ("strong".into(), "fixture:strong".into()),
-                        ("cheap".into(), "fixture:cheap".into()),
+                        (
+                            "strong".into(),
+                            Target {
+                                model: "fixture:strong".into(),
+                                effort: None,
+                            },
+                        ),
+                        (
+                            "cheap".into(),
+                            Target {
+                                model: "fixture:cheap".into(),
+                                effort: None,
+                            },
+                        ),
                     ]),
-                    default_tier: Some(tier.into()),
+                    default_tier: tier.into(),
+                    classifier_digest: None,
+                    routes: BTreeMap::new(),
                     tool_use_tier: Some("strong".into()),
                     tool_safe_tiers: vec!["strong".into()],
-                    ..PolicyDefinition::default()
                 },
             );
         }
         fs::write(
-            fixture.directory.path().join("policy-lock.yaml"),
-            deterministic_yaml(&lock)?,
+            fixture.directory.path().join("policy.yaml"),
+            deterministic_yaml(&source)?,
         )?;
     }
     let raw = serde_saphyr::to_string(&document)?;
@@ -99,10 +122,10 @@ presets:
             source: "fixture".into(),
             rationale: "Compare complete compatible routes.".into(),
             rules: vec![BlockRule {
-                selector: selector(named).into(),
+                selector: if named { "bitrouter/coding" } else { "coding" }.into(),
                 fingerprint: None,
-                baseline_route: selector(named).into(),
-                challenger_route: if named { "@candidate" } else { "candidate" }.into(),
+                baseline_route: if named { "bitrouter/coding" } else { "coding" }.into(),
+                challenger_route: if named { "bitrouter/candidate" } else { "candidate" }.into(),
             }],
             independence_rationale: "One controlled block.".into(),
             dependencies: BTreeMap::new(),

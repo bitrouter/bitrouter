@@ -42,6 +42,7 @@ fn reference(value: &mut ResourceRef) -> Result<()> {
 
 pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
     let RetainedExecutionRevision {
+        bro_capture: _,
         installation,
         tenant,
         revision,

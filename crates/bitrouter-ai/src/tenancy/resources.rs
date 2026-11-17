@@ -39,7 +39,7 @@ pub struct CredentialBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Definition {
-    /// Installation-managed operational profile, independent of PolicyLock.
+    /// Installation-managed operational profile, independent of routing Policy.
     AdmissionProfile {
         /// Closed, bounded operational rules.
         profile: AdmissionProfileV1,
@@ -100,8 +100,7 @@ pub enum Definition {
     /// Policy-as-code, interpreted and validated exclusively by the service.
     Policy {
         /// Explicit policy document; filesystem paths are not authority.
-        #[cfg_attr(feature = "schema", schemars(with = "crate::policy::Document"))]
-        document: Value,
+        document: crate::policy::Document,
         /// Selected policy name in this document.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
         name: String,
@@ -343,8 +342,8 @@ impl Validate for Definition {
                 name,
                 dependencies,
             } => {
-                require(document.is_object(), "policy document")?;
                 text(name, 256)?;
+                require(document.policies.contains_key(name), "policy name")?;
                 unique(dependencies, 0, 256)?;
                 require(
                     dependencies.iter().all(|r| {

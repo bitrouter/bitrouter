@@ -57,7 +57,7 @@ async fn public_sdk_roundtrips_owned_ledger_over_each_enabled_transport() -> Res
             )?;
             let installation = &fixture.installation;
             let tenant = &fixture.tenant;
-            let mut evidence = subject()?;
+            let mut evidence = subject(&fixture)?;
             evidence.eval_id = "sdk/subject α?draft=1#part".into();
             let inserted = client
                 .put_eval_subject(installation, tenant, &evidence)

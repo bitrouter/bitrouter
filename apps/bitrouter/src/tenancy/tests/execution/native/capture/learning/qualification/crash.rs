@@ -74,7 +74,8 @@ async fn killed_file_backed_paid_owner_cannot_restart_or_replay_its_uncertain_pr
             "accepted job/budget/pending not committed before death"
         );
         let snapshot = store::load(&db, Utc::now()).await?;
-        let resources = Resources::with_key(snapshot.installation.clone(), [29; 32])?;
+        let resources =
+            Resources::with_key(snapshot.installation.clone(), [29; 32])?.for_bro_capture();
         let attempt = Service::start_prepared(
             db.clone(),
             Some(owner.clone()),

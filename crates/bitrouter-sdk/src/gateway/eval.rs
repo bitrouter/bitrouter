@@ -18,17 +18,39 @@ impl GatewayClient {
     /// Insert immutable evidence using this client's service credential.
     /// An interrupted submission is never automatically retried.
     pub async fn put_eval_subject(&self, subject: &EvalSubject) -> Result<PutSubjectReport> {
+        if subject.schema_version != bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
+            || !matches!(
+                subject.identity,
+                bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+            )
+        {
+            return Err(Error::Request(
+                "gateway eval requires a schema-2 gateway_generic subject",
+            ));
+        }
         self.eval_post("v1/evals/subjects", subject).await
     }
 
     /// List subjects visible to the authenticated principal.
     pub async fn eval_subjects(&self) -> Result<Vec<EvalSubject>> {
-        self.eval_get(self.url("v1/evals/subjects")?).await
+        let subjects: Vec<EvalSubject> = self.eval_get(self.url("v1/evals/subjects")?).await?;
+        for subject in &subjects {
+            gateway_subject(subject)?;
+        }
+        Ok(subjects)
     }
 
     pub async fn eval_subject(&self, eval_id: &str) -> Result<EvalSubject> {
-        self.eval_get(self.eval_resource("subjects", eval_id)?)
-            .await
+        let subject: EvalSubject = self
+            .eval_get(self.eval_resource("subjects", eval_id)?)
+            .await?;
+        gateway_subject(&subject)?;
+        if subject.eval_id != eval_id {
+            return Err(Error::Response(
+                "evaluation response identity differs from request",
+            ));
+        }
+        Ok(subject)
     }
 
     /// Submit a result for service-side admission; this never publishes a policy.
@@ -95,5 +117,20 @@ impl GatewayClient {
         }
         serde_json::from_slice(&transport::body(response, self.options.max_response_bytes).await?)
             .map_err(|_| Error::Response("body does not match the evaluation contract"))
+    }
+}
+
+fn gateway_subject(subject: &EvalSubject) -> Result<()> {
+    if subject.schema_version == bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
+        && matches!(
+            subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        )
+    {
+        Ok(())
+    } else {
+        Err(Error::Response(
+            "invalid gateway evaluation subject profile",
+        ))
     }
 }

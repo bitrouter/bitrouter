@@ -55,7 +55,9 @@ pub(super) fn compiled_with_operation(
         "public configuration digest mismatch"
     );
     ensure!(
-        revision.compiler_version == COMPILER_VERSION
+        revision.compiler_version == super::MODEL_POLICY_COMPILER_VERSION
+            || revision.compiler_version == super::BRO_OBLIGATION_COMPILER_VERSION
+            || revision.compiler_version == COMPILER_VERSION
             || revision.compiler_version == super::PROFILED_COMPILER_VERSION
             || revision.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION
             || revision.compiler_version == super::NATIVE_COMPILER_VERSION,
@@ -246,7 +248,11 @@ pub(super) fn compiled_with_operation(
                     } else {
                         compiler::routing_config(routing)?
                     };
-                    crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
+                    ensure!(
+                        document.policies.contains_key(name),
+                        "selected policy missing"
+                    );
+                    crate::policy_lock::validate_for_config(&config, document)?;
                 }
             }
             let expected = if matches!(envelope.format, 4..=6) {
@@ -298,6 +304,16 @@ pub(super) fn compiled_with_operation(
     ensure!(
         (envelope.format == 6) == (revision.compiler_version == super::NATIVE_COMPILER_VERSION),
         "native configuration compiler mismatch"
+    );
+    ensure!(
+        (envelope.format == 7)
+            == (revision.compiler_version == super::MODEL_POLICY_COMPILER_VERSION),
+        "model policy configuration compiler mismatch"
+    );
+    ensure!(
+        (envelope.format == 8)
+            == (revision.compiler_version == super::BRO_OBLIGATION_COMPILER_VERSION),
+        "BRO obligation configuration compiler mismatch"
     );
     super::execution::validate_with_operation(envelope, operation)
 }

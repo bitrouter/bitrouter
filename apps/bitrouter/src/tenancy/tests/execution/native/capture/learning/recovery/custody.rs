@@ -39,7 +39,7 @@ async fn opener() -> Result<()> {
     let before = exact(&db).await?;
     let (attached, receive) = tokio::sync::oneshot::channel();
     let mut opening = AbortOnDropHandle::new(tokio::spawn(async move {
-        Service::open_owned_profile_observed_startup(
+        Service::open_owned_bro_profile_observed_startup(
             database,
             &config(),
             &crate::config::ContinuationConfig::default(),

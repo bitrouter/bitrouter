@@ -256,30 +256,6 @@ impl Service {
     }
 }
 
-/// A read fence on the existing host slot. Unknown native cleanup retains the
-/// original slot, so it cannot be replaced by a serialized released label.
-pub(in crate::tenancy) struct StoppedRead {
-    _permit: OwnedSemaphorePermit,
-}
-impl Service {
-    pub(in crate::tenancy) fn stopped_learner_source(&self) -> Result<Arc<StoppedRead>, Failure> {
-        let accepting = self
-            .accepting
-            .lock()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        if !*accepting || !self.live.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        let permit = self
-            .hosts
-            .slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
-        Ok(Arc::new(StoppedRead { _permit: permit }))
-    }
-}
-
 #[cfg(all(feature = "core", feature = "harness"))]
 impl Service {
     /// Only the actual opener holding this Service's original slot can register.

@@ -70,6 +70,35 @@ from shared gateway mode; the two profiles cannot be enabled together.
 [Tenant routing](tenant-routing.md) describes the actual-send limits and health
 state inside the authorized retained candidate set.
 
+## Accepted M0 Policy and Eval boundary
+
+These boundaries apply independently of the compiled feature set.
+Gateway model Policy uses the same public typed source as files, defaults, CLI,
+SDK and tenant resources. Shared publication carries model_policy under format2;
+ACL policies stay independent. Runtime selection changes model/effort and keeps
+complete admitted context. A private compiled view never becomes an editable
+format or a source-reconstruction bridge. Exact revision/literal-name bindings,
+full dependency qualification and live authority are checked before dispatch.
+
+Tenant/shared import, configuration and execution reject experimental context,
+core_choice, paid assessment and ACP block even on Policy-free routes with all
+features enabled. Retained experiments have an explicit BRO local harness owner.
+Ordinary provider continuation and explicitly enabled server tools retain their
+own permissions; selecting a Policy cannot start tool execution.
+
+Model Policy and tenant Eval exchange belong to the minimum gateway profile.
+Evaluation executes externally; the service admits/queries/freezes facts against
+verified closed identities. It adds no Eval runner or implicit learner. Results,
+freeze and draft source do not change active routing. Source publication and
+configuration activation are distinct authorized/CAS operations.
+
+Shared bootstrap/join/restart validate the current baseline, authenticated head
+and all affected encrypted publications before instance registration, heartbeat
+or recovery writes. A Policy-free head does not permit old retained content.
+Refusal preserves old data; current shared reconciliation, idempotency, output,
+usage/Unknown and cancellation obligations remain required. Format selection is
+owned by the [service contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback).
+
 ## Adapter validation
 
 Authentication, routes and model availability are deployment-specific. Unknown

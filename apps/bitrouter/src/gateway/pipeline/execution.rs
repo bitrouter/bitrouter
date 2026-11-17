@@ -2501,9 +2501,7 @@ impl Pipeline {
                 .iter()
                 .filter(|hook| hook.supports(operation))
             {
-                selector
-                    .prepare_selection(policy, resolution.variant.as_deref(), ctx)
-                    .await?;
+                selector.prepare_selection(policy, ctx).await?;
             }
         }
         let native = preparation_runtime(ctx);
@@ -2562,7 +2560,7 @@ impl Pipeline {
                     preparation_runtime(ctx),
                     ctx.request_id().into(),
                     NativePreparationWorkKind::ModelSelection,
-                    selector.select_variant(policy, resolution.variant.as_deref(), ctx),
+                    selector.select_policy(policy, ctx),
                 )
                 .await?;
             }

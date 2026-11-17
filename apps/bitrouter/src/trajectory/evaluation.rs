@@ -1,6 +1,3 @@
-#[cfg(any(feature = "core", feature = "multi-instance"))]
-pub(crate) mod headroom;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
@@ -9,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
     crate::storage::evaluation::validate_result_for_subject, bitrouter_ai::eval::DecisionCredit,
-    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+    bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
     bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
     bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
     bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
@@ -110,7 +107,7 @@ pub(crate) fn build_operational_evaluation(
             None => {}
         }
     }
-    let (current_route, current_decision) = decoded
+    let _current = decoded
         .iter()
         .rev()
         .find(|(event, _)| event.request_id == settlement.request_id)
@@ -185,16 +182,11 @@ pub(crate) fn build_operational_evaluation(
         snapshot.episode_id, snapshot.through_sequence
     );
     let subject = EvalSubject {
-        schema_version: EVAL_SCHEMA_VERSION,
+        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: eval_id.clone(),
         scope: EvalScope::Episode,
         subject_id: snapshot.episode_id.clone(),
-        policy_digest: current_decision.policy_digest.clone(),
-        preset: current_route
-            .evidence
-            .categorical
-            .get("route.preset")
-            .cloned(),
         cohort: None,
         holdout: false,
         decisions,
@@ -204,7 +196,7 @@ pub(crate) fn build_operational_evaluation(
         observed_at: settlement.captured_at.clone(),
     };
     let result = EvaluationResult {
-        schema_version: EVAL_SCHEMA_VERSION,
+        schema_version: EVAL_RESULT_SCHEMA_VERSION,
         eval_id,
         evidence_digest,
         evaluator: EvaluatorIdentity {
@@ -616,8 +608,10 @@ mod tests {
         assert_eq!(envelope.subject.scope, EvalScope::Episode);
         assert_eq!(envelope.subject.subject_id, "episode-1");
         assert_eq!(envelope.subject.eval_id, "trajectory:episode-1:3");
-        assert_eq!(envelope.subject.policy_digest, POLICY_DIGEST);
-        assert_eq!(envelope.subject.preset.as_deref(), Some("auto:cost"));
+        assert!(matches!(
+            envelope.subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
         assert_eq!(envelope.subject.decisions.len(), 1);
         assert_eq!(envelope.subject.decisions[0].decision_id, "route-1");
         assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");

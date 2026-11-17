@@ -12,7 +12,7 @@ compatibility consequences. Admission and review follow the
 | BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.5` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
 
 M0 configuration/service-api beta.5 and Policy cutover clauses are accepted
-targets pending implementation and conformance qualification. Policy beta.1
+requirements for implementation and conformance qualification. Policy beta.1
 retains its unchanged unpublished source; Registry beta.7 is unchanged.
 
 ## Contract identifiers and revision dimensions

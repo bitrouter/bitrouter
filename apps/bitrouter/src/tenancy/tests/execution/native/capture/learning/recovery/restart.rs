@@ -145,7 +145,7 @@ async fn consumer() -> Result<()> {
             }
         }
         let before = exact(&db).await?;
-        let open = Service::open_owned_profile(
+        let open = Service::open_owned_bro_profile(
             database,
             &config(),
             &crate::config::ContinuationConfig::default(),

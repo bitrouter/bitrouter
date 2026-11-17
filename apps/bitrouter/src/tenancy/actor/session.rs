@@ -10,7 +10,6 @@ impl Worker {
     ) -> Result<Reply, Failure> {
         let authority = match &job.request {
             Request::Load(authority) => authority,
-            Request::Assessment(request) => request.binding.authority(),
             Request::Save { binding, .. } | Request::Reconcile(binding, _) => binding.authority(),
         };
         let cleanup = matches!(
@@ -35,9 +34,6 @@ impl Worker {
                 authority
                     .check()
                     .map_err(|failure| Rejected(failure.0.code))?;
-            }
-            if let Request::Assessment(request) = &job.request {
-                request.check().map_err(Rejected)?;
             }
             Ok(())
         };
@@ -77,35 +73,14 @@ impl Worker {
                     self.write_intent_failure(error, ErrorCode::AuthorityUnavailable)
                 })?
         };
-        let budget_check = || {
-            check().map_err(|error| {
-                error
-                    .downcast_ref::<Rejected>()
-                    .map_or(ErrorCode::AuthorityUnavailable, |error| error.0)
-            })
-        };
-        let budget = crate::storage::operation_budget::OperationBudget::new(&budget_check);
         let result = async {
             check()?;
             let reply = match &job.request {
-                Request::Load(authority) => {
-                    crate::tenancy::learning::store::native::cleanup::guard_open(
-                        &tx, authority, &budget,
-                    )
-                    .await?;
-                    Reply::Loaded(
-                        self.prepare_stopped_native(&tx, authority, &check)
-                            .await?
-                            .map(Box::new),
-                    )
-                }
-                Request::Assessment(request) => {
-                    let (value, wrote) = request.execute(&tx, &budget).await?;
-                    Reply::Assessment {
-                        value: Box::new(value),
-                        wrote,
-                    }
-                }
+                Request::Load(authority) => Reply::Loaded(
+                    self.prepare_stopped_native(&tx, authority, &check)
+                        .await?
+                        .map(Box::new),
+                ),
                 Request::Reconcile(binding, recovery) => {
                     let loaded = crate::managed_store::owned::load_bounded_in(
                         &tx,
@@ -127,7 +102,6 @@ impl Worker {
                     recovery,
                     ..
                 } => {
-                    binding.check_paid_journal(bytes, &budget)?;
                     if let Some(recovery) = recovery {
                         let metadata = metadata
                             .as_ref()
@@ -181,31 +155,15 @@ impl Worker {
                                 }
                             }
                         }
-                        if crate::tenancy::experiment::store::terminal::native_ack(
-                            &tx, binding, bytes, &budget,
+                        crate::managed_store::owned::save_in(
+                            &tx,
+                            binding,
+                            *expected,
+                            bytes,
+                            metadata.as_ref(),
+                            &check,
                         )
-                        .await?
-                        {
-                            crate::managed_store::owned::save_experiment_in(
-                                &tx,
-                                binding,
-                                *expected,
-                                bytes,
-                                metadata.as_ref(),
-                                &budget,
-                            )
-                            .await?;
-                        } else {
-                            crate::managed_store::owned::save_in(
-                                &tx,
-                                binding,
-                                *expected,
-                                bytes,
-                                metadata.as_ref(),
-                                &check,
-                            )
-                            .await?;
-                        }
+                        .await?;
                     }
                     Reply::Saved
                 }
@@ -241,7 +199,7 @@ impl Worker {
                 return Err(map(error));
             }
         };
-        if matches!(reply, Reply::Saved | Reply::Assessment { wrote: true, .. }) {
+        if matches!(reply, Reply::Saved) {
             let commit = control.commit(tx).await;
             #[cfg(test)]
             if let Request::Save {

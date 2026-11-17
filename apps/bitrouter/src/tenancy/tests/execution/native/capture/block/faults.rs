@@ -306,7 +306,7 @@ async fn acknowledged_no_send_receipt(host: &Host, intent: &Value) -> Result<()>
             && receipt.attempts.is_empty()
             && !receipt.usage.complete
     );
-    ensure!(candidate.experiment_disposition()?.1 == DispatchState::NotStarted);
+    ensure!(candidate.dispatch_state()? == DispatchState::NotStarted);
     let count = host.fixture.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
         "SELECT COUNT(*) AS count FROM tenancy_execution_receipts WHERE installation_id=? AND tenant_id=?",
         [host.fixture.installation.as_str().into(), host.fixture.tenant.as_str().into()])).await?.context("receipt count")?;

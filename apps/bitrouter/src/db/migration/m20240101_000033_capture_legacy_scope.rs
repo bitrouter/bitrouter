@@ -9,11 +9,6 @@ use sea_orm_migration::prelude::*;
 
 use super::m20240101_000028_resource_tenancy::identity;
 
-mod dependencies;
-
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 const TABLES: [&str; 9] = [
     "acp_capture_connections",
     "acp_canonical_sessions",
@@ -89,13 +84,6 @@ impl ScopedIndex {
             statement.col(Alias::new(*column));
         }
         statement.to_owned()
-    }
-
-    fn drop(&self) -> IndexDropStatement {
-        Index::drop()
-            .name(self.name)
-            .table(Alias::new(self.table))
-            .to_owned()
     }
 }
 
@@ -770,94 +758,29 @@ async fn preflight(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     Ok(())
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Inspect the entire partially applied schema before adding anything.
-        preflight(manager).await?;
-        mysql_widths(manager).await?;
-        for table in TABLES {
-            for column in COLUMNS {
-                if !has_column(manager, table, column).await? {
-                    manager
-                        .alter_table(
-                            Table::alter()
-                                .table(Alias::new(table))
-                                .add_column(identity(
-                                    manager.get_database_backend(),
-                                    column,
-                                    128,
-                                    true,
-                                ))
-                                .to_owned(),
-                        )
-                        .await?;
-                }
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    // Inspect the entire partially applied schema before adding anything.
+    preflight(manager).await?;
+    mysql_widths(manager).await?;
+    for table in TABLES {
+        for column in COLUMNS {
+            if !has_column(manager, table, column).await? {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new(table))
+                            .add_column(identity(manager.get_database_backend(), column, 128, true))
+                            .to_owned(),
+                    )
+                    .await?;
             }
         }
-        for index in &INDEXES {
-            if !manager.has_index(index.table, index.name).await? {
-                manager.create_index(index.create()).await?;
-            }
-        }
-        preflight(manager).await
     }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        preflight(manager).await?;
-        dependencies::down(manager).await?;
-        // ALL tables must pass before the first DROP, including mixed-NULL rows
-        // and partial DDL. No row may be relabeled Legacy by removing metadata.
-        for table in TABLES {
-            let mut populated = Condition::any();
-            let mut present = false;
-            for column in COLUMNS {
-                if has_column(manager, table, column).await? {
-                    populated = populated.add(Expr::col(Alias::new(column)).is_not_null());
-                    present = true;
-                }
-            }
-            if present {
-                let statement = Query::select()
-                    .expr(Expr::val(1))
-                    .from(Alias::new(table))
-                    .cond_where(populated)
-                    .limit(1)
-                    .to_owned();
-                if manager
-                    .get_connection()
-                    .query_one(manager.get_database_backend().build(&statement))
-                    .await?
-                    .is_some()
-                {
-                    return Err(DbErr::Custom(format!(
-                        "migration033 cannot remove populated ownership from {table}"
-                    )));
-                }
-            }
+    for index in &INDEXES {
+        if !manager.has_index(index.table, index.name).await? {
+            manager.create_index(index.create()).await?;
         }
-        for index in INDEXES.iter().rev() {
-            if manager.has_index(index.table, index.name).await? {
-                manager.drop_index(index.drop()).await?;
-            }
-        }
-        for table in TABLES.into_iter().rev() {
-            for column in COLUMNS.into_iter().rev() {
-                if has_column(manager, table, column).await? {
-                    manager
-                        .alter_table(
-                            Table::alter()
-                                .table(Alias::new(table))
-                                .drop_column(Alias::new(column))
-                                .to_owned(),
-                        )
-                        .await?;
-                }
-            }
-        }
-        Ok(())
     }
+    preflight(manager).await
 }
-
-#[cfg(test)]
-mod tests;

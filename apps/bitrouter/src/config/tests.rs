@@ -1011,26 +1011,6 @@ providers:
 }
 
 #[test]
-fn parses_presets_and_variants() {
-    let yaml = r#"
-presets:
-  careful:
-    model: gpt-5
-    system_prompt: "Reason carefully."
-    params: { temperature: 0.2 }
-    routing: { require_tags: [paid], sort: latency }
-variants:
-  free:
-    routing: { require_tags: [free] }
-"#;
-    let cfg = parse(yaml).unwrap();
-    let careful = cfg.presets.get("careful").unwrap();
-    assert_eq!(careful.model.as_deref(), Some("gpt-5"));
-    assert_eq!(careful.routing.require_tags, vec!["paid"]);
-    assert!(cfg.variants.contains_key("free"));
-}
-
-#[test]
 fn parses_strict_named_router_configuration() -> crate::gateway::error::Result<()> {
     let config = parse(
         r#"
@@ -1136,74 +1116,24 @@ fn auto_router_template_resolves_auto_and_cost_variant()
 }
 
 #[test]
-fn policy_runtime_mode_defaults_to_frozen() -> crate::gateway::error::Result<()> {
-    let config = parse("")?;
-    let policy = serde_json::to_value(&config.policy)
-        .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?;
-
-    assert_eq!(policy["mode"], "frozen");
-    assert!(policy.get("writeback").is_none());
-    Ok(())
-}
-
-#[test]
-fn policy_runtime_mode_accepts_adaptive_and_legacy_writeback_values()
--> crate::gateway::error::Result<()> {
-    for (yaml, expected) in [
-        ("policy:\n  mode: adaptive\n", "adaptive"),
-        ("policy:\n  writeback: locked\n", "frozen"),
-        ("policy:\n  writeback: evolve\n", "adaptive"),
+fn policy_source_location_is_strict_and_modes_are_not_accepted() -> crate::gateway::error::Result<()>
+{
+    let config = parse("policy: {path: ./team.yaml}")?;
+    assert_eq!(
+        config.policy.path.as_deref(),
+        Some(std::path::Path::new("./team.yaml"))
+    );
+    for source in [
+        "policy: {mode: frozen}",
+        "policy: {mode: adaptive}",
+        "policy: {writeback: locked}",
+        "policy: {writeback: evolve}",
+        "policy: {unknown: value}",
+        "presets: {}",
+        "variants: {}",
     ] {
-        let config = parse(yaml)?;
-        let policy = serde_json::to_value(&config.policy)
-            .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?;
-        assert_eq!(policy["mode"], expected, "yaml: {yaml}");
-        assert!(policy.get("writeback").is_none(), "yaml: {yaml}");
+        assert!(parse(source).is_err(), "{source}");
     }
-    Ok(())
-}
-
-#[test]
-fn policy_runtime_mode_controls_effective_adequacy_flags() -> crate::gateway::error::Result<()> {
-    let config = AdequacyConfig {
-        enabled: false,
-        explore_enabled: false,
-        explore_tier: Some("economy".to_string()),
-        ..AdequacyConfig::default()
-    };
-
-    let frozen = PolicyRuntimeMode::Frozen.apply_to_adequacy(&config);
-    assert!(!frozen.enabled);
-    assert!(!frozen.explore_enabled);
-
-    let adaptive = PolicyRuntimeMode::Adaptive.apply_to_adequacy(&config);
-    assert!(!adaptive.enabled);
-    assert!(!adaptive.explore_enabled);
-
-    let without_explore_tier =
-        PolicyRuntimeMode::Adaptive.apply_to_adequacy(&AdequacyConfig::default());
-    assert!(!without_explore_tier.enabled);
-    assert!(!without_explore_tier.explore_enabled);
-    Ok(())
-}
-
-#[test]
-fn adaptive_runtime_mode_does_not_require_legacy_learner_configuration()
--> crate::gateway::error::Result<()> {
-    let config = parse(
-        r#"
-policy:
-  mode: adaptive
-"#,
-    )?;
-
-    assert_eq!(config.policy.mode, PolicyRuntimeMode::Adaptive);
-    let effective_adequacy = config
-        .policy
-        .mode
-        .apply_to_adequacy(&AdequacyConfig::default());
-    assert!(!effective_adequacy.enabled);
-    assert!(!effective_adequacy.explore_enabled);
     Ok(())
 }
 

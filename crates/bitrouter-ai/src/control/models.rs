@@ -32,8 +32,6 @@ pub enum ModelsSource {
 pub enum RouterSource {
     /// A definition under the public `routers:` config section.
     User,
-    /// A compatibility definition normalized from `presets:`.
-    Legacy,
     /// The product's built-in coding initialization slot has no saved binding.
     Default,
 }

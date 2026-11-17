@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 
-use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
 use crate::gateway::routing::exploration::RouteExploration;
 use {
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalVerdict,
@@ -36,6 +36,8 @@ pub struct ArmAssessment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CohortAssessment {
+    /// Exact immutable identity represented by this cohort; generic facts never qualify.
+    pub identity: Option<bitrouter_ai::eval::EvalSubjectIdentity>,
     pub control: ArmAssessment,
     pub challenger: ArmAssessment,
     pub excluded_requests: u32,
@@ -115,9 +117,41 @@ pub fn assess_cohort(
     active_policy_digest: &str,
     exploration: &RouteExploration,
 ) -> Result<CohortAssessment> {
+    let mut binding = None;
+    let mut identity = None;
+    for record in &snapshot.records {
+        if let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
+            installation_id,
+            tenant_id,
+            configuration_revision,
+            policy,
+            name,
+            ..
+        } = &record.subject.identity
+        {
+            let current = crate::storage::evaluation::canonical_digest(&(
+                installation_id,
+                tenant_id,
+                configuration_revision,
+                policy,
+                name,
+            ))?;
+            anyhow::ensure!(
+                binding.as_ref().is_none_or(|bound| bound == &current),
+                "cohort spans immutable model-policy identities"
+            );
+            binding = Some(current);
+            identity = Some(record.subject.identity.clone());
+        }
+    }
     let mut subjects = BTreeMap::<SubjectKey, SubjectGroup<'_>>::new();
     let mut excluded_request_subjects = BTreeSet::<SubjectKey>::new();
     for record in &snapshot.records {
+        let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy { source_digest, .. } =
+            &record.subject.identity
+        else {
+            continue;
+        };
         let target_decisions = record
             .subject
             .decisions
@@ -140,7 +174,7 @@ pub fn assess_cohort(
                 subject_id: record.subject.subject_id.clone(),
             })
             .or_default();
-        if record.subject.policy_digest != active_policy_digest {
+        if source_digest.as_deref() != Some(active_policy_digest) {
             group.malformed = true;
         }
         for decision in target_decisions {
@@ -200,7 +234,7 @@ pub fn assess_cohort(
     let classifier_cohorts = groups
         .values()
         .flat_map(|group| &group.records)
-        .flat_map(|record| crate::core::eval::compiler::classifier_cohorts(&record.subject))
+        .flat_map(|record| crate::eval::compiler::classifier_cohorts(&record.subject))
         .collect::<BTreeSet<_>>();
     let ambiguous_classifier = classifier_cohorts.len() > 1;
 
@@ -364,6 +398,7 @@ pub fn assess_cohort(
         CohortGateVerdict::Pass
     };
     Ok(CohortAssessment {
+        identity,
         control,
         challenger,
         excluded_requests,
@@ -527,10 +562,10 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use {
-        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+        bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
         bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::EvalScope,
         bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
         bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
@@ -613,7 +648,7 @@ mod tests {
         }
     }
 
-    fn record(spec: RecordSpec<'_>) -> EvalEvidenceRecord {
+    fn record(spec: RecordSpec<'_>) -> Result<EvalEvidenceRecord> {
         let mut metrics = BTreeMap::new();
         if let Some(value) = spec.trajectory_cost {
             metrics.insert(
@@ -632,16 +667,30 @@ mod tests {
             );
         }
         let eval_id = format!("eval-{}", spec.subject_id);
-        EvalEvidenceRecord {
+        Ok(EvalEvidenceRecord {
             result_id: format!("result-{}-{}", spec.subject_id, spec.result_suffix),
             content_digest: EVIDENCE_DIGEST.into(),
             subject: EvalSubject {
-                schema_version: EVAL_SCHEMA_VERSION,
+                schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+                identity: bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
+                    installation_id: "installation".try_into()?,
+                    tenant_id: "tenant".try_into()?,
+                    configuration_revision: "configuration".try_into()?,
+                    policy: bitrouter_ai::tenancy::configuration::ResourceRef {
+                        owner_kind: bitrouter_ai::tenancy::authority::OwnerKind::Tenant,
+                        owner_id: "tenant".try_into()?,
+                        resource_kind: bitrouter_ai::tenancy::authority::ResourceKind::Policy,
+                        resource_id: "policy".try_into()?,
+                        revision_id: "policy-r1".try_into()?,
+                    },
+                    name: "auto".into(),
+                    source_digest: Some(spec.policy_digest.into()),
+                    classifier_digest: None,
+                    execution: None,
+                },
                 eval_id: eval_id.clone(),
                 scope: spec.scope,
                 subject_id: spec.subject_id.into(),
-                policy_digest: spec.policy_digest.into(),
-                preset: Some("auto".into()),
                 cohort: Some("untrusted-evaluator-label".into()),
                 holdout: false,
                 decisions: vec![decision(
@@ -657,7 +706,7 @@ mod tests {
                 observed_at: "2026-08-17T00:00:00Z".into(),
             },
             result: EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
+                schema_version: EVAL_RESULT_SCHEMA_VERSION,
                 eval_id,
                 evidence_digest: EVIDENCE_DIGEST.into(),
                 evaluator: EvaluatorIdentity {
@@ -680,7 +729,7 @@ mod tests {
                 idempotency_key: format!("idempotency-{}-{}", spec.subject_id, spec.result_suffix),
                 submitted_at: spec.submitted_at.into(),
             },
-        }
+        })
     }
 
     fn decision(
@@ -730,14 +779,14 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             700,
-        ));
+        ))?;
         let duplicate = exact.clone();
         let mut request = record(spec(
             "request-pass",
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             1,
-        ));
+        ))?;
         request.subject.scope = EvalScope::Request;
         let mut wrong_policy = spec(
             "wrong-policy",
@@ -758,7 +807,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             1,
-        ));
+        ))?;
         mixed.subject.decisions.push(decision(
             "decision-2",
             ExperimentArm::Control,
@@ -771,7 +820,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             1,
-        ));
+        ))?;
         let mut conflicting_fail_spec = spec(
             "conflicting-result",
             ExperimentArm::Challenger,
@@ -779,21 +828,21 @@ mod tests {
             1,
         );
         conflicting_fail_spec.result_suffix = "conflict";
-        let conflicting_fail = record(conflicting_fail_spec);
+        let conflicting_fail = record(conflicting_fail_spec)?;
         let control = record(spec(
             "control-exact",
             ExperimentArm::Control,
             EvalVerdict::Pass,
             1_000,
-        ));
+        ))?;
 
         let assessment = assess_cohort(
             &snapshot(vec![
                 exact,
                 duplicate,
                 request,
-                record(wrong_policy),
-                record(wrong_experiment),
+                record(wrong_policy)?,
+                record(wrong_experiment)?,
                 mixed,
                 conflicting_pass,
                 conflicting_fail,
@@ -820,7 +869,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             700,
-        ));
+        ))?;
         projected.subject.decisions[0].route_projection = route_projection.into();
         projected.subject.decisions[0].request_key =
             "semantic_route/v1|unknown|implement|normal".into();
@@ -842,7 +891,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             700,
-        ));
+        ))?;
         malformed.subject.decisions.push(decision(
             "decision-2",
             ExperimentArm::Challenger,
@@ -871,7 +920,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             700,
-        ));
+        ))?;
         malformed.subject.decisions.push(decision(
             "decision-2",
             ExperimentArm::Control,
@@ -900,7 +949,7 @@ mod tests {
             ExperimentArm::Challenger,
             EvalVerdict::Pass,
             700,
-        ));
+        ))?;
         malformed.subject.decisions[0]
             .experiment
             .as_mut()
@@ -929,7 +978,7 @@ mod tests {
                 ExperimentArm::Control,
                 EvalVerdict::Pass,
                 1_000,
-            )));
+            ))?);
         }
         for index in 0..10 {
             let subject_id = format!("challenger-{index}");
@@ -944,7 +993,7 @@ mod tests {
                 700,
             );
             challenger.evaluator_cost = Some(10);
-            records.push(record(challenger));
+            records.push(record(challenger)?);
         }
 
         let assessment = assess_cohort(
@@ -981,7 +1030,7 @@ mod tests {
         second.evaluator_digest = EVALUATOR_B;
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(first), record(second)]),
+            &snapshot(vec![record(first)?, record(second)?]),
             POLICY_DIGEST,
             &exploration(None),
         )?;
@@ -1012,7 +1061,7 @@ mod tests {
         other.evaluator_digest = EVALUATOR_B;
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(hard), record(other)]),
+            &snapshot(vec![record(hard)?, record(other)?]),
             POLICY_DIGEST,
             &exploration(None),
         )?;
@@ -1043,7 +1092,11 @@ mod tests {
         conflict_b.result_suffix = "conflict-b";
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(exact), record(conflict_a), record(conflict_b)]),
+            &snapshot(vec![
+                record(exact)?,
+                record(conflict_a)?,
+                record(conflict_b)?,
+            ]),
             POLICY_DIGEST,
             &exploration(None),
         )?;
@@ -1069,7 +1122,7 @@ mod tests {
         violation.hard_violation = true;
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(violation)]),
+            &snapshot(vec![record(violation)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )?;
@@ -1096,7 +1149,7 @@ mod tests {
         other.evaluator_digest = EVALUATOR_B;
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(exact), record(other)]),
+            &snapshot(vec![record(exact)?, record(other)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )?;
@@ -1129,7 +1182,7 @@ mod tests {
         second.assignment_id = "shared-assignment";
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(first), record(second)]),
+            &snapshot(vec![record(first)?, record(second)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )?;
@@ -1156,7 +1209,7 @@ mod tests {
         episode.trajectory_cost = Some(600);
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(task), record(episode)]),
+            &snapshot(vec![record(task)?, record(episode)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )?;
@@ -1183,7 +1236,7 @@ mod tests {
         newer.trajectory_cost = Some(600);
 
         let assessment = assess_cohort(
-            &snapshot(vec![record(older), record(newer)]),
+            &snapshot(vec![record(older)?, record(newer)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )?;
@@ -1217,9 +1270,9 @@ mod tests {
 
         let assessment = assess_cohort(
             &snapshot(vec![
-                record(tied_later_id),
-                record(stale),
-                record(tied_earlier_id),
+                record(tied_later_id)?,
+                record(stale)?,
+                record(tied_earlier_id)?,
             ]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
@@ -1237,13 +1290,13 @@ mod tests {
                 ExperimentArm::Control,
                 EvalVerdict::Pass,
                 1000,
-            )),
+            ))?,
             record(spec(
                 "backend-b-task",
                 ExperimentArm::Challenger,
                 EvalVerdict::Pass,
                 600,
-            )),
+            ))?,
         ];
         for (index, record) in records.iter_mut().enumerate() {
             record
@@ -1277,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_result_timestamp_returns_a_checked_error() {
+    fn malformed_result_timestamp_returns_a_checked_error() -> Result<()> {
         let mut malformed = spec(
             "malformed-submitted-at",
             ExperimentArm::Challenger,
@@ -1287,7 +1340,7 @@ mod tests {
         malformed.submitted_at = "not-rfc3339";
 
         let error = assess_cohort(
-            &snapshot(vec![record(malformed)]),
+            &snapshot(vec![record(malformed)?]),
             POLICY_DIGEST,
             &exploration(Some(EVALUATOR_A)),
         )
@@ -1296,5 +1349,56 @@ mod tests {
         assert!(
             error.is_some_and(|error| error.to_string().contains("submitted_at must be RFC3339"))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn same_named_policy_facts_cannot_cross_resources_revisions_or_configurations() -> Result<()> {
+        let control = record(spec(
+            "control",
+            ExperimentArm::Control,
+            EvalVerdict::Pass,
+            100,
+        ))?;
+        for field in ["resource", "revision", "configuration"] {
+            let mut challenger = record(spec(
+                "challenger",
+                ExperimentArm::Challenger,
+                EvalVerdict::Pass,
+                50,
+            ))?;
+            if let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
+                policy,
+                configuration_revision,
+                ..
+            } = &mut challenger.subject.identity
+            {
+                match field {
+                    "resource" => {
+                        policy.resource_id = "another-policy-with-auto-name".try_into()?
+                    }
+                    "revision" => policy.revision_id = "policy-r2".try_into()?,
+                    _ => *configuration_revision = "configuration-r2".try_into()?,
+                }
+            }
+            assert!(
+                assess_cohort(
+                    &snapshot(vec![control.clone(), challenger]),
+                    POLICY_DIGEST,
+                    &exploration(Some(EVALUATOR_A))
+                )
+                .is_err()
+            );
+        }
+        let mut generic = control;
+        generic.subject.identity = bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {};
+        let assessed = assess_cohort(
+            &snapshot(vec![generic]),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+        assert!(assessed.identity.is_none());
+        assert_eq!(assessed.verdict, CohortGateVerdict::InsufficientEvidence);
+        Ok(())
     }
 }

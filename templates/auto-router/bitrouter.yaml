@@ -15,18 +15,10 @@ providers:
         provider_model_id: moonshotai/kimi-k3
 inherit_defaults: true
 policy:
-  path: "./policy-lock.yaml"
-  mode: frozen
-trajectory:
-  enabled: true
-  retention_days: 30
-  outbox_batch_size: 100
+  path: "./policy.yaml"
 routers:
   auto:
     selection:
       kind: policy
       base_model: "openai-codex:gpt-5.6-sol"
       policy: auto
-variants:
-  cost:
-    routing: { sort: cost }

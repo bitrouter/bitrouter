@@ -3,15 +3,16 @@ use std::path::Path;
 
 use axum_test::TestServer;
 use bitrouter::config::EvalConfig;
-use bitrouter::core::eval::EvalService;
-use bitrouter::core::eval::api;
-use bitrouter::core::eval::store::EvalStore;
+use bitrouter::eval::EvalService;
+use bitrouter::eval::api;
+use bitrouter::eval::store::EvalStore;
 use {
-    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
-    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
-    bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
-    bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
+    bitrouter::storage::evaluation::evidence_digest,
+    bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+    bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::MetricUnit,
+    bitrouter_ai::eval::MetricValue,
 };
 
 #[tokio::test]
@@ -145,13 +146,11 @@ fn path_text(path: &Path) -> anyhow::Result<&str> {
 fn subject() -> anyhow::Result<EvalSubject> {
     let evidence = Vec::new();
     Ok(EvalSubject {
-        schema_version: EVAL_SCHEMA_VERSION,
+        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: "eval-equivalence".into(),
         scope: EvalScope::Task,
         subject_id: "task-equivalence".into(),
-        policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .into(),
-        preset: Some("auto:cost".into()),
         cohort: None,
         holdout: false,
         decisions: Vec::new(),
@@ -164,7 +163,7 @@ fn subject() -> anyhow::Result<EvalSubject> {
 
 fn result(subject: &EvalSubject) -> EvaluationResult {
     EvaluationResult {
-        schema_version: EVAL_SCHEMA_VERSION,
+        schema_version: EVAL_RESULT_SCHEMA_VERSION,
         eval_id: subject.eval_id.clone(),
         evidence_digest: subject.evidence_digest.clone(),
         evaluator: EvaluatorIdentity {
@@ -172,7 +171,8 @@ fn result(subject: &EvalSubject) -> EvaluationResult {
             evaluator_id: "task-native-fixture".into(),
             kind: EvaluatorKind::TaskNative,
             version: "1".into(),
-            config_digest: subject.policy_digest.clone(),
+            config_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
         },
         verdict: EvalVerdict::Pass,
         metrics: BTreeMap::from([(

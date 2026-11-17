@@ -189,7 +189,7 @@ plugins:
                     rand::random(),
                 )?,
                 policies: Vec::new(),
-                policy_lock: None,
+                model_policy: None,
             };
             let second_inputs = crate::assemble::SharedAssembly {
                 continuation: peer,
@@ -197,7 +197,7 @@ plugins:
                 auth_appliers: first_inputs.auth_appliers.clone(),
                 correlation_key: first_inputs.correlation_key.clone(),
                 policies: Vec::new(),
-                policy_lock: None,
+                model_policy: None,
             };
             let mismatch = crate::assemble::build_shared_app(&config, &first_inputs)
                 .await

@@ -12,7 +12,7 @@ fn input(fixture: &Fixture, operation: &str, model: &str) -> Result<ResourcePut>
     input.key.resource_kind = ResourceKind::Policy;
     input.key.resource_id = "auto-policy".try_into()?;
     input.definition = Definition::Policy {
-        document: source(model),
+        document: serde_json::from_value(source(model))?,
         name: "auto".into(),
         dependencies: Vec::new(),
     };
@@ -72,45 +72,20 @@ async fn source_reads_remain_revision_exact_after_rotation_and_restart() -> Resu
 #[tokio::test]
 async fn legacy_and_experimental_source_rejection_does_not_create_a_resource_head() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let mut invalid = input(&fixture, "bad-policy", "mock:small")?;
-    for version in [
-        "policy/1.0.0-beta.2",
-        "registry/1.0.0-beta.1",
-        "1.0.0-beta.1",
+    let valid_input = input(&fixture, "bad-policy", "mock:small")?;
+    let raw = serde_json::to_value(&valid_input)?;
+    for document in [
+        json!({"lockfileVersion":4,"policies":{}}),
+        json!({"spec_version":"policy/1.0.0-beta.2","policies":{}}),
+        json!({"spec_version":"registry/1.0.0-beta.1","policies":{}}),
+        json!({"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{
+            "tiers":{"default":{"model":"mock:small","context":"evidence"}},"default_tier":"default"
+        }}}),
     ] {
-        let mut document = source("mock:small");
-        document["spec_version"] = json!(version);
-        invalid.definition = Definition::Policy {
-            document,
-            name: "auto".into(),
-            dependencies: Vec::new(),
-        };
-        ensure!(
-            fixture
-                .service
-                .execute(
-                    fixture.operator.clone(),
-                    Command::Resource(fixture.tenant.clone(), invalid.clone())
-                )
-                .await
-                .is_err()
-        );
+        let mut rejected = raw.clone();
+        rejected["definition"]["document"] = document;
+        ensure!(serde_json::from_value::<ResourcePut>(rejected).is_err());
     }
-    invalid.definition = Definition::Policy {
-        document: serde_json::to_value(crate::policy_lock::PolicyLock::default())?,
-        name: "auto".into(),
-        dependencies: Vec::new(),
-    };
-    ensure!(
-        fixture
-            .service
-            .execute(
-                fixture.operator.clone(),
-                Command::Resource(fixture.tenant.clone(), invalid)
-            )
-            .await
-            .is_err()
-    );
     let valid = input(&fixture, "valid-policy", "mock:small")?;
     put(&fixture, fixture.operator.clone(), valid).await?;
     Ok(())

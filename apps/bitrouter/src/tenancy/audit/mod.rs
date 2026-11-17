@@ -5,7 +5,6 @@ mod listener;
 pub(crate) mod recovery;
 #[cfg(all(test, unix))]
 pub(super) mod tests;
-pub(crate) mod upgrade;
 mod validation;
 
 use super::{

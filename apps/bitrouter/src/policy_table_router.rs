@@ -1,6 +1,6 @@
-//! Frozen named-policy actions selected from shared semantic routing evidence.
-//! Model selection, context planning and settlement run inside the SDK pipeline.
-//! Learn attribution retains one policy snapshot through guards and execution.
+//! Frozen model-selection tables over shared semantic routing evidence.
+//! Serving source always preserves context; BRO treatment measurements retain
+//! their explicit internal types. One table snapshot owns each decision.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -26,7 +26,6 @@ use crate::gateway::routing::workflow::online::OnlineWorkflowState;
 use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
-use crate::trajectory::guard::ProgressGuardPolicy;
 use crate::trajectory::types::HistoryCompleteness;
 use bitrouter_ai::harness::inspection::NextStepRole;
 use {
@@ -140,38 +139,6 @@ impl PolicyDecision {
     pub fn trace_identity(&self) -> &WorkflowIdentity {
         &self.workflow_identity
     }
-
-    pub(crate) fn tool_use_tier(&self) -> Option<String> {
-        self.policy_snapshot.tool_use_tier.clone()
-    }
-
-    pub(crate) fn tool_safe_tiers(&self) -> std::collections::BTreeSet<String> {
-        self.policy_snapshot
-            .tool_safe_tiers
-            .iter()
-            .cloned()
-            .collect()
-    }
-
-    pub(crate) fn effective_tier_efforts(
-        &self,
-        inherited: Option<ReasoningEffort>,
-    ) -> std::collections::BTreeMap<String, ReasoningEffort> {
-        self.policy_snapshot
-            .tiers
-            .iter()
-            .filter_map(|(tier, target)| {
-                target
-                    .effort()
-                    .or(inherited)
-                    .map(|effort| (tier.clone(), effort))
-            })
-            .collect()
-    }
-
-    pub(crate) fn effort_of_tier(&self, tier: &str) -> Option<ReasoningEffort> {
-        self.policy_snapshot.effort_of_tier(tier)
-    }
 }
 
 /// The resolved, immutable policy spec: fingerprint→tier→model plus tool-use
@@ -191,6 +158,37 @@ pub struct PolicyTable {
 }
 
 impl PolicyTable {
+    /// Build a serving table from validated model-only indexes. BRO treatment
+    /// constructors remain separate; source cannot choose their context action.
+    pub(crate) fn from_model_selection(
+        selection: &crate::model_policy::CompiledSelection,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            tiers: selection
+                .tiers
+                .iter()
+                .map(|(name, target)| {
+                    (
+                        name.clone(),
+                        PolicyModelTarget {
+                            model: target.model.clone(),
+                            effort: target.effort,
+                            context: bitrouter_ai::routing::ContextStrategy::Preserve,
+                        },
+                    )
+                })
+                .collect(),
+            fingerprints: selection
+                .routes
+                .iter()
+                .map(|(key, tier)| (key.clone(), tier.clone()))
+                .collect(),
+            default_tier: Some(selection.default_tier.clone()),
+            tool_use_tier: selection.tool_use_tier.clone(),
+            tool_safe_tiers: selection.tool_safe_tiers.clone(),
+        })
+    }
+
     /// Build the shared spec from config, or `None` when the section is inert
     /// (no tiers defined).
     pub fn from_config(config: &PolicyTableConfig) -> Option<Arc<Self>> {
@@ -406,7 +404,6 @@ pub struct PolicyTableRouter {
     decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
     state_namespace: Option<String>,
     eval_observer: Option<EvalDecisionObserver>,
-    progress_guard: Option<ProgressGuardPolicy>,
     exploration: Option<RouteExploration>,
     classifier_constraints: HashMap<String, String>,
 }
@@ -431,7 +428,6 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             eval_observer: None,
-            progress_guard: None,
             exploration: None,
             classifier_constraints: HashMap::new(),
         })
@@ -474,16 +470,13 @@ impl PolicyTableRouter {
             decision_recorder: None,
             state_namespace: None,
             eval_observer: None,
-            progress_guard: None,
             exploration: None,
             classifier_constraints: HashMap::new(),
         }
     }
 
-    pub(crate) fn with_classifier_constraints(
-        mut self,
-        constraints: HashMap<String, String>,
-    ) -> Self {
+    #[cfg(test)]
+    fn with_classifier_constraints(mut self, constraints: HashMap<String, String>) -> Self {
         self.classifier_constraints = constraints;
         self
     }
@@ -525,20 +518,13 @@ impl PolicyTableRouter {
         self
     }
 
-    pub(crate) fn with_progress_guard(mut self, guard: Option<ProgressGuardPolicy>) -> Self {
-        self.progress_guard = guard;
-        self
-    }
-
-    pub(crate) fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
+    #[cfg(test)]
+    fn with_exploration(mut self, exploration: Option<RouteExploration>) -> Self {
         self.exploration = exploration;
         self
     }
 
-    pub(crate) fn progress_guard(&self) -> Option<&ProgressGuardPolicy> {
-        self.progress_guard.as_ref()
-    }
-
+    #[cfg(feature = "core")]
     pub(crate) fn eval_policy_name(&self) -> Option<&str> {
         self.eval_observer
             .as_ref()
@@ -802,24 +788,8 @@ impl PolicyTableRouter {
         self.decision_for_inner(prompt, headers, false, !guarded, assessment, None)
     }
 
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn decision_for_owned_experiment(
-        &self,
-        prompt: &Prompt,
-        headers: &HeaderMap,
-        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
-        witness: &crate::tenancy::experiment::Witness,
-    ) -> crate::gateway::error::Result<PolicyDecision> {
-        let treatment = self.exploration.as_ref().ok_or_else(|| {
-            crate::gateway::error::BitrouterError::Forbidden(
-                "native experiment policy is absent".into(),
-            )
-        })?;
-        let assignment = witness.assignment_for(treatment)?;
-        Ok(self.decision_for_inner(prompt, headers, false, false, assessment, Some(assignment)))
-    }
-
-    pub(crate) fn apply_guarded_route(
+    #[cfg(test)]
+    fn apply_guarded_route(
         &self,
         decision: &mut PolicyDecision,
         selected_tier: Option<&str>,
@@ -1233,7 +1203,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 /// rewritten by the legacy inline policy table instead of reaching the signed
 /// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@') || model.contains(':') || crate::config::presets::is_reserved(model)
+    model.starts_with('@') || model.contains(':') || crate::config::resolution::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -1265,13 +1235,9 @@ mod tests {
     use super::*;
     use crate::config::PolicyKeyStrategy;
     #[cfg(feature = "core")]
-    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    use crate::eval::settlement::EvalSettlementRecorder;
     #[cfg(feature = "core")]
-    use crate::core::eval::settlement::EvalSettlementRecorder;
-    #[cfg(feature = "core")]
-    use crate::core::eval::store::EvalStore;
-    #[cfg(feature = "core")]
-    use crate::core::policy::{CompileInput, compile_candidate};
+    use crate::eval::store::EvalStore;
     #[cfg(feature = "core")]
     use crate::gateway::caller::CallerContext;
     #[cfg(feature = "core")]
@@ -1282,7 +1248,7 @@ mod tests {
     use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
     use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::gateway::routing::workflow::online::OnlineWorkflowState;
-    use crate::policy_lock::{PolicyLock, semantic_digest};
+    use crate::policy_lock::semantic_digest;
     use crate::trajectory::canonical::CorrelationKey;
     use bitrouter_ai::eval::ExperimentAssignmentUnit;
     #[cfg(feature = "core")]
@@ -1294,12 +1260,6 @@ mod tests {
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-    #[cfg(feature = "core")]
-    use {
-        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalVerdict,
-        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
-        bitrouter_ai::eval::EvaluatorKind,
-    };
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
     use bitrouter_ai::harness::inspection::NextStepRole;
@@ -2949,68 +2909,39 @@ mod tests {
     async fn unified_v1_settlement_attributes_exact_route_and_unknown_baseline()
     -> anyhow::Result<()> {
         let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStepRole::Implement);
-        let template = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("templates/auto-router/policy-lock.yaml");
-        let mut active: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(template)?)?;
+        let mut active = crate::model_policy::decode(include_str!("../policy/default.yaml"))?;
         let configured = active
             .policies
             .get_mut("auto")
             .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
-        configured.adequacy.min_semantic_successes_for_lock = 1;
-        configured.predictor =
-            Some(crate::gateway::routing::workflow::predictive::compiled_predictor_contract());
-        let key = "semantic_route/v1|unknown|implement|normal";
-        configured.routes.insert(key.into(), "balanced".into());
-        let digest = format!("sha256:{}", "a".repeat(64));
-        active.certificates.insert(
-            "auto".into(),
-            BTreeMap::from([(
-                key.into(),
-                crate::policy_lock::PolicyCertificate {
-                    classifier_digest: None,
-                    owner: crate::policy_lock::RouteOwner::Operator,
-                    selected_tier: "balanced".into(),
-                    baseline_tier: Some("balanced".into()),
-                    source: crate::policy_lock::CertificateSource::Operator,
-                    eligible_episodes: 0,
-                    independent_tasks: 0,
-                    quality: None,
-                    economics: None,
-                    latency: None,
-                    critical_violations: 0,
-                    verdict: crate::policy_lock::PromotionVerdict::Retain,
-                    evaluator_config_digest: None,
-                    compiler_config_digest: digest.clone(),
-                    evidence_digest: digest,
-                },
-            )]),
+        configured.classifier_digest = Some(
+            crate::gateway::routing::workflow::predictive::compiled_predictor_contract()
+                .config_digest,
         );
+        let key = "semantic_route/v1|unknown|implement|normal";
+        configured
+            .routes
+            .insert("unknown|implement|normal".into(), "balanced".into());
+        let compiled = crate::model_policy::compile(&active)?;
         let policy_digest = semantic_digest(&active)?;
         let policy = active
             .policies
             .get("auto")
-            .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
-        let table = PolicyTable::from_config(
-            &policy.as_table_config(crate::config::PolicyRuntimeMode::Frozen),
-        )
-        .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
-        let route_baselines = active.certificates["auto"]
-            .iter()
-            .filter_map(|(request_key, certificate)| {
-                certificate
-                    .baseline_tier
-                    .as_ref()
-                    .map(|baseline| (request_key.clone(), baseline.clone()))
-            })
-            .collect();
+            .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
+        let table = PolicyTable::from_model_selection(
+            compiled
+                .selections()
+                .get("auto")
+                .ok_or_else(|| anyhow::anyhow!("compiled auto missing"))?,
+        );
+        let route_baselines = [(key.into(), "balanced".into())].into();
         let pending = PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto",
             policy_digest.clone(),
             route_baselines,
-            policy.default_tier.clone(),
+            Some(policy.default_tier.clone()),
         );
         let mut prompt = prompt("@auto");
         prompt.messages = vec![user(
@@ -3031,8 +2962,8 @@ mod tests {
             .tiers
             .get("strong")
             .ok_or_else(|| anyhow::anyhow!("template strong tier missing"))?
-            .model()
-            .to_owned();
+            .model
+            .clone();
         router.apply_continuation_adjustment(
             &mut decision,
             &ContinuationAdjustment::Pin {
@@ -3132,69 +3063,10 @@ mod tests {
             );
 
             assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
-            // A task evaluator explicitly attributes its task result to this
-            // decision. Request completion alone cannot provide this quality.
-            let mut subject = subject;
-            subject.scope = bitrouter_ai::eval::EvalScope::Task;
-            subject.subject_id = "independently-evaluated-task".into();
-            subject.eval_id = "task:independently-evaluated-task".into();
-            let result = EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: subject.eval_id.clone(),
-                evidence_digest: subject.evidence_digest.clone(),
-                evaluator: EvaluatorIdentity {
-                    authority_id: "task-native".into(),
-                    evaluator_id: "unified-v1-regression".into(),
-                    kind: EvaluatorKind::TaskNative,
-                    version: "1".into(),
-                    config_digest: policy_digest,
-                },
-                verdict: EvalVerdict::Pass,
-                metrics: BTreeMap::new(),
-                hard_violations: Vec::new(),
-                confidence_ppm: Some(1_000_000),
-                evidence_refs: Vec::new(),
-                decision_credit: BTreeMap::new(),
-                idempotency_key: "unified-v1-regression".into(),
-                submitted_at: "2026-08-15T00:00:01Z".into(),
-            };
-            let eval = EvalEvidenceSnapshot {
-                evidence_root:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                frozen_at: "2026-08-15T00:00:02Z".into(),
-                records: vec![EvalEvidenceRecord {
-                    result_id: "unified-v1-result".into(),
-                    content_digest:
-                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                            .into(),
-                    subject,
-                    result,
-                }],
-            };
-            let routes = eval.route_evidence()?;
-            let attributed = routes
-                .get(&(
-                    "auto".to_owned(),
-                    "semantic_route/v1|code:generation|implement|normal".to_owned(),
-                ))
-                .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
-            assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
             assert_eq!(
-                attributed.matched_request_keys,
-                BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
+                subject.schema_version,
+                bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
             );
-            let compiled = compile_candidate(CompileInput {
-                current: &active,
-                parent_digest: None,
-                snapshot_time_unix_ms: 0,
-                eval: Some(&eval),
-                proposed_progress_guards: None,
-            })?
-            .document;
-            let certificate = compiled
-                .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
-                .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
-            assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
         }
         Ok(())
     }

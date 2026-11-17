@@ -51,30 +51,6 @@ pub(crate) async fn recovery(
     Ok(())
 }
 
-#[cfg(feature = "core")]
-pub(crate) async fn eval(
-    db: &impl ConnectionTrait,
-    inventory: &Inventory,
-    installation: &InstallationId,
-) -> Result<()> {
-    common(db, inventory, installation).await?;
-    for table in &inventory.tables {
-        ensure!(
-            AUTHORITY.contains(&table.name.as_str())
-                || [
-                    "seaql_migrations",
-                    "sqlite_sequence",
-                    "bro_runtime_ownership",
-                    "provider_continuation_key_epoch"
-                ]
-                .contains(&table.name.as_str())
-                || table.rows == 0,
-            "Eval target contains configuration/resource/work history"
-        );
-    }
-    Ok(())
-}
-
 async fn common(
     db: &impl ConnectionTrait,
     inventory: &Inventory,

@@ -353,10 +353,10 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     let config = Configuration {
-        format: 1,
+        format: 2,
         routing: serde_json::json!({"providers":{"dispatch-fixture":{"api_base":"http://127.0.0.1:1","auto_discover":false}}}),
         policies: vec![],
-        policy_lock: None,
+        model_policy: None,
         credentials: vec![CredentialBinding {
             provider: "dispatch-fixture".into(),
             account: "default".into(),

@@ -56,8 +56,9 @@ fn digest(byte: char) -> String {
 
 fn subject_value(id: &str) -> Value {
     json!({
-        "schema_version":1,"eval_id":id,"scope":"request","subject_id":"request-1",
-        "policy_digest":digest('a'),"preset":null,"cohort":null,"holdout":false,
+        "schema_version":2,"eval_id":id,"scope":"request","subject_id":"request-1",
+        "identity":{"profile":"tenant_generic","installation_id":"installation","tenant_id":"tenant"},
+        "cohort":null,"holdout":false,
         "decisions":[],"requested_dimensions":[],"evidence":[],
         "evidence_digest":digest('b'),"observed_at":TIME
     })

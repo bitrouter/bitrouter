@@ -24,18 +24,11 @@ async fn legacy_eval_writers_wait_for_budget_and_preserve_exchange_replay() -> R
     let (store, tenancy, cell) = fixture().await?;
     let subject = subject()?;
     assert!(store.insert_subject(&subject).await.is_err());
-    assert!(
-        store
-            .insert_settlement_subject_owned(&subject, "local")
-            .await
-            .is_err()
-    );
+    assert!(store.insert_subject_owned(&subject, "local").await.is_err());
     assert!(store.subject(&subject.eval_id).await?.is_none());
     cell.set(tenancy.storage_budget())
         .map_err(|_| anyhow::anyhow!("cell already set"))?;
-    store
-        .insert_settlement_subject_owned(&subject, "local")
-        .await?;
+    store.insert_subject_owned(&subject, "local").await?;
     store.insert_subject_owned(&subject, "local").await?;
     let result = result(EvalVerdict::Pass);
     let saved = store.insert_result_owned(&result, "local").await?;
@@ -75,7 +68,7 @@ async fn delegated_legacy_eval_sql_failure_fences_without_publishing_subject() -
     store.db.execute_unprepared("CREATE TRIGGER reject_eval_subject BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END").await?;
     let subject = subject()?;
     let error = store
-        .insert_settlement_subject_owned(&subject, "local")
+        .insert_subject_owned(&subject, "local")
         .await
         .err()
         .context("SQL failure accepted")?;
@@ -85,6 +78,37 @@ async fn delegated_legacy_eval_sql_failure_fences_without_publishing_subject() -
         tenancy.storage_budget().reserve(0, false),
         Err(ErrorCode::StorageUnavailable)
     ));
+    tenancy.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(feature = "core")]
+#[tokio::test]
+async fn settlement_writer_waits_for_budget_and_replays_its_schema_two_identity() -> Result<()> {
+    let (store, tenancy, cell) = fixture().await?;
+    let subject = subject()?;
+    assert!(
+        store
+            .insert_settlement_subject_owned(&subject, "local")
+            .await
+            .is_err()
+    );
+    assert!(store.subject(&subject.eval_id).await?.is_none());
+    cell.set(tenancy.storage_budget())
+        .map_err(|_| anyhow::anyhow!("cell already set"))?;
+    assert_eq!(
+        store
+            .insert_settlement_subject_owned(&subject, "local")
+            .await?,
+        SubjectInsertOutcome::Inserted
+    );
+    assert_eq!(
+        store
+            .insert_settlement_subject_owned(&subject, "local")
+            .await?,
+        SubjectInsertOutcome::Duplicate
+    );
+    assert_eq!(store.subject(&subject.eval_id).await?, Some(subject));
     tenancy.shutdown().await?;
     Ok(())
 }

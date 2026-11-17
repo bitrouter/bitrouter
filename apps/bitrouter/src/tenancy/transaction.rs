@@ -630,8 +630,6 @@ impl Control {
 pub(super) enum JobTarget {
     Eval,
     Settlement,
-    TrajectoryBegin,
-    TrajectoryTerminal,
     #[cfg(feature = "harness")]
     NativeLoad,
 }

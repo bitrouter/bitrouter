@@ -461,12 +461,12 @@ impl SettlementRecorder for RouterIdentityCapturingRecorder {
     }
 }
 
-struct PresetAwareRoutingTable;
+struct NamedRoutingTable;
 
 #[async_trait]
-impl RoutingTable for PresetAwareRoutingTable {
+impl RoutingTable for NamedRoutingTable {
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
-        if model == "@adaptive:preferred" {
+        if model == "bitrouter/adaptive" {
             Ok(ModelResolution {
                 clean_model: "strong-model".into(),
                 prefs: RoutingPrefs {
@@ -475,7 +475,7 @@ impl RoutingTable for PresetAwareRoutingTable {
                 },
                 overrides: PromptOverrides::default(),
                 policy: Some("coding".into()),
-                variant: Some("preferred".into()),
+
                 router: Some(RouterRequestIdentity {
                     router_id: "adaptive".into(),
                     original_selector: model.into(),
@@ -523,7 +523,7 @@ struct ConvergenceRoutingTable;
 impl RoutingTable for ConvergenceRoutingTable {
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
         match model {
-            "@legacy-a" => Ok(ModelResolution {
+            "bitrouter/unchecked-a" => Ok(ModelResolution {
                 clean_model: "legacy-a-model".to_owned(),
                 prefs: RoutingPrefs::default(),
                 overrides: PromptOverrides {
@@ -534,12 +534,12 @@ impl RoutingTable for ConvergenceRoutingTable {
                     )]),
                 },
                 policy: None,
-                variant: None,
+
                 router: None,
                 request_checks: Vec::new(),
             }),
-            "@legacy-b" => Ok(candidate_resolution(model, false)),
-            "@checked-a" => Ok(ModelResolution {
+            "bitrouter/unchecked-b" => Ok(candidate_resolution(model, false)),
+            "bitrouter/checked-a" => Ok(ModelResolution {
                 clean_model: "checked-a-model".to_owned(),
                 prefs: RoutingPrefs::default(),
                 overrides: PromptOverrides {
@@ -550,7 +550,7 @@ impl RoutingTable for ConvergenceRoutingTable {
                     )]),
                 },
                 policy: None,
-                variant: None,
+
                 router: Some(RouterRequestIdentity {
                     router_id: "checked-a".to_owned(),
                     original_selector: model.to_owned(),
@@ -563,7 +563,7 @@ impl RoutingTable for ConvergenceRoutingTable {
                     timeout_ms: 1000,
                 }],
             }),
-            "@checked-b" => Ok(candidate_resolution(model, true)),
+            "bitrouter/checked-b" => Ok(candidate_resolution(model, true)),
             other => Ok(ModelResolution::passthrough(other)),
         }
     }
@@ -615,7 +615,7 @@ fn candidate_resolution(model: &str, checked: bool) -> ModelResolution {
             ]),
         },
         policy: Some("candidate-policy".to_owned()),
-        variant: None,
+
         router: checked.then(|| RouterRequestIdentity {
             router_id: "checked-b".to_owned(),
             original_selector: model.to_owned(),
@@ -684,7 +684,7 @@ impl PreRequestHook for EffectiveDefaultsHook {
                 .contains_key("checked_a_only")
             || ctx.router_identity().is_none_or(|identity| {
                 identity.router_id != "checked-a"
-                    || identity.original_selector != "@checked-a"
+                    || identity.original_selector != "bitrouter/checked-a"
                     || identity.binding_digest != "router-v1:checked-a"
             })
         {
@@ -767,12 +767,7 @@ struct CandidateModelSelector(Arc<AtomicUsize>);
 
 #[async_trait]
 impl ModelSelector for CandidateModelSelector {
-    async fn select_variant(
-        &self,
-        policy: &str,
-        _variant: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
         if policy != "candidate-policy" {
             return Err(BitrouterError::internal("unexpected candidate policy"));
         }
@@ -833,12 +828,7 @@ struct CountingModelSelector(Arc<AtomicUsize>);
 
 #[async_trait]
 impl ModelSelector for CountingModelSelector {
-    async fn select_variant(
-        &self,
-        policy: &str,
-        _variant: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn select_policy(&self, policy: &str, ctx: &mut PipelineContext) -> Result<()> {
         assert_eq!(policy, "coding");
         tokio::task::yield_now().await;
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -1086,7 +1076,7 @@ async fn managed_fixed_continuation_requires_a_known_matching_effort() -> Result
         ] {
             let mut builder = PipelineBuilder::new();
             builder
-                .routing_table(Arc::new(PresetAwareRoutingTable))
+                .routing_table(Arc::new(NamedRoutingTable))
                 .executor(Arc::new(MockExecutor::always_text(
                     "compatible continuation",
                 )))
@@ -1100,7 +1090,7 @@ async fn managed_fixed_continuation_requires_a_known_matching_effort() -> Result
                 plans: Default::default(),
                 reports: Default::default(),
             });
-            let mut request = request_for_model("@adaptive:preferred");
+            let mut request = request_for_model("bitrouter/adaptive");
             request
                 .input
                 .generation_prompt_mut()
@@ -1165,7 +1155,7 @@ async fn managed_constraints_reject_policy_provenance_and_continuation_conflicts
         let calls = Arc::new(AtomicUsize::new(0));
         let mut builder = PipelineBuilder::new();
         builder
-            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .routing_table(Arc::new(NamedRoutingTable))
             .executor(Arc::new(NeverCalledExecutor(calls.clone())));
         if case == 1 {
             builder.model_selector(Arc::new(ModelAndEffortSelector(Arc::new(
@@ -1188,7 +1178,7 @@ async fn managed_constraints_reject_policy_provenance_and_continuation_conflicts
             plans: Default::default(),
             reports: Default::default(),
         });
-        let mut request = request_for_model("@adaptive:preferred");
+        let mut request = request_for_model("bitrouter/adaptive");
         request
             .input
             .generation_prompt_mut()
@@ -1220,12 +1210,7 @@ async fn managed_constraints_reject_policy_provenance_and_continuation_conflicts
 
 #[async_trait]
 impl ModelSelector for ModelAndEffortSelector {
-    async fn select_variant(
-        &self,
-        _: &str,
-        _: Option<&str>,
-        ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn select_policy(&self, _: &str, ctx: &mut PipelineContext) -> Result<()> {
         self.0.fetch_add(1, Ordering::SeqCst);
         ctx.set_model("economy-model");
         ctx.set_policy_reasoning_effort(ReasoningEffort::Low)?;
@@ -1242,7 +1227,7 @@ async fn managed_fixed_model_skips_policy_and_manual_effort_survives_policy() ->
         let calls = Arc::new(AtomicUsize::new(0));
         let mut builder = PipelineBuilder::new();
         builder
-            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .routing_table(Arc::new(NamedRoutingTable))
             .executor(Arc::new(MockExecutor::always_text("ok")))
             .model_selector(Arc::new(ModelAndEffortSelector(calls.clone())));
         let pipeline = Arc::new(builder.build()?);
@@ -1251,7 +1236,7 @@ async fn managed_fixed_model_skips_policy_and_manual_effort_survives_policy() ->
             plans: Default::default(),
             reports: Default::default(),
         });
-        let mut request = request_for_model("@adaptive:preferred");
+        let mut request = request_for_model("bitrouter/adaptive");
         request
             .input
             .generation_prompt_mut()
@@ -1300,7 +1285,7 @@ async fn managed_fixed_model_rejects_hook_rewrite_before_dispatch() -> Result<()
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = PipelineBuilder::new();
     builder
-        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .routing_table(Arc::new(NamedRoutingTable))
         .executor(Arc::new(NeverCalledExecutor(calls.clone())))
         .pre_request_hook(RewriteSelector {
             selector: "other-model",
@@ -1325,12 +1310,7 @@ async fn managed_fixed_model_rejects_hook_rewrite_before_dispatch() -> Result<()
 
 #[async_trait]
 impl ModelSelector for FailingModelSelector {
-    async fn select_variant(
-        &self,
-        _policy: &str,
-        _variant: Option<&str>,
-        _ctx: &mut PipelineContext,
-    ) -> Result<()> {
+    async fn select_policy(&self, _policy: &str, _ctx: &mut PipelineContext) -> Result<()> {
         tokio::task::yield_now().await;
         Err(BitrouterError::bad_request(
             "async selector rejected request",
@@ -1644,11 +1624,16 @@ async fn unguarded_rewrite_contract(streamed: bool) -> Result<()> {
         .routing_table(Arc::new(ConvergenceRoutingTable))
         .executor(convergence_executor(streamed))
         .pre_request_hook(RewriteSelector {
-            selector: "@legacy-b",
+            selector: "bitrouter/unchecked-b",
             outcome: RewriteOutcome::Allow,
         })
         .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
-    run_convergence_request(Arc::new(legacy_builder.build()?), "@legacy-a", streamed).await?;
+    run_convergence_request(
+        Arc::new(legacy_builder.build()?),
+        "bitrouter/unchecked-a",
+        streamed,
+    )
+    .await?;
     assert_eq!(selector_calls.load(Ordering::SeqCst), 1);
 
     let checker_calls = Arc::new(AtomicUsize::new(0));
@@ -1659,7 +1644,7 @@ async fn unguarded_rewrite_contract(streamed: bool) -> Result<()> {
         .routing_table(Arc::new(ConvergenceRoutingTable))
         .executor(Arc::new(NeverCalledExecutor(executor_calls.clone())))
         .pre_request_hook(RewriteSelector {
-            selector: "@checked-b",
+            selector: "bitrouter/checked-b",
             outcome: RewriteOutcome::Allow,
         })
         .request_checker_runner(Arc::new(CountingAllowingRequestChecker(
@@ -1670,7 +1655,7 @@ async fn unguarded_rewrite_contract(streamed: bool) -> Result<()> {
         )));
     let rejected = run_convergence_request(
         Arc::new(checked_introduction_builder.build()?),
-        "@legacy-a",
+        "bitrouter/unchecked-a",
         streamed,
     )
     .await;
@@ -1712,7 +1697,7 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
             .routing_table(Arc::new(ConvergenceRoutingTable))
             .executor(executor)
             .router_preparation_hook(RewriteSelector {
-                selector: "@checked-b",
+                selector: "bitrouter/checked-b",
                 outcome: RewriteOutcome::Allow,
             })
             .pre_request_hook(EffectiveDefaultsHook(local_policy_calls.clone()))
@@ -1723,7 +1708,8 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
             }))
             .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
         let result =
-            run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
+            run_convergence_request(Arc::new(builder.build()?), "bitrouter/checked-a", streamed)
+                .await;
 
         assert_eq!(local_policy_calls.load(Ordering::SeqCst), 1);
         assert_eq!(checker_calls.load(Ordering::SeqCst), 1);
@@ -1773,7 +1759,7 @@ async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
             .routing_table(Arc::new(ConvergenceRoutingTable))
             .executor(Arc::new(NeverCalledExecutor(executor_calls.clone())))
             .pre_request_hook(RewriteSelector {
-                selector: "@checked-b",
+                selector: "bitrouter/checked-b",
                 outcome,
             })
             .request_checker_runner(Arc::new(CountingAllowingRequestChecker(
@@ -1781,7 +1767,8 @@ async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
             )))
             .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
         let result =
-            run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
+            run_convergence_request(Arc::new(builder.build()?), "bitrouter/checked-a", streamed)
+                .await;
 
         let Err(error) = result else {
             return Err(BitrouterError::internal(
@@ -2270,12 +2257,12 @@ async fn failed_non_streaming_request_settles_the_attempted_target() {
 }
 
 #[tokio::test]
-async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
+async fn policy_selection_is_router_scoped_and_preserves_routing_preferences() {
     let selected = Arc::new(AtomicUsize::new(0));
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut builder = PipelineBuilder::new();
     builder
-        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .routing_table(Arc::new(NamedRoutingTable))
         .executor(Arc::new(MockExecutor::new(vec![
             MockResponse::Generate(gen_result(Vec::new())),
             MockResponse::Generate(gen_result(Vec::new())),
@@ -2285,7 +2272,7 @@ async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
     let pipeline = builder.build().unwrap();
 
     pipeline
-        .execute(request_for_model("@adaptive:preferred"))
+        .execute(request_for_model("bitrouter/adaptive"))
         .await
         .unwrap();
     pipeline
@@ -2308,15 +2295,15 @@ async fn router_identity_uses_inbound_selector_and_reaches_settlement() -> Resul
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut builder = PipelineBuilder::new();
     builder
-        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .routing_table(Arc::new(NamedRoutingTable))
         .executor(Arc::new(MockExecutor::always_text("ok")))
         .model_selector(Arc::new(CountingModelSelector(Arc::new(AtomicUsize::new(
             0,
         )))))
         .settlement_recorder(RouterIdentityCapturingRecorder(captured.clone()));
     let pipeline = builder.build()?;
-    let mut request = request_for_model("@adaptive:preferred");
-    request.original_model = "@inbound-alias".into();
+    let mut request = request_for_model("bitrouter/adaptive");
+    request.original_model = "bitrouter/inbound-alias".into();
 
     pipeline.execute(request).await?;
 
@@ -2326,7 +2313,7 @@ async fn router_identity_uses_inbound_selector_and_reaches_settlement() -> Resul
     };
     assert_eq!(identities.len(), 1);
     assert_eq!(identities[0].router_id, "adaptive");
-    assert_eq!(identities[0].original_selector, "@inbound-alias");
+    assert_eq!(identities[0].original_selector, "bitrouter/inbound-alias");
     assert_eq!(identities[0].binding_digest, "router-v1:sha256:test");
     Ok(())
 }
@@ -2335,13 +2322,13 @@ async fn router_identity_uses_inbound_selector_and_reaches_settlement() -> Resul
 async fn async_policy_selector_errors_propagate_before_route_execution() {
     let mut builder = PipelineBuilder::new();
     builder
-        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .routing_table(Arc::new(NamedRoutingTable))
         .executor(Arc::new(MockExecutor::always_text("must not execute")))
         .model_selector(Arc::new(FailingModelSelector));
     let pipeline = builder.build().unwrap();
 
     let error = pipeline
-        .execute(request_for_model("@adaptive:preferred"))
+        .execute(request_for_model("bitrouter/adaptive"))
         .await
         .expect_err("selector error must abort route resolution");
 

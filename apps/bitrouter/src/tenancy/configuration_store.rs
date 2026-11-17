@@ -22,6 +22,45 @@ use serde_json::Value as JsonValue;
 const RESOURCES: &str = "tenancy_resource_revisions";
 const CONFIGURATIONS: &str = "tenancy_configurations";
 const ACTIVE: &str = "tenancy_active_configurations";
+
+/// Bound one page of retained configuration identities, including inactive history.
+pub(in crate::tenancy) async fn retained_configuration_page(
+    db: &impl ConnectionTrait,
+    after: Option<&(TenantId, RevisionId)>,
+) -> Result<Vec<(TenantId, RevisionId)>> {
+    let mut query = Query::select();
+    query
+        .from(Alias::new(CONFIGURATIONS))
+        .order_by(Alias::new("tenant_id"), sea_orm::sea_query::Order::Asc)
+        .order_by(Alias::new("revision_id"), sea_orm::sea_query::Order::Asc)
+        .limit(32);
+    if let Some((tenant, revision)) = after {
+        query.cond_where(
+            sea_orm::sea_query::Cond::any()
+                .add(Expr::col(Alias::new("tenant_id")).gt(tenant.as_str()))
+                .add(
+                    sea_orm::sea_query::Cond::all()
+                        .add(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+                        .add(Expr::col(Alias::new("revision_id")).gt(revision.as_str())),
+                ),
+        );
+    }
+    bounded_columns(
+        &mut query,
+        db.get_database_backend(),
+        &[("tenant_id", 128), ("revision_id", 128)],
+    )?;
+    db.query_all(db.get_database_backend().build(&query))
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok((
+                text(&row, "tenant_id")?.try_into()?,
+                text(&row, "revision_id")?.try_into()?,
+            ))
+        })
+        .collect()
+}
 const RESOURCE_KEY: [&str; 5] = [
     "owner_kind",
     "owner_id",
@@ -763,80 +802,3 @@ pub(super) async fn active_revision_page(
 #[cfg(test)]
 #[path = "configuration_store/tests.rs"]
 mod tests;
-
-#[cfg(all(feature = "core", feature = "harness"))]
-async fn reserve_learner_json(
-    db: &impl ConnectionTrait,
-    mut query: SelectStatement,
-    columns: &[&str],
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-    multiplier: usize,
-) -> Result<()> {
-    use crate::storage::operation_budget::Error;
-    budget.check()?;
-    for name in columns {
-        let bytes = match db.get_database_backend() {
-            DatabaseBackend::Sqlite => format!("length(CAST({name} AS BLOB))"),
-            DatabaseBackend::Postgres => format!("CAST(OCTET_LENGTH({name}) AS BIGINT)"),
-            DatabaseBackend::MySql => format!("OCTET_LENGTH({name})"),
-        };
-        query.expr_as(Expr::cust(bytes), Alias::new(*name));
-    }
-    query.limit(1);
-    let Some(row) = db
-        .query_one(db.get_database_backend().build(&query))
-        .await?
-    else {
-        return Err(Error::Rejected(bitrouter_ai::tenancy::operation::ErrorCode::NotFound).into());
-    };
-    let mut bytes = 4096_usize;
-    for name in columns {
-        let value = usize::try_from(row.try_get::<i64>("", name)?)?;
-        ensure!(value <= MAX_ENVELOPE_BYTES, Error::Capacity);
-        bytes = bytes
-            .checked_add(value.checked_mul(multiplier).ok_or(Error::Capacity)?)
-            .ok_or(Error::Capacity)?;
-    }
-    budget.charge(1, bytes)?;
-    Ok(())
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(super) async fn reserve_learner_resource(
-    db: &impl ConnectionTrait,
-    reference: &ResourceRef,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-    multiplier: usize,
-) -> Result<()> {
-    let mut query = Query::select();
-    query.from(Alias::new(RESOURCES));
-    resource_key(&mut query, reference)?;
-    reserve_learner_json(
-        db,
-        query,
-        &["payload_json", "dependency_json"],
-        budget,
-        multiplier,
-    )
-    .await
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(super) async fn reserve_learner_configuration(
-    db: &impl ConnectionTrait,
-    tenant: &TenantId,
-    revision: &RevisionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<()> {
-    let mut query = Query::select();
-    query
-        .from(Alias::new(CONFIGURATIONS))
-        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
-        .and_where(Expr::col(Alias::new("revision_id")).eq(revision.as_str()));
-    reserve_learner_json(
-        db,
-        query,
-        &["document_json", "compiled_json", "dependencies_json"],
-        budget,
-        3,
-    )
-    .await
-}

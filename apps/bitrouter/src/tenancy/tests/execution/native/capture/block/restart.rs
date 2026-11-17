@@ -123,10 +123,7 @@ async fn actual_block_restart_child() -> Result<()> {
         db.clone(),
         Some(owner),
         snapshot,
-        Arc::new(Resources::with_key(
-            transfer.installation.clone(),
-            [29; 32],
-        )?),
+        Arc::new(Resources::with_key(transfer.installation.clone(), [29; 32])?.for_bro_capture()),
         crate::tenancy::Provisioning {
             import: None,
             continuations: &crate::config::ContinuationConfig::default(),

@@ -2,7 +2,7 @@
 //!
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
-//! `checkers`, `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
+//! `checkers`; per-plugin config lives under `plugins`. Load a file with
 //! [`load`]; build a [`RoutingTable`](crate::gateway::pipeline::routing::RoutingTable) over
 //! it with [`ConfigRoutingTable`](routing_table::ConfigRoutingTable).
 //!
@@ -23,12 +23,12 @@
 pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
 
 use bitrouter_ai::control::ControlScope;
+use bitrouter_ai::routing::PolicyModelTarget;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
-use {bitrouter_ai::routing::PolicyModelTarget, bitrouter_ai::routing::RoutingConfig};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -43,7 +43,7 @@ pub mod decision;
 pub mod gateway_state;
 pub mod mcp;
 pub mod pattern;
-pub mod presets;
+pub mod resolution;
 pub mod router;
 pub mod routing_table;
 pub mod server_tools;
@@ -56,7 +56,7 @@ pub(crate) mod yaml;
 mod tests;
 
 use pattern::PatternMap;
-use presets::PresetResolution;
+use resolution::RouterResolution;
 
 /// Retained native-model, onboarding-launch and headless prompt defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -138,10 +138,6 @@ pub struct Config {
     pub routers: HashMap<String, router::RouterConfig>,
     /// Compiled request-check extensions, keyed by the ids referenced from named routers.
     pub checkers: HashMap<String, checker::CheckerConfig>,
-    /// `@preset` definitions.
-    pub presets: HashMap<String, PresetConfig>,
-    /// `:variant` definitions.
-    pub variants: HashMap<String, VariantConfig>,
     /// Plugin config, keyed by plugin / bundle id.
     pub plugins: HashMap<String, serde_json::Value>,
     /// Top-level MCP gateway settings (aggregation, caching). All fields
@@ -168,7 +164,7 @@ pub struct Config {
     pub registry: RegistryConfig,
     /// Adaptive model-policy settings. A file-backed config resolves the
     /// optional path relative to its own directory; when omitted the app looks
-    /// for `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries
+    /// for `policy.yaml` next to `bitrouter.yaml`. The SDK only carries
     /// this declaration -- loading and evolving policy locks belongs to the
     /// BitRouter app layer.
     pub policy: PolicyConfig,
@@ -195,8 +191,6 @@ impl Default for Config {
             models: HashMap::new(),
             routers: HashMap::new(),
             checkers: HashMap::new(),
-            presets: HashMap::new(),
-            variants: HashMap::new(),
             plugins: HashMap::new(),
             mcp: McpConfig::default(),
             mcp_servers: HashMap::new(),
@@ -275,46 +269,30 @@ impl Config {
         router::validate_router_config(self)
     }
 
-    /// Resolve a raw model selector through canonical routers and legacy
-    /// preset compatibility syntax.
-    pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
+    /// Resolve a raw model selector through explicit named routers.
+    pub fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
         self.validate_router_config()?;
         if let Some((provider, _)) = raw_model.split_once(':')
             && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
         {
             return Err(BitrouterError::bad_request(message));
         }
-        presets::resolve_routers(
-            raw_model,
-            &self.routers,
-            &self.presets,
-            &self.variants,
-            &self.checkers,
-        )
+        resolution::resolve_routers(raw_model, &self.routers, &self.checkers)
     }
 
-    /// Redaction-safe inventory of canonical and legacy router definitions.
+    /// Redaction-safe inventory of named router definitions.
     pub fn router_inventory(&self) -> Result<Vec<router::RouterInventoryEntry>> {
         router::router_inventory(self)
     }
 
     /// Policy bindings from normalized router definitions.
     ///
-    /// The optional base model deliberately preserves legacy parsing behavior
-    /// so read and validation consumers can distinguish a valid binding from
-    /// one whose missing model must be reported at their existing boundary.
     pub fn router_policy_bindings(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
-        let routers = self.routers.iter().filter_map(|(id, config)| {
+        self.routers.iter().filter_map(|(id, config)| {
             router::EffectiveRouterDefinition::from_router(config)
                 .into_policy_binding()
                 .map(|(policy, base_model)| (id.as_str(), policy, base_model))
-        });
-        let presets = self.presets.iter().filter_map(|(id, preset)| {
-            router::EffectiveRouterDefinition::from_legacy_preset(preset)
-                .into_policy_binding()
-                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
-        });
-        routers.chain(presets)
+        })
     }
 }
 
@@ -484,47 +462,12 @@ pub enum EvalAuthorityKind {
     Generic,
 }
 
-/// Current routing-policy artifact configuration.
+/// Portable model-policy source location.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
-    /// Override for the policy lock. Relative paths are resolved against the
-    /// directory containing the parsed `bitrouter.yaml`. `None` means the
-    /// sibling `policy-lock.yaml` default.
+    /// Source path relative to the configuration directory. Defaults to policy.yaml.
     pub path: Option<PathBuf>,
-    /// Runtime authority for adaptive routing and active policy publication.
-    /// `writeback` is accepted as a migration alias for older configuration.
-    #[serde(alias = "writeback")]
-    pub mode: PolicyRuntimeMode,
-}
-
-/// Process-owned routing-policy behavior.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PolicyRuntimeMode {
-    /// Route from the static lock while continuing to record evidence. Learned
-    /// database state cannot affect live routing or replace the active lock.
-    #[default]
-    #[serde(alias = "locked")]
-    Frozen,
-    /// Permit explicit validated publication to atomically replace the active
-    /// lock. Request-time routing remains identical to frozen mode.
-    #[serde(alias = "evolve")]
-    Adaptive,
-}
-
-impl PolicyRuntimeMode {
-    /// Disable legacy request-time learning in every process mode. Thresholds
-    /// and tier names remain compiler inputs only.
-    pub fn apply_to_adequacy(self, configured: &AdequacyConfig) -> AdequacyConfig {
-        let _ = self;
-        let mut effective = configured.clone();
-        effective.enabled = false;
-        effective.explore_enabled = false;
-        effective
-    }
 }
 
 /// Default complete Registry v1 document, pinned to this beta contract on the
@@ -1625,31 +1568,6 @@ pub struct VirtualEndpoint {
     pub service_id: String,
 }
 
-/// An `@preset` definition.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct PresetConfig {
-    /// Substitute the request's model with this one.
-    pub model: Option<String>,
-    /// Name of a policy in `policy-lock.yaml`. Only requests that explicitly
-    /// select this preset opt into adaptive model selection.
-    pub policy: Option<String>,
-    /// Prepend / replace the system prompt.
-    pub system_prompt: Option<String>,
-    /// Generation-parameter overrides, merged shallowly into the request.
-    pub params: serde_json::Map<String, serde_json::Value>,
-    /// Routing knobs fed into the cascade.
-    pub routing: RoutingConfig,
-}
-
-/// A `:variant` definition — a routing modifier only.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct VariantConfig {
-    /// Routing knobs fed into the cascade.
-    pub routing: RoutingConfig,
-}
-
 // ===== `${VAR}` substitution + loader =====
 
 /// Replace every `${VAR}` reference with the value resolved by `lookup`, an
@@ -1934,8 +1852,8 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
 }
 
 /// Validate one policy-table definition independently of the top-level config.
-/// Policy lock loading reuses this so inline legacy tables and named lock
-/// policies enforce identical tier/guardrail/adequacy invariants.
+/// This private experiment projection is not a public model-policy document.
+/// Model-only source compilation has its own strict validator.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     for fingerprint in policy.fingerprints.keys() {
         if parse_semantic_route_key(fingerprint).is_none() {

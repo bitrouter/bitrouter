@@ -42,7 +42,7 @@ async fn materialize(authority: &Authority, process: &Process) -> Result<Input> 
         correlation_key: keys.active_correlation()?,
         auth_appliers: auth,
         policies: prepared.policies,
-        policy_lock: published.policy_lock,
+        model_policy: published.model_policy,
     })
 }
 

@@ -109,14 +109,6 @@ pub struct RoutingConfig {
 }
 
 impl PolicyModelTarget {
-    /// Construct a model action with evidence routing and inherited effort.
-    pub fn model_only(model: String) -> Self {
-        Self {
-            model,
-            effort: None,
-            context: Default::default(),
-        }
-    }
     /// Model selected by this action.
     pub fn model(&self) -> &str {
         &self.model
@@ -129,13 +121,17 @@ impl PolicyModelTarget {
 
 impl From<String> for PolicyModelTarget {
     fn from(model: String) -> Self {
-        Self::model_only(model)
+        Self {
+            model,
+            effort: None,
+            context: ContextStrategy::Evidence,
+        }
     }
 }
 
 impl From<&str> for PolicyModelTarget {
     fn from(model: &str) -> Self {
-        Self::model_only(model.into())
+        Self::from(model.to_owned())
     }
 }
 

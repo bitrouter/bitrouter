@@ -71,16 +71,16 @@ pub(in crate::tenancy) struct Candidate {
 }
 
 impl Candidate {
+    #[cfg(all(test, feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn dispatch_state(&self) -> Result<DispatchState> {
+        let disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
+        Ok(disposition.dispatch)
+    }
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn learning_digest(&self) -> &str {
         &self.digest
     }
 
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn experiment_disposition(&self) -> Result<(&str, DispatchState)> {
-        let disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
-        Ok((&self.digest, disposition.dispatch))
-    }
     pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
         Self::from_parts(receipt, disposition.into())
     }
@@ -275,22 +275,10 @@ async fn bounded_row(
     budget: Option<&archive::Charge<'_>>,
 ) -> Result<Option<QueryResult>> {
     let backend = db.get_database_backend();
-    // Migration 43 backfills obligations using the pre-ordered schema, while
-    // normal readers and migration 45 must verify the real format column.
-    let format = if backend != DatabaseBackend::Sqlite {
-        "receipt_format"
+    let format = if backend == DatabaseBackend::Sqlite {
+        "CASE WHEN typeof(receipt_format)='integer' THEN receipt_format ELSE NULL END"
     } else {
-        if let Some(charge) = budget {
-            charge(1, 256)?;
-        }
-        let ordered = db.query_one(sea_orm::Statement::from_string(backend,
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='tenancy_dispatch_intents' LIMIT 1"
-        )).await?.is_some();
-        if ordered {
-            "CASE WHEN typeof(receipt_format)='integer' THEN receipt_format ELSE NULL END"
-        } else {
-            "1"
-        }
+        "receipt_format"
     };
     query.expr_as(Expr::cust(format), Alias::new("receipt_format"));
 
@@ -967,60 +955,6 @@ pub(in crate::tenancy) async fn recovery_lookup(
         "auxiliary receipt link has no recovery proof"
     );
     Ok(Some(candidate))
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) fn reserve_experiment_write(
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<()> {
-    // The existing insert performs at most two bounded point loads and one
-    // immutable write. Each decode may validate one bounded auxiliary row;
-    // auxiliary insertion additionally writes and compares that same body.
-    // Reserve the full transfer envelope before the first I/O, so the original
-    // receipt and experiment participant cannot each claim a fresh allowance.
-    let receipt = MAX_RECEIPT + MAX_DISPOSITION + 4096;
-    let auxiliary = super::auxiliary::MAX_BYTES + 4096;
-    let evidence = bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 4096;
-    // An archived replay also transfers compressed bytes, decodes the envelope
-    // and retains canonical sidecar copies. Reserve that path before insertion.
-    budget.charge(32, 8 * receipt + 4 * auxiliary + 8 * evidence + 256 * 1024)?;
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn native_candidate_in(
-    tx: &DatabaseTransaction,
-    authority: &crate::tenancy::execution::session::Authority,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    let (installation, tenant, _) = authority.storage_identity();
-    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn learner_candidate_in(
-    tx: &sea_orm::DatabaseTransaction,
-    identity: &crate::tenancy::learner::identity::ReadIdentity,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    identity
-        .check(&[])
-        .map_err(crate::storage::operation_budget::Error::Rejected)?;
-    let (installation, tenant, _) = identity.storage_identity();
-    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) async fn paid_recovery_candidate_in(
-    tx: &DatabaseTransaction,
-    identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
-    id: &ExecutionId,
-    budget: &crate::storage::operation_budget::OperationBudget<'_>,
-) -> Result<Option<Candidate>> {
-    let (installation, tenant, _) = identity.storage_identity();
-    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
 }
 
 /// The live original capture authority supplies the namespace; an imported

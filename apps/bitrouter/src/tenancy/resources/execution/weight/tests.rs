@@ -53,6 +53,7 @@ fn reference(kind: ResourceKind, name: &str) -> TestResult<ResourceRef> {
 
 fn revision() -> TestResult<RetainedExecutionRevision> {
     Ok(RetainedExecutionRevision {
+        bro_capture: false,
         installation: "installation".try_into()?,
         tenant: "tenant".try_into()?,
         revision: "r1".try_into()?,
@@ -163,7 +164,7 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         first.revision,
         first.authority_revision,
         super::super::ValidatedEnvelope {
-            model_only_policies: true,
+            bro_capture: false,
             learned_checkpoint: false,
             document: first.document,
             routes: first.routes,
@@ -249,7 +250,7 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         second.revision,
         second.authority_revision,
         super::super::ValidatedEnvelope {
-            model_only_policies: true,
+            bro_capture: false,
             learned_checkpoint: false,
             document: second.document,
             routes: second.routes,
@@ -288,11 +289,15 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
 #[test]
 fn shared_policy_and_source_allocations_are_counted_once_per_revision() -> TestResult<()> {
     let mut value = revision()?;
-    let mut definition = PolicyDefinition::default();
+    let mut definition: Policy =
+        serde_json::from_value(json!({"tiers": {}, "default_tier": "safe"}))?;
     definition
         .routes
         .insert("evidence".into(), "p".repeat(64 * 1024));
-    let mut document = PolicyLock::default();
+    let mut document = Document {
+        spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
+        policies: BTreeMap::new(),
+    };
     document.policies.insert("policy".into(), definition);
     let document = Arc::new(document);
     let source = Arc::new(json!({"private": "s".repeat(32 * 1024)}));
@@ -404,7 +409,10 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     data.policy = Some(RetainedPolicy {
         reference: over_reserved_reference(ResourceKind::Policy, "policy")?,
         name: "policy".into(),
-        document: Arc::new(PolicyLock::default()),
+        document: Arc::new(Document {
+            spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
+            policies: BTreeMap::new(),
+        }),
         routing_source: Arc::new(json!({})),
     });
     for candidate in &mut data.candidates {
@@ -416,7 +424,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         over_reserved_id("r1")?,
         1.try_into()?,
         super::super::ValidatedEnvelope {
-            model_only_policies: true,
+            bro_capture: false,
             learned_checkpoint: false,
             document,
             routes: HashMap::from([("route".into(), Arc::new(data))]),
@@ -424,6 +432,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     )
     .map_err(|code| anyhow::anyhow!("constructor failed: {code:?}"))?;
     let RetainedExecutionRevision {
+        bro_capture: _,
         installation,
         tenant,
         revision,

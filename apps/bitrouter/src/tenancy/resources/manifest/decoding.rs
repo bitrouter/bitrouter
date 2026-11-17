@@ -1,4 +1,4 @@
-//! Preserve exact profile-number tokens while keeping the legacy import codec.
+//! Decode current source and preserve independent route/profile discriminators.
 
 use super::*;
 use serde::de::Error;
@@ -16,7 +16,7 @@ struct Tag {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-enum LegacyDefinition {
+enum SourceDefinition {
     Route {
         routing: Value,
         selector: String,
@@ -32,7 +32,7 @@ enum LegacyDefinition {
         block: Option<Box<super::super::block::Profile>>,
     },
     Policy {
-        document: PolicyLock,
+        document: Document,
         name: String,
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
@@ -111,7 +111,7 @@ impl<'de> Deserialize<'de> for Definition {
                 _ => Err(D::Error::custom("invalid profiled resource definition")),
             }
         } else {
-            LegacyDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
+            SourceDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
                 .map_err(D::Error::custom)
         }
     }

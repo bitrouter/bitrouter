@@ -186,8 +186,7 @@ pub struct RouteReport {
     /// Stable identity of the named router resolved during Stage 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router: Option<crate::routing::RouterRequestIdentity>,
-    /// Whether the router came from canonical configuration or legacy preset
-    /// compatibility syntax.
+    /// Whether the router came from explicit configuration or a product default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router_source: Option<crate::control::models::RouterSource>,
     /// Dynamic policy bound to the named router, when present.

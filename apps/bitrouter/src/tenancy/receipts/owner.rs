@@ -86,14 +86,6 @@ impl Owner {
     }
 
     #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
-        (
-            &self.identity.installation,
-            &self.identity.tenant,
-            &self.identity.principal,
-        )
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn attach_learning(
         &self,
         owner: Arc<crate::tenancy::learning::owner::Owner>,

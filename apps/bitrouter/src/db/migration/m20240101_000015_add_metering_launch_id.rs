@@ -12,56 +12,32 @@
 
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Requests::Table)
-                    .add_column(ColumnDef::new(Requests::LaunchId).string().to_owned())
-                    .to_owned(),
-            )
-            .await?;
-        // Every read of this column filters by it; without the index each
-        // exit summary and status-bar refresh is a full scan of the window.
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_requests_launch_id")
-                    .table(Requests::Table)
-                    .col(Requests::LaunchId)
-                    .to_owned(),
-            )
-            .await
-    }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_requests_launch_id")
-                    .table(Requests::Table)
-                    .to_owned(),
-            )
-            .await?;
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(Requests::Table)
-                    .drop_column(Requests::LaunchId)
-                    .to_owned(),
-            )
-            .await
-    }
-}
-
 #[derive(DeriveIden)]
 enum Requests {
     Table,
     LaunchId,
+}
+
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    manager
+        .alter_table(
+            Table::alter()
+                .table(Requests::Table)
+                .add_column(ColumnDef::new(Requests::LaunchId).string().to_owned())
+                .to_owned(),
+        )
+        .await?;
+    // Every read of this column filters by it; without the index each
+    // exit summary and status-bar refresh is a full scan of the window.
+    manager
+        .create_index(
+            Index::create()
+                .if_not_exists()
+                .name("idx_requests_launch_id")
+                .table(Requests::Table)
+                .col(Requests::LaunchId)
+                .to_owned(),
+        )
+        .await
 }

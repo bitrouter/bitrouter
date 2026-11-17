@@ -13,7 +13,8 @@ use super::super::{
     manifest::{Artifact, CredentialBinding, Definition},
 };
 use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, native_v1, target};
-use crate::{gateway::pipeline::routing::PromptOverrides, policy_lock::PolicyLock};
+use crate::gateway::pipeline::routing::PromptOverrides;
+use bitrouter_ai::policy::Document;
 
 // Internal decoded-work limits, in addition to the authenticated 1 MiB plaintext
 // bound. This counts target/projection content, not process RSS or cache weight.
@@ -36,7 +37,7 @@ struct Source {
 
 struct Policy {
     name: String,
-    document: Arc<PolicyLock>,
+    document: Arc<Document>,
 }
 
 pub(super) fn decode(envelope: Envelope) -> Result<ValidatedEnvelope> {
@@ -54,9 +55,10 @@ pub(super) fn decode_with_operation(
         routes,
         artifacts,
     } = envelope;
-    // Integrity reads and paid-work recovery may inspect historical experiments.
-    // Executable entrypoints require this complete-closure qualification result.
-    let model_only_policies = super::super::qualify_model_policies(&artifacts).is_ok();
+    // Every authenticated policy in the closure must use the current source.
+    // Recovery never turns a source qualification error into a capability flag.
+    super::super::qualify_model_policies(&artifacts)
+        .map_err(|_| anyhow::anyhow!("invalid retained model policy source"))?;
     ensure!(
         artifacts.len() <= MAX_CLOSURE && routes.len() <= 256,
         ExecutionCapacityExceeded
@@ -289,7 +291,8 @@ pub(super) fn decode_with_operation(
         }
     }
     Ok(ValidatedEnvelope {
-        model_only_policies,
+        bro_capture: false,
+
         document,
         learned_checkpoint,
         routes: retained,

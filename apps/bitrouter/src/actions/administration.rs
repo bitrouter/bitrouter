@@ -1,13 +1,10 @@
 //! Typed, content-limited host inspection shared by the CLI and control API.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use {
     bitrouter_ai::control::administration::AgentEntry,
     bitrouter_ai::control::administration::AgentsReport,
-    bitrouter_ai::control::administration::CertificateIdentity,
     bitrouter_ai::control::administration::ObserveReport,
-    bitrouter_ai::control::administration::PolicyDetail,
     bitrouter_ai::control::administration::PolicyInput,
     bitrouter_ai::control::administration::PolicyReport,
     bitrouter_ai::control::administration::PolicyView,
@@ -22,7 +19,7 @@ use anyhow::Result;
 
 use crate::daemon::ObserveStatusProvider;
 use crate::paths::ConfigSource;
-use crate::policy_lock::{LoadedPolicyLock, PolicyRuntime};
+use crate::policy_lock::{LoadedPolicy, PolicyRuntime};
 
 pub(crate) trait ObserveReportRuntime: Sized {
     fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self;
@@ -49,57 +46,13 @@ impl ObserveReportRuntime for ObserveReport {
 }
 
 pub(crate) trait PolicyReportRuntime: Sized {
-    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicyLock>, view: PolicyView) -> Self;
+    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicy>, view: PolicyView) -> Self;
     fn selected(self, name: Option<&str>) -> Result<Self>;
 }
 
 impl PolicyReportRuntime for PolicyReport {
-    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicyLock>, view: PolicyView) -> Self {
-        let definitions = loaded
-            .map(|loaded| {
-                loaded
-                    .document
-                    .policies
-                    .iter()
-                    .map(|(name, definition)| {
-                        let certificates = loaded
-                            .document
-                            .certificates
-                            .get(name)
-                            .into_iter()
-                            .flat_map(|entries| entries.iter())
-                            .map(|(key, certificate)| {
-                                (
-                                    key.clone(),
-                                    CertificateIdentity {
-                                        selected_tier: certificate.selected_tier.clone(),
-                                        evidence_digest: certificate.evidence_digest.clone(),
-                                        compiler_config_digest: certificate
-                                            .compiler_config_digest
-                                            .clone(),
-                                        evaluator_config_digest: certificate
-                                            .evaluator_config_digest
-                                            .clone(),
-                                    },
-                                )
-                            })
-                            .collect();
-                        (
-                            name.clone(),
-                            PolicyDetail {
-                                tiers: definition.tiers.clone(),
-                                routes: definition.routes.clone(),
-                                default_tier: definition.default_tier.clone(),
-                                tool_use_tier: definition.tool_use_tier.clone(),
-                                tool_safe_tiers: definition.tool_safe_tiers.clone(),
-                                certificates,
-                            },
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-        let artifact = loaded.and_then(|loaded| loaded.document.artifact.as_ref());
+    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicy>, view: PolicyView) -> Self {
+        let source = loaded.map(|loaded| loaded.document.clone());
         Self {
             view,
             availability: if loaded.is_some() {
@@ -108,31 +61,28 @@ impl PolicyReportRuntime for PolicyReport {
                 "not_configured"
             }
             .into(),
-            digest: loaded.map(|loaded| loaded.digest.clone()),
-            mode: match config.policy.mode {
-                crate::config::PolicyRuntimeMode::Frozen => "frozen",
-                crate::config::PolicyRuntimeMode::Adaptive => "adaptive",
-            }
-            .into(),
-            policies: definitions.keys().cloned().collect(),
+            source_digest: loaded.map(|loaded| loaded.digest.clone()),
+            policies: source
+                .as_ref()
+                .map(|source| source.policies.keys().cloned().collect())
+                .unwrap_or_default(),
             bindings: config
                 .router_policy_bindings()
                 .map(|(router_id, policy, _)| (router_id.to_string(), policy.to_string()))
                 .collect(),
-            evidence_root: artifact.map(|artifact| artifact.evidence_root.clone()),
-            eval_snapshot_root: artifact.and_then(|artifact| artifact.eval_snapshot_root.clone()),
-            definitions,
+            source,
         }
     }
 
-    fn selected(mut self, name: Option<&str>) -> Result<Self> {
-        match name {
-            Some(name) => {
-                validate_identifier(name)?;
-                anyhow::ensure!(self.definitions.contains_key(name), "policy_not_found");
-                self.definitions.retain(|key, _| key == name);
-            }
-            None => self.definitions.clear(),
+    fn selected(self, name: Option<&str>) -> Result<Self> {
+        if let Some(name) = name {
+            validate_identifier(name)?;
+            anyhow::ensure!(
+                self.source
+                    .as_ref()
+                    .is_some_and(|source| source.policies.contains_key(name)),
+                "policy_not_found"
+            );
         }
         Ok(self)
     }
@@ -266,6 +216,27 @@ mod tests {
         assert!(!report.contains("endpoint"));
         Ok(())
     }
+
+    #[test]
+    fn named_show_preserves_the_complete_source_and_its_digest() -> Result<()> {
+        let document: bitrouter_ai::policy::Document = serde_json::from_str(
+            r#"{"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{"tiers":{"strong":{"model":"fixture/strong"}},"default_tier":"strong"},"auto:cost":{"tiers":{"cheap":{"model":"fixture/cheap"}},"default_tier":"cheap"}}}"#,
+        )?;
+        let digest = crate::policy_lock::semantic_digest(&document)?;
+        let loaded = LoadedPolicy {
+            path: None,
+            document: document.clone(),
+            digest: digest.clone(),
+        };
+        let config = crate::config::parse("inherit_defaults: false\n")?;
+        let report = PolicyReport::from_loaded(&config, Some(&loaded), PolicyView::Active);
+        let selected = report.clone().selected(Some("auto:cost"))?;
+        assert_eq!(selected.source, Some(document));
+        assert_eq!(selected.source_digest.as_deref(), Some(digest.as_str()));
+        assert_eq!(selected.policies, ["auto", "auto:cost"]);
+        assert!(report.selected(Some("missing")).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -273,22 +244,21 @@ mod snapshot_tests {
     use super::*;
 
     #[tokio::test]
-    async fn active_mode_and_bindings_change_only_with_the_policy_snapshot() -> anyhow::Result<()> {
+    async fn active_source_and_bindings_change_only_with_the_policy_snapshot() -> anyhow::Result<()>
+    {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("bitrouter.yaml");
-        let lock = directory.path().join("policy-lock.yaml");
-        let initial_yaml = "inherit_defaults: false\npolicy:\n  mode: frozen\npresets:\n  coding:\n    model: fixture:old\n    policy: coding\n";
-        let candidate_yaml = "inherit_defaults: false\npolicy:\n  mode: adaptive\npresets:\n  chat:\n    model: fixture:new\n    policy: coding\n";
+        let lock = directory.path().join("policy.yaml");
+        let initial_yaml = "inherit_defaults: false\nrouters:\n  coding:\n    selection: { kind: policy, policy: coding, base_model: fixture:old }\n";
+        let candidate_yaml = "inherit_defaults: false\nrouters:\n  chat:\n    selection: { kind: policy, policy: coding, base_model: fixture:new }\n";
         let policy_yaml = |model: &str| {
             format!(
-                "lockfileVersion: 4\nartifact:\n  evidence_root: \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n  source_snapshot_time_unix_ms: 0\n  compiler:\n    id: bitrouter-policy-compiler\n    version: 1\n    config_digest: \"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\npolicies:\n  coding:\n    key_strategy: agent_trace\n    tiers: {{ strong: {{ model: fixture:{model}, context: evidence }} }}\n    routes: {{}}\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n"
+                "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers: {{ strong: {{ model: fixture:{model} }} }}\n    default_tier: strong\n"
             )
         };
         std::fs::write(&path, initial_yaml)?;
         std::fs::write(&lock, policy_yaml("old"))?;
         let initial = crate::config::load(&path).await?;
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
         let runtime = PolicyRuntime::new(
             &initial,
             Some(&path),
@@ -298,7 +268,6 @@ mod snapshot_tests {
         )
         .await?;
         let active_before = runtime.administration_snapshot();
-        assert_eq!(active_before.mode, "frozen");
         assert_eq!(
             active_before.bindings.get("coding").map(String::as_str),
             Some("coding")
@@ -307,26 +276,32 @@ mod snapshot_tests {
         std::fs::write(&path, candidate_yaml)?;
         std::fs::write(&lock, policy_yaml("new"))?;
         let disk = disk_policy(&ConfigSource::File(path.clone())).await?;
-        assert_eq!(disk.mode, "adaptive");
         assert!(disk.bindings.contains_key("chat"));
-        assert_ne!(disk.digest, active_before.digest);
+        assert_eq!(
+            disk.source
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing disk source"))?
+                .policies["coding"]
+                .tiers["strong"]
+                .model,
+            "fixture:new"
+        );
+        assert_ne!(disk.source_digest, active_before.source_digest);
         let still_active = runtime.administration_snapshot();
-        assert_eq!(still_active.mode, active_before.mode);
         assert_eq!(still_active.bindings, active_before.bindings);
-        assert_eq!(still_active.digest, active_before.digest);
+        assert_eq!(still_active.source_digest, active_before.source_digest);
 
         let candidate = crate::config::load(&path).await?;
         let prepared = runtime.prepare_for_config(&candidate, Some(&path)).await?;
         assert_eq!(
-            runtime.administration_snapshot().digest,
-            active_before.digest
+            runtime.administration_snapshot().source_digest,
+            active_before.source_digest
         );
         runtime.commit(prepared);
         let active_after = runtime.administration_snapshot();
         assert_eq!(active_after.view, PolicyView::Active);
-        assert_eq!(active_after.mode, disk.mode);
         assert_eq!(active_after.bindings, disk.bindings);
-        assert_eq!(active_after.digest, disk.digest);
+        assert_eq!(active_after.source_digest, disk.source_digest);
         Ok(())
     }
 }

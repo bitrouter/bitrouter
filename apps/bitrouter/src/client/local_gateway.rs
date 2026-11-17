@@ -117,14 +117,20 @@ pub(crate) async fn ensure_local_daemon(
                 reset = p.reset,
             );
             let log_path = source.home().join("bitrouter.log");
-            match crate::daemon::start_and_wait(
-                source,
-                &log_path,
-                Some(&socket),
-                crate::daemon::DAEMON_READY_TIMEOUT,
-            )
-            .await
-            {
+            let outcome = {
+                #[cfg(all(feature = "core", feature = "harness"))]
+                let start = crate::daemon::start_harness_and_wait;
+                #[cfg(not(all(feature = "core", feature = "harness")))]
+                let start = crate::daemon::start_and_wait;
+                start(
+                    source,
+                    &log_path,
+                    Some(&socket),
+                    crate::daemon::DAEMON_READY_TIMEOUT,
+                )
+                .await
+            };
+            match outcome {
                 Ok(crate::daemon::DaemonStartOutcome::Ready(_)) => {
                     eprintln!(
                         "{cyan}note:{reset} BitRouter daemon ready",

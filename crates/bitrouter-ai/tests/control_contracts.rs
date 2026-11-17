@@ -40,11 +40,11 @@ fn partial_reload() -> Value {
 fn capability_scopes_and_descriptor_schemas_keep_their_wire_shape()
 -> Result<(), Box<dyn std::error::Error>> {
     let wire = json!({
-        "protocol": "bitrouter-control", "protocol_version": 1,
-        "server_version": "fixture", "actions": ["reload"],
+        "protocol": "bitrouter-control", "protocol_version": 2,
+        "server_version": "fixture",
         "action_descriptors": {
             "reload": {
-                "version": 1, "required_scope": "control:reload",
+                "version": 2, "required_scope": "control:reload",
                 "input_schema": {"type": "object", "additionalProperties": false},
                 "output_schema": {"$ref": "#/$defs/OperationReport", "$defs": {"OperationReport": {"type": "object"}}}
             }
@@ -58,16 +58,47 @@ fn capability_scopes_and_descriptor_schemas_keep_their_wire_shape()
     assert_eq!(report.scopes, [ControlScope::Read, ControlScope::Reload]);
     assert_eq!(serde_json::to_value(report)?, wire);
 
-    // An older server advertises only its legacy action names. Missing grants
-    // must remain absent, rather than being inferred from the advertised verbs.
-    let legacy: CapabilitiesReport = serde_json::from_value(json!({
-        "protocol": "bitrouter-control", "protocol_version": 1,
-        "server_version": "legacy", "actions": ["status", "models"]
-    }))?;
-    assert!(legacy.scopes.is_empty());
-    assert!(legacy.action_descriptors.is_empty());
-    assert!(legacy.resources.is_empty());
-    assert!(legacy.server_instance_id.is_none());
+    // Names from protocol one cannot replace mandatory current descriptors.
+    assert!(
+        serde_json::from_value::<CapabilitiesReport>(json!({
+            "protocol": "bitrouter-control", "protocol_version": 1,
+            "server_version": "legacy", "actions": ["status", "models"]
+        }))
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn protocol_one_reader_refuses_current_capability_bytes() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Frozen peer boundary from the protocol-one client: exact protocol/version
+    // and its required action-name list, before descriptor-based dispatch.
+    #[derive(serde::Deserialize)]
+    struct ProtocolOneCapabilities {
+        protocol: String,
+        protocol_version: u32,
+        actions: Vec<String>,
+    }
+    fn protocol_one_accepts(raw: &str) -> Result<bool, serde_json::Error> {
+        let report: ProtocolOneCapabilities = serde_json::from_str(raw)?;
+        Ok(report.protocol == "bitrouter-control"
+            && report.protocol_version == 1
+            && report.actions.iter().any(|name| name == "status"))
+    }
+    let old = r#"{"protocol":"bitrouter-control","protocol_version":1,"server_version":"old","actions":["status"]}"#;
+    let current = r#"{"protocol":"bitrouter-control","protocol_version":2,"server_version":"current","action_descriptors":{"status":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}}},"scopes":["control:read"]}"#;
+    assert!(protocol_one_accepts(old)?);
+    assert!(protocol_one_accepts(current).is_err());
+    let mut version_only = serde_json::from_str::<Value>(old)?;
+    version_only["protocol_version"] = json!(2);
+    assert!(!protocol_one_accepts(&serde_json::to_string(
+        &version_only
+    )?)?);
+    assert!(serde_json::from_str::<CapabilitiesReport>(old).is_err());
+    let report: CapabilitiesReport = serde_json::from_str(current)?;
+    assert_eq!(report.protocol_version, 2);
+    assert!(serde_json::to_value(report)?.get("actions").is_none());
     Ok(())
 }
 
@@ -134,5 +165,38 @@ fn reload_identity_and_unknown_operation_remain_recoverable()
     assert!(!report.is_running());
     assert!(!report.succeeded());
     assert_eq!(serde_json::to_value(report)?, wire);
+    Ok(())
+}
+
+#[test]
+fn current_policy_report_carries_resubmittable_source_and_refuses_runtime_ir()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::control::administration::PolicyReport;
+    let raw = r#"{"view":"active","availability":"available","source_digest":"sha256:fixture","policies":["auto"],"bindings":{"coding":"auto"},"source":{"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{"tiers":{"strong":{"model":"fixture/strong"}},"default_tier":"strong"}}}}"#;
+    let report: PolicyReport = serde_json::from_str(raw)?;
+    let source: &bitrouter_ai::policy::Document = report.source.as_ref().ok_or("missing source")?;
+    let target: &bitrouter_ai::policy::Target = &source.policies["auto"].tiers["strong"];
+    assert_eq!(target.model, "fixture/strong");
+    assert_eq!(
+        serde_json::to_value(report)?,
+        serde_json::from_str::<Value>(raw)?
+    );
+    for changed in [
+        raw.replacen('{', "{\"mode\":\"adaptive\",", 1),
+        raw.replacen('{', "{\"definitions\":{},", 1),
+        raw.replacen('{', "{\"certificates\":{},", 1),
+        raw.replace(
+            "\"model\":\"fixture/strong\"",
+            "\"model\":\"fixture/strong\",\"context\":\"evidence\"",
+        ),
+        raw.replace(
+            "\"strong\":{\"model\":\"fixture/strong\"}",
+            "\"strong\":{\"model\":\"fixture/strong\"},\"strong\":{\"model\":\"other\"}",
+        ),
+    ] {
+        assert!(serde_json::from_str::<PolicyReport>(&changed).is_err());
+    }
+    let old = r#"{"view":"active","availability":"available","digest":"old","mode":"frozen","policies":[],"bindings":{},"definitions":{},"evidence_root":null,"eval_snapshot_root":null}"#;
+    assert!(serde_json::from_str::<PolicyReport>(old).is_err());
     Ok(())
 }

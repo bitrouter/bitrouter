@@ -61,7 +61,7 @@ pub(super) async fn configuration(
         );
         return Ok(prior.clone());
     }
-    let execution = resources.open_paid_recovery(&saved, budget)?;
+    let execution = resources.open_obligation_recovery(&saved, budget)?;
     ensure!(
         execution.installation_id() == installation
             && execution.tenant_id() == tenant
@@ -80,7 +80,6 @@ pub(super) async fn configuration(
 
 pub(super) struct Closure {
     pub association: namespace::Stored,
-    pub subject: String,
     pub input: ScoringInput,
     pub digest: String,
 }
@@ -91,13 +90,9 @@ pub(super) async fn job(
     value: &Record,
     namespace: (Scope, Provenance),
     profile: &Configuration,
-    identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
     budget: &OperationBudget<'_>,
 ) -> Result<Closure> {
     let (scope, provenance) = namespace;
-    if value.version == 4 {
-        return super::native::job(tx, value, scope, provenance, profile, identity, budget).await;
-    }
     let checkpoint = io::one(
         tx,
         checkpoints::Entity::find_by_id(&value.checkpoint)
@@ -216,7 +211,6 @@ pub(super) async fn job(
     budget.charge(0, bytes)?;
     let digest = crate::storage::evolution::digest(&stamp)?;
     Ok(Closure {
-        subject: association.descriptor().model.clone(),
         association: namespace::Stored::Capture(Box::new(association)),
         input,
         digest,
@@ -268,12 +262,7 @@ pub(super) async fn terminal(
     input: &ScoringInput,
     budget: &OperationBudget<'_>,
 ) -> Result<String> {
-    let a = match namespace {
-        namespace::Stored::Native(a) => {
-            return super::native::terminal(tx, a, value, input, budget).await;
-        }
-        namespace::Stored::Capture(a) => a,
-    };
+    let namespace::Stored::Capture(a) = namespace;
     let mut terminal_receipt = None;
     if let Some(recovery) = &value.recovery {
         let saved = receipt(tx, &recovery.seed, budget)

@@ -1,58 +1,41 @@
-# Unified `bitrouter/auto` routing
+# Explicit `bitrouter/auto` source
 
-Requests that select `bitrouter/auto` use the policy bundled with the binary by
-default. That default shares this template's tiers and empty routes, without
-the progress guard that requires trajectory configuration. No policy file or
-model/output-token flag is needed. This directory demonstrates an explicit
-file-backed policy with trajectory protection enabled.
+The zero-config router uses the model-only policy bundled with the binary.
+This directory supplies the same source as an explicit, editable `policy.yaml`.
+It has three model tiers, a strong default, tool-safe fallback rules, and no
+learned routes. Every request retains its full admitted context. A target's
+optional `effort` replaces caller effort; omitting it preserves caller effort.
 
-Start this directory with `bro serve --config bitrouter.yaml` and request
-`bitrouter/auto`. The named router binds one version 4 policy for model, optional
-reasoning effort, and context treatment. API requests and Core sessions share
-the same System One classification and planning stages. Rich request history can
-supply workflow state; Core adds explicit task and immutable evidence facts.
+Copy both YAML files to a directory, configure the providers' credentials,
+then validate and start from that directory:
 
-This bootstrap uses the strong default and contains no pretrained routes.
-Old deterministic scorecard experiments are not evidence for a different
-classifier. Add evaluated routes through the existing Eval/Optimize workflow;
-each explicit semantic route requires a matching predictor contract and route
-certificate. Frozen mode records evidence without publishing policy changes.
-
-Every action is structured:
-
-```yaml
-tiers:
-  strong: { model: "openai-codex:gpt-5.6-sol", effort: high, context: preserve }
-  economy: { model: "bitrouter:deepseek/deepseek-v4-pro", context: evidence }
+```bash
+bro policy check --config bitrouter.yaml
+bro policy show auto --disk --config bitrouter.yaml
+bro serve --config bitrouter.yaml
 ```
 
-`preserve` retains full context. `evidence` allows the shared planner to consider
-an owner's admitted extracts, summaries, omissions, and recalls. It grants no
-new access. Ordinary HTTP prompts retain their full context unless a trusted
-host supplies alternatives and the necessary capabilities. Missing effort
-preserves the caller's effort.
+Request `bitrouter/auto`. `policy show` defaults to the selected running
+instance; `--disk` explicitly reads the saved source. Its `source` field is a
+complete `policy::Document` that can also be submitted to the Policy service.
+Neither initialization nor evaluation changes an active policy automatically.
 
-To enable semantic classification, add `decision_model` with a model available
-on your decision backend and set the credential environment variable:
+To update, write a separate current-format source, inspect its changes, and use
+the exact digest from the disk report as the compare-and-swap argument:
 
-```yaml
-decision_model:
-  model: your-decision-model
-  base_url: https://api.typesafe.ai
-  api_key_env: TYPESAFE_API_KEY
+```bash
+bro policy diff policy.yaml candidate.yaml
+bro policy publish candidate.yaml --expected-digest <source-digest> --config bitrouter.yaml
+bro policy rollback <previous-source-digest> --expected-digest <current-source-digest> --config bitrouter.yaml
 ```
 
-The built-in HTTP adapter speaks TypeSafe's typed decision protocol. Other
-backends, including Jev, can implement SDK `DecisionExecutor`; using a different
-URL alone is sufficient only when its protocol is compatible. No backend name
-changes the routing algorithm. With no backend or an invalid/low-confidence
-answer, the relevant labels abstain and the policy default remains available.
+Publication and rollback reload a reachable local daemon. A rejected reload
+restores the previous source with CAS and reloads it; a concurrent winner is
+never overwritten. `bro policy reload --config bitrouter.yaml` explicitly
+reloads saved configuration and source on the selected daemon.
 
-Classification receipts record backend, rubric, threshold, input commitment and
-reported distributions. Plan receipts bind the exact selected prompt. Learn
-uses those receipts alongside action propensities and independently attributed
-request, episode or task outcomes. A successful request is not task success.
-
-Version 1–3 locks, scalar action targets, the global `policy_table` entry, and
-`decision_model.policy.generation_models` are rejected. Write a fresh version 4
-lock; there is no automatic migration of old quality evidence.
+The source accepts only `spec_version: policy/1.0.0-beta.1` and model/effort
+selection fields. Explicit missing files, old lock documents, context actions,
+guards, presets, variants, and runtime modes are rejected. To add classified
+routes, supply matching classifier configuration and evaluate the exact revision
+externally before explicitly publishing a new source.

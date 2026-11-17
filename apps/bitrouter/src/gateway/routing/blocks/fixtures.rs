@@ -6,10 +6,11 @@ use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::gateway::routing::blocks::allocation::BanditConfig;
 use crate::gateway::routing::blocks::control::{BlockDefinition, BlockRule};
-use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+use crate::policy_lock::deterministic_yaml;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use crate::storage::session_identity::SessionIdentity;
 use anyhow::{Context, Result};
+use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -55,14 +56,13 @@ pub(crate) async fn fixture_with_persistence(named: bool, persistent: bool) -> R
     let mut config: Config = crate::config::parse_with(
         &format!(
             r#"
+inherit_defaults: false
 server:
   skip_auth: true
 database:
   url: "sqlite::memory:"
 registry:
   enabled: false
-policy:
-  mode: frozen
 providers:
   fixture:
     api_base: "{}"
@@ -96,15 +96,17 @@ models:
         service_id: unavailable
       - provider: fixture
         service_id: cheap
-presets:
+routers:
   coding:
-    model: "fixture:strong"
-    system_prompt: "Use recorded requirements."
+    selection: {{kind: model, model: "fixture:strong"}}
+    defaults:
+      system_prompt: "Use recorded requirements."
   candidate:
-    model: "fixture:cheap"
-    system_prompt: "Use recorded requirements."
-    params:
-      temperature: 0.2
+    selection: {{kind: model, model: "fixture:cheap"}}
+    defaults:
+      system_prompt: "Use recorded requirements."
+      params:
+        temperature: 0.2
 "#,
             upstream.uri()
         ),
@@ -117,30 +119,56 @@ presets:
         );
     }
     if named {
-        let mut lock = PolicyLock::default();
+        let mut document = Document {
+            spec_version: SpecVersion::Beta1,
+            policies: BTreeMap::new(),
+        };
         for (name, default_tier) in [("coding", "strong"), ("candidate", "cheap")] {
-            config
-                .presets
+            let router = config
+                .routers
                 .get_mut(name)
-                .context("fixture preset missing")?
-                .policy = Some(name.into());
-            lock.policies.insert(
+                .context("fixture router missing")?;
+            let model = if name == "coding" {
+                "fixture:strong"
+            } else {
+                "fixture:cheap"
+            };
+            router.selection = crate::config::router::RouterSelection::Policy {
+                policy: name.into(),
+                base_model: model.into(),
+                routing: Default::default(),
+            };
+            document.policies.insert(
                 name.into(),
-                PolicyDefinition {
-                    tiers: BTreeMap::from([
-                        ("strong".into(), "fixture:strong".into()),
-                        ("cheap".into(), "fixture:cheap".into()),
-                    ]),
-                    default_tier: Some(default_tier.into()),
+                Policy {
+                    tiers: [
+                        (
+                            "strong".into(),
+                            Target {
+                                model: "fixture:strong".into(),
+                                effort: None,
+                            },
+                        ),
+                        (
+                            "cheap".into(),
+                            Target {
+                                model: "fixture:cheap".into(),
+                                effort: None,
+                            },
+                        ),
+                    ]
+                    .into(),
+                    default_tier: default_tier.into(),
                     tool_use_tier: Some("strong".into()),
                     tool_safe_tiers: vec!["strong".into()],
-                    ..PolicyDefinition::default()
+                    classifier_digest: None,
+                    routes: BTreeMap::new(),
                 },
             );
         }
         tokio::fs::write(
-            home.path().join("policy-lock.yaml"),
-            deterministic_yaml(&lock)?,
+            home.path().join("policy.yaml"),
+            deterministic_yaml(&document)?,
         )
         .await?;
     }

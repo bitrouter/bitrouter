@@ -185,7 +185,14 @@ pub async fn serve_with_extensions(
             anyhow::bail!("shared gateway runs through bro serve without compiled extension hosts")
         }
     };
-    serve_with_options(source, false, register, selected).await
+    serve_with_options(
+        source,
+        false,
+        register,
+        selected,
+        crate::assemble::AssemblyScope::Gateway,
+    )
+    .await
 }
 
 /// Run the bundled CLI host. Only a child launched by `bro start` may be
@@ -206,7 +213,41 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
             return crate::gateway::shared::runtime::serve(*process).await;
         }
     };
-    serve_with_options(source, managed_child, |_| Ok(()), selected).await
+    serve_with_options(
+        source,
+        managed_child,
+        |_| Ok(()),
+        selected,
+        crate::assemble::AssemblyScope::Gateway,
+    )
+    .await
+}
+
+/// Run only the OS-local BRO child selected by a harness launcher.
+/// The ordinary serve/custom-host paths always retain the gateway boundary.
+#[cfg(all(feature = "core", feature = "harness"))]
+pub async fn serve_harness_cli(
+    source: &crate::paths::ConfigSource,
+    managed_child: bool,
+) -> Result<()> {
+    let selected = crate::config::shared_process::select(source).await?;
+    #[cfg(not(feature = "multi-instance"))]
+    let crate::config::shared_process::Selection::Local(selected) = selected;
+    #[cfg(feature = "multi-instance")]
+    let selected = match selected {
+        crate::config::shared_process::Selection::Local(selected) => selected,
+        crate::config::shared_process::Selection::Shared(_) => {
+            anyhow::bail!("local BRO harness cannot use shared gateway authority")
+        }
+    };
+    serve_with_options(
+        source,
+        managed_child,
+        |_| Ok(()),
+        selected,
+        crate::assemble::AssemblyScope::BroHarness,
+    )
+    .await
 }
 
 /// Reject cold shared startup before a local launcher creates files or children.
@@ -241,6 +282,7 @@ async fn serve_with_options(
     cli_owned: bool,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
     selected: Option<Box<crate::config::shared_process::LocalInput>>,
+    scope: crate::assemble::AssemblyScope,
 ) -> Result<()> {
     validate_startup_features()?;
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
@@ -292,7 +334,7 @@ async fn serve_with_options(
         crate::paths::ConfigSource::Default { .. } => None,
     };
     let assembled =
-        crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
+        crate::assemble::build_scoped_app(&cfg, config_path_for_reload, register, scope).await?;
     let observe_for_shutdown = assembled.observe.clone();
     let tenancy_for_shutdown = assembled.tenancy.clone();
     let receipt_observer = assembled
@@ -341,8 +383,7 @@ async fn serve_with_options(
             );
         }
         let app = Arc::new(assembled.app);
-        #[cfg(feature = "core")]
-        let eval_router = crate::core::eval::api::router(
+        let eval_router = crate::eval::api::router(
             assembled.eval_service.clone(),
             assembled.db.clone(),
             cfg.server.skip_auth,
@@ -515,7 +556,6 @@ async fn serve_with_options(
             };
             let inference = async move {
                 let managed_wrapper = move |router: axum::Router| {
-                    #[cfg(feature = "core")]
                     let router = router.merge(eval_router.clone());
                     #[cfg(feature = "core")]
                     { managed_core.wrap(router) }

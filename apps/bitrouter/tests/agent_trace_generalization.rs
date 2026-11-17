@@ -8,7 +8,8 @@ use axum_test::TestServer;
 use bitrouter::config;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
-use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
+use bitrouter::policy_lock::deterministic_yaml;
+use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use wiremock::matchers::{method, path};
@@ -42,29 +43,37 @@ async fn fixture(
             "usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}
         }))).mount(&upstream).await;
     let dir = tempfile::tempdir()?;
-    let mut lock = PolicyLock::default();
-    lock.policies.insert(
-        "auto".into(),
-        PolicyDefinition {
-            tiers: BTreeMap::from([
-                ("strong".into(), "mock:strong".into()),
-                ("cheap".into(), "mock:cheap".into()),
-            ]),
-            routes: BTreeMap::from([(
-                "semantic_route/v1|code:debugging|verify|normal".into(),
-                "cheap".into(),
-            )]),
-            default_tier: Some("strong".into()),
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers: vec!["strong".into(), "cheap".into()],
-            ..PolicyDefinition::default()
-        },
-    );
-    decision::certify_routes(&mut lock);
-    std::fs::write(
-        dir.path().join("policy-lock.yaml"),
-        deterministic_yaml(&lock)?,
-    )?;
+    let mut source = Document {
+        spec_version: SpecVersion::Beta1,
+        policies: BTreeMap::from([(
+            "auto".into(),
+            Policy {
+                tiers: BTreeMap::from([
+                    (
+                        "strong".into(),
+                        Target {
+                            model: "mock:strong".into(),
+                            effort: None,
+                        },
+                    ),
+                    (
+                        "cheap".into(),
+                        Target {
+                            model: "mock:cheap".into(),
+                            effort: None,
+                        },
+                    ),
+                ]),
+                routes: BTreeMap::from([("code:debugging|verify|normal".into(), "cheap".into())]),
+                classifier_digest: None,
+                default_tier: "strong".into(),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into(), "cheap".into()],
+            },
+        )]),
+    };
+    decision::pin_classifier(&mut source);
+    std::fs::write(dir.path().join("policy.yaml"), deterministic_yaml(&source)?)?;
     let mut config = config::parse_with(
         &format!(
             r#"
@@ -82,7 +91,7 @@ routers:
   auto:
     selection: {{kind: policy, policy: auto, base_model: 'mock:strong'}}
 policy:
-  path: './policy-lock.yaml'
+  path: './policy.yaml'
 "#,
             upstream.uri()
         ),
@@ -171,7 +180,9 @@ async fn missing_backend_uses_unknown_and_conservative_default() -> Result<()> {
     for (endpoint, body) in requests() {
         server.post(endpoint).json(&body).await.assert_status_ok();
     }
-    for request in upstream.received_requests().await.context("capture")? {
+    let captured = upstream.received_requests().await.context("capture")?;
+    assert_eq!(captured.len(), requests().len());
+    for request in captured {
         let body: Value = serde_json::from_slice(&request.body)?;
         assert_eq!(body["model"], "strong");
     }

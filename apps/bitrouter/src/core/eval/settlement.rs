@@ -13,9 +13,8 @@ use crate::gateway::observability::decision::{
 };
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
-    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
-    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-    bitrouter_ai::eval::EvidenceItem,
+    bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvidenceItem,
 };
 
 /// Converts a settled routed request into a generic, redacted eval subject.
@@ -117,12 +116,26 @@ impl EvalSettlementRecorder {
         evidence.extend(routing_evidence(context)?);
         let evidence_digest = evidence_digest(&evidence)?;
         Ok(EvalSubject {
-            schema_version: EVAL_SCHEMA_VERSION,
+            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            identity: match &self.owner {
+                RecorderOwner::Legacy { .. } => {
+                    bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+                }
+                RecorderOwner::Tenant { execution, .. } => {
+                    let identity = crate::tenancy::eval::identity::for_execution(execution)?;
+                    anyhow::ensure!(
+                        execution
+                            .route()
+                            .policy()
+                            .is_some_and(|policy| policy.name() == decision.policy),
+                        "selected policy name mismatch"
+                    );
+                    identity
+                }
+            },
             eval_id: format!("request:{}", context.request_id),
             scope: EvalScope::Request,
             subject_id: context.request_id.clone(),
-            policy_digest: decision.policy_digest.clone(),
-            preset: decision.preset.clone(),
             cohort: None,
             holdout: decision.holdout,
             decisions: vec![EvalDecisionRef {
@@ -265,7 +278,7 @@ mod tests {
     use super::{
         EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
     };
-    use crate::core::eval::store::EvalStore;
+    use crate::eval::store::EvalStore;
     use crate::gateway::observability::decision::tests::test_decision;
     use crate::gateway::observability::settlement::PolicySettlementRecorder;
     use crate::trajectory::canonical::CorrelationKey;
@@ -405,7 +418,10 @@ mod tests {
             .subject("request:request-1")
             .await?
             .ok_or_else(|| anyhow::anyhow!("request subject missing"))?;
-        assert_eq!(subject.policy_digest, DIGEST);
+        assert!(matches!(
+            subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ));
         assert_eq!(subject.decisions.len(), 1);
         assert_eq!(
             subject.decisions[0].selected_effort,

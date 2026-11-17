@@ -161,7 +161,25 @@ pub(super) async fn retain(
         );
         return Ok(());
     }
-    configuration_store::insert_resource(db, &record).await
+    configuration_store::insert_resource(db, &record).await?;
+    let authority = super::super::store::startup::read_header_in(db, 4096)
+        .await?
+        .map_or(0, |header| header.header.revision.get())
+        .try_into()?;
+    let is_head = super::lifecycle::head(db, &resources.installation, &artifact.reference.key())
+        .await?
+        .is_none();
+    super::lifecycle::write(
+        db,
+        &resources.installation,
+        &super::lifecycle::Record {
+            reference: artifact.reference.clone(),
+            is_head,
+            revoked: false,
+            authority_revision: authority,
+        },
+    )
+    .await
 }
 
 /// Prepare ciphertext before opening the authority transaction. No store writes.
@@ -173,7 +191,11 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
         &artifact.definition,
         super::manifest::Definition::Credential { oauth: Some(_), .. }
     );
-    let version = if artifact.definition.is_native_route() {
+    let version = if artifact.definition.uses_model_policy() {
+        super::MODEL_POLICY_COMPILER_VERSION
+    } else if artifact.definition.requires_envelope_v2() {
+        super::BRO_OBLIGATION_COMPILER_VERSION
+    } else if artifact.definition.is_native_route() {
         super::NATIVE_COMPILER_VERSION
     } else if artifact.definition.is_shared_profile() {
         super::SHARED_HEALTH_COMPILER_VERSION
@@ -216,7 +238,9 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
 
 pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Result<Artifact> {
     ensure!(
-        record.compiler_version == COMPILER_VERSION
+        record.compiler_version == super::MODEL_POLICY_COMPILER_VERSION
+            || record.compiler_version == super::BRO_OBLIGATION_COMPILER_VERSION
+            || record.compiler_version == COMPILER_VERSION
             || record.compiler_version == super::PROFILED_COMPILER_VERSION
             || record.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION
             || record.compiler_version == super::NATIVE_COMPILER_VERSION
@@ -244,16 +268,24 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
     };
     let bytes = key.open_bound(purpose, &binding, &sealed)?;
     let artifact: Artifact = serde_json::from_slice(&bytes)?;
+    let expected_version = if artifact.definition.uses_model_policy() {
+        super::MODEL_POLICY_COMPILER_VERSION
+    } else if artifact.definition.requires_envelope_v2() {
+        super::BRO_OBLIGATION_COMPILER_VERSION
+    } else if artifact.definition.is_native_route() {
+        super::NATIVE_COMPILER_VERSION
+    } else if artifact.definition.is_shared_profile() {
+        super::SHARED_HEALTH_COMPILER_VERSION
+    } else if artifact.definition.is_profiled() {
+        super::PROFILED_COMPILER_VERSION
+    } else if oauth {
+        "tenancy-oauth-resource-v1"
+    } else {
+        COMPILER_VERSION
+    };
     ensure!(
-        artifact.definition.is_profiled()
-            == (record.compiler_version == super::PROFILED_COMPILER_VERSION
-                || record.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION
-                || record.compiler_version == super::NATIVE_COMPILER_VERSION)
-            && artifact.definition.is_shared_profile()
-                == (record.compiler_version == super::SHARED_HEALTH_COMPILER_VERSION)
-            && artifact.definition.is_native_route()
-                == (record.compiler_version == super::NATIVE_COMPILER_VERSION),
-        "admission resource compiler mismatch"
+        record.compiler_version == expected_version,
+        "resource compiler mismatch"
     );
     ensure!(
         oauth
@@ -282,5 +314,6 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
         fingerprint == record.content_digest.as_str(),
         "resource fingerprint mismatch"
     );
+    artifact.definition.validate_current_profile()?;
     Ok(artifact)
 }

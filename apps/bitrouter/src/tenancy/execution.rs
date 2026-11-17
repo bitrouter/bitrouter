@@ -45,8 +45,6 @@ pub(crate) mod choice;
 mod continuation;
 mod count;
 pub(crate) mod deadline;
-#[cfg(all(feature = "core", feature = "harness"))]
-mod experiment;
 mod generation_defaults;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
@@ -147,8 +145,6 @@ impl Submission {
 /// One invocation, shared with detached execution, stream draining and delivery.
 /// No Clone implementation can duplicate the lease or attempt counter.
 pub(crate) struct TenantExecution {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    experiment: std::sync::OnceLock<Arc<super::experiment::Witness>>,
     #[cfg(all(feature = "core", feature = "harness"))]
     assessment: std::sync::OnceLock<super::learning::source::Binding>,
     service: Service,
@@ -594,8 +590,6 @@ impl Service {
             });
         let execution = Arc::new(TenantExecution {
             #[cfg(all(feature = "core", feature = "harness"))]
-            experiment: std::sync::OnceLock::new(),
-            #[cfg(all(feature = "core", feature = "harness"))]
             assessment: std::sync::OnceLock::new(),
             service: self.clone(),
             submission,
@@ -768,55 +762,6 @@ impl TenantExecution {
     }
 
     #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn send_trajectory(
-        &self,
-        permit: tokio::sync::mpsc::OwnedPermit<super::actor::Job>,
-        job: super::actor::Job,
-        deadline: tokio::time::Instant,
-    ) -> Result<(), ErrorCode> {
-        let _gate = self
-            .service
-            .accepting
-            .lock()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        if !self.trajectory_producer_ready() || tokio::time::Instant::now() >= deadline {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        drop(permit.send(job));
-        Ok(())
-    }
-
-    #[cfg(feature = "core")]
-    pub(crate) fn storage_database(&self) -> &sea_orm::DatabaseConnection {
-        &self.service.db
-    }
-    #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn trajectory_identity(
-        &self,
-    ) -> (
-        &bitrouter_ai::tenancy::identity::RevisionId,
-        &bitrouter_ai::tenancy::configuration::Learning,
-    ) {
-        (&self.submission.binding.execution_revision, &self.learning)
-    }
-    #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn trajectory_resources(&self) -> &super::resources::Resources {
-        &self.service.resources
-    }
-    #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn trajectory_sender(
-        &self,
-    ) -> tokio::sync::mpsc::Sender<super::actor::Job> {
-        self.service.commands.clone()
-    }
-    #[cfg(feature = "core")]
-    pub(in crate::tenancy) fn trajectory_producer_ready(&self) -> bool {
-        self.service.eval.producers_open.load(Ordering::Acquire)
-            && self.service.eval.healthy()
-            && self.service.live.load(Ordering::Acquire)
-    }
-
-    #[cfg(feature = "core")]
     pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
         (
             &self.submission.binding.installation_id,
@@ -825,9 +770,15 @@ impl TenantExecution {
         )
     }
 
+    /// Exact immutable configuration admitted for this execution.
     #[cfg(feature = "core")]
-    pub(crate) fn eval_store(&self) -> crate::core::eval::store::EvalStore {
-        crate::core::eval::store::EvalStore::for_execution(self.service.db.clone(), self)
+    pub(crate) fn configuration_revision(&self) -> &RevisionId {
+        &self.submission.binding.execution_revision
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn eval_store(&self) -> crate::eval::store::EvalStore {
+        crate::eval::store::EvalStore::for_execution(self.service.db.clone(), self)
     }
 
     #[cfg(feature = "core")]

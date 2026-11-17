@@ -13,6 +13,13 @@ not spawn itself through the external controller. Native vendor launchers retain
 the vendor's own interaction and authentication flow. See the
 [runtime guide](agent-runtime.md) for identity and authority ownership.
 
+Local harness launchers select a code-owned BRO assembly scope when starting a
+new child. The child uses loopback inference/control listeners and its OS-local
+native endpoints. Stock `serve`, `start`, shared serving and custom extension
+hosts keep the gateway scope; no YAML or HTTP field selects the BRO scope. A
+running source-owned process is reused without changing its product authority.
+Local experiments require a BRO owner and do not become tenant-service features.
+
 ## Routing
 
 External ACP routing is enabled by default; an explicit direct invocation opts

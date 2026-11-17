@@ -63,6 +63,14 @@ pub(in crate::gateway::shared) async fn initialize(
     crate::gateway::shared::schema::initialize_all(store)
         .await
         .map_err(|error| super::mutation_failure(&error))?;
+    // An existing namespace is authenticated before replay can mutate a receipt.
+    if store
+        .get::<crate::gateway::shared::authority::Head>(Kind::Authority, "head")
+        .await?
+        .is_some()
+    {
+        authority.preflight_current().await?;
+    }
     store
         .retry(|| async {
             let tx = store.begin().await?;

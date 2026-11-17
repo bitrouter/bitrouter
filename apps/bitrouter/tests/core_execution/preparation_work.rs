@@ -121,10 +121,9 @@ impl RoutingTable for Probe {
 
 #[async_trait]
 impl ModelSelector for Probe {
-    async fn select_variant(
+    async fn select_policy(
         &self,
         _: &str,
-        _: Option<&str>,
         _: &mut PipelineContext,
     ) -> bitrouter::gateway::error::Result<()> {
         self.called(Kind::ModelSelection).await

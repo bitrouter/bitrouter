@@ -1,7 +1,6 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
-pub mod assessment;
 pub(crate) mod owned;
 
 use crate::storage::checkpoint::CheckpointBatchExt;
@@ -617,29 +616,6 @@ impl NativeSession {
     #[cfg(all(test, unix))]
     pub(crate) fn harness_port_for_test(&self) -> Arc<dyn HarnessPort> {
         self.port.clone()
-    }
-
-    /// Assess one frozen Eval root against this authenticated handle's retained
-    /// experiment route. This local read starts no model work and takes no
-    /// execution lease. Current tenant-wide ResourceRead and the original
-    /// credential/binding ceilings are required through delivery.
-    ///
-    /// # Errors
-    /// Rejects Legacy, a busy owner, unsupported retained policy, unqualified
-    /// external evidence, revoked authority or an exceeded bounded read budget.
-    /// Built-in operational evidence does not imply a quality pass or promotion.
-    pub async fn experiment_cohort(
-        &self,
-        model: &str,
-        evidence_root: &str,
-    ) -> Result<crate::core::optimization::cohort::CohortAssessment, CoreError> {
-        let handle = self.owned_handle.as_ref().ok_or_else(|| {
-            CoreError::rejected(
-                ErrorCode::UnauthorizedScope,
-                "native cohort requires an authenticated session",
-            )
-        })?;
-        handle.cohort(model, evidence_root).await
     }
 
     pub async fn run(

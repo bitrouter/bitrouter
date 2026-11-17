@@ -2,7 +2,6 @@
 mod control;
 pub(in crate::tenancy) mod entities;
 pub(in crate::tenancy) mod history;
-pub(crate) mod native;
 pub(in crate::tenancy) mod owner;
 pub(in crate::tenancy) mod queue;
 pub(crate) mod recovery;

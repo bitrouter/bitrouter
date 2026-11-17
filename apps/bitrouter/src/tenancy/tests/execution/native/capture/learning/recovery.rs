@@ -165,7 +165,7 @@ async fn producer() -> Result<()> {
     .await?;
     ready.fixture.service.shutdown().await?;
     // The same originally leased pool is consumed once, before real admission.
-    ready.fixture.service = Service::open_owned_profile(
+    ready.fixture.service = Service::open_owned_bro_profile(
         database,
         &config(),
         &crate::config::ContinuationConfig::default(),

@@ -369,7 +369,9 @@ async fn missing_nonprofile_and_full_ref_transplants_never_substitute_authority(
     policy.key = pin.key();
     policy.key.resource_id = "other-policy".try_into()?;
     policy.definition = Definition::Policy {
-        document: serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
+        document: serde_json::from_value(
+            serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
+        )?,
         name: "selected".into(),
         dependencies: Vec::new(),
     };

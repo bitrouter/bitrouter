@@ -59,6 +59,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const SECRET: &str = "owned-upstream-secret";
 
 mod control;
+mod replacement;
 
 /// SDV for real cold dispatch and restart with a near-limit explicit grant.
 #[tokio::test]
@@ -242,6 +243,18 @@ impl Provider {
         tokens: u32,
         secret: &str,
     ) -> Result<()> {
+        self.generation_request(service, binding, tokens, secret)
+            .await?;
+        Ok(())
+    }
+
+    async fn generation_request(
+        &mut self,
+        service: &Service,
+        binding: &HeaderMap,
+        tokens: u32,
+        secret: &str,
+    ) -> Result<Value> {
         let (status, response) = dispatch(service, binding).await?;
         ensure!(status == StatusCode::OK, "dispatch returned {status}");
         ensure!(response["choices"][0]["message"]["content"] == "cached reply");
@@ -274,10 +287,11 @@ impl Provider {
         };
         ensure!(result.content.iter().any(|content| matches!(content,
             bitrouter_ai::types::Content::Text { text, .. } if text == "cached reply")));
-        self.observed(tokens, secret).await
+        self.observed(tokens, secret).await?;
+        Ok(())
     }
 
-    async fn observed(&mut self, tokens: u32, secret: &str) -> Result<()> {
+    async fn observed(&mut self, tokens: u32, secret: &str) -> Result<Value> {
         let (headers, body) = tokio::time::timeout(TIMEOUT, self.received.recv())
             .await?
             .context("provider request missing")?;
@@ -289,7 +303,7 @@ impl Provider {
         );
         ensure!(body["model"] == "model-a");
         ensure!(body["max_tokens"] == tokens, "incorrect retained defaults");
-        Ok(())
+        Ok(body)
     }
 
     fn calls(&self) -> usize {
@@ -844,8 +858,8 @@ async fn warmed_entries_recheck_credential_and_binding_expiry_without_publicatio
 }
 
 #[tokio::test]
-async fn warm_immutable_execution_survives_db_corruption_but_management_get_is_uncached()
--> Result<()> {
+async fn warm_configuration_corruption_refuses_dispatch_without_another_provider_send() -> Result<()>
+{
     let mut provider = Provider::start().await?;
     let (fixture, route, _) = provision(&provider.url).await?;
     let revision = draft(&fixture, &route, "cache-draft", 25).await?;
@@ -857,16 +871,21 @@ async fn warm_immutable_execution_survives_db_corruption_but_management_get_is_u
         &revision.revision_id,
     )?;
     provider.generation(&fixture.service, &binding, 25).await?;
+    ensure!(provider.calls() == 1);
+    ensure!(fixture.service.current().is_ok());
     corrupt_configuration(&fixture, &revision.revision_id).await?;
-    provider.generation(&fixture.service, &binding, 25).await?;
-    ensure!(provider.calls() == 2);
+    let (status, rejection) = dispatch(&fixture.service, &binding).await?;
+    ensure!(status == StatusCode::SERVICE_UNAVAILABLE);
+    ensure!(rejection["code"] == "storage_unavailable");
+    ensure!(rejection["dispatch_state"] == "not_started");
+    ensure!(rejection["execution_id"].is_null());
     ensure!(
-        matches!(fixture.service.configuration(&fixture.operator, &fixture.tenant, &revision.revision_id).await,
-        Err(error) if error.0.code == ErrorCode::StorageUnavailable)
+        provider.calls() == 1,
+        "warm corrupt configuration reached the provider"
     );
     ensure!(
         fixture.service.current().is_err(),
-        "management integrity failure did not fence"
+        "dispatch integrity failure did not fence"
     );
     fixture.service.shutdown().await?;
     Ok(())
@@ -876,21 +895,34 @@ async fn warm_immutable_execution_survives_db_corruption_but_management_get_is_u
 async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart() -> Result<()> {
     for corrupt_key in [false, true] {
         let mut provider = Provider::start().await?;
-        let (mut fixture, route, slot) = provision(&provider.url).await?;
+        let (fixture, route, slot) = provision(&provider.url).await?;
         let revision = draft(&fixture, &route, "cache-draft", 25).await?;
         let credential = fixture.issue("cache-user").await?;
         let token = credential.secret.as_deref().context("secret")?;
         enable_dispatch(&fixture);
         let binding = headers(&fixture, token, &revision.revision_id)?;
         provider.generation(&fixture.service, &binding, 25).await?;
+        ensure!(
+            fixture
+                .service
+                .active_revision(&fixture.operator, &fixture.tenant)
+                .await
+                .map_err(failure)?
+                .revision_id
+                .is_none(),
+            "fixture configuration must remain inactive"
+        );
+        let before = fixture.service.current().map_err(failure)?.revision;
         if corrupt_key {
             corrupt_credential(&fixture, &slot).await?;
+            // A retained static credential remains usable by the warm service;
+            // configuration authentication does not change credential caching.
+            provider.generation(&fixture.service, &binding, 25).await?;
         } else {
             corrupt_configuration(&fixture, &revision.revision_id).await?;
         }
-        provider.generation(&fixture.service, &binding, 25).await?;
-        ensure!(provider.calls() == 2);
-        let before = fixture.service.current().map_err(failure)?.revision;
+        let expected_calls = if corrupt_key { 2 } else { 1 };
+        ensure!(provider.calls() == expected_calls);
         fixture.service.shutdown().await?;
         let snapshot = store::load(&fixture.db, Utc::now()).await?;
         ensure!(snapshot.revision == before);
@@ -903,29 +935,16 @@ async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart(
             fixture.service.resources.clone(),
         )
         .await;
-        if corrupt_key {
-            // The fixture now uses production's authenticated actor bootstrap.
-            // Corrupt credential rows must fail there before any Service/cache
-            // is exposed; inactive configuration corruption is still read below.
-            ensure!(
-                reopened.is_err(),
-                "cold corrupt credential passed bootstrap"
-            );
-            ensure!(provider.calls() == 2);
-            continue;
+        // Bootstrap authenticates every retained configuration, including this
+        // inactive draft, and every retained credential before exposing service.
+        if let Ok(service) = reopened {
+            service.shutdown().await?;
+            anyhow::bail!("corrupt retained bytes passed bootstrap (credential: {corrupt_key})");
         }
-        fixture.service = reopened?;
-        enable_dispatch(&fixture);
-        let binding = headers(&fixture, token, &revision.revision_id)?;
-        let (status, rejection) = dispatch(&fixture.service, &binding).await?;
-        ensure!(status == StatusCode::SERVICE_UNAVAILABLE);
-        ensure!(rejection["code"] == "storage_unavailable");
         ensure!(
-            provider.calls() == 2,
+            provider.calls() == expected_calls,
             "cold corrupt bytes reached the provider"
         );
-        ensure!(fixture.service.current().is_err());
-        fixture.service.shutdown().await?;
     }
     Ok(())
 }

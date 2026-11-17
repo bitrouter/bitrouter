@@ -2,7 +2,7 @@
 
 `bro tenancy offline recover --plan FILE --report NEW_DIRECTORY` checks an explicitly retired SQLite archive and a stopped, newly provisioned installation. It does not start Service, migrate a database, issue credentials, import resources, reset counters, copy history or authorize dispatch. The private plan/report formats are not public tenancy DTOs or runtime authority.
 
-This first profile verifies independently approved **new static provisioning**. Historical Eval conversion remains the separate `eval-inventory` / `eval-backfill` procedure. Source-equivalent definition transfer, OAuth generations, checkpoints, learned/Choice/paid routes and automatic learning are outside this verifier's profile. Source history stays in its exact archived namespace, including unknown effects. There is no cross-tenant deduplication or implicit adoption.
+This profile verifies independently approved **new static provisioning**. Historical Eval conversion commands are retired. Current Eval facts use the [scoped service exchange](specs/service-api/README.md#tenant-eval-profile); importing facts does not transfer authority or activate a Policy. Source-equivalent definition transfer, OAuth generations, checkpoints, learned/Choice/paid routes and automatic learning are outside this verifier's profile. Source history stays in its exact archived namespace, including unknown effects. There is no cross-tenant deduplication or implicit adoption.
 
 ## Operator procedure
 

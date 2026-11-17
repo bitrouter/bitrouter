@@ -1,6 +1,5 @@
 //! Bounded provider, agent, observation and policy inspection data.
 
-use crate::routing::PolicyModelTarget;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -74,39 +73,19 @@ pub struct ObserveReport {
     pub active_spans: usize,
 }
 
-/// Explicitly selected policy fields; never serialize the source document.
+/// Source and provenance from the explicitly selected running or saved view.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PolicyDetail {
-    pub tiers: BTreeMap<String, PolicyModelTarget>,
-    pub routes: BTreeMap<String, String>,
-    pub default_tier: Option<String>,
-    pub tool_use_tier: Option<String>,
-    pub tool_safe_tiers: Vec<String>,
-    pub certificates: BTreeMap<String, CertificateIdentity>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CertificateIdentity {
-    pub selected_tier: String,
-    pub evidence_digest: String,
-    pub compiler_config_digest: String,
-    pub evaluator_config_digest: Option<String>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyReport {
     pub view: PolicyView,
     pub availability: String,
-    pub digest: Option<String>,
-    pub mode: String,
+    /// Digest of the complete source document, never a resource revision.
+    pub source_digest: Option<String>,
     pub policies: Vec<String>,
     pub bindings: BTreeMap<String, String>,
-    pub evidence_root: Option<String>,
-    pub eval_snapshot_root: Option<String>,
-    pub definitions: BTreeMap<String, PolicyDetail>,
+    /// Complete portable source; a named show does not change its digest identity.
+    pub source: Option<crate::policy::Document>,
 }
 
 impl PolicyInput {

@@ -3,9 +3,6 @@
 use sea_orm::DatabaseBackend;
 use sea_orm_migration::prelude::*;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 const TABLES: [&str; 6] = [
     "tenancy_installation",
     "tenancy_tenants",
@@ -223,114 +220,31 @@ pub(super) fn statements(backend: DatabaseBackend) -> Vec<TableCreateStatement> 
     ]
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        for statement in statements(manager.get_database_backend()) {
-            manager.create_table(statement).await?;
-        }
-        // MySQL DDL commits before the migration ledger is written. An
-        // interrupted run must resume without recreating an existing index.
-        // https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html
-        if manager.get_database_backend() == DatabaseBackend::MySql
-            && manager
-                .has_index(TABLES[4], "idx_tenancy_credentials_state")
-                .await?
-        {
-            return Ok(());
-        }
-        manager
-            .create_index(
-                Index::create()
-                    .if_not_exists()
-                    .name("idx_tenancy_credentials_state")
-                    .table(Alias::new(TABLES[4]))
-                    .col(Alias::new("state"))
-                    .col(Alias::new("tenant_id"))
-                    .to_owned(),
-            )
-            .await?;
-        Ok(())
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    for statement in statements(manager.get_database_backend()) {
+        manager.create_table(statement).await?;
     }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Downgrade is an offline operator action; existing legacy tables remain intact.
-        for name in TABLES.into_iter().rev() {
-            manager
-                .drop_table(Table::drop().table(Alias::new(name)).to_owned())
-                .await?;
-        }
-        Ok(())
+    // MySQL DDL commits before the migration ledger is written. An
+    // interrupted run must resume without recreating an existing index.
+    // https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html
+    if manager.get_database_backend() == DatabaseBackend::MySql
+        && manager
+            .has_index(TABLES[4], "idx_tenancy_credentials_state")
+            .await?
+    {
+        return Ok(());
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-
-    use super::*;
-
-    #[tokio::test]
-    async fn additive_authority_migration_never_assigns_legacy_owners() -> anyhow::Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        crate::db::migration::m20240101_000001_create_auth_tables::Migration
-            .up(&manager)
-            .await?;
-        db.execute(Statement::from_string(DatabaseBackend::Sqlite,
-            "INSERT INTO users (id, created_at) VALUES ('old-a', '2026-01-01T00:00:00Z'), ('old-b', '2026-01-01T00:00:00Z')".to_owned())).await?;
-        Migration.up(&manager).await?;
-        Migration.up(&manager).await?;
-        for table in TABLES {
-            let row = db
-                .query_one(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    format!("SELECT COUNT(*) AS count FROM {table}"),
-                ))
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("missing count"))?;
-            assert_eq!(
-                row.try_get::<i64>("", "count")?,
-                0,
-                "migration must not infer ownership"
-            );
-        }
-        Migration.down(&manager).await?;
-        let owners = db
-            .query_all(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "SELECT id FROM users ORDER BY id".to_owned(),
-            ))
-            .await?;
-        assert_eq!(owners.len(), 2);
-        assert_eq!(owners[0].try_get::<String>("", "id")?, "old-a");
-        assert_eq!(owners[1].try_get::<String>("", "id")?, "old-b");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn command_identity_includes_installation_and_principal_but_not_tenant()
-    -> anyhow::Result<()> {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        Migration.up(&SchemaManager::new(&db)).await?;
-        let insert = |installation: &str, principal: &str, tenant: &str| {
-            Statement::from_sql_and_values(
-                DatabaseBackend::Sqlite,
-                "INSERT INTO tenancy_operations (installation_id, principal_id, operation_id, tenant_id, authority_class, read_context_json, hash_version, command_digest, result_json, response_json, created_at, safety) VALUES (?, ?, 'operation', ?, 'tenant', '{}', 1, 'digest', '{}', '{}', '2026-01-01T00:00:00Z', 0)",
-                [installation.into(), principal.into(), tenant.into()],
-            )
-        };
-        db.execute(insert("installation-a", "principal-a", "tenant-a"))
-            .await?;
-        assert!(
-            db.execute(insert("installation-a", "principal-a", "tenant-b"))
-                .await
-                .is_err()
-        );
-        db.execute(insert("installation-a", "principal-b", "tenant-b"))
-            .await?;
-        db.execute(insert("installation-b", "principal-a", "tenant-a"))
-            .await?;
-        Ok(())
-    }
+    manager
+        .create_index(
+            Index::create()
+                .if_not_exists()
+                .name("idx_tenancy_credentials_state")
+                .table(Alias::new(TABLES[4]))
+                .col(Alias::new("state"))
+                .col(Alias::new("tenant_id"))
+                .to_owned(),
+        )
+        .await?;
+    Ok(())
 }

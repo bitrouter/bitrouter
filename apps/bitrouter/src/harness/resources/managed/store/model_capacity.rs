@@ -6,7 +6,7 @@ use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 fn exhausted() -> CoreError {
     CoreError::rejected(
         ErrorCode::LimitExceeded,
-        "native experiment ACK capacity exhausted",
+        "native journal ACK capacity exhausted",
     )
 }
 fn add(a: u64, b: u64) -> Result<u64, CoreError> {
@@ -89,5 +89,15 @@ pub(super) fn check(journal: &Journal, projection: &Projection) -> Result<(), Co
         add(add(fixed, checkpoint)?, starts)?,
         add(artifacts, projection.checkpoint)?,
     )?;
-    crate::tenancy::experiment::check_native_allowance(bytes).map_err(|_| exhausted())
+    // Keep the existing bounded writer allowance for native journal/ACK work.
+    let work = usize::try_from(bytes)
+        .map_err(|_| exhausted())?
+        .checked_mul(5)
+        .and_then(|n| n.checked_add(128 * 5 * (8192 + 4096)))
+        .and_then(|n| n.checked_add(32 * 1024))
+        .ok_or_else(exhausted)?;
+    let check = || Ok(());
+    crate::storage::operation_budget::OperationBudget::new(&check)
+        .charge(128 * 5 + 8, work)
+        .map_err(|_| exhausted())
 }

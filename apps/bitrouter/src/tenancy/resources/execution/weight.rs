@@ -28,7 +28,7 @@ use std::{
 
 use bitrouter_ai::{
     core::evidence::{ModelTokenLimits, NativeRouteConstraints},
-    routing::PolicyModelTarget,
+    policy::{Document, Policy, Target},
     tenancy::{
         configuration::{Configuration, GenerationDefaults, Learning, Limits, ResourceRef},
         operation::ErrorCode,
@@ -39,23 +39,7 @@ use serde_json::{Map, Value};
 
 use super::native_v1::{NativeChain, NativeChains, Unavailable};
 use super::{Candidate, Chain, RetainedExecutionRevision, RetainedPolicy, RouteData};
-use crate::{
-    config::AdequacyConfig,
-    gateway::{
-        pipeline::{routing::PromptOverrides, types::RoutingTarget},
-        routing::{
-            exploration::{
-                OptimizationGate, PolicyOptimizationState, RouteExploration, RouteRejection,
-            },
-            workflow::predictive::PredictorContract,
-        },
-    },
-    policy_lock::{
-        CompilerIdentity, EconomicsSummary, LatencySummary, PolicyArtifact, PolicyCertificate,
-        PolicyDefinition, PolicyLock, QualitySummary,
-    },
-    trajectory::guard::ProgressGuardPolicy,
-};
+use crate::gateway::pipeline::{routing::PromptOverrides, types::RoutingTarget};
 
 #[cfg(test)]
 mod tests;
@@ -69,6 +53,7 @@ type Result<T> = std::result::Result<T, ErrorCode>;
 
 pub(super) fn retained_heap_bytes(value: &RetainedExecutionRevision) -> Result<usize> {
     let RetainedExecutionRevision {
+        bro_capture: _,
         installation,
         tenant,
         revision,
@@ -95,7 +80,7 @@ pub(super) fn retained_heap_bytes(value: &RetainedExecutionRevision) -> Result<u
 struct Weight {
     bytes: usize,
     remaining: usize,
-    // Type tags separate RouteData, PolicyLock and Value allocation identities.
+    // Type tags separate RouteData, Document and Value allocation identities.
     // This temporary bookkeeping is not part of the cached object graph.
     seen: HashSet<(u8, *const ())>,
 }
@@ -611,253 +596,44 @@ impl Weight {
         Ok(())
     }
 
-    fn policy(&mut self, value: &PolicyLock) -> Result<()> {
-        let PolicyLock {
-            lockfile_version: _,
-            artifact,
+    fn policy(&mut self, value: &Document) -> Result<()> {
+        let Document {
+            spec_version: _,
             policies,
-            certificates,
         } = value;
-        if let Some(artifact) = artifact {
-            self.artifact(artifact)?;
-        }
         self.tree(policies)?;
         for (name, policy) in policies {
             self.string(name)?;
             self.definition(policy)?;
         }
-        self.tree(certificates)?;
-        for (name, certificates) in certificates {
-            self.string(name)?;
-            self.tree(certificates)?;
-            for (name, certificate) in certificates {
-                self.string(name)?;
-                self.certificate(certificate)?;
-            }
-        }
         Ok(())
     }
 
-    fn artifact(&mut self, value: &PolicyArtifact) -> Result<()> {
-        let PolicyArtifact {
-            parent_digest,
-            evidence_root,
-            eval_snapshot_root,
-            source_snapshot_time_unix_ms: _,
-            compiler,
-        } = value;
-        let CompilerIdentity {
-            id,
-            version: _,
-            config_digest,
-        } = compiler;
-        self.optional_string(parent_digest)?;
-        self.string(evidence_root)?;
-        self.optional_string(eval_snapshot_root)?;
-        self.string(id)?;
-        self.string(config_digest)
-    }
-
-    fn definition(&mut self, value: &PolicyDefinition) -> Result<()> {
-        let PolicyDefinition {
-            key_strategy: _,
+    fn definition(&mut self, value: &Policy) -> Result<()> {
+        let Policy {
             tiers,
-            routes,
             default_tier,
+            classifier_digest,
+            routes,
             tool_use_tier,
             tool_safe_tiers,
-            progress_guard,
-            predictor,
-            optimization,
-            adequacy,
         } = value;
         self.tree(tiers)?;
-        for (name, target) in tiers {
-            let PolicyModelTarget {
-                model,
-                effort: _,
-                context: _,
-            } = target;
+        for (name, Target { model, effort: _ }) in tiers {
             self.string(name)?;
             self.string(model)?;
         }
+        self.string(default_tier)?;
+        self.optional_string(classifier_digest)?;
         self.tree(routes)?;
         for (key, tier) in routes {
             self.string(key)?;
             self.string(tier)?;
         }
-        self.optional_string(default_tier)?;
         self.optional_string(tool_use_tier)?;
         self.vector(tool_safe_tiers)?;
         for tier in tool_safe_tiers {
             self.string(tier)?;
-        }
-        if let Some(guard) = progress_guard {
-            self.guard(guard)?;
-        }
-        if let Some(predictor) = predictor {
-            let PredictorContract {
-                algorithm,
-                version: _,
-                config_digest,
-                confidence_kind,
-                calibration_digest,
-            } = predictor;
-            for value in [algorithm, config_digest, confidence_kind] {
-                self.string(value)?;
-            }
-            self.optional_string(calibration_digest)?;
-        }
-        if let Some(optimization) = optimization {
-            self.optimization(optimization)?;
-        }
-        self.adequacy(adequacy)
-    }
-
-    fn guard(&mut self, value: &ProgressGuardPolicy) -> Result<()> {
-        let ProgressGuardPolicy {
-            escalation_tier,
-            protected_tiers,
-            max_consecutive_unprotected: _,
-            max_same_projection_unprotected: _,
-            max_recovery_count: _,
-            max_episode_requests: _,
-            max_episode_elapsed_ms: _,
-            max_episode_cost_micro_usd: _,
-            hold_for_requests: _,
-            incomplete_history: _,
-        } = value;
-        self.string(escalation_tier)?;
-        self.tree_storage::<String, ()>(protected_tiers.len())?;
-        for tier in protected_tiers {
-            self.string(tier)?;
-        }
-        Ok(())
-    }
-
-    fn adequacy(&mut self, value: &AdequacyConfig) -> Result<()> {
-        let AdequacyConfig {
-            enabled: _,
-            escalation_tier,
-            escalation_threshold: _,
-            pin_cooldown_secs: _,
-            reliability_window_size: _,
-            reliability_consecutive_failures: _,
-            reliability_error_rate_percent: _,
-            reliability_cooldown_secs: _,
-            explore_enabled: _,
-            explore_tier,
-            explore_interval: _,
-            explore_threshold: _,
-            max_downgraded_requests_per_session: _,
-            min_semantic_successes_for_lock: _,
-            explore_opening: _,
-            min_semantic_successes_for_opening: _,
-        } = value;
-        self.optional_string(escalation_tier)?;
-        self.optional_string(explore_tier)
-    }
-
-    fn optimization(&mut self, value: &PolicyOptimizationState) -> Result<()> {
-        let PolicyOptimizationState { active, rejections } = value;
-        if let Some(active) = active {
-            self.exploration(active)?;
-        }
-        self.vector(rejections)?;
-        for RouteRejection {
-            experiment_id,
-            target_request_key,
-            treatment_context_digest,
-            treatment,
-            experiment_parent_digest,
-            source_policy_digest,
-            evidence_root,
-            reason,
-        } in rejections
-        {
-            for value in [experiment_id, evidence_root, reason] {
-                self.string(value)?;
-            }
-            for value in [
-                target_request_key,
-                treatment_context_digest,
-                experiment_parent_digest,
-                source_policy_digest,
-            ] {
-                self.optional_string(value)?;
-            }
-            if let Some(treatment) = treatment {
-                self.exploration(treatment)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn exploration(&mut self, value: &RouteExploration) -> Result<()> {
-        let RouteExploration {
-            experiment_id,
-            target_request_key,
-            champion_tier,
-            challenger_tier,
-            challenger_exposure_ppm: _,
-            gate,
-        } = value;
-        let OptimizationGate {
-            objective: _,
-            minimum_tasks_per_arm: _,
-            maximum_challenger_tasks: _,
-            minimum_pass_rate_ppm: _,
-            evaluator_config_digest,
-        } = gate;
-        for value in [
-            experiment_id,
-            target_request_key,
-            champion_tier,
-            challenger_tier,
-        ] {
-            self.string(value)?;
-        }
-        self.optional_string(evaluator_config_digest)
-    }
-
-    fn certificate(&mut self, value: &PolicyCertificate) -> Result<()> {
-        let PolicyCertificate {
-            classifier_digest,
-            owner: _,
-            selected_tier,
-            baseline_tier,
-            source: _,
-            eligible_episodes: _,
-            independent_tasks: _,
-            quality,
-            economics,
-            latency,
-            critical_violations: _,
-            verdict: _,
-            evaluator_config_digest,
-            compiler_config_digest,
-            evidence_digest,
-        } = value;
-        let (None
-        | Some(QualitySummary {
-            baseline_pass_rate_ppm: _,
-            candidate_pass_rate_ppm: _,
-            delta_ppm: _,
-            lower_bound_ppm: _,
-        })) = quality;
-        let (None
-        | Some(EconomicsSummary {
-            normalized_cost_delta_ppm: _,
-        })) = economics;
-        let (None
-        | Some(LatencySummary {
-            normalized_latency_delta_ppm: _,
-        })) = latency;
-        for value in [classifier_digest, baseline_tier, evaluator_config_digest] {
-            self.optional_string(value)?;
-        }
-        for value in [selected_tier, compiler_config_digest, evidence_digest] {
-            self.string(value)?;
         }
         Ok(())
     }

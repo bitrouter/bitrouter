@@ -58,14 +58,6 @@ impl Worker {
                 let result = async {
                     let budget = OperationBudget::with_row_limit(&check, 1024);
                     let reply = match &job.work {
-                        Work::NativePrepare(request) => Reply::Prepared(Arc::new(
-                            crate::tenancy::learning::native::prepare(&tx, request, &budget)
-                                .await?,
-                        )),
-                        Work::NativeStopped(proof) => {
-                            crate::tenancy::learning::native::stopped(&tx, proof, &budget).await?;
-                            Reply::NativeStopped
-                        }
                         Work::Prepare {
                             binding,
                             native,

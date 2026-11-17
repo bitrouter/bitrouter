@@ -58,6 +58,8 @@ pub mod daemon_handoff;
 pub mod daemon_locator;
 pub mod db;
 pub mod error_report;
+#[path = "core/eval/mod.rs"]
+pub mod eval;
 pub mod gateway;
 #[cfg(feature = "harness")]
 pub mod gateways;
@@ -92,7 +94,6 @@ pub mod providers;
 pub mod reload;
 pub mod remote_control;
 pub mod request_checks;
-pub mod router_migration;
 mod runtime_crypto;
 pub mod session_diagnostics;
 pub mod session_identity;

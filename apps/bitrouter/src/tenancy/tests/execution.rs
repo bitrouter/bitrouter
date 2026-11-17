@@ -15,6 +15,7 @@ const MODEL: &str = "provider:literal-route";
 
 mod cache;
 mod defaults;
+mod eval_loop;
 #[cfg(feature = "core")]
 mod evaluation;
 mod http_continuation;
