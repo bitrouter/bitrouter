@@ -55,8 +55,6 @@ database:
   url: "sqlite://measure.db?mode=rwc"
 agent_api:
   enabled: false
-policy:
-  mode: frozen
 providers:
   fixture:
     api_base: "{upstream}"

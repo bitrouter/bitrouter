@@ -19,6 +19,7 @@ use crate::gateway::shared::{
     authority::{Authority, Revision},
     credentials::{CredentialStamp, Credentials},
     engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits},
+    publication::{Configuration, CredentialBinding},
     store::{Kind, NewRecord, Store, Stored},
 };
 
@@ -510,25 +511,6 @@ async fn finalization_rollback_and_recovery_isolation(first: &Store, second: &St
     Ok(())
 }
 
-async fn publish_generation(store: &Store) -> Result<u64> {
-    store
-        .retry(|| async {
-            let tx = store.begin().await?;
-            let mut head: Stored<Value> = store.lock(&tx, Kind::Authority, "head").await?;
-            let generation = head.value["config_generation"]
-                .as_u64()
-                .context("generation missing")?
-                + 1;
-            head.value["config_generation"] = generation.into();
-            store
-                .save(&tx, &mut head, "active", None, Store::now(&tx).await?)
-                .await?;
-            tx.commit().await?;
-            Ok(generation)
-        })
-        .await
-}
-
 async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 2).await?;
     let one = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
@@ -553,8 +535,26 @@ async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
             .await
             .is_err()
     );
-    let publisher = second.clone();
-    let mut publication = tokio::spawn(async move { publish_generation(&publisher).await });
+    let publisher = Authority::new(second.clone(), DeploymentKey::fixture()?);
+    let expected = fixture.revision.config_generation;
+    let configuration = Configuration {
+        format: 2,
+        routing: serde_json::json!({"providers": {"fixture": {
+            "api_base": "https://example.com/v1",
+            "models": [{"id": "fixture-model"}]
+        }}}),
+        policies: Vec::new(),
+        model_policy: None,
+        credentials: vec![CredentialBinding {
+            provider: "fixture".into(),
+            account: "default".into(),
+            credential_provider: fixture.slot.provider.clone(),
+            credential_account: fixture.slot.account.clone(),
+        }],
+        require_known_pricing: false,
+    };
+    let mut publication =
+        tokio::spawn(async move { publisher.publish(expected, &configuration).await });
     ensure!(
         tokio::time::timeout(Duration::from_millis(100), &mut publication)
             .await
@@ -563,8 +563,8 @@ async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     );
     blocker.commit().await?;
     dispatch.await??;
-    let generation = publication.await??;
-    ensure!(generation == fixture.revision.config_generation + 1);
+    let head = publication.await??;
+    ensure!(head.config_generation == expected + 1);
     ensure!(
         row(first, Kind::Attempt, &first_attempt.attempt_id).await?["view"]["state"]["status"]
             == "dispatched"
