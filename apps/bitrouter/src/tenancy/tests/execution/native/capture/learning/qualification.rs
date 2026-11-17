@@ -23,8 +23,10 @@ async fn file_ready(
     let owner = crate::tenancy::ownership::acquire_path(path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}", path.display()), &owner).await?;
     let fixture = Fixture::with_database(db, &mut |_| {}).await?;
+    let resources =
+        Arc::new(Resources::fixture_key(&fixture.installation, key_env)?.for_bro_capture());
     let ready = Ready::from_fixture_tracked(
-        (fixture, key_env),
+        (fixture, resources),
         Some(owner),
         (subject, judge),
         true,

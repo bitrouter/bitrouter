@@ -32,8 +32,10 @@ async fn campaign(
 ) -> Result<()> {
     let db = database.connect().await?;
     let fixture = Fixture::with_database(db, &mut |service| database.retain(service)).await?;
+    let resources =
+        Arc::new(Resources::fixture_key(&fixture.installation, None)?.for_bro_capture());
     let mut ready = Ready::from_fixture_tracked(
-        (fixture, None),
+        (fixture, resources),
         None,
         (&provider.url, &judge.url),
         true,

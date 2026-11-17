@@ -17,8 +17,10 @@ async fn full_producer() -> Result<()> {
     let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let provider = Provider::start(false).await?;
     let mut judge = Judge::new(true).await?;
+    let resources =
+        Arc::new(Resources::fixture_key(&fixture.installation, Some(KEY))?.for_bro_capture());
     let ready = Ready::from_fixture_tracked(
-        (fixture, Some(KEY)),
+        (fixture, resources),
         Some(owner),
         (&provider.url, &judge.url),
         true,
