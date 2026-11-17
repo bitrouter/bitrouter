@@ -17,6 +17,7 @@
 //! — typed wrappers around the application-owned management client.
 
 pub mod account;
+pub mod agent;
 pub mod api;
 pub mod api_client;
 pub mod auth;

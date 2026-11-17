@@ -76,6 +76,42 @@ Use `--human` for a text view. The profile is `gateway` for no optional features
 Aliases and transitive features are normalized at build time; `--all-features`
 is a custom selection, not the official full profile.
 
+## Browser-approved Agent authentication
+
+`bro cloud agent connect [--profile ID] [--name NAME] [--renew]` uses a dedicated
+key-bound Agent identity. It does not share the developer account credential
+store. The human approves an explicit namespace, daily cap and expiry in the
+browser; the client confirms only after persisting the response. Omitted profile
+IDs create separate connections. Resume a pending registration with its original
+name. Ctrl-C detaches waiting without revoking the request.
+
+`bro cloud agent status --profile ID` reads current authority, confirms a saved
+pending delivery, or refreshes near-expiry credentials. `disconnect --profile ID`
+revokes only that profile's native clients and erases its local secrets after
+acknowledgement. It remains retryable after expiry, prior revoke or a lost reply.
+
+The default key store is the OS keychain; `--key-storage file` is an explicit
+Unix fallback. Synced mode-0600 profiles in a mode-0700 directory live outside
+the project, under the account data directory's `agent-connections/` child.
+Unknown formats and unqualified storage platforms refuse without credential
+fallback. A lost refresh response remains uncertain; renew through the browser
+instead of replaying an old refresh token.
+
+`bro cloud agent mcp [--issuer URL] [--resource URL] [--key-storage keychain|file]`
+is an opt-in stdio auth bridge requiring `mcp`. It publishes only `agent_connect`,
+`agent_status`, and `agent_disconnect`. Like ACP stdio it is exempt from the
+single-JSON-report rule. Secrets and browser sessions never enter tool results;
+the model cannot change startup trust destinations or storage policy.
+Status and disconnect also reject saved profiles whose issuer or resource
+differs from the bridge startup settings, before network access or changes to
+saved connection state.
+
+Connect also accepts explicit `--issuer`/`--resource` for trusted self-hosted
+deployments. It selects the versioned Agent discovery profile; unsupported
+servers fail instead of falling back to developer/API-key login. Redirects and
+out-of-issuer credential destinations are refused. This auth surface does not
+activate paid inference, provider routing or a remote MCP authorization server.
+
 ## Output format
 
 Every command prints a single **formatted JSON object** to **stdout** — success or failure — so output is machine-parseable by default (agent-native first). Global flags:
