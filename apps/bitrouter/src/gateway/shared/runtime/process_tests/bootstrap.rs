@@ -8,7 +8,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use super::cleanup::{ExitExpectations, ExpectedExit, finish_children, retain_failed_logs};
 use super::*;
 use crate::gateway::shared::test_database::{EmptyDatabase, combine_results};
-use bitrouter_ai::gateway::operator::BootstrapReceipt;
+use bitrouter_ai::gateway::operator::{BootstrapPlan, BootstrapReceipt, Publication};
 
 async fn empty_fixture(database: &mut EmptyDatabase) -> Result<Fixture> {
     let binary = PathBuf::from(std::env::var("BITROUTER_TEST_GATEWAY_BINARY")?);
@@ -185,10 +185,20 @@ async fn campaign(fixture: &mut Fixture) -> Result<()> {
     .await?;
     tokio::fs::write(
         &plan,
-        serde_json::to_vec(&json!({"configuration": {
-            "format":1, "routing":{}, "policies":[], "policy_lock":null,
-            "credentials":[], "require_known_pricing":false
-        }}))?,
+        serde_json::to_vec(&BootstrapPlan {
+            resources: Vec::new(),
+            tenants: Vec::new(),
+            principals: Vec::new(),
+            credentials: Vec::new(),
+            configuration: Publication {
+                format: 2,
+                routing: json!({}),
+                policies: Vec::new(),
+                model_policy: None,
+                credentials: Vec::new(),
+                require_known_pricing: false,
+            },
+        })?,
     )
     .await?;
 

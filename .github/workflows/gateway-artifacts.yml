@@ -229,7 +229,7 @@ jobs:
           # The test executable may compile, but the child bro always comes from
           # the archive above; no workspace debug binary is substituted.
           cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance \
-            --lib --run-ignored only --test-threads 2 \
+            --lib --run-ignored only --test-threads 2 --no-fail-fast --no-tests fail \
             -E 'test(gateway::shared::runtime::process_tests::)'
       - name: Run shared PostgreSQL authority and persistence regressions
         shell: bash
@@ -237,7 +237,7 @@ jobs:
           # Include the native-continuation and writer-isolation modules, while
           # keeping external-adapter acceptance and the process suite separate.
           cargo nextest run --locked -p bitrouter --all-features --lib \
-            --run-ignored only --test-threads 2 --retries 0 \
+            --run-ignored only --test-threads 2 --retries 0 --no-fail-fast --no-tests fail \
             -E '(test(gateway::shared::) & not test(gateway::shared::runtime::process_tests::)) | test(continuation::shared::) | test(assemble::writers_tests::shared::)'
       - name: Preserve failed shared gateway child logs
         if: failure()
