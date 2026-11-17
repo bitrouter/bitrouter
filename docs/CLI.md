@@ -97,6 +97,15 @@ Unknown formats and unqualified storage platforms refuse without credential
 fallback. A lost refresh response remains uncertain; renew through the browser
 instead of replaying an old refresh token.
 
+After interrupted confirmation, a saved candidate is reconciled with the server
+before being expired or replaced, including profiles marked expired by an older
+client. A key-bound read retrieves an already committed current receipt after
+access-token expiry. The recovered session is saved before ordinary refresh;
+an unknown refresh result retains its existing uncertainty marker. A pending
+delivery still has its original server deadline and cannot be activated by the
+read. Before replacing a terminal pending attempt, the client acknowledges its
+cancellation so its native client is not forgotten.
+
 `bro cloud agent mcp [--issuer URL] [--resource URL] [--key-storage keychain|file]`
 is an opt-in stdio auth bridge requiring `mcp`. It publishes only `agent_connect`,
 `agent_status`, and `agent_disconnect`. Like ACP stdio it is exempt from the

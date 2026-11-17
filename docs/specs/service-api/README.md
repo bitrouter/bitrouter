@@ -2481,6 +2481,13 @@ a proof for that exact Console URL and the registered logical Cloud audience.
 The separate key-bound disconnect action only reduces authority and remains
 usable before approval or after token expiry/revoke. Its proof binds the native
 client ID in the path; it cannot retarget a copied proof to another connection.
+The required `activation_endpoint_template` names
+`/api/agent-connections/{client_id}/activation`. Its empty-object POST uses the
+same initiating-key DPoP/AS-nonce boundary, without an access token. It returns
+`pending`, `expired`, `unavailable`, or `active` with an already committed current
+activation receipt. The response binds `client_id` and `connection_id`; only a
+current active receipt includes Agent/Grant identity. This control read MUST NOT
+activate a pending grant, mint tokens or extend its delivery deadline.
 
 Native refresh remains serialized across local processes. Before a potentially
 rotating request the client persists an uncertainty marker. A lost response MUST
@@ -2488,6 +2495,15 @@ NOT cause blind reuse of the old refresh token. A saved candidate survives a
 process restart; confirmation retries must return the same activation instead
 of advancing generation again. Renewal retains the previous session until that
 same-key successor confirms. It must not silently rebase a stale predecessor.
+An interrupted confirmation MUST be reconciled before local expiry or candidate
+discard, including retained `expired` profiles. After access-token expiry, the
+key-bound read can recover the current receipt. Persist that successor as current
+before journaled refresh, so refresh uncertainty renews from the correct
+Connection. Lookup errors retain all candidate credentials and IDs. A terminal
+pending client must be cancelled and acknowledged before replacement. Existing
+readers ignore the additive metadata endpoint; a new client on a server missing
+it fails discovery without credential fallback. The private profile format stays
+at version 1.
 
 CLI/MCP output uses the safe `Status` DTO in `cloud/agent/mod.rs`: IDs, state,
 pairing information and explicit terms. It MUST NOT contain access/refresh

@@ -262,6 +262,23 @@ impl Controller {
         if profile.disconnected || profile.disconnecting {
             bail!("Agent profile is disconnected or awaiting revocation; use a new profile");
         }
+        let secret = store::read_key(profile.key.as_ref().context("Agent signing key missing")?)?;
+        let mut transport = wire::Transport::new(secret.clone())?;
+        // A saved candidate may already be the current server authority, even
+        // when an older client marked it expired. Reconcile it before renewal.
+        if profile
+            .pending
+            .as_ref()
+            .is_some_and(|attempt| attempt.session.is_some())
+        {
+            let recovered = progress(&store, &mut profile, &metadata, &mut transport).await?;
+            if !(renew
+                && profile.current.is_some()
+                && matches!(recovered.status.as_str(), "expired" | "failed"))
+            {
+                return Ok(recovered);
+            }
+        }
         if profile.pending.as_ref().is_some_and(|a| {
             matches!(
                 a.phase.as_str(),
@@ -270,7 +287,15 @@ impl Controller {
         }) && renew
             && profile.current.is_some()
         {
+            if let Some(client) = profile
+                .pending
+                .as_ref()
+                .and_then(|attempt| attempt.client_id.as_deref())
+            {
+                cancel_client(&metadata, &mut transport, client).await?;
+            }
             profile.pending = None;
+            store.save(&profile)?;
         }
         if profile.pending.is_none() {
             if profile.current.is_some() && !renew {
@@ -294,8 +319,6 @@ impl Controller {
             });
             store.save(&profile)?;
         }
-        let secret = store::read_key(profile.key.as_ref().context("Agent signing key missing")?)?;
-        let mut transport = wire::Transport::new(secret.clone())?;
         let pending = profile
             .pending
             .as_ref()
@@ -390,49 +413,7 @@ impl Controller {
         if profile.pending.is_some() {
             return progress(&store, &mut profile, &metadata, &mut transport).await;
         }
-        if profile.refresh_uncertain {
-            return pending_status(&profile);
-        }
-        if profile
-            .current
-            .as_ref()
-            .is_some_and(|session| session.expires_at <= now() + 30)
-        {
-            // Commit the uncertainty marker BEFORE rotating. A restarted process
-            // must not replay a refresh whose replacement may have been lost.
-            profile.refresh_uncertain = true;
-            store.save(&profile)?;
-            let current = profile.current.as_ref().context("Agent session missing")?;
-            let result = transport
-                .machine(
-                    &metadata.authorization_server_metadata.token_endpoint,
-                    &current.client_id,
-                    &[
-                        ("grant_type", "refresh_token".into()),
-                        ("refresh_token", current.refresh_token.clone()),
-                        ("resource", profile.resource.clone()),
-                    ],
-                )
-                .await?
-                .require_ok()?;
-            let mut replacement = tokens(result, &current.client_id)?;
-            if replacement.connection_id != current.connection_id {
-                bail!("refresh changed the Agent connection");
-            }
-            replacement.agent_id = current.agent_id.clone();
-            profile.current = Some(replacement);
-            profile.refresh_uncertain = false;
-            store.save(&profile)?;
-        }
-        let current = profile
-            .current
-            .as_ref()
-            .context("Agent session missing; resume connect")?;
-        let result = transport
-            .protected(&metadata.self_endpoint, "GET", &current.access_token)
-            .await?
-            .require_ok()?;
-        safe_self(profile_id, current, result)
+        read_current(&store, &mut profile, &metadata, &mut transport).await
     }
 
     async fn disconnect(&self, profile_id: &str) -> Result<Status> {
@@ -458,18 +439,7 @@ impl Controller {
                 )
                 .collect();
             for client in clients {
-                if !client.starts_with("bitrouter-agent-")
-                    || client.len() > 144
-                    || !client
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
-                {
-                    bail!("invalid saved Agent client binding");
-                }
-                let url = metadata
-                    .disconnect_endpoint_template
-                    .replace("{client_id}", client);
-                transport.key_action(&url, &json!({})).await?.require_ok()?;
+                cancel_client(&metadata, &mut transport, client).await?;
             }
             profile.current = None;
             profile.pending = None;
@@ -487,6 +457,77 @@ impl Controller {
     }
 }
 
+async fn cancel_client(
+    metadata: &wire::Discovery,
+    transport: &mut wire::Transport,
+    client: &str,
+) -> Result<()> {
+    if !client.starts_with("bitrouter-agent-")
+        || client.len() > 144
+        || !client
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+    {
+        bail!("invalid saved Agent client binding");
+    }
+    let url = metadata
+        .disconnect_endpoint_template
+        .replace("{client_id}", client);
+    transport.key_action(&url, &json!({})).await?.require_ok()?;
+    Ok(())
+}
+
+async fn read_current(
+    store: &Store,
+    profile: &mut Profile,
+    metadata: &wire::Discovery,
+    transport: &mut wire::Transport,
+) -> Result<Status> {
+    if profile.refresh_uncertain {
+        return pending_status(profile);
+    }
+    if profile
+        .current
+        .as_ref()
+        .is_some_and(|session| session.expires_at <= now() + 30)
+    {
+        // Commit the uncertainty marker BEFORE rotating. A restarted process
+        // must not replay a refresh whose replacement may have been lost.
+        profile.refresh_uncertain = true;
+        store.save(profile)?;
+        let current = profile.current.as_ref().context("Agent session missing")?;
+        let result = transport
+            .machine(
+                &metadata.authorization_server_metadata.token_endpoint,
+                &current.client_id,
+                &[
+                    ("grant_type", "refresh_token".into()),
+                    ("refresh_token", current.refresh_token.clone()),
+                    ("resource", profile.resource.clone()),
+                ],
+            )
+            .await?
+            .require_ok()?;
+        let mut replacement = tokens(result, &current.client_id)?;
+        if replacement.connection_id != current.connection_id {
+            bail!("refresh changed the Agent connection");
+        }
+        replacement.agent_id = current.agent_id.clone();
+        profile.current = Some(replacement);
+        profile.refresh_uncertain = false;
+        store.save(profile)?;
+    }
+    let current = profile
+        .current
+        .as_ref()
+        .context("Agent session missing; resume connect")?;
+    let result = transport
+        .protected(&metadata.self_endpoint, "GET", &current.access_token)
+        .await?
+        .require_ok()?;
+    safe_self(&profile.id, current, result)
+}
+
 async fn progress(
     store: &Store,
     profile: &mut Profile,
@@ -499,10 +540,12 @@ async fn progress(
         store.save(profile)?;
         return pending_status(profile);
     }
-    if matches!(
-        pending.phase.as_str(),
-        "delivery_uncertain" | "expired" | "denied" | "failed" | "registering"
-    ) {
+    if pending.session.is_none()
+        && matches!(
+            pending.phase.as_str(),
+            "delivery_uncertain" | "expired" | "denied" | "failed" | "registering"
+        )
+    {
         return pending_status(profile);
     }
     if pending.session.is_none() {
@@ -580,12 +623,60 @@ async fn progress(
         tests::barrier(profile, "after-token-save").await?;
     }
     let pending = profile.pending.as_ref().context("missing pairing")?;
-    if pending
-        .confirmation_deadline
-        .is_none_or(|deadline| deadline <= now())
+    let session = pending
+        .session
+        .as_ref()
+        .context("missing pending session")?;
+    // The server receipt, not a local timeout, resolves an unknown activation.
+    // This key-bound lookup remains usable after the saved access token expires.
+    let url = metadata
+        .activation_endpoint_template
+        .replace("{client_id}", &session.client_id);
+    let state = transport.key_action(&url, &json!({})).await?.require_ok()?;
+    if state.get("client_id").and_then(Value::as_str) != Some(session.client_id.as_str())
+        || state.get("connection_id").and_then(Value::as_str)
+            != Some(session.connection_id.as_str())
     {
-        profile.pending.as_mut().context("missing pairing")?.phase = "expired".into();
-        store.save(profile)?;
+        bail!("Agent activation lookup changed connection");
+    }
+    match state.get("status").and_then(Value::as_str) {
+        Some("active") => {
+            return finish_activation(
+                store,
+                profile,
+                metadata,
+                transport,
+                state
+                    .get("activation")
+                    .cloned()
+                    .context("missing activation receipt")?,
+            )
+            .await;
+        }
+        Some("expired" | "unavailable") => {
+            profile.pending.as_mut().context("missing pairing")?.phase =
+                if state["status"] == "expired" {
+                    "expired"
+                } else {
+                    "failed"
+                }
+                .into();
+            store.save(profile)?;
+            return pending_status(profile);
+        }
+        Some("pending") => {}
+        _ => bail!("invalid Agent activation state"),
+    }
+    profile.pending.as_mut().context("missing pairing")?.phase = "awaiting_confirmation".into();
+    store.save(profile)?;
+    let pending = profile.pending.as_ref().context("missing pairing")?;
+    // Never refresh an unconfirmed candidate. Only a recovered active receipt
+    // can promote it into the ordinary, journaled current-session refresh path.
+    if pending
+        .session
+        .as_ref()
+        .is_some_and(|session| session.expires_at <= now())
+    {
         return pending_status(profile);
     }
     let session = pending
@@ -607,6 +698,21 @@ async fn progress(
         return pending_status(profile);
     }
     let receipt = reply.require_ok()?;
+    finish_activation(store, profile, metadata, transport, receipt).await
+}
+
+async fn finish_activation(
+    store: &Store,
+    profile: &mut Profile,
+    metadata: &wire::Discovery,
+    transport: &mut wire::Transport,
+    receipt: Value,
+) -> Result<Status> {
+    let session = profile
+        .pending
+        .as_ref()
+        .and_then(|attempt| attempt.session.as_ref())
+        .context("missing saved candidate")?;
     if receipt.get("ok").and_then(Value::as_bool) != Some(true)
         || receipt.get("connectionId").and_then(Value::as_str)
             != Some(session.connection_id.as_str())
@@ -622,15 +728,7 @@ async fn progress(
     profile.pending = None;
     profile.refresh_uncertain = false;
     store.save(profile)?;
-    let session = profile
-        .current
-        .as_ref()
-        .context("missing confirmed session")?;
-    let result = transport
-        .protected(&metadata.self_endpoint, "GET", &session.access_token)
-        .await?
-        .require_ok()?;
-    safe_self(&profile.id, session, result)
+    read_current(store, profile, metadata, transport).await
 }
 fn safe_self(profile: &str, session: &Session, value: Value) -> Result<Status> {
     let connection = id(&value, "connection_id", "connection_")?;

@@ -27,6 +27,7 @@ pub(super) struct Discovery {
     pub registration_endpoint: String,
     pub confirmation_endpoint_template: String,
     pub disconnect_endpoint_template: String,
+    pub activation_endpoint_template: String,
     pub self_endpoint: String,
     pub authorization_server_metadata: Metadata,
 }
@@ -167,6 +168,8 @@ pub(super) async fn discover(issuer: &str, expected_resource: &str) -> Result<Di
         != format!("{issuer}/api/agent-connections/{{connection_id}}/confirm")
         || data.disconnect_endpoint_template
             != format!("{issuer}/api/agent-connections/{{client_id}}/disconnect")
+        || data.activation_endpoint_template
+            != format!("{issuer}/api/agent-connections/{{client_id}}/activation")
         || data.self_endpoint != format!("{issuer}/api/agent-connections/self")
     {
         bail!("unsupported Agent control endpoints");

@@ -223,6 +223,13 @@ or disconnect. Renewal retains the predecessor until confirmation succeeds.
 Disconnect cancels the profile's native clients using their initiating key,
 including before approval or after expiry/revocation; local secrets are erased
 after server acknowledgement. Browser logout is independent.
+Saved confirmation candidates are reconciled before renewal can replace them,
+even after the confirmation deadline or access-token expiry. A key-bound read
+recovers only a committed current receipt; it cannot approve or activate a
+pending request. The recovered successor is saved before refresh. If refresh
+then becomes uncertain, `--renew` retains the correct successor as predecessor.
+Lookup errors retain the candidate for retry or disconnect. An older server
+missing the recovery endpoint requires a server update; no fallback is attempted.
 
 Local MCP auth bridge (requires the `mcp` build feature):
 
