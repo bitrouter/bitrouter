@@ -138,8 +138,14 @@ async fn qualify_current_profiles(
         ("scope-choice", 3),
         ("scope-block", 2),
     ] {
+        let mut routes = vec![reference(ResourceKind::Route, name)?];
+        if name == "scope-subject" {
+            // Assessment requires an explicitly selected judge root. Choice
+            // retains its Decisions child as a hidden dependency instead.
+            routes.push(reference(ResourceKind::Route, "scope-judge")?);
+        }
         let document: Configuration = serde_json::from_value(json!({
-            "routes": [reference(ResourceKind::Route, name)?], "policy": null,
+            "routes": routes, "policy": null,
             "generation_defaults": GenerationDefaults { max_output_tokens: 128, temperature: 0.5 },
             "learning": {"mode": "off", "max_evaluations": 0},
             "limits": {"active_executions": 1, "queued_work": 1, "learning_jobs": 0}
@@ -191,6 +197,12 @@ async fn qualify_current_profiles(
             .select_native(name, ModelOperation::Generation)
             .map_err(|code| anyhow::anyhow!("BRO {name} route: {code:?}"))?;
         match name {
+            "scope-subject" => {
+                ensure!(
+                    root.assessment_reference()
+                        == Some(&reference(ResourceKind::Route, "scope-judge")?)
+                );
+            }
             "scope-choice" => {
                 let profile = root
                     .choice_profile()

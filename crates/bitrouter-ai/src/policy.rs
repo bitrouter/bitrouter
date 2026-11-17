@@ -52,7 +52,11 @@ pub struct Policy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_tier: Option<String>,
     /// Tiers permitted for tool-bearing requests when a tool fallback is configured.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "tool_tiers"
+    )]
     pub tool_safe_tiers: Vec<String>,
 }
 
@@ -79,6 +83,12 @@ where
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("a mapping with unique keys")
         }
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_map(self)
+        }
         fn visit_map<M: serde::de::MapAccess<'de>>(
             self,
             mut map: M,
@@ -92,5 +102,13 @@ where
             Ok(result)
         }
     }
-    deserializer.deserialize_map(Unique(std::marker::PhantomData))
+    // YAML deserializers can coerce a null scalar into an empty map. Only
+    // omission may select the field's default.
+    deserializer.deserialize_option(Unique(std::marker::PhantomData))
+}
+
+fn tool_tiers<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    // Likewise, an explicit null is not an empty array.
+    Option::<Vec<String>>::deserialize(deserializer)?
+        .ok_or_else(|| serde::de::Error::custom("expected a tool-safe tier array, found null"))
 }
