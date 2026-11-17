@@ -2,7 +2,7 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use sea_orm::Statement;
-use sea_orm::sqlx::{self, Connection as _, Row as _};
+use sea_orm::sqlx::{self, Connection as _};
 use std::cell::Cell;
 
 async fn fixture() -> Result<(tempfile::TempDir, OwnedDatabase)> {
@@ -50,19 +50,12 @@ async fn pending_migration_estimates_the_current_wal_visible_image_before_writin
     let (_directory, owned) = fixture().await?;
     {
         let mut connection = owned.db.get_sqlite_connection_pool().acquire().await?;
-        // Finalize connector catalog statements before checkpointing. Keep the
-        // checkpoint uncached and consume it through SQLITE_DONE before DDL;
-        // an active SQLite cursor can otherwise lock this same connection.
+        // Keep the scratch writes on the connection where autocheckpoint is
+        // disabled. The new main file starts much smaller than the test image.
         connection.clear_cached_statements().await?;
         sqlx::raw_sql("PRAGMA wal_autocheckpoint=0")
             .execute(&mut *connection)
             .await?;
-        let checkpoint = sqlx::raw_sql("PRAGMA wal_checkpoint(PASSIVE)")
-            .fetch_all(&mut *connection)
-            .await
-            .context("draining checkpoint before WAL fixture writes")?;
-        ensure!(checkpoint.len() == 1 && checkpoint[0].try_get::<i64, _>("busy")? == 0);
-        drop(checkpoint);
         // Leave a genuinely empty catalog with a large WAL-visible freelist.
         // No checkpoint follows these writes: the current baseline is pending
         // without constructing or adopting an older schema.

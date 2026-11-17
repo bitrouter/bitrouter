@@ -492,7 +492,22 @@ async fn current_source_continuation_pins_hidden_or_uncommitted_history_and_deta
             let second_id = second["id"].as_str().context("followup ID missing")?;
             assert!(second_id.starts_with("brc_"));
             assert_ne!(first_id, second_id);
-            assert_eq!(second["output"], first["output"]);
+            // Unified responses allocate per-response item identities. Compare
+            // the complete output with only that generated field normalized.
+            let mut first_output = first["output"].clone();
+            let mut second_output = second["output"].clone();
+            for output in [&mut first_output, &mut second_output] {
+                let items = output.as_array_mut().context("missing response output")?;
+                assert_eq!(items.len(), 1);
+                assert!(
+                    items[0]
+                        .as_object_mut()
+                        .context("response item is not an object")?
+                        .remove("id")
+                        .is_some_and(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+                );
+            }
+            assert_eq!(second_output, first_output);
             assert_eq!(second["usage"], first["usage"]);
             assert_eq!(second["status"], "completed");
             let (models, parents, bodies) = {

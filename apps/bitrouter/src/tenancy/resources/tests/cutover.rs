@@ -161,16 +161,19 @@ async fn retired_policy_compiler_refuses_file_connector_and_v2_restore_without_w
     database.database().clone().close().await?;
     drop(database);
     let original = image(&source)?;
-    ensure!(
-        crate::db::connect_owned_tenancy(&format!("sqlite://{}", source.display()))
-            .await
-            .is_err()
-    );
-    ensure!(image(&source)? == original);
     let destination = home.join("must-not-restore.sqlite");
     // Opaque forensic snapshot must succeed, so the refusal below belongs to
     // the actual keyed restore rather than an earlier archive-creation error.
     let (bundle, digest) = snapshot_bundle(&home, &source).await?;
+    let error = crate::db::connect_owned_tenancy(&format!("sqlite://{}", source.display()))
+        .await
+        .err()
+        .context("retired compiler passed writable startup qualification")?;
+    ensure!(
+        format!("{error:#}").contains("retained historical Policy resource"),
+        "unexpected writable startup refusal: {error:#}"
+    );
+    ensure!(image(&source)? == original);
     ensure!(
         crate::offline::restore_with_options(
             &bundle,
@@ -262,15 +265,21 @@ async fn unreferenced_retired_exploration_refuses_startup_and_v2_restore_without
     let (installation, reference, _) = current_source(&home, &source).await?;
     mutate_authenticated_route(&source, &installation, &reference, true, None).await?;
     let original = image(&source)?;
+    let (bundle, digest) = snapshot_bundle(&home, &source).await?;
     match producer::Live::open(&source, None, Some(producer::KEY_ENV)).await {
         Ok(live) => {
             live.close(&source).await?;
             anyhow::bail!("retired unreferenced route reached a live listener");
         }
-        Err(_) => ensure!(image(&source)? == original),
+        Err(error) => {
+            ensure!(
+                format!("{error:#}").contains("native continuation key initialization failed"),
+                "unexpected startup refusal: {error:#}"
+            );
+            ensure!(image(&source)? == original);
+        }
     }
     let destination = home.join("must-not-exist.sqlite");
-    let (bundle, digest) = snapshot_bundle(&home, &source).await?;
     ensure!(
         crate::offline::restore_with_options(
             &bundle,
