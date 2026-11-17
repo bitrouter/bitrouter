@@ -31,7 +31,7 @@ use bitrouter_ai::types::{
     ModelOperation, Prompt, StreamPart, Usage,
 };
 
-// Pure post-parse merge shared by retained presets and request-local defaults.
+// Pure post-parse merge shared by router and request-local defaults.
 // Never interprets provider JSON as routing, credentials, headers or Prompt state.
 pub(crate) fn apply_parameter_defaults<'a>(
     params: &mut GenerationParams,
@@ -44,10 +44,16 @@ pub(crate) fn apply_parameter_defaults<'a>(
         }
 
         // Promote the protocol fields normalized by inbound adapters into
-        // the same typed slots when they come from a preset. Otherwise a
-        // preset `store: true`, for example, could bypass the cross-wire
+        // the same typed slots when they come from defaults. Otherwise
+        // `store: true`, for example, could bypass the cross-wire
         // safety checks by remaining an untyped supplemental field.
         match k.as_str() {
+            "max_tokens" => {
+                if params.max_tokens.is_none() {
+                    params.max_tokens = v.as_u64().and_then(|value| u32::try_from(value).ok());
+                }
+                continue;
+            }
             "store" => {
                 if params.store.is_none() {
                     params.store = v.as_bool();
@@ -1393,6 +1399,7 @@ mod tests {
         let overrides = PromptOverrides {
             system_prompt: None,
             params: serde_json::Map::from_iter([
+                ("max_tokens".to_string(), 96.into()),
                 ("store".to_string(), true.into()),
                 ("parallel_tool_calls".to_string(), false.into()),
                 (
@@ -1403,6 +1410,7 @@ mod tests {
         };
         ctx.apply_preset_overrides(&overrides)?;
 
+        assert_eq!(ctx.require_generation_prompt()?.params.max_tokens, Some(96));
         assert_eq!(ctx.require_generation_prompt()?.params.store, Some(false));
         assert_eq!(
             ctx.require_generation_prompt()?.params.parallel_tool_calls,
@@ -1422,6 +1430,16 @@ mod tests {
                 .supplemental_extra
                 .is_empty()
         );
+
+        let mut prompt = empty_prompt();
+        let field = bitrouter_ai::types::ChatTokenLimitField::MaxCompletionTokens;
+        prompt.params.max_tokens = Some(32);
+        prompt.params.chat_token_limit_field = Some(field);
+        let mut ctx = ctx_from_prompt(prompt);
+        ctx.apply_preset_overrides(&overrides)?;
+        let params = &ctx.require_generation_prompt()?.params;
+        assert_eq!(params.max_tokens, Some(32));
+        assert_eq!(params.chat_token_limit_field, Some(field));
 
         Ok(())
     }
