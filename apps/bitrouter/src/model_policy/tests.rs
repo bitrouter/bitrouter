@@ -159,6 +159,125 @@ fn raw_duplicate_mappings_are_rejected_before_value_conversion() {
     }
 }
 
+#[test]
+fn raw_null_and_omitted_policy_fields_have_explicit_semantics() -> Result<()> {
+    let minimal = json!({"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{
+        "tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"
+    }}});
+    let omitted = decode(&serde_json::to_string(&minimal)?)?;
+    let mut explicit = minimal.clone();
+    let policy = &mut explicit["policies"]["auto"];
+    policy["classifier_digest"] = Value::Null;
+    policy["tool_use_tier"] = Value::Null;
+    policy["routes"] = json!({});
+    policy["tool_safe_tiers"] = json!([]);
+    policy["tiers"]["only"]["effort"] = Value::Null;
+    for raw in [
+        serde_json::to_string(&explicit)?,
+        serde_saphyr::to_string(&explicit)?,
+    ] {
+        let normalized = decode(&raw)?;
+        assert_eq!(normalized, omitted);
+        assert_eq!(source_digest(&normalized)?, source_digest(&omitted)?);
+    }
+    for pointer in [
+        "/policies",
+        "/policies/auto/tiers",
+        "/policies/auto/default_tier",
+        "/policies/auto/routes",
+        "/policies/auto/tool_safe_tiers",
+        "/policies/auto/tiers/only/model",
+    ] {
+        let mut invalid = explicit.clone();
+        *invalid
+            .pointer_mut(pointer)
+            .ok_or_else(|| anyhow::anyhow!("fixture pointer {pointer}"))? = Value::Null;
+        for raw in [
+            serde_json::to_string(&invalid)?,
+            serde_saphyr::to_string(&invalid)?,
+        ] {
+            assert!(decode(&raw).is_err(), "accepted null at {pointer}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn raw_policy_byte_and_collection_limits_are_enforced() -> Result<()> {
+    let minimal = json!({"spec_version":"policy/1.0.0-beta.1","policies":{"auto":{
+        "tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"
+    }}});
+    let mut at_byte_limit = serde_json::to_string(&minimal)?;
+    at_byte_limit.push_str(&" ".repeat(MAX_BYTES - at_byte_limit.len()));
+    decode(&at_byte_limit)?;
+    at_byte_limit.push(' ');
+    let error = decode(&at_byte_limit)
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("accepted oversized raw source"))?;
+    assert!(error.to_string().contains("policy byte capacity exceeded"));
+
+    let mut at_tier_limit = minimal.clone();
+    at_tier_limit["policies"]["auto"]["tiers"] = (0..256)
+        .map(|n| {
+            (
+                format!("tier-{n:03}"),
+                json!({"model":format!("fixture:model-{n:03}")}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    at_tier_limit["policies"]["auto"]["default_tier"] = json!("tier-000");
+    at_tier_limit["policies"]["auto"]["tool_safe_tiers"] =
+        json!((0..256).map(|n| format!("tier-{n:03}")).collect::<Vec<_>>());
+    decode(&serde_json::to_string(&at_tier_limit)?)?;
+    let mut too_many_tiers = at_tier_limit.clone();
+    too_many_tiers["policies"]["auto"]["tiers"]["tier-256"] = json!({"model":"fixture:model-256"});
+    let mut too_many_tools = at_tier_limit;
+    too_many_tools["policies"]["auto"]["tool_safe_tiers"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("fixture tool tiers"))?
+        .push(json!("tier-000"));
+    let mut at_policy_limit = minimal.clone();
+    at_policy_limit["policies"] = (0..256)
+        .map(|n| {
+            (
+                format!("policy-{n:03}"),
+                minimal["policies"]["auto"].clone(),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    decode(&serde_json::to_string(&at_policy_limit)?)?;
+    let mut too_many_policies = at_policy_limit;
+    too_many_policies["policies"]["policy-256"] = minimal["policies"]["auto"].clone();
+    let mut too_many_routes = minimal;
+    too_many_routes["policies"]["auto"]["routes"] = (0..4097)
+        .map(|n| (format!("route-{n:04}"), json!("only")))
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    // The over-limit route map must fail on its count before class parsing.
+    for (invalid, reason) in [
+        (too_many_tiers, "policy tier count"),
+        (too_many_tools, "policy tool tier capacity exceeded"),
+        (too_many_policies, "policy count"),
+        (too_many_routes, "policy route capacity exceeded"),
+    ] {
+        for raw in [
+            serde_json::to_string(&invalid)?,
+            serde_saphyr::to_string(&invalid)?,
+        ] {
+            let error = decode(&raw)
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("accepted {reason}"))?;
+            assert!(
+                error.to_string().contains(reason),
+                "wrong refusal for {reason}: {error:#}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn selection_uses_literal_names_and_missing_suffix_never_falls_back() -> Result<()> {
     use crate::gateway::{

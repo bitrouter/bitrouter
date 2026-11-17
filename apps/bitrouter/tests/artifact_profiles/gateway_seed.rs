@@ -3,11 +3,10 @@
 use super::*;
 use crate::capture_fixture::{FixtureScope, PersistedHistory};
 use bitrouter::config::Config;
-use bitrouter::gateway::routing::blocks::allocation::BanditConfig;
-use bitrouter::gateway::routing::blocks::control::{BlockDefinition, BlockRule, BlockStatus};
 use bitrouter::policy_lock::deterministic_yaml;
 use bitrouter::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
+use bitrouter_ai::types::ReasoningEffort;
 use std::collections::BTreeMap;
 
 pub(super) fn configuration(fixture: &Fixture, upstream: &str, named: bool) -> Result<String> {
@@ -34,12 +33,14 @@ providers:
       - "*": chat_completions
     models:
       - id: strong
-        capabilities: [tools]
+        capabilities: [tools, reasoning]
+        reasoning_effort: {{levels: [low, medium, high]}}
         pricing:
           input_micro_usd_per_token: 2
           output_micro_usd_per_token: 4
       - id: cheap
-        capabilities: [tools]
+        capabilities: [tools, reasoning]
+        reasoning_effort: {{levels: [low, medium, high]}}
         pricing:
           input_micro_usd_per_token: 1
           output_micro_usd_per_token: 2
@@ -59,56 +60,30 @@ routers:
       model: "fixture:strong"
     defaults:
       system_prompt: "Use recorded requirements."
+      params:
+        temperature: 0.7
+        max_tokens: 96
   candidate:
     selection:
       kind: model
       model: "fixture:cheap"
     defaults:
-      system_prompt: "Use recorded requirements."
+      system_prompt: "Unrelated Block candidate defaults."
       params:
         temperature: 0.2
 "#,
         database_url(fixture)
     ))?;
     if named {
-        let mut source = Document {
-            spec_version: SpecVersion::Beta1,
-            policies: BTreeMap::new(),
-        };
+        document["policy"] = json!({"path":"./policy.yaml"});
         for (name, tier) in [("coding", "strong"), ("candidate", "cheap")] {
             document["routers"][name]["selection"] = json!({
                 "kind": "policy", "policy": name, "base_model": format!("fixture:{tier}"),
             });
-            source.policies.insert(
-                name.into(),
-                Policy {
-                    tiers: BTreeMap::from([
-                        (
-                            "strong".into(),
-                            Target {
-                                model: "fixture:strong".into(),
-                                effort: None,
-                            },
-                        ),
-                        (
-                            "cheap".into(),
-                            Target {
-                                model: "fixture:cheap".into(),
-                                effort: None,
-                            },
-                        ),
-                    ]),
-                    default_tier: tier.into(),
-                    classifier_digest: None,
-                    routes: BTreeMap::new(),
-                    tool_use_tier: Some("strong".into()),
-                    tool_safe_tiers: vec!["strong".into()],
-                },
-            );
         }
         fs::write(
             fixture.directory.path().join("policy.yaml"),
-            deterministic_yaml(&source)?,
+            deterministic_yaml(&source("strong")?)?,
         )?;
     }
     let raw = serde_saphyr::to_string(&document)?;
@@ -116,26 +91,9 @@ routers:
     fs::write(&fixture.config, &raw)?;
     fs::set_permissions(&fixture.config, fs::Permissions::from_mode(0o600))?;
     fixture.runtime.block_on(async {
-        let assembled = bitrouter::assemble::build_app_with_path(&config, Some(&fixture.config)).await?;
-        let definition = BlockDefinition {
-            block_id: "coding-block".into(),
-            source: "fixture".into(),
-            rationale: "Compare complete compatible routes.".into(),
-            rules: vec![BlockRule {
-                selector: if named { "bitrouter/coding" } else { "coding" }.into(),
-                fingerprint: None,
-                baseline_route: if named { "bitrouter/coding" } else { "coding" }.into(),
-                challenger_route: if named { "bitrouter/candidate" } else { "candidate" }.into(),
-            }],
-            independence_rationale: "One controlled block.".into(),
-            dependencies: BTreeMap::new(),
-            measurement_contract: "fixture-measurement".into(),
-            batch_sessions: 32,
-            bandit: BanditConfig::default(),
-        };
-        // The real core registration computes the production route digest.
-        // Adoption below is a controlled serving fixture, not learned promotion.
-        assembled.evolution.register("local", definition).await?;
+        let assembled = Box::pin(bitrouter::assemble::build_app_with_path(
+            &config, Some(&fixture.config),
+        )).await?;
         for id in ["baseline", "full", "minimum", "restored", "changed"] {
             let history = PersistedHistory::new(assembled.db.clone(), FixtureScope {
                 owner: "local".into(),
@@ -166,31 +124,54 @@ routers:
     Ok(raw)
 }
 
-pub(super) fn adopt(fixture: &Fixture) -> Result<Value> {
+pub(super) fn source(default_tier: &str) -> Result<Document> {
+    ensure!(matches!(default_tier, "strong" | "cheap"));
+    let mut policies = BTreeMap::new();
+    for (name, selected) in [("coding", default_tier), ("candidate", "cheap")] {
+        policies.insert(
+            name.into(),
+            Policy {
+                tiers: BTreeMap::from([
+                    (
+                        "strong".into(),
+                        Target {
+                            model: "fixture:strong".into(),
+                            effort: Some(ReasoningEffort::High),
+                        },
+                    ),
+                    (
+                        "cheap".into(),
+                        Target {
+                            model: "fixture:cheap".into(),
+                            effort: Some(ReasoningEffort::Low),
+                        },
+                    ),
+                ]),
+                default_tier: selected.into(),
+                classifier_digest: None,
+                routes: BTreeMap::new(),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into()],
+            },
+        );
+    }
+    Ok(Document {
+        spec_version: SpecVersion::Beta1,
+        policies,
+    })
+}
+
+pub(super) fn assert_no_blocks(fixture: &Fixture) -> Result<()> {
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
-        let store = EvolutionStore::new(db.clone(), "local")?;
-        let (revision, _): (_, ControlState) = store
-            .get("control", "owner")
-            .await?
-            .context("control missing")?;
-        store
-            .update::<ControlState, _>("control", "owner", revision, |state| {
-                let block = state
-                    .blocks
-                    .get_mut("coding-block")
-                    .context("block missing")?;
-                block.parent_revision = Some(block.revision.clone());
-                block.revision = "controlled-adoption".into();
-                block.status = BlockStatus::Adopted;
-                block.plan = None;
-                state.generation += 1;
-                Ok(())
-            })
-            .await?;
-        let state =
-            serde_json::to_value(BlockPolicyStore::new(db.clone(), "local")?.state().await?)?;
+        ensure!(
+            EvolutionStore::new(db.clone(), "local")?
+                .list::<Value>("control")
+                .await?
+                .is_empty(),
+            "independent fixture contains Block state"
+        );
         db.close().await?;
-        Ok(state)
+        Ok(())
     })
 }

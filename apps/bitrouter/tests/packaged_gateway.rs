@@ -783,10 +783,10 @@ async fn bundled_auto_source_dispatches_with_tools_effort_and_complete_context()
     exercise.with_context(|| {
         format!(
             "bundled source process failed: {}",
-            std::fs::read_to_string(&child.stderr).map_or_else(
-                |error| format!("stderr unavailable: {error}"),
-                |contents| contents
-            )
+            match std::fs::read_to_string(&child.stderr) {
+                Ok(contents) => contents,
+                Err(error) => format!("stderr unavailable: {error}"),
+            }
         )
     })?;
     let mut stop = OwnedChild::spawn(
@@ -805,11 +805,22 @@ async fn bundled_auto_source_dispatches_with_tools_effort_and_complete_context()
     Ok(())
 }
 
-/// Submit the shipped template through the real service, without a local Policy
-/// file or application-library assembly. Tenant ownership is Unix-only.
+/// Copy, configure and start the shipped template, then resubmit its exact source.
 #[cfg(unix)]
 #[tokio::test]
 async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() -> Result<()> {
+    shipped_template_service_case("auto").await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shipped_coding_template_starts_and_submits_its_cli_output_through_service_api()
+-> Result<()> {
+    shipped_template_service_case("coding").await
+}
+
+#[cfg(unix)]
+async fn shipped_template_service_case(name: &str) -> Result<()> {
     use bitrouter_ai::{
         policy::Document,
         tenancy::{
@@ -834,17 +845,86 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
     let control_endpoint = format!("http://{control_address}");
     let config_path = home.path().join("bitrouter.yaml");
     let socket = home.path().join("template.sock");
-    std::fs::write(
-        &config_path,
-        serde_json::to_vec_pretty(&json!({
-            "inherit_defaults":false,"registry":{"enabled":false},
-            "server":{"listen":inference_address.to_string(),"skip_auth":false,"control_socket":socket},
-            "database":{"url":DATABASE},"tenancy":{"enabled":true,"wrapping_key_env":"BITROUTER_TEMPLATE_WRAP"},
-            "control":{"enabled":true,"listen":control_address.to_string(),"credentials":[{
-                "id":"template-operator","token_env":"BITROUTER_PACKAGED_CONTROL_TOKEN","scopes":["control:read","control:tenancy"]
-            }]},
-        }))?,
+    let template_config = match name {
+        "auto" => include_str!("../../../templates/auto-router/bitrouter.yaml"),
+        "coding" => include_str!("../../../templates/coding-router/bitrouter.yaml"),
+        _ => anyhow::bail!("unknown shipped template"),
+    };
+    std::fs::write(&config_path, template_config)?;
+    let mut config: Value = serde_saphyr::from_str(template_config)?;
+    // Configure the README's provider placeholders, isolated listeners and
+    // authority. The shipped auto source and router binding remain unchanged.
+    let upstream = mock_upstream().await?;
+    config["inherit_defaults"] = json!(false);
+    config["registry"] = json!({"enabled":false});
+    config["server"] =
+        json!({"listen":inference_address.to_string(),"skip_auth":false,"control_socket":socket});
+    config["database"] = json!({"url":DATABASE});
+    config["tenancy"] = json!({"enabled":true,"wrapping_key_env":"BITROUTER_TEMPLATE_WRAP"});
+    config["control"] = json!({"enabled":true,"listen":control_address.to_string(),"credentials":[{
+        "id":"template-operator","token_env":"BITROUTER_PACKAGED_CONTROL_TOKEN","scopes":["control:read","control:tenancy"]
+    }]});
+    if name == "coding" {
+        config["providers"] = json!({"fixture":{
+            "api_base":upstream.endpoint,"api_key":PROVIDER_KEY,"auto_discover":false,
+            "api_protocol":[{"*":"responses"}],"models":[{"id":"strong"},{"id":"economy"}]
+        }});
+    } else {
+        for provider in config["providers"]
+            .as_object_mut()
+            .context("template providers")?
+            .values_mut()
+        {
+            provider["api_base"] = json!(upstream.endpoint);
+            provider["api_key"] = json!(PROVIDER_KEY);
+            provider["auto_discover"] = json!(false);
+        }
+        std::fs::write(
+            home.path().join("policy.yaml"),
+            include_str!("../../../templates/auto-router/policy.yaml"),
+        )?;
+    }
+    std::fs::write(&config_path, serde_json::to_vec_pretty(&config)?)?;
+    if name == "coding" {
+        let mut init = OwnedChild::spawn(
+            host_command(binary, home.path(), &token)
+                .args([
+                    "--json",
+                    "policy",
+                    "init",
+                    "coding",
+                    "--strong",
+                    "fixture:strong",
+                    "--economy",
+                    "fixture:economy",
+                    "--config",
+                ])
+                .arg(&config_path),
+            logs.path(),
+            "template-init",
+        )?;
+        init.success(Duration::from_secs(15)).await?;
+    }
+    let mut check = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .args(["--json", "policy", "check", "--config"])
+            .arg(&config_path),
+        logs.path(),
+        "template-check",
     )?;
+    check.success(Duration::from_secs(15)).await?;
+    let mut show = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .args(["--json", "policy", "show", name, "--disk", "--config"])
+            .arg(&config_path),
+        logs.path(),
+        "template-show",
+    )?;
+    show.success(Duration::from_secs(15)).await?;
+    let template: Document = serde_json::from_value(show.json()?["source"].clone())?;
+    let policy_bytes = std::fs::read(home.path().join("policy.yaml"))?;
+    let disk: Document = serde_saphyr::from_slice(&policy_bytes)?;
+    ensure!(template == disk && template.policies.contains_key(name));
     drop((inference, control));
     let mut child = OwnedChild::spawn(
         host_command(binary, home.path(), &token)
@@ -874,13 +954,11 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
         )
         .await?;
     ensure!(created.status == OperationStatus::Applied);
-    let template: Document =
-        serde_saphyr::from_str(include_str!("../../../templates/auto-router/policy.yaml"))?;
     let key = ResourceKey {
         owner_kind: OwnerKind::Tenant,
         owner_id: tenant.as_str().try_into()?,
         resource_kind: ResourceKind::Policy,
-        resource_id: "template-auto".try_into()?,
+        resource_id: format!("template-{name}").try_into()?,
     };
     let command = ResourcePut {
         format: 1,
@@ -890,7 +968,7 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
         expected_revision: None,
         definition: Definition::Policy {
             document: template.clone(),
-            name: "auto".into(),
+            name: name.into(),
             dependencies: Vec::new(),
         },
     };
@@ -910,7 +988,7 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
         .policy_source(&installation, &tenant, &reference)
         .await?;
     ensure!(
-        shown.document == template && shown.name == "auto" && shown.status.reference == reference,
+        shown.document == template && shown.name == name && shown.status.reference == reference,
         "template source was changed or returned under another immutable identity"
     );
     let replay = client.put_resource(&tenant, &command).await?;
@@ -918,9 +996,23 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
         replay.resource_revision == written.resource_revision,
         "replay published another source revision"
     );
+    if name == "auto" {
+        reject_raw_policy_sources_without_mutation(
+            &client,
+            &control_endpoint,
+            &token,
+            &command,
+            &reference,
+        )
+        .await?;
+    }
     ensure!(
-        !home.path().join("policy.yaml").exists(),
-        "API submission wrote a host policy file"
+        std::fs::read(home.path().join("policy.yaml"))? == policy_bytes,
+        "API submission changed the copied/initialized template source"
+    );
+    ensure!(
+        upstream.calls.lock().await.is_empty(),
+        "template setup or Policy submission performed provider work"
     );
     let mut stop = OwnedChild::spawn(
         host_command(binary, home.path(), &token)
@@ -935,5 +1027,103 @@ async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() 
     child.success(Duration::from_secs(20)).await?;
     closed(inference_address).await?;
     closed(control_address).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn reject_raw_policy_sources_without_mutation(
+    client: &bitrouter_sdk::tenancy::TenancyClient,
+    endpoint: &str,
+    token: &str,
+    command: &bitrouter_ai::tenancy::resources::ResourcePut,
+    reference: &bitrouter_ai::tenancy::configuration::ResourceRef,
+) -> Result<()> {
+    use bitrouter_ai::tenancy::identity::{OperationId, TenantId};
+    let tenant: TenantId = command.key.owner_id.as_str().try_into()?;
+    let installation = &command.installation_id;
+    let before = client.directory(installation, None, None, 100).await?;
+    ensure!(
+        before.next_after.is_none(),
+        "template directory fixture exceeds one page"
+    );
+    let original = client
+        .policy_source(installation, &tenant, reference)
+        .await?;
+    let base = serde_json::to_value(command)?;
+    let source = base["definition"]["document"].clone();
+    let mut cases = Vec::new();
+    for field in ["tiers", "routes", "tool_safe_tiers", "default_tier"] {
+        let mut invalid = source.clone();
+        invalid["policies"]["auto"][field] = Value::Null;
+        cases.push(invalid);
+    }
+    let mut missing = source.clone();
+    missing["policies"]["auto"]
+        .as_object_mut()
+        .context("policy object")?
+        .remove("default_tier");
+    cases.push(missing);
+    let mut oversized = source.clone();
+    oversized["policies"]["auto"]["tiers"]["strong"]["model"] =
+        json!(format!("fixture:{}", "x".repeat(1024 * 1024)));
+    cases.push(oversized);
+    let mut policies = source.clone();
+    for n in 0..256 {
+        policies["policies"][format!("policy-{n:03}")] = source["policies"]["auto"].clone();
+    }
+    cases.push(policies);
+    let mut tiers = source.clone();
+    tiers["policies"]["auto"]["tiers"] = (0..257)
+        .map(|n| {
+            (
+                format!("tier-{n:03}"),
+                json!({"model":format!("fixture:model-{n:03}")}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    cases.push(tiers);
+    let http = reqwest::Client::new();
+    for (index, invalid) in cases.into_iter().enumerate() {
+        let operation: OperationId = format!("template-invalid-source-{index}").try_into()?;
+        let mut raw = base.clone();
+        raw["operation_id"] = json!(operation);
+        raw["key"]["resource_id"] = json!(format!("must-not-be-created-{index}"));
+        raw["definition"]["document"] = invalid;
+        // Send raw bytes so neither SDK validation nor a pre-decoded Document
+        // can hide the null/omission and capacity attacks from real ingress.
+        let response = http
+            .post(format!("{endpoint}/control/v1/tenants/{tenant}/resources"))
+            .bearer_auth(token)
+            .header("Bitrouter-Installation-Id", installation.as_str())
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(&raw)?)
+            .send()
+            .await?;
+        ensure!(
+            matches!(response.status().as_u16(), 400 | 413 | 422),
+            "invalid Policy source {index} got HTTP {}",
+            response.status()
+        );
+        ensure!(
+            matches!(client.operation(installation, &operation).await,
+            Err(bitrouter_sdk::error::Error::Tenancy(failure)) if failure.status == 404),
+            "invalid source {index} recorded a management operation"
+        );
+        let after = client
+            .directory(installation, Some(before.authority_revision), None, 100)
+            .await?;
+        ensure!(
+            serde_json::to_value(after)? == serde_json::to_value(&before)?,
+            "invalid source {index} changed authority"
+        );
+        let shown = client
+            .policy_source(installation, &tenant, reference)
+            .await?;
+        ensure!(
+            serde_json::to_value(shown)? == serde_json::to_value(&original)?,
+            "invalid source {index} changed the immutable source or resource head"
+        );
+    }
     Ok(())
 }

@@ -70,14 +70,10 @@ async fn restore(
     destination: &Path,
     installation: &InstallationId,
 ) -> Result<()> {
-    let bundle = home.join("bundle");
-    let report = crate::offline::snapshot_with_options(source, &bundle, options(home)).await?;
-    let report = serde_json::to_value(&report as &dyn crate::output::CliReport)?;
+    let (bundle, digest) = snapshot_bundle(home, source).await?;
     crate::offline::restore_with_options(
         &bundle,
-        report["evidence_digest"]
-            .as_str()
-            .context("snapshot anchor")?,
+        &digest,
         destination,
         installation.as_str(),
         producer::KEY_ENV,
@@ -86,6 +82,17 @@ async fn restore(
     )
     .await?;
     Ok(())
+}
+
+async fn snapshot_bundle(home: &Path, source: &Path) -> Result<(std::path::PathBuf, String)> {
+    let bundle = home.join("bundle");
+    let report = crate::offline::snapshot_with_options(source, &bundle, options(home)).await?;
+    let report = serde_json::to_value(&report as &dyn crate::output::CliReport)?;
+    let digest = report["evidence_digest"]
+        .as_str()
+        .context("snapshot anchor")?
+        .to_owned();
+    Ok((bundle, digest))
 }
 
 async fn profile_rows(path: &Path) -> Result<Vec<(String, String, String)>> {
@@ -137,12 +144,13 @@ async fn independent_admission_profiles_survive_file_restarts_and_v2_restore() -
 }
 
 #[tokio::test]
-#[ignore = "requires explicit BITROUTER_TEST_RECOVERY_KEY; old compiler refuses before writable connector setup"]
-async fn retired_policy_compiler_refuses_file_connector_without_writes() -> Result<()> {
+#[ignore = "requires explicit BITROUTER_TEST_RECOVERY_KEY; old compiler refuses file startup and actual v2 restore"]
+async fn retired_policy_compiler_refuses_file_connector_and_v2_restore_without_writes() -> Result<()>
+{
     let directory = home()?;
     let home = directory.path().canonicalize()?;
     let source = home.join("retired.sqlite");
-    current_source(&home, &source).await?;
+    let (installation, _, _) = current_source(&home, &source).await?;
     let database =
         crate::db::connect_owned_tenancy(&format!("sqlite://{}", source.display())).await?;
     let changed = database.database().execute(Statement::from_string(DatabaseBackend::Sqlite,
@@ -156,6 +164,25 @@ async fn retired_policy_compiler_refuses_file_connector_without_writes() -> Resu
             .await
             .is_err()
     );
+    ensure!(image(&source)? == original);
+    let destination = home.join("must-not-restore.sqlite");
+    // Opaque forensic snapshot must succeed, so the refusal below belongs to
+    // the actual keyed restore rather than an earlier archive-creation error.
+    let (bundle, digest) = snapshot_bundle(&home, &source).await?;
+    ensure!(
+        crate::offline::restore_with_options(
+            &bundle,
+            &digest,
+            &destination,
+            installation.as_str(),
+            producer::KEY_ENV,
+            32,
+            options(&home)
+        )
+        .await
+        .is_err()
+    );
+    ensure!(!destination.exists());
     ensure!(image(&source)? == original);
     Ok(())
 }

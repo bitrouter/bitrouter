@@ -1,4 +1,6 @@
-//! Serving published blocks uses the same records with and without core.
+//! The explicit local BRO owner retains Block enrollment and replay fences.
+
+#![cfg(all(feature = "core", feature = "harness"))]
 
 use std::collections::BTreeMap;
 
@@ -6,7 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::control::{BlockState, BlockStatus, ControlState, EnrollmentBatch};
-use super::fixtures::{Fixture, definition, fixture_with_persistence, request, session};
+use super::fixtures::{Fixture, bro_fixture_with_persistence, definition, request, session};
 use super::store::{BlockPolicyStore, CONTROL_KEY, CONTROL_KIND, SESSION_KIND, SessionEnrollment};
 use crate::storage::evolution::EvolutionStore;
 use crate::storage::execution::DecisionContext;
@@ -64,10 +66,10 @@ async fn dispatch(
 }
 
 #[tokio::test]
-async fn persisted_adoption_survives_gateway_reassembly_and_preserves_replay_protection()
--> Result<()> {
+async fn persisted_adoption_survives_bro_reassembly_and_preserves_replay_protection() -> Result<()>
+{
     for named in [false, true] {
-        let fixture = fixture_with_persistence(named, true).await?;
+        let fixture = bro_fixture_with_persistence(named, true).await?;
         let (selector, candidate) = if named {
             ("bitrouter/coding", "bitrouter/candidate")
         } else {
@@ -82,10 +84,12 @@ async fn persisted_adoption_survives_gateway_reassembly_and_preserves_replay_pro
             _home,
         } = fixture;
         drop(assembled);
-        let assembled = crate::assemble::build_app_with_path(
+        let assembled = Box::pin(crate::assemble::build_scoped_app(
             &config,
             Some(&_home.path().join("bitrouter.yaml")),
-        )
+            |_| Ok(()),
+            crate::assemble::AssemblyScope::BroHarness,
+        ))
         .await?;
         let fixture = Fixture {
             assembled,
@@ -133,7 +137,7 @@ async fn persisted_adoption_survives_gateway_reassembly_and_preserves_replay_pro
 
 #[tokio::test]
 async fn published_adoption_retains_existing_baseline_membership() -> Result<()> {
-    let fixture = fixture_with_persistence(false, false).await?;
+    let fixture = bro_fixture_with_persistence(false, false).await?;
     published(&fixture, "coding", "candidate").await?;
     let identity = session(&fixture, "existing-baseline", "fixture").await?;
     let enrollment = SessionEnrollment {
@@ -191,7 +195,7 @@ async fn published_adoption_retains_existing_baseline_membership() -> Result<()>
 
 #[tokio::test]
 async fn published_adoption_does_not_bypass_changed_route_dependencies() -> Result<()> {
-    let fixture = fixture_with_persistence(false, false).await?;
+    let fixture = bro_fixture_with_persistence(false, false).await?;
     published(&fixture, "coding", "candidate").await?;
     let mut config = fixture.assembled.routing_table.snapshot_config();
     config

@@ -107,11 +107,9 @@ pub(crate) fn build_operational_evaluation(
             None => {}
         }
     }
-    let _current = decoded
-        .iter()
-        .rev()
-        .find(|(event, _)| event.request_id == settlement.request_id)
-        .ok_or_else(|| anyhow::anyhow!("settlement has no matching replayable route intent"))?;
+    // Independent correlation has no guard intent or Policy decision to invent.
+    // Supplied intents are validated above; native plan receipts enter separately
+    // through the settlement's routing evidence.
 
     let metrics = operational_metrics(&snapshot.health, settlement)?;
     let requested_dimensions = metrics.keys().cloned().collect::<BTreeSet<_>>();

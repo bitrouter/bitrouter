@@ -291,6 +291,9 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
     - name: preserve full, minimum and harness executables from the same revision
       shell: bash
       run: |
@@ -309,10 +312,24 @@ jobs:
         BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bro
       run: |
         cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
-        cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_profiles -- --ignored --test-threads=1
+        for selector in \
+          artifact_profiles_preserve_residents_and_gate_explicit_replacement \
+          persistence::historical_dataset_is_refused_by_full_minimum_and_harness_artifacts \
+          persistence::current_records_survive_full_minimum_full_harness_full_transitions; do
+          cargo nextest run --locked -p bitrouter --no-default-features --jobs 2 \
+            --test artifact_profiles --test-threads 1 --retries 0 \
+            --run-ignored only --no-tests fail -E "test(=$selector)"
+        done
         # Core seeds published state and dispatches the original judge attempt.
         # Serving/replay requests use the preserved full/minimum binaries.
-        cargo test --locked -p bitrouter --jobs 2 --test artifact_profiles gateway_state:: -- --ignored --test-threads=1
+        for selector in \
+          gateway_state::published_policy_and_accounting_survive_full_minimum_full \
+          gateway_state::judge::reserved_judge_charge_survives_full_minimum_full \
+          gateway_state::trajectory::explicit_trajectory_facts_and_outbox_survive_full_minimum_full; do
+          cargo nextest run --locked -p bitrouter --jobs 2 --test artifact_profiles \
+            --test-threads 1 --retries 0 --run-ignored only --no-tests fail \
+            -E "test(=$selector)"
+        done
     - name: validate local measurement fixture and interruption cleanup
       shell: bash
       env:

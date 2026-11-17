@@ -400,12 +400,23 @@ async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions()
     use axum::{Json, Router, http::StatusCode, routing::post};
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
     use bitrouter::trajectory::{
-        canonical::Canonicalizer, correlation::TrajectoryRuntime, store::TrajectoryStore,
+        canonical::Canonicalizer,
+        correlation::{CorrelatedRequest, TrajectoryRuntime},
+        store::TrajectoryStore,
+        types::{RequestStatus, TrajectoryEventKind},
     };
     use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
     use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
     use bitrouter_ai::types::ApiProtocol;
+    use sea_orm::EntityTrait;
+
+    #[derive(Clone)]
+    struct Observation {
+        body: Value,
+        request_id: String,
+        correlation: CorrelatedRequest,
+    }
 
     let home = tempfile::tempdir()?;
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -483,8 +494,9 @@ policy:
     let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
     // Model-only Policy does not start episodes. An independent observer owns
     // the actual request identity/input before the provider returns its outcome.
+    let trajectory = TrajectoryStore::new(assembled.db.clone());
     let observer = Arc::new(TrajectoryRuntime::new(
-        TrajectoryStore::new(assembled.db.clone()),
+        trajectory.clone(),
         Canonicalizer::new(bitrouter::paths::get_or_create_correlation_key(
             home.path(),
         )?),
@@ -517,7 +529,11 @@ policy:
                     )
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                captured.lock().await.push((body, correlated.episode_id));
+                captured.lock().await.push(Observation {
+                    body,
+                    request_id: request_id.to_owned(),
+                    correlation: correlated,
+                });
                 Ok::<_, StatusCode>(Json(json!({
                     "id":"core-fixture", "object":"chat.completion", "model":"strong",
                     "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
@@ -606,7 +622,8 @@ policy:
     assert!(state.context_store.decisions.is_empty());
     let requests = observed_requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].0["model"], "strong");
+    assert_eq!(requests[0].body["model"], "strong");
+    assert_eq!(requests[0].request_id, plan.request_id);
     assert_eq!(
         backend
             .received_requests()
@@ -619,6 +636,49 @@ policy:
         .context("pipeline")?
         .drain_required_pending_settlements()
         .await?;
+    let observed = &requests[0];
+    let metered =
+        bitrouter::metering::entities::requests::Entity::find_by_id(observed.request_id.as_str())
+            .one(&assembled.db)
+            .await?
+            .context("actual Core metering")?;
+    assert_eq!(metered.model_id, "strong");
+    assert_eq!(metered.prompt_tokens, 10);
+    assert_eq!(metered.completion_tokens, 1);
+    assert!(metered.error.is_none());
+    let correlated = trajectory
+        .request("local", &observed.correlation.request_id)
+        .await?
+        .context("independently observed request")?;
+    let events = trajectory
+        .events_for_episode("local", &observed.correlation.episode_id)
+        .await?;
+    assert_eq!(
+        correlated.status,
+        RequestStatus::Settled,
+        "real metering must settle the independently observed request: {events:?}"
+    );
+    assert_eq!(events.len(), 2, "observation needs no guard route intent");
+    assert_eq!(events[0].kind, TrajectoryEventKind::RequestStarted);
+    assert_eq!(events[1].kind, TrajectoryEventKind::RequestSettled);
+    assert_eq!(
+        events[1].request_id.as_deref(),
+        Some(correlated.request_id.as_str())
+    );
+    assert_eq!(
+        events[1]
+            .evidence
+            .structural
+            .get("settlement.prompt_tokens"),
+        Some(&10)
+    );
+    assert_eq!(
+        events[1]
+            .evidence
+            .structural
+            .get("settlement.completion_tokens"),
+        Some(&1)
+    );
     assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
     let subjects = store.list_subjects().await?;
     assert_eq!(
@@ -636,7 +696,7 @@ policy:
         .iter()
         .find(|subject| subject.scope == EvalScope::Episode)
         .context("episode eval")?;
-    assert_eq!(episode.subject_id, requests[0].1);
+    assert_eq!(episode.subject_id, observed.correlation.episode_id);
     assert!(matches!(
         episode.identity,
         bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}

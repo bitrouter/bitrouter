@@ -210,9 +210,31 @@ fn gateway_subject(fixture: &Fixture) -> Result<EvalSubject> {
     Ok(subject)
 }
 
+async fn gateway_json<T: serde::de::DeserializeOwned>(
+    response: axum::response::Response,
+) -> Result<T> {
+    ensure!(
+        response.status() == StatusCode::OK,
+        "unexpected gateway Eval status: {}",
+        response.status()
+    );
+    ensure!(
+        response
+            .headers()
+            .get("content-type")
+            .is_some_and(|value| value == "application/json")
+    );
+    let body = tokio::time::timeout(
+        TIMEOUT,
+        axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024),
+    )
+    .await??;
+    Ok(serde_json::from_slice(&body)?)
+}
+
 async fn seed_gateway(fixture: &Fixture) -> Result<()> {
     // Assembly mounts this exact independent API/store on the tenancy database.
-    let _: PutSubjectReport = json(
+    let _: PutSubjectReport = gateway_json(
         gateway_router(fixture.db.clone())
             .oneshot(
                 Request::builder()
@@ -234,7 +256,7 @@ async fn seed_gateway(fixture: &Fixture) -> Result<()> {
 }
 
 async fn read_gateway(db: sea_orm::DatabaseConnection, expected: &EvalSubject) -> Result<()> {
-    let found: EvalSubject = json(
+    let found: EvalSubject = gateway_json(
         gateway_router(db)
             .oneshot(
                 Request::builder()

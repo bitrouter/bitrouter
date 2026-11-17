@@ -27,6 +27,7 @@ struct TrajectoryFacts {
 }
 
 fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
+    seed::assert_no_blocks(fixture)?;
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
         let mut records = BTreeMap::new();
@@ -49,6 +50,10 @@ fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
                 let raw: String = row.try_get("", "event_json")?;
                 Ok(serde_json::from_str::<TrajectoryEvent>(&raw)?)
             }).collect::<Result<Vec<_>>>()?;
+        for event in &events {
+            ensure!(serde_json::to_value(&event.kind)? != json!("guard_activated"),
+                "model-only source activated a progress guard");
+        }
         let health = reduce(&events, &BTreeSet::from(["strong".into()]))?;
         db.close().await?;
         Ok(TrajectoryFacts { records, outbox, evaluation, health })
@@ -69,6 +74,7 @@ fn configuration(fixture: &Fixture, upstream: &str) -> Result<()> {
     let raw = seed::configuration(fixture, upstream, false)?;
     let mut config: Value = serde_saphyr::from_str(&raw)?;
     config["trajectory"] = json!({"enabled":true});
+    config["policy"] = json!({"path":"./policy.yaml"});
     config["routers"]["coding"]["selection"] = json!({
         "kind":"policy", "policy":"coding", "base_model":"fixture:strong",
     });
@@ -231,6 +237,8 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         upstream
     });
     configuration(fixture, &upstream.uri())?;
+    seed::assert_no_blocks(fixture)?;
+    let source_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
     let (pid, listen) = start(fixture, full, &full_identity)?;
     let mut messages = vec![json!({"role":"user","content":"Make a small change."})];
     infer(
@@ -330,6 +338,7 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
     ensure!(fs::read(fixture.directory.path().join("correlation.key"))? == key);
     fixture.stop_resident(pid)?;
     ensure!(trajectory_facts(fixture)? == delivered);
+    ensure!(fs::read(fixture.directory.path().join("policy.yaml"))? == source_bytes);
     Ok(())
 }
 

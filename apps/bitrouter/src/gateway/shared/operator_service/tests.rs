@@ -2,7 +2,9 @@ use crate::runtime_crypto::DeploymentKey;
 use anyhow::{Context, Result, ensure};
 use axum::{body::Body, http::Method};
 use bitrouter_ai::gateway::operator::{
-    Command, Grant, Mutation, OperationLookup, Receipt, ResourcePut,
+    Command, CredentialBinding, CredentialImport, CredentialInput, CredentialMetadata, Grant,
+    Mutation, OperationLookup, Outcome, Publication, PublicationPut, Receipt, ResourcePut,
+    Revision,
 };
 use sea_orm::{ConnectionTrait as _, DatabaseBackend, Statement};
 use serde_json::json;
@@ -135,6 +137,7 @@ async fn postgres_operator_http_authorization_receipts_and_deadlines() -> Result
             authenticator(vec![Grant::PolicyWrite])?,
             Duration::from_secs(2),
         );
+        publication_cases(&authority, &router).await?;
 
         let pending =
             Body::from_stream(futures::stream::pending::<std::io::Result<bytes::Bytes>>());
@@ -284,6 +287,232 @@ async fn postgres_operator_http_authorization_receipts_and_deadlines() -> Result
     let closed = database.close().await;
     result?;
     closed?;
+    Ok(())
+}
+
+async fn record_snapshot(store: &Store) -> Result<String> {
+    store.database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+        "SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY id),'[]'::jsonb)::text AS snapshot FROM gateway_shared_records r WHERE namespace=$1",
+        [store.namespace().into()]
+    )).await?.context("missing authority record snapshot")?.try_get("", "snapshot").map_err(Into::into)
+}
+
+async fn publication_cases(authority: &Authority, policy_writer: &Router) -> Result<()> {
+    let pool = Mutation {
+        operation_id: "publication-pool".into(),
+        command: Command::PutResource(ResourcePut {
+            resource_pool_id: "publication-pool".into(),
+            expected_revision: None,
+            concurrent_attempts: 3,
+        }),
+    };
+    let _: Receipt = decode(
+        policy_writer.clone().oneshot(post(&pool)?).await?,
+        StatusCode::OK,
+    )
+    .await?;
+    let credentials = super::router(
+        authority.clone(),
+        authenticator(vec![Grant::CredentialWrite])?,
+        Duration::from_secs(2),
+    );
+    let import = Mutation {
+        operation_id: "publication-credential".into(),
+        command: Command::ImportCredential(CredentialImport {
+            provider: "fixture".into(),
+            account: "default".into(),
+            resource_pool_id: "publication-pool".into(),
+            expected_version: None,
+            credential: CredentialInput::ApiKey {
+                value: "publication-private-secret".into(),
+            },
+        }),
+    };
+    let _: Receipt = decode(credentials.oneshot(post(&import)?).await?, StatusCode::OK).await?;
+    let document: bitrouter_ai::policy::Document = serde_json::from_value(json!({
+        "spec_version":"policy/1.0.0-beta.1",
+        "policies": {
+            "auto:cost": {"tiers":{"strong":{"model":"fixture:strong"},"economy":{"model":"fixture:economy"}},
+                "default_tier":"strong","tool_use_tier":"strong","tool_safe_tiers":["strong"]},
+            "review": {"tiers":{"safe":{"model":"fixture:economy"}},"default_tier":"safe"}
+        }
+    }))?;
+    let configuration = Publication {
+        format: 2,
+        routing: json!({
+            "providers":{"fixture":{"api_base":"https://example.com/v1","models":[{"id":"strong"},{"id":"economy"}]}},
+            "routers":{
+                "coding":{"selection":{"kind":"policy","policy":"auto:cost","base_model":"fixture:strong"}},
+                "review":{"selection":{"kind":"policy","policy":"review","base_model":"fixture:economy"}}
+            }
+        }),
+        policies: vec![
+            json!({"id":"publication-acl","allowed_models":["fixture:strong","fixture:economy"]}),
+        ],
+        model_policy: Some(document.clone()),
+        credentials: vec![CredentialBinding {
+            provider: "fixture".into(),
+            account: "default".into(),
+            credential_provider: "fixture".into(),
+            credential_account: "default".into(),
+        }],
+        require_known_pricing: false,
+    };
+    let mutation = Mutation {
+        operation_id: "publish-current-source".into(),
+        command: Command::Publish(PublicationPut {
+            expected_generation: authority.head().await?.value.config_generation,
+            configuration: configuration.clone(),
+        }),
+    };
+    // The existing policy writer retains its narrower permissions.
+    let before = record_snapshot(authority.store()).await?;
+    let error: ErrorResponse = decode(
+        policy_writer.clone().oneshot(post(&mutation)?).await?,
+        StatusCode::FORBIDDEN,
+    )
+    .await?;
+    ensure!(error.code == ErrorCode::Forbidden);
+    ensure!(record_snapshot(authority.store()).await? == before);
+    let publisher = super::router(
+        authority.clone(),
+        authenticator(vec![Grant::Publish])?,
+        Duration::from_secs(2),
+    );
+    let receipt: Receipt = decode(
+        publisher.clone().oneshot(post(&mutation)?).await?,
+        StatusCode::OK,
+    )
+    .await?;
+    let head = authority.head().await?;
+    let loaded = authority.configuration(&head).await?;
+    ensure!(
+        serde_json::to_value(&loaded)? == serde_json::to_value(&configuration)?,
+        "HTTP publication lost complete configuration source"
+    );
+    ensure!(serde_json::to_value(&loaded.model_policy)? == serde_json::to_value(Some(&document))?);
+    let revision: Revision = decode(
+        publisher
+            .clone()
+            .oneshot(get("revision", &[], READ_TOKEN)?)
+            .await?,
+        StatusCode::OK,
+    )
+    .await?;
+    ensure!(
+        revision.config_generation == head.value.config_generation
+            && revision.key_generation == head.value.key_generation
+    );
+    ensure!(matches!(&receipt.outcome, Outcome::Published(actual) if *actual == revision));
+    let credential: CredentialMetadata = decode(
+        publisher
+            .clone()
+            .oneshot(get(
+                "credentials",
+                &[("provider", "fixture"), ("account", "default")],
+                READ_TOKEN,
+            )?)
+            .await?,
+        StatusCode::OK,
+    )
+    .await?;
+    ensure!(credential.version == 1 && credential.resource_pool_id == "publication-pool");
+    let before = record_snapshot(authority.store()).await?;
+    let replay: Receipt = decode(
+        publisher.clone().oneshot(post(&mutation)?).await?,
+        StatusCode::OK,
+    )
+    .await?;
+    ensure!(replay == receipt && record_snapshot(authority.store()).await? == before);
+    let old_source = json!({"lockfileVersion":4,"policies":{"coding":{}}});
+    for case in [
+        "old-format",
+        "old-field",
+        "mixed-fields",
+        "old-source",
+        "missing-format",
+        "future-format",
+    ] {
+        let operation_id = format!("publish-http-{case}");
+        let mut raw = serde_json::to_value(&mutation)?;
+        raw["operation_id"] = operation_id.clone().into();
+        raw["command"]["input"]["expected_generation"] = revision.config_generation.into();
+        let config = raw["command"]["input"]["configuration"]
+            .as_object_mut()
+            .context("publication object missing")?;
+        match case {
+            "old-format" => {
+                config.insert("format".into(), 1.into());
+            }
+            "old-field" => {
+                config.remove("model_policy");
+                config.insert("policy_lock".into(), old_source.clone());
+            }
+            "mixed-fields" => {
+                config.insert("policy_lock".into(), old_source.clone());
+            }
+            "old-source" => {
+                config.insert("model_policy".into(), old_source.clone());
+            }
+            "missing-format" => {
+                config.remove("format");
+            }
+            _ => {
+                config.insert("format".into(), 3.into());
+            }
+        }
+        let mut request = post(&mutation)?;
+        *request.body_mut() = Body::from(serde_json::to_vec(&raw)?);
+        let error: ErrorResponse = decode(
+            publisher.clone().oneshot(request).await?,
+            StatusCode::BAD_REQUEST,
+        )
+        .await?;
+        ensure!(
+            error.code == ErrorCode::InvalidInput && error.operation_id.is_none(),
+            "raw publication accepted: {case}"
+        );
+        let lookup: OperationLookup = decode(
+            publisher
+                .clone()
+                .oneshot(get(
+                    "operations",
+                    &[("operation_id", operation_id.as_str())],
+                    WRITE_TOKEN,
+                )?)
+                .await?,
+            StatusCode::OK,
+        )
+        .await?;
+        ensure!(matches!(lookup, OperationLookup::Unresolved { .. }));
+        let current = authority.head().await?;
+        ensure!(
+            serde_json::to_value(&current.value)? == serde_json::to_value(&head.value)?,
+            "rejection changed publication head: {case}"
+        );
+        ensure!(
+            serde_json::to_value(authority.configuration(&current).await?)?
+                == serde_json::to_value(&loaded)?,
+            "rejection changed configuration/bindings: {case}"
+        );
+        let current_credential: CredentialMetadata = decode(
+            publisher
+                .clone()
+                .oneshot(get(
+                    "credentials",
+                    &[("provider", "fixture"), ("account", "default")],
+                    READ_TOKEN,
+                )?)
+                .await?,
+            StatusCode::OK,
+        )
+        .await?;
+        ensure!(current_credential == credential);
+        ensure!(
+            record_snapshot(authority.store()).await? == before,
+            "rejection changed authority records: {case}"
+        );
+    }
     Ok(())
 }
 

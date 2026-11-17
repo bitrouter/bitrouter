@@ -212,6 +212,116 @@ async fn postgres_invalid_source_publication_rejection_preserves_authority() -> 
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn postgres_join_checks_old_retained_publication_and_terminal_beyond_first_page() -> Result<()>
+{
+    let mut database = EmptyDatabase::create().await?;
+    let result = tokio::time::timeout(Duration::from_secs(90), async {
+        let f = Fixture::new(&mut database).await?;
+        for generation in 1..33 {
+            f.engine
+                .authority
+                .publish(generation, &f.publication)
+                .await?;
+        }
+        let mut executions = Vec::new();
+        for _ in 0..33 {
+            let id = f.admit().await?;
+            let outcome = TerminalOutcome::Failed {
+                code: "before_provider_send".into(),
+            };
+            no_attempt_failure(
+                &f.engine.finish_with_inputs(&id, &outcome, None).await?,
+                &outcome,
+            )?;
+            executions.push(id);
+        }
+        executions.sort();
+        let last = executions.last().context("last retained execution")?;
+        // Both readers use 32-row keyset pages. Configuration/9 sorts last;
+        // the terminal attack is also past a full healthy first page.
+        let healthy = Engine::join(f.engine.authority.clone(), 180_000).await?;
+        healthy.drain().await?;
+        let key = "configuration/9";
+        let original: Stored<crate::runtime_crypto::SealedSecret> = f
+            .observer
+            .get(Kind::Authority, key)
+            .await?
+            .context("retained publication")?;
+        let mut old = serde_json::to_value(&f.publication)?;
+        old["format"] = json!(1);
+        old["policy_lock"] = old["model_policy"].take();
+        old.as_object_mut()
+            .context("publication object")?
+            .remove("model_policy");
+        let sealed = f
+            .engine
+            .authority
+            .seal(key, 9, &serde_json::to_vec(&old)?)?;
+        replace_contract_body(&f, "authority", key, &serde_json::to_value(sealed)?).await?;
+        refused_join_preserves_namespace(&f, "retained shared publication").await?;
+        replace_contract_body(&f, "authority", key, &serde_json::to_value(original.value)?).await?;
+
+        let terminal: Stored<serde_json::Value> = f
+            .observer
+            .get(Kind::Execution, last)
+            .await?
+            .context("terminal history")?;
+        let mut old = terminal.value;
+        old["projection"] = serde_json::Value::Null;
+        replace_contract_body(&f, "execution", last, &old).await?;
+        refused_join_preserves_namespace(&f, "original projection requirements are missing")
+            .await?;
+        Ok(())
+    })
+    .await
+    .context("retained history join deadline")
+    .and_then(|result| result);
+    database.finish(result).await
+}
+
+async fn replace_contract_body(
+    f: &Fixture,
+    kind: &str,
+    key: &str,
+    body: &serde_json::Value,
+) -> Result<()> {
+    let result = f
+        .observer
+        .database()
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "UPDATE gateway_shared_records SET body=$1 WHERE namespace=$2 AND kind=$3 AND key=$4",
+            [
+                serde_json::to_string(body)?.into(),
+                f.observer.namespace().into(),
+                kind.into(),
+                key.into(),
+            ],
+        ))
+        .await?;
+    ensure!(result.rows_affected() == 1);
+    Ok(())
+}
+
+async fn refused_join_preserves_namespace(f: &Fixture, reason: &str) -> Result<()> {
+    let before = f.snapshot().await?;
+    let error = Engine::join(f.engine.authority.clone(), 180_000)
+        .await
+        .err()
+        .context("old retained history joined")?;
+    ensure!(
+        format!("{error:#}").contains(reason),
+        "unexpected refusal: {error:#}"
+    );
+    ensure!(
+        f.snapshot().await? == before,
+        "refused join changed authority or history"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
 async fn postgres_capture_identity_rejects_before_attempt_or_terminal_writes() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
