@@ -7,9 +7,13 @@ compatibility consequences. Admission and review follow the
 | Object | Canonical specification | Why it needs a maintained format contract |
 | --- | --- | --- |
 | Published model/provider registry | [Registry v1](registry-v1/README.md), `registry/1.0.0-beta.7` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
-| Application configuration | [Configuration formats](configuration/README.md), `configuration/1.0.0-beta.4` | Existing YAML files, defaults, startup tenancy, routing weights and strict readers |
+| Application configuration | [Configuration formats](configuration/README.md), `configuration/1.0.0-beta.5` | Existing YAML files, defaults, startup tenancy, routing weights and strict readers |
 | Portable model-routing policy | [Policy](policy/README.md), `policy/1.0.0-beta.1` | Independently authored policy files, SDK submissions, retained source and model-only execution semantics |
-| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.4` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.5` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+
+M0 configuration/service-api beta.5 and Policy cutover clauses are accepted
+targets pending implementation and conformance qualification. Policy beta.1
+retains its unchanged unpublished source; Registry beta.7 is unchanged.
 
 ## Contract identifiers and revision dimensions
 

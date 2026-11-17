@@ -1,6 +1,9 @@
 # Model-routing policy
 
-Status: **beta, `policy/1.0.0-beta.1`**. This is the canonical contract for
+Status: **accepted M0 contract, implementation pending, `policy/1.0.0-beta.1`**.
+The source fields and meaning are unchanged from the unpublished beta.1; its
+identifier is retained. Cutover requirements are normative targets pending
+implementation and conformance qualification. This is the canonical contract for
 portable model-only policy source, authored as JSON or YAML and submitted to
 the service through JSON. Consumers are policy authors, SDK clients, gateway
 publication, tenant resource management and the serving compiler. MUST, MUST NOT,
@@ -19,7 +22,9 @@ Regenerate the schema with `cargo run -p bitrouter-ai --features schema
 unversioned, numeric-vx or namespace substitution fallback. Unknown fields at
 document, policy and target levels are errors. Optional fields use only the
 defaults declared by the public types. Null is not interchangeable with omission
-except for optional nullable fields represented by `Option`.
+except for optional nullable fields represented by `Option`. Duplicate keys at
+every nesting level MUST be rejected from raw JSON/YAML before a map or generic
+JSON value can discard them.
 
 This contract replaces the service's former direct acceptance of
 `lockfileVersion` documents. Old context actions, compiler lineage, certificates,
@@ -104,25 +109,61 @@ the inference contract permits the override. Absence preserves caller effort.
 ## Management and evaluation
 
 Policy submission creates an immutable revision through existing resource
-management. A route binds the exact revision and selected policy name. Updating
+management. A route binds the full immutable `ResourceRef` and literal selected
+name. `auto` and `auto:cost` are independent names; a request variant MUST NOT
+select the latter or fall back to the former. Missing names fail. Updating
 the managed head does not retarget an old route/configuration. Configuration
 activation is explicit and uses its existing authority revision/CAS. Drafting,
 evaluation or compilation does not activate a policy.
 
-Authorized source reads return the normalized document and selected name with
-the exact resource status. Provider secrets and generic resource definitions
-are not disclosed. Experimental artifacts without a complete lossless source
-representation fail with `capability_mismatch`.
+Files, defaults, HTTP, SDK, shared publication, reads and exports use the same
+typed `policy::Document`. `Definition::Policy.document` and source-bearing reads
+use that type; reported targets use `policy::Target`. Store normalized source
+and separate management metadata, then build a private model-selection view.
+No PolicyLock, compiler-marker qualification, certificate bridge or source
+reconstruction through recompilation is permitted. Provider secrets are excluded.
+Qualification covers the complete reachable closure at import, configuration
+creation, activation, restart and execution reopening, including hidden and
+unselected dependencies. Experimental content fails with `capability_mismatch`.
 
-The compiler may produce private routing IR, but must retain every meaningful
-source distinction and validate that representation on reload. Internal adapter
-certificates attest submitted rules only: zero evidence counts, no quality or
-promotion claims. They do not grant installation-operator authority.
+| Identity | Meaning |
+| --- | --- |
+| `source_digest` | `sha256:` plus lowercase SHA-256 of compact UTF-8 JSON of normalized typed source; recursively sort object keys by UTF-8 bytes, retain array order, use typed omission/default rules and JSON string escaping without ASCII-only conversion |
+| Compiled cache identity | Private compiler identity, source digest, literal selected name, classifier contract and exact authorized route/dependency identities; never a resource revision |
+| Policy revision | Full immutable ResourceRef: owner kind/ID, resource kind/ID and revision ID |
+| Configuration revision | Immutable configuration selecting the resource/name; activation authority revision and expected-head CAS remain separate |
+| `classifier_digest` | Installed classification contract; never a resource revision or assessment cohort |
 
-Existing execution/evaluation evidence identifies the immutable policy resource
-and the compiled policy digest. That digest is a runtime-IR identity, not a
-public-source digest, Policy format version or evidence of learned quality.
-Evaluation cannot silently publish or activate a replacement.
+The source digest excludes paths and management metadata. Equivalent YAML/JSON
+and object order have one digest. An old IR digest MUST NOT be relabelled as a
+source digest. Changed receipt/Eval identities require explicit discriminator
+selection rather than reinterpreting retained old fields.
+
+Publication takes explicit CAS parameters, never an artifact `parent_digest`.
+Rollback reactivates current-contract source/revision and preserves concurrency
+rejection and atomic file replacement; it does not load old snapshots. Source
+grants no publication permission. Active is the selected running instance's
+default view; disk is explicitly selected and cannot replace a failed active or
+remote read. Authorized source reads return normalized source, literal selected
+name and exact resource status; the source can be resubmitted directly.
+
+Clients/external evaluators run evaluation using revision-bound inference; the
+service receives, validates, queries and freezes facts. M0 adds no server Eval
+runner or implicit learner. Model-policy subjects bind installation, tenant,
+configuration revision, full Policy ResourceRef and literal selected name.
+Source/classifier digests are supplemental evidence. Results and freeze inherit
+verified subject identity. Aggregation/export retain that tuple and MUST NOT
+merge solely by name/projection. Generic subjects cannot acquire model-policy
+update eligibility. See the closed
+[Eval profiles](../service-api/README.md#eval-subject-identity-profiles).
+
+The explicit loop is evaluate an exact revision, submit/freeze results, author
+new source, create a new revision, then separately authorize/CAS activation.
+Context treatments, candidate exchange, guards, optimization and paid assessment
+belong to an explicit BRO harness or are removed. Tenant/shared entry points
+reject experimental routes and dependencies even with all features and without
+a Policy binding. Normal provider continuation and explicit server tools retain
+their own authority; model selection cannot invoke them.
 
 ## Conformance
 
@@ -133,3 +174,12 @@ revision activation, actual model dispatch and context preservation on default,
 class, tool and bypass paths. Management tests cover authorization, replay/CAS,
 restart, revocation and immutable old configurations. Shared publication uses
 the same admission rules as tenant submission.
+
+Required cutover cases include raw duplicate-key refusal, equivalent YAML/JSON
+source digests, source read/resubmission, literal selected-name failure, hidden
+experimental closures and Policy-free experimental routes in minimum and
+all-feature builds. Eval facts for same-name different-revision policies remain
+distinct; generic and cross-endpoint profiles cannot impersonate them. These
+cases remain pending implementation. Current-format recovery remains required;
+old stores are refused without conversion or inference replay under the
+[store contract](../service-api/README.md#resource-and-evidence-migration-and-rollback).

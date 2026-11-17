@@ -1,8 +1,10 @@
 # BitRouter configuration formats
 
-Status: **beta, `configuration/1.0.0-beta.4`**. This is the format contract for
-`bitrouter.yaml`, its shared-process profile and retained local harness
-configuration artifacts. Portable service routing policies have their own
+Status: **accepted M0 revision, implementation pending, `configuration/1.0.0-beta.5`**.
+This is the format contract for
+`bitrouter.yaml`, its shared-process profile and Policy source loading.
+The beta.5 cutover is pending parser/schema/DTO and conformance implementation.
+Portable service routing policies have their own
 [Policy contract](../policy/README.md). This document's revision does not add
 a version field to existing application YAML.
 MUST, MUST NOT, SHOULD and MAY express requirements on readers and writers.
@@ -22,7 +24,7 @@ The [generated application schema](../../../dist/schema/bitrouter.config.schema.
 is the field/type reference for ordinary application YAML. The configuration
 parser performs additional reference, derivation and semantic validation.
 `bro config validate` uses that parser; JSON Schema validation alone is not
-runtime acceptance. The schema, parser, migration behavior, examples and this
+runtime acceptance. The schema, parser, rejection behavior, examples and this
 contract must be reviewed together. Do not hand-maintain another copy of the
 complete field catalog in prose.
 
@@ -38,21 +40,36 @@ are not local YAML fields.
 The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`,
 `chat`, `upstream`, `database`, `gateway_state`, `eval`, `trajectory`,
 `acp_recording`, `continuation`, `providers`, `models`, `routers`, `checkers`,
-`presets`, `variants`, `plugins`, `mcp`, `mcp_servers`, `skills`, `server_tools`,
+`plugins`, `mcp`, `mcp_servers`, `skills`, `server_tools`,
 `agents`, `inherit_defaults`, `registry` and `policy`. Their exact shapes and
 field units are defined by the generated schema. Environment substitution in
 the local profile precedes parsing and semantic validation. Operator instructions
 for source selection, substitutions and validation are in the
 [CLI reference](../../CLI.md#config-resolution).
 
-Named routers are selected by `bitrouter/<id>`. Router selection, defaults and
-ordered request checks are separate fields. Legacy preset/variant forms have
-explicit compatibility resolution; readers MUST NOT reinterpret them as an
-unrelated second execution pipeline. Configuration inspection or execution
-MUST NOT implicitly rewrite an old document. File migration is an explicit
-operator action. The `policy.path` reference is resolved relative to the
-configuration file; when omitted, the file-backed default is `policy-lock.yaml`
-beside `bitrouter.yaml`.
+Named routers use `bitrouter/<id>`. Selection, defaults and ordered request
+checks are separate. `presets`, `variants`, old router addresses and aliases
+are rejected without conversion. Ordinary provider/model selectors and upstream
+protocol versions keep their meanings. Policy bindings select literal names;
+there is no variant-derived selection or base-name fallback.
+
+`policy` is closed and accepts only optional `path`. Unknown/deleted keys,
+including `mode`, `writeback`, `locked` and `evolve`, fail even with values
+that previously disabled them. Paths resolve relative to the configuration;
+the conventional omitted path is `policy.yaml` beside `bitrouter.yaml`.
+There is no implicit discovery of `policy-lock.yaml`. Every path accepts only
+public Policy source. An explicit missing, invalid or unsupported file fails
+without default fallback. Local zero-configuration may use the maintained bundled
+source when no user source is selected; no user file is overwritten. Tenant
+initialization explicitly submits source and never inherits host files/defaults.
+
+Policy init/check/show/status/diff and explicit publish/rollback use that source.
+Active is the default for the selected running instance; disk is explicitly
+selected for offline checks and never replaces failed active/remote reads.
+Publication takes explicit expected-head/CAS. Filesystem/process permissions
+control local writes; service authentication/scope/CAS control service writes.
+There is no automatic learning publication, v4 migration or legacy compile/evolve/
+evidence-verification entry point in mature Policy commands.
 
 A structural minimal local example is:
 
@@ -298,59 +315,38 @@ contains a complete deployment example and current feature restrictions.
 
 ## Service policy source
 
-Tenant Policy submission and shared gateway `Publication.policy_lock` use the
-independent [model-only Policy contract](../policy/README.md). They require
-`spec_version: policy/1.0.0-beta.1`; the historical `policy_lock` API field name
-does not select the old local lockfile decoder. Access-control
-`Publication.policies` is a separate collection and retains its existing meaning.
+File, API, default, SDK and export inputs use the
+[Policy contract](../policy/README.md), exactly `policy/1.0.0-beta.1`.
+Shared publication format 2 carries typed `model_policy`; format 1,
+`policy_lock` and mixed fields are rejected before mutation. ACL `policies`
+and principal `policy_id` remain independent access-control objects. BRO
+experiments need an explicit harness owner and cannot reuse the retired lock
+reader or submit context/learning state as model-only source.
 
-## Existing local harness lock artifact
+## Persistent dataset selection
 
-The following format remains an implementation input of the combined local
-harness. It is not accepted as new public service Policy source, has no promised
-compatibility with `policy/1.0.0-beta.1`, and is not a migration target for the
-model-only contract. Its experimental context and learner behavior belongs to
-the harness boundary.
-
-`policy-lock.yaml` has its own discriminator, `lockfileVersion: 4`. Only version
-4 is accepted; versions 1–3, unknown fields in strict structures and scalar tier
-targets are rejected. The document contains required artifact lineage, named
-`policies` and optional route `certificates`. The artifact contains
-`evidence_root`, `source_snapshot_time_unix_ms` and `compiler` (`id`, `version`,
-`config_digest`), with optional `parent_digest` and `eval_snapshot_root`.
-Each explicit route requires an appropriate certificate.
-
-A policy contains `key_strategy`, `tiers`, `routes`, default/tool tier selection
-and its declared guard/predictor/optimization fields. Each tier is a structured
-action with `model`, required `context` (`preserve` or `evidence`) and optional
-`effort`. Context is part of action identity. A semantic key has the form
-`semantic_route/v1|<family>|<role>|<risk>`; lookup uses the exact cell,
-unknown-family cell, then the default. Unsupported versions, enum values or
-required semantics MUST NOT be inferred from familiar field names.
-
-The [lock types and validator](../../../apps/bitrouter/src/policy_lock.rs)
-define nested fields, certificate constraints and admitted combinations. The
-[bundled lock](../../../apps/bitrouter/policy/default.yaml) is a complete example;
-its model membership is illustrative, not a format guarantee. Existing
-certificates cannot be relabeled for another action or classifier cohort.
-Publication requires the expected parent and preserves concurrent edits;
-compiling a candidate does not itself activate it. The learning workflow and
-implementation ownership are documented in the
-[evidence guide](../../development/evidence-learning.md).
+The [service store contract](../service-api/README.md#resource-and-evidence-migration-and-rollback)
+selects exact current tenant/shared formats independently of YAML and Policy
+SemVer. Old datasets are refused even with Policy-free active heads. Validation
+does not authorize migration or adding a current marker to old data. New data
+locations/installation identity are explicit; failed opens never clear, rewrite
+or replace old data. Binary rollback uses the old binary and its own consistent
+data/configuration/key copy, never a downgraded new store.
 
 ## Compatibility cases
 
 - Parse the ordinary local example and reject an unknown root key. Check nested
   openness against the corresponding schema rather than applying one rule to
   all objects. Missing values retain declared defaults and units.
-- Validate an old preset document through its explicit compatibility resolver;
-  inspection does not rewrite the file. A migration requires explicit input.
+- Reject old presets/variants, addresses and Policy aliases from raw YAML,
+  including duplicates and removed nested keys; leave files unchanged.
 - Select shared mode literally; reject an environment-selected mode, unknown
   shared process key or routing authority embedded in that process document.
-- Load a valid v4 lock with artifact lineage. Reject versions 1–3, scalar tier
-  targets, invalid references and an explicit route without its certificate.
-- Verify exact route, unknown-family fallback and default in order. A candidate
-  compilation leaves the active lock unchanged; a changed parent blocks publish.
+- Load public source from policy.yaml, explicit paths and bundled defaults.
+  Reject old lock discriminators, invalid references and unsupported versions.
+  Explicit missing/invalid paths never discover defaults or an old lock file.
+- Verify exact route, unknown-family fallback and default. Compilation preserves
+  active source; explicit stale CAS blocks publication.
 - An old document without tenancy settings stays disabled. Omitted and null
   optional values retain their absence semantics; reject null required values,
   unknown tenancy keys and invalid timeout bounds, including schema-valid zero.
@@ -374,6 +370,6 @@ implementation ownership are documented in the
   sort last and ties retain order. Omitted/null weights never inherit prices.
   Test old-reader rejection or ignored-field behavior without treating it as
   support; new-reader defaults preserve old unweighted routes.
-- Migration leaves immutable route revisions unchanged. Rollback uses a verified
-  compatible configuration and store/key backup, without deleting new evidence
-  or revocation metadata to satisfy an older reader.
+- Reject old/unmarked/partially initialized/foreign/future stores and forged
+  markers before authority or recovery writes. Preserve records, source bytes
+  and provider counts. Current restart preserves receipts and cumulative budgets.
