@@ -39,6 +39,7 @@ runtime behaviors is sufficient reason to create a new specification.
 
 [Named provider connections](provider-connection-proposal.md) is an
 unimplemented review draft. It is not a canonical specification and not a
-supported format. If accepted, its configuration rules move into the
-configuration specification, its relay messages move into the service API
-specification, and the draft is removed.
+supported format. The current slice is discovery and checks for an existing
+custom provider; publish and relay are deferred and unspecified. If accepted,
+any new check result moves into the service API specification, and the draft
+is removed.
