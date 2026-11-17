@@ -89,6 +89,40 @@ fn casts_and_backend_check_rendering_preserve_literal_case_and_membership() {
     assert_ne!(normalized("'local::text'"), normalized("'local'"));
     assert_ne!(normalized("'_utf8mb4local'"), normalized("'local'"));
 }
+
+#[test]
+fn mysql_check_catalog_matches_escaped_quotes_without_widening_literals() {
+    for (expected, observed) in [
+        (
+            r#""publication_state" IN ('provisional', 'delivering', 'active')"#,
+            r"(`publication_state` in (_utf8mb4\'provisional\',_utf8mb4\'delivering\',_utf8mb4\'active\'))",
+        ),
+        (
+            r#""publication_generation" <> ''"#,
+            r"(`publication_generation` <> _utf8mb4\'\')",
+        ),
+    ] {
+        let expected = normalized(expected);
+        let observed = normalized(observed);
+        assert!(check_matches(DatabaseBackend::MySql, &expected, &observed));
+        assert!(!check_matches(
+            DatabaseBackend::Postgres,
+            &expected,
+            &observed
+        ));
+        assert!(!check_matches(
+            DatabaseBackend::MySql,
+            &expected,
+            &observed.replacen(r"\'", r"\\'", 1),
+        ));
+        assert!(!check_matches(
+            DatabaseBackend::MySql,
+            &expected,
+            &observed.replacen(r"\'", r"\'X", 1),
+        ));
+    }
+}
+
 #[test]
 fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
     let column = Column {

@@ -477,8 +477,8 @@ fn validate_constraints(
                 let expression = normalized(&constraint.expression);
                 let position = checks
                     .iter()
-                    .position(|expected| expected == &expression)
-                    .context("check constraint differs")?;
+                    .position(|expected| check_matches(backend, expected, &expression))
+                    .with_context(|| format!("check constraint differs: {}", table.name))?;
                 checks.remove(position);
             }
             _ => anyhow::bail!("unexpected constraint: {}", table.name),
@@ -490,6 +490,13 @@ fn validate_constraints(
         table.name
     );
     Ok(())
+}
+fn check_matches(backend: DatabaseBackend, expected: &str, observed: &str) -> bool {
+    // MySQL 8.4 can serialize quotes in CHECK_CLAUSE as backslash-quote.
+    // Compare the escaped spelling of the trusted pattern without decoding
+    // escapes in an arbitrary catalog expression.
+    expected == observed
+        || (backend == DatabaseBackend::MySql && expected.replace('\'', "\\'") == observed)
 }
 fn rule(backend: DatabaseBackend, value: &str) -> String {
     if backend == DatabaseBackend::MySql && value == "NO ACTION" {
@@ -517,7 +524,7 @@ fn normalized(value: &str) -> String {
                 offset += cast.len();
                 continue;
             }
-            if remaining.starts_with("_utf8mb4'") {
+            if remaining.starts_with("_utf8mb4'") || remaining.starts_with("_utf8mb4\\'") {
                 offset += "_utf8mb4".len();
                 continue;
             }
