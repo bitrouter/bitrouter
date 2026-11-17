@@ -130,9 +130,9 @@ async fn read_state(db: &DatabaseConnection, owner: &str) -> Result<StoredState>
     })
 }
 
-fn snapshot(fixture: &Fixture, owner: &str) -> Result<StoredState> {
+fn snapshot(fixture: &Fixture, owner: &str, query: &str) -> Result<StoredState> {
     let url = format!(
-        "sqlite://{}?mode=ro",
+        "sqlite://{}?mode=ro{query}",
         fixture.directory.path().join("profiles.db").display()
     );
     fixture.runtime.block_on(async {
@@ -252,7 +252,13 @@ fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
     );
     let path = fixture.directory.path().join("profiles.db");
     fs::write(&path, &bytes)?;
-    let original = snapshot(fixture, OLD_OWNER)?;
+    // The historical fixture is a closed, checkpointed image. An ordinary
+    // read-only WAL connection can create sidecars before the candidate starts.
+    let original = snapshot(fixture, OLD_OWNER, "&immutable=true")?;
+    ensure!(
+        !path.with_extension("db-wal").exists(),
+        "historical fixture observation created a WAL"
+    );
     ensure!(original.ledger.len() == 26);
     for (rows, expected) in original.rows.iter().zip([1, 1, 284, 2, 0, 2]) {
         ensure!(rows.len() == expected);
@@ -265,12 +271,12 @@ fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
             "refusal rewrote the old database"
         );
         ensure!(
-            snapshot(fixture, OLD_OWNER)? == original,
-            "refusal changed old ledger/history/ownership"
-        );
-        ensure!(
             !path.with_extension("db-wal").exists(),
             "refusal created a writable WAL"
+        );
+        ensure!(
+            snapshot(fixture, OLD_OWNER, "&immutable=true")? == original,
+            "refusal changed old ledger/history/ownership"
         );
         ensure!(!fixture.socket.exists() && !agent_local::socket_path(&fixture.socket).exists());
         ensure!(fs::read_to_string(&fixture.config)? == config);
@@ -460,7 +466,7 @@ fn exercise_current_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> 
     seed_current_history(fixture)?;
     let config = format!("{config}{}", providers(&provider.uri()));
     fs::write(&fixture.config, &config)?;
-    let original = snapshot(fixture, OWNER)?;
+    let original = snapshot(fixture, OWNER, "")?;
     ensure!(
         original.ledger.len() == 1 && original.ledger[0].0 == "m20261118_000001_model_policy_store"
     );
@@ -468,7 +474,7 @@ fn exercise_current_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> 
         ensure!(rows.len() == expected);
     }
     for (step, index) in [0, 1, 0, 2, 0].into_iter().enumerate() {
-        let previous = snapshot(fixture, OWNER)?;
+        let previous = snapshot(fixture, OWNER, "")?;
         let pid = fixture.start(binaries[index])?;
         let report =
             fixture.status(binaries[index], &identities[index], &identities[index], pid)?;
@@ -482,13 +488,13 @@ fn exercise_current_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> 
             inspect_harness(fixture, index == 0)?;
         }
         provider_idle(fixture, &provider)?;
-        let running = snapshot(fixture, OWNER)?;
+        let running = snapshot(fixture, OWNER, "")?;
         ensure!(
             running.preserved(&original),
             "profile step {step} changed current history or its original owner"
         );
         fixture.stop_resident(pid)?;
-        let after = snapshot(fixture, OWNER)?;
+        let after = snapshot(fixture, OWNER, "")?;
         ensure!(
             after.preserved(&original),
             "profile step {step} changed current history on shutdown"
