@@ -86,12 +86,14 @@ async fn restore(
 
 async fn snapshot_bundle(home: &Path, source: &Path) -> Result<(std::path::PathBuf, String)> {
     let bundle = home.join("bundle");
-    let report = crate::offline::snapshot_with_options(source, &bundle, options(home)).await?;
-    let report = serde_json::to_value(&report as &dyn crate::output::CliReport)?;
-    let digest = report["evidence_digest"]
-        .as_str()
-        .context("snapshot anchor")?
-        .to_owned();
+    let digest = {
+        let report = crate::offline::snapshot_with_options(source, &bundle, options(home)).await?;
+        let value = serde_json::to_value(&report as &dyn crate::output::CliReport)?;
+        value["evidence_digest"]
+            .as_str()
+            .context("snapshot anchor")?
+            .to_owned()
+    };
     Ok((bundle, digest))
 }
 
@@ -268,10 +270,19 @@ async fn unreferenced_retired_exploration_refuses_startup_and_v2_restore_without
         Err(_) => ensure!(image(&source)? == original),
     }
     let destination = home.join("must-not-exist.sqlite");
+    let (bundle, digest) = snapshot_bundle(&home, &source).await?;
     ensure!(
-        restore(&home, &source, &destination, &installation)
-            .await
-            .is_err()
+        crate::offline::restore_with_options(
+            &bundle,
+            &digest,
+            &destination,
+            installation.as_str(),
+            producer::KEY_ENV,
+            32,
+            options(&home)
+        )
+        .await
+        .is_err()
     );
     ensure!(!destination.exists());
     ensure!(image(&source)? == original);
