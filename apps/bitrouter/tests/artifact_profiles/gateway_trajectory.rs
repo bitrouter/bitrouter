@@ -6,7 +6,7 @@ use super::*;
 use crate::persistence::table_rows;
 use bitrouter::policy_lock::deterministic_yaml;
 use bitrouter::trajectory::health::reduce;
-use bitrouter::trajectory::types::{TrajectoryEvent, TrajectorySnapshot};
+use bitrouter::trajectory::types::{TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use std::collections::BTreeMap;
@@ -51,7 +51,7 @@ fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
                 Ok(serde_json::from_str::<TrajectoryEvent>(&raw)?)
             }).collect::<Result<Vec<_>>>()?;
         for event in &events {
-            ensure!(serde_json::to_value(&event.kind)? != json!("guard_activated"),
+            ensure!(event.kind != TrajectoryEventKind::GuardActivated,
                 "model-only source activated a progress guard");
         }
         let health = reduce(&events, &BTreeSet::from(["strong".into()]))?;

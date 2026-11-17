@@ -17,7 +17,9 @@ mod resource_coverage;
 mod revisions;
 use crate::gateway::caller::CallerContext;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
-use serde_json::{Value, json};
+#[cfg(feature = "harness")]
+use serde_json::Value;
+use serde_json::json;
 use wiremock::{
     Mock, ResponseTemplate,
     matchers::{body_partial_json, method, path},
