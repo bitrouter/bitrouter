@@ -13,7 +13,7 @@ mod companion;
 mod faults;
 mod marker;
 
-const KEY: &str = "BITROUTER_TEST_STOPPED_NATIVE_KEY";
+pub(super) const KEY: &str = "BITROUTER_TEST_STOPPED_NATIVE_KEY";
 const ROOT: &str = "BITROUTER_TEST_STOPPED_NATIVE_ROOT";
 const MODE: &str = "BITROUTER_TEST_STOPPED_NATIVE_MODE";
 const DIAGNOSTICS: &str = "BITROUTER_TEST_STOPPED_NATIVE_DIAGNOSTICS";
@@ -256,6 +256,13 @@ impl Child {
                 "cumulative",
             );
         }
+        let key = match std::env::var(KEY) {
+            Ok(key) => key,
+            Err(std::env::VarError::NotPresent) => {
+                base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 32]>())
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut child = command
             .args([
                 "--ignored",
@@ -266,10 +273,7 @@ impl Child {
             ])
             .env(ROOT, root)
             .env(MODE, mode)
-            .env(
-                KEY,
-                base64::engine::general_purpose::STANDARD.encode([29u8; 32]),
-            )
+            .env(KEY, key)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

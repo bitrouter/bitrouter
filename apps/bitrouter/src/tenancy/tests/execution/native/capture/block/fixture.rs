@@ -38,11 +38,12 @@ pub(super) struct Host {
 }
 impl Host {
     pub async fn new() -> Result<Self> {
-        Self::new_in(tempfile::tempdir()?, None).await
+        Self::new_in(tempfile::tempdir()?, None, None).await
     }
     pub async fn new_in(
         directory: tempfile::TempDir,
         upstream_override: Option<&str>,
+        key_env: Option<&str>,
     ) -> Result<Self> {
         Self::new_options(
             directory,
@@ -50,11 +51,20 @@ impl Host {
             false,
             None,
             Options::default(),
+            key_env,
         )
         .await
     }
     pub async fn pair() -> Result<Self> {
-        Self::new_options(tempfile::tempdir()?, None, true, None, Options::default()).await
+        Self::new_options(
+            tempfile::tempdir()?,
+            None,
+            true,
+            None,
+            Options::default(),
+            None,
+        )
+        .await
     }
     pub async fn non_hit() -> Result<Self> {
         Self::new_options(
@@ -63,6 +73,7 @@ impl Host {
             false,
             Some("never-this-actual-prompt".into()),
             Options::default(),
+            None,
         )
         .await
     }
@@ -70,7 +81,7 @@ impl Host {
         Self::configured_in(tempfile::tempdir()?, options).await
     }
     pub async fn configured_in(directory: tempfile::TempDir, options: Options<'_>) -> Result<Self> {
-        Self::new_options(directory, None, false, None, options).await
+        Self::new_options(directory, None, false, None, options, None).await
     }
     async fn new_options(
         directory: tempfile::TempDir,
@@ -78,6 +89,7 @@ impl Host {
         two_tenants: bool,
         fingerprint: Option<String>,
         options: Options<'_>,
+        key_env: Option<&str>,
     ) -> Result<Self> {
         let db_path = directory.path().join("block.sqlite");
         let database =
@@ -130,7 +142,7 @@ impl Host {
             if let Some(bandit) = &options.bandit {
                 definition.bandit = bandit.clone();
             }
-            let resources = Resources::with_key(fixture.installation.clone(), [29;32])?.for_bro_capture();
+            let resources = Resources::fixture_key(&fixture.installation, key_env)?.for_bro_capture();
             let mut imported = Vec::new();
             for subject in std::iter::once(&fixture).chain(sibling.iter()) {
                 let route = resource(subject, ResourceKind::Route, "literal:subject")?;

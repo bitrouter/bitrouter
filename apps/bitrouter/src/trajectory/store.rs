@@ -3340,7 +3340,6 @@ mod tests {
 
     use super::*;
     use crate::gateway::routing::workflow::ir::RouteProjection;
-    use crate::trajectory::evaluation::build_operational_evaluation;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     #[cfg(feature = "core")]
     use crate::trajectory::replay::replay_episode;

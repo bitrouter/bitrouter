@@ -171,7 +171,7 @@ impl Ready {
         maximum: u32,
     ) -> Result<Self> {
         Self::from_fixture_tracked(
-            fixture,
+            (fixture, None),
             owner,
             (subject_url, judge_url),
             profile,
@@ -182,7 +182,7 @@ impl Ready {
         .await
     }
     pub async fn from_fixture_tracked(
-        mut fixture: Fixture,
+        (mut fixture, key_env): (Fixture, Option<&str>),
         owner: Option<crate::tenancy::ownership::Lease>,
         endpoints: (&str, &str),
         profile: bool,
@@ -192,8 +192,7 @@ impl Ready {
     ) -> Result<Self> {
         let (subject_url, judge_url) = endpoints;
         fixture.service.shutdown().await?;
-        let resources =
-            Resources::with_key(fixture.installation.clone(), [29; 32])?.for_bro_capture();
+        let resources = Resources::fixture_key(&fixture.installation, key_env)?.for_bro_capture();
         let reference = |kind, name: &str| -> Result<ResourceRef> {
             Ok(ResourceRef {
                 owner_kind: OwnerKind::Tenant,
@@ -332,12 +331,10 @@ impl Ready {
     }
     pub async fn restart(&mut self) -> Result<()> {
         self.fixture.service.shutdown().await?;
-        let resources =
-            Resources::with_key(self.fixture.installation.clone(), [29; 32])?.for_bro_capture();
+        let resources = self.fixture.service.resources.clone();
         let snapshot = store::load(&self.fixture.db, Utc::now()).await?;
         self.fixture.service =
-            Service::start_prepared(self.fixture.db.clone(), None, snapshot, Arc::new(resources))
-                .await?;
+            Service::start_prepared(self.fixture.db.clone(), None, snapshot, resources).await?;
         self.fixture
             .service
             .dispatch_test_ready

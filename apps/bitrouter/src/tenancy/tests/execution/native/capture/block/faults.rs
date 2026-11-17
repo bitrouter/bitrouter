@@ -45,7 +45,7 @@ async fn block_fault_child() -> Result<()> {
 }
 
 async fn exercise(root: &Path, mode: &str, upstream: &str) -> Result<()> {
-    let mut host = Host::new_in(tempfile::tempdir_in(root)?, Some(upstream)).await?;
+    let mut host = Host::new_in(tempfile::tempdir_in(root)?, Some(upstream), None).await?;
     // Keep the real file present after ordinary handles drop. The parent owns
     // the containing TempDir and preserves it on any containment failure.
     host.directory.disable_cleanup(true);

@@ -15,6 +15,7 @@ pub(in crate::tenancy::tests) const ROOT: &str = "BITROUTER_PAID_STARTUP_ROOT";
 pub(in crate::tenancy::tests) const MODE: &str = "BITROUTER_PAID_STARTUP_MODE";
 #[cfg(all(unix, feature = "core", feature = "harness"))]
 pub(in crate::tenancy::tests) const WITNESS: &str = "paid-startup-physical-file-ready";
+pub(in crate::tenancy::tests) const KEY: &str = "BITROUTER_PAID_STARTUP_KEY";
 const PROFILE: &str = "BITROUTER_PAID_STARTUP_PROFILE";
 
 #[derive(Serialize, Deserialize)]
@@ -75,7 +76,7 @@ async fn consume(path: &Path, pending: bool) -> Result<()> {
                 .is_empty(),
             "an active profile could mask the pending fence"
         );
-        let resources = Resources::with_key(transfer.installation.clone(), [29; 32])?;
+        let resources = Resources::fixture_key(&transfer.installation, Some(KEY))?;
         let draft = crate::tenancy::configuration_store::configuration(
             &db,
             &transfer.tenant,

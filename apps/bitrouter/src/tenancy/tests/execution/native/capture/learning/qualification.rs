@@ -14,18 +14,23 @@ mod process;
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 mod server;
 
-async fn file_ready(path: &Path, subject: &str, judge: &str) -> Result<Ready> {
+async fn file_ready(
+    path: &Path,
+    subject: &str,
+    judge: &str,
+    key_env: Option<&str>,
+) -> Result<Ready> {
     let owner = crate::tenancy::ownership::acquire_path(path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}", path.display()), &owner).await?;
     let fixture = Fixture::with_database(db, &mut |_| {}).await?;
-    let ready = Ready::from_fixture(
-        fixture,
+    let ready = Ready::from_fixture_tracked(
+        (fixture, key_env),
         Some(owner),
-        subject,
-        judge,
+        (subject, judge),
         true,
         LearningMode::Observe,
         2,
+        &mut |_| {},
     )
     .await?;
     ensure!(

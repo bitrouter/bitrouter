@@ -3409,6 +3409,7 @@ policies:
 
         #[cfg(feature = "core")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
+        drop(disabled);
         assert!(!disabled_home.path().join("correlation.key").exists());
 
         let enabled_home = tempfile::tempdir()?;
@@ -3425,6 +3426,7 @@ policies:
                 .map(|publisher| publisher.configured_batch_size()),
             Some(7)
         );
+        drop(enabled);
         assert!(enabled_home.path().join("correlation.key").is_file());
         Ok(())
     }

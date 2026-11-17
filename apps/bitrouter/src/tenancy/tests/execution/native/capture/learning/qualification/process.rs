@@ -5,6 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 pub(super) const ROOT: &str = "BITROUTER_PAID_GAP_ROOT";
 pub(super) const MODE: &str = "BITROUTER_PAID_GAP_MODE";
 pub(super) const SUBJECT: &str = "BITROUTER_PAID_GAP_SUBJECT";
+pub(super) const KEY: &str = "BITROUTER_PAID_GAP_KEY";
 pub(super) const JUDGE: &str = "BITROUTER_PAID_GAP_JUDGE";
 pub(super) const WITNESS: &str = "paid-gap-real-owner-ready";
 pub(super) struct Child {
@@ -17,7 +18,7 @@ impl Child {
         selector: &str,
         root: &Path,
         mode: &str,
-        urls: Option<(&str, &str)>,
+        connection: Option<(&str, &str, &[u8; 32])>,
     ) -> Result<Self> {
         let mut command = tokio::process::Command::new(std::env::current_exe()?);
         command
@@ -34,8 +35,12 @@ impl Child {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        if let Some((subject, judge)) = urls {
-            command.env(SUBJECT, subject).env(JUDGE, judge);
+        if let Some((subject, judge, key)) = connection {
+            use base64::Engine;
+            command
+                .env(SUBJECT, subject)
+                .env(JUDGE, judge)
+                .env(KEY, base64::engine::general_purpose::STANDARD.encode(key));
         }
         let mut child = command.spawn()?;
         let output = BufReader::new(child.stdout.take().context("child stdout")?.take(16_385));
