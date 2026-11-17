@@ -68,7 +68,6 @@ pub(super) fn decode_with_operation(
     let mut sources = HashMap::new();
     let mut policies = HashMap::new();
     let mut graph = HashMap::new();
-    let mut learned_checkpoint = false;
     for Artifact {
         reference,
         definition,
@@ -148,10 +147,6 @@ pub(super) fn decode_with_operation(
                         document: Arc::new(document),
                     },
                 );
-            }
-            Definition::Checkpoint { evidence } => {
-                evidence.validate(&reference)?;
-                learned_checkpoint = true;
             }
             Definition::Credential { .. } => {
                 anyhow::bail!("credential plaintext in compiled envelope")
@@ -294,7 +289,6 @@ pub(super) fn decode_with_operation(
         bro_capture: false,
 
         document,
-        learned_checkpoint,
         routes: retained,
     })
 }

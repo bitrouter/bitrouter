@@ -370,7 +370,9 @@ async fn owned_scope_assembly_child() -> Result<()> {
         serde_json::to_vec(&manifest(&installation, &format!("{}/v1", upstream.uri()))?)?,
     )?;
     config.tenancy.resource_import = Some(import.clone());
-    let db = crate::db::connect(&config.database.url).await?;
+    // Inspect through the supported read-only connector. A writable pool
+    // without the configured owner must never reopen a tenant store.
+    let db = crate::db::connect(&format!("{}?mode=ro", config.database.url)).await?;
     let before = logical_rows(&db).await?;
 
     // Startup intentionally reports a generic initialization error. Acceptance

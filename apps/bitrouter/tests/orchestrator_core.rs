@@ -397,18 +397,19 @@ models:
 
 #[tokio::test]
 async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions() -> Result<()> {
+    use axum::{Json, Router, http::StatusCode, routing::post};
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
+    use bitrouter::trajectory::{
+        canonical::Canonicalizer, correlation::TrajectoryRuntime, store::TrajectoryStore,
+    };
     use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
     use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
+    use bitrouter_ai::types::ApiProtocol;
+
     let home = tempfile::tempdir()?;
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"core-fixture", "object":"chat.completion", "model":"strong",
-            "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
-            "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
-        }))).mount(&upstream).await;
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let upstream_uri = format!("http://{}", upstream.local_addr()?);
     let mut source = Document {
         spec_version: SpecVersion::Beta1,
         policies: BTreeMap::from([(
@@ -469,7 +470,7 @@ routers:
 policy:
   path: './policy.yaml'
 "#,
-            upstream.uri()
+            upstream_uri
         ),
         |_| None,
     )?;
@@ -480,6 +481,59 @@ policy:
     let assembled =
         bitrouter::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
     let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
+    // Model-only Policy does not start episodes. An independent observer owns
+    // the actual request identity/input before the provider returns its outcome.
+    let observer = Arc::new(TrajectoryRuntime::new(
+        TrajectoryStore::new(assembled.db.clone()),
+        Canonicalizer::new(bitrouter::paths::get_or_create_correlation_key(
+            home.path(),
+        )?),
+    ));
+    let observed_requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = observed_requests.clone();
+    let upstream_router = Router::new().route(
+        "/chat/completions",
+        post(move |headers: http::HeaderMap, Json(body): Json<Value>| {
+            let observer = observer.clone();
+            let captured = captured.clone();
+            async move {
+                let request_id = headers
+                    .get("x-bitrouter-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or(StatusCode::BAD_REQUEST)?;
+                let prompt = bitrouter::gateway::model::protocol::inbound_adapter_for(
+                    &ApiProtocol::ChatCompletions,
+                )
+                .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+                .parse_request(body.clone())
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+                let correlated = observer
+                    .begin_request(
+                        "local",
+                        request_id,
+                        ApiProtocol::ChatCompletions,
+                        &prompt,
+                        &chrono::Utc::now().to_rfc3339(),
+                    )
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                captured.lock().await.push((body, correlated.episode_id));
+                Ok::<_, StatusCode>(Json(json!({
+                    "id":"core-fixture", "object":"chat.completion", "model":"strong",
+                    "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
+                    "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
+                })))
+            }
+        }),
+    );
+    let stop = tokio_util::sync::CancellationToken::new();
+    let _stop_guard = stop.clone().drop_guard();
+    let stopped = stop.clone();
+    let upstream_task = tokio::spawn(async move {
+        axum::serve(upstream, upstream_router)
+            .with_graceful_shutdown(stopped.cancelled_owned())
+            .await
+    });
     let publisher = assembled
         .trajectory_outbox_publisher
         .clone()
@@ -550,15 +604,9 @@ policy:
         .context("committed plan")?;
     assert_eq!(plan.effective_model, "mock:strong");
     assert!(state.context_store.decisions.is_empty());
-    let requests = upstream
-        .received_requests()
-        .await
-        .context("generation capture")?;
+    let requests = observed_requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&requests[0].body)?["model"],
-        "strong"
-    );
+    assert_eq!(requests[0].0["model"], "strong");
     assert_eq!(
         backend
             .received_requests()
@@ -573,6 +621,11 @@ policy:
         .await?;
     assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
     let subjects = store.list_subjects().await?;
+    assert_eq!(
+        subjects.len(),
+        1,
+        "one observed request owns one episode subject"
+    );
     assert!(
         !subjects
             .iter()
@@ -583,6 +636,11 @@ policy:
         .iter()
         .find(|subject| subject.scope == EvalScope::Episode)
         .context("episode eval")?;
+    assert_eq!(episode.subject_id, requests[0].1);
+    assert!(matches!(
+        episode.identity,
+        bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+    ));
     assert!(
         !episode
             .evidence
@@ -609,5 +667,9 @@ policy:
         selected.attributes.get("model").map(String::as_str),
         Some("mock:strong")
     );
+    assert_eq!(publisher.drain_after_active_worker().await?.failed, 0);
+    assert_eq!(store.list_subjects().await?, subjects);
+    stop.cancel();
+    upstream_task.await??;
     Ok(())
 }

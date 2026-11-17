@@ -1098,15 +1098,28 @@ fn default_config_does_not_implicitly_create_coding_router() {
 }
 
 #[test]
-fn auto_router_template_resolves_auto_and_cost_variant()
+fn auto_router_template_resolves_auto_and_explicit_cost_router()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../templates/auto-router/bitrouter.yaml");
-    let config = parse(&std::fs::read_to_string(path)?)?;
+    let mut config = parse(&std::fs::read_to_string(path)?)?;
     let auto = config.resolve_router("bitrouter/auto")?;
     assert_eq!(auto.clean_model, "openai-codex:gpt-5.6-sol");
     assert_eq!(auto.policy.as_deref(), Some("auto"));
-    let cost = config.resolve_router("bitrouter/auto:cost")?;
+    assert!(config.resolve_router("bitrouter/auto:cost").is_err());
+    let mut cost_router = config
+        .routers
+        .get("auto")
+        .ok_or("template auto router missing")?
+        .clone();
+    match &mut cost_router.selection {
+        super::router::RouterSelection::Policy { routing, .. } => {
+            routing.sort = Some(SortOrder::Cost);
+        }
+        _ => return Err("template auto router must select a Policy".into()),
+    }
+    config.routers.insert("auto-cost".into(), cost_router);
+    let cost = config.resolve_router("bitrouter/auto-cost")?;
     assert_eq!(cost.clean_model, auto.clean_model);
     assert_eq!(cost.policy, auto.policy);
     assert_eq!(cost.prefs.sort, SortOrder::Cost);

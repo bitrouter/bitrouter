@@ -2536,7 +2536,7 @@ impl AppReloader {
                 let restart_fields = fixed_restart_fields(raw_restart_fields);
                 let mut reload_fields = changed.into_iter().collect::<Vec<_>>();
                 if named_policy == AuxiliaryConfigState::ReloadRequired {
-                    reload_fields.push("policy_lock".to_string());
+                    reload_fields.push("model_policy".to_string());
                 }
                 if access_policies == AuxiliaryConfigState::ReloadRequired {
                     reload_fields.push("access_policies".to_string());
@@ -2766,7 +2766,7 @@ providers:
         access_policy_dir: std::path::PathBuf,
     }
 
-    fn coordinated_config_yaml(model: &str, read_secs: u64) -> String {
+    fn coordinated_config_yaml(endpoint: &str, read_secs: u64) -> String {
         format!(
             r#"inherit_defaults: false
 upstream:
@@ -2774,7 +2774,7 @@ upstream:
     read_secs: {read_secs}
 providers:
   alpha:
-    api_base: https://alpha.example.com/v1
+    api_base: https://{endpoint}.example.com/v1
     api_key: alpha-key
     api_protocol:
       - "*": chat_completions
@@ -2791,7 +2791,7 @@ routers:
   coding:
     selection:
       kind: policy
-      base_model: {model}
+      base_model: alpha:m
       policy: coding
 "#
         )
@@ -2823,7 +2823,7 @@ policies:
         let lock_path = home.path().join("policy.yaml");
         let access_policy_dir = home.path().join("access-policies");
         std::fs::create_dir(&access_policy_dir)?;
-        std::fs::write(&config_path, coordinated_config_yaml("alpha:m", 30))?;
+        std::fs::write(&config_path, coordinated_config_yaml("alpha", 30))?;
         std::fs::write(&lock_path, coordinated_policy_lock_yaml("alpha:m"))?;
         std::fs::write(
             access_policy_dir.join("operator.yaml"),
@@ -2857,10 +2857,10 @@ policies:
             .ok_or_else(|| anyhow::anyhow!("initial active policy has no digest"))?;
         let policy_store = Arc::new(PolicyStore::load_dir(&access_policy_dir).await?);
 
-        // Change every participant's input before executing the test-only
-        // boundary fault. The fixture therefore verifies both the participant
-        // report and the live state on either side of every mutation boundary.
-        std::fs::write(&config_path, coordinated_config_yaml("beta:m", 1))?;
+        // Router bindings require restart. Change the provider endpoint within
+        // that fixed binding, plus every other reloadable participant's input.
+        // Each live assertion distinguishes the prepared snapshot from alpha.
+        std::fs::write(&config_path, coordinated_config_yaml("beta", 1))?;
         std::fs::write(&lock_path, coordinated_policy_lock_yaml("beta:m"))?;
         std::fs::write(
             access_policy_dir.join("operator.yaml"),
@@ -2868,6 +2868,7 @@ policies:
         )?;
         let mut candidate = config::load(&config_path).await?;
         resolve_reloadable_config(&mut candidate, None).await;
+        assert_eq!(initial.routers, candidate.routers);
         let candidate_policy_digest =
             crate::policy_lock::load_for_config(&candidate, Some(&config_path))
                 .await?
@@ -2972,7 +2973,7 @@ policies:
     #[tokio::test]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() -> anyhow::Result<()> {
         let fixture = coordinated_fixture(None, None).await?;
-        std::fs::write(&fixture.config_path, coordinated_config_yaml("beta:m", 7))?;
+        std::fs::write(&fixture.config_path, coordinated_config_yaml("beta", 7))?;
         std::fs::write(&fixture.lock_path, "lockfileVersion: 4\n")?;
         assert!(fixture.reloader.reload().await.is_err());
         assert_eq!(
@@ -2982,6 +2983,16 @@ policies:
                 .resolve_router("bitrouter/coding")?
                 .clean_model,
             "alpha:m"
+        );
+        assert_eq!(
+            fixture
+                .routing_table
+                .snapshot_config()
+                .providers
+                .get("alpha")
+                .ok_or_else(|| anyhow::anyhow!("active alpha provider missing"))?
+                .api_base,
+            "https://alpha.example.com/v1"
         );
         assert_eq!(
             fixture
@@ -3058,16 +3069,25 @@ policies:
                 .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
             assert_eq!(configuration.running, RunningConfigState::Mixed);
 
-            let expected_routing_model = if failed_participant == ReloadParticipant::RoutingTable {
-                "alpha:m"
+            let expected_routing_endpoint = if failed_participant == ReloadParticipant::RoutingTable
+            {
+                "https://alpha.example.com/v1"
             } else {
-                "beta:m"
+                "https://beta.example.com/v1"
             };
             let active_config = fixture.routing_table.snapshot_config();
             let routed_model = active_config
                 .resolve_router("bitrouter/coding")?
                 .clean_model;
-            assert_eq!(routed_model, expected_routing_model);
+            assert_eq!(routed_model, "alpha:m");
+            assert_eq!(
+                active_config
+                    .providers
+                    .get("alpha")
+                    .ok_or_else(|| anyhow::anyhow!("active alpha provider missing"))?
+                    .api_base,
+                expected_routing_endpoint
+            );
 
             let expected_access_model =
                 if failed_participant == ReloadParticipant::AccessPolicyStore {
@@ -3152,11 +3172,11 @@ policies:
         let task = tokio::spawn(async move { reloader.reload_reserved(reservation).await });
 
         tokio::time::timeout(Duration::from_secs(3), pause.prepared.notified()).await?;
-        // The operation has already captured beta's routing, timeout, policy
-        // table, named-policy, and access-policy inputs. Revert every source
+        // The operation has captured beta's provider endpoint, timeout,
+        // named-policy and access-policy inputs. Revert every source
         // file before allowing mutation; any late source read would install
         // alpha instead and make this test fail.
-        std::fs::write(&fixture.config_path, coordinated_config_yaml("alpha:m", 30))?;
+        std::fs::write(&fixture.config_path, coordinated_config_yaml("alpha", 30))?;
         std::fs::write(&fixture.lock_path, coordinated_policy_lock_yaml("alpha:m"))?;
         std::fs::write(
             fixture.access_policy_dir.join("operator.yaml"),
@@ -3176,7 +3196,15 @@ policies:
         let routed_model = active_config
             .resolve_router("bitrouter/coding")?
             .clean_model;
-        assert_eq!(routed_model, "beta:m");
+        assert_eq!(routed_model, "alpha:m");
+        assert_eq!(
+            active_config
+                .providers
+                .get("alpha")
+                .ok_or_else(|| anyhow::anyhow!("active alpha provider missing"))?
+                .api_base,
+            "https://beta.example.com/v1"
+        );
         let access_model = fixture.policy_store.with_policy("operator", |policy| {
             policy
                 .and_then(|policy| policy.allowed_models.as_ref())
@@ -3551,7 +3579,7 @@ routers:
         assert!(
             changed
                 .reload_required_fields
-                .contains(&"policy_lock".into())
+                .contains(&"model_policy".into())
         );
         assert!(
             changed

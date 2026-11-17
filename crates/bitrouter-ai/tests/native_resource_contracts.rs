@@ -150,17 +150,22 @@ fn native_resource_schemas_are_separate_closed_and_bounded() -> TestResult {
             "generate_content"
         ])
     );
-    if let Ok(directory) = std::env::var("BITROUTER_NATIVE_RESOURCE_SCHEMA_EXPORT") {
-        let directory = std::path::Path::new(&directory);
-        std::fs::create_dir_all(directory)?;
-        for (name, schema) in [
-            ("native-resource-put-v3.schema.json", put),
-            ("native-resource-capabilities-v3.schema.json", capability),
-        ] {
-            std::fs::write(
-                directory.join(name),
-                format!("{}\n", serde_json::to_string_pretty(&schema)?),
-            )?;
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specs/service-api");
+    for (name, schema) in [
+        ("native-resource-put-v3.schema.json", put),
+        ("native-resource-capabilities-v3.schema.json", capability),
+    ] {
+        let rendered = format!("{}\n", serde_json::to_string_pretty(&schema)?);
+        let path = directory.join(name);
+        if std::env::var("BITROUTER_BLESS").as_deref() == Ok("1") {
+            std::fs::write(&path, &rendered)?;
+        }
+        assert_eq!(std::fs::read_to_string(&path)?, rendered);
+        if let Ok(export) = std::env::var("BITROUTER_NATIVE_RESOURCE_SCHEMA_EXPORT") {
+            let export = std::path::Path::new(&export);
+            std::fs::create_dir_all(export)?;
+            std::fs::write(export.join(name), &rendered)?;
         }
     }
     Ok(())

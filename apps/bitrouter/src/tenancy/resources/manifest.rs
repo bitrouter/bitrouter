@@ -78,9 +78,6 @@ pub(super) enum Definition {
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
     },
-    Checkpoint {
-        evidence: super::checkpoint::Evidence,
-    },
     Credential {
         credential: Credential,
         /// Token generation is separate from the ResourceRef's immutable
@@ -268,17 +265,12 @@ impl Import {
                 );
                 // A route/policy cycle cannot create an unbounded or implicit closure.
                 ensure!(
-                    dependencies.iter().all(|r| matches!(
-                        r.resource_kind,
-                        ResourceKind::Credential | ResourceKind::Checkpoint
-                    )),
+                    dependencies
+                        .iter()
+                        .all(|r| matches!(r.resource_kind, ResourceKind::Credential)),
                     "invalid policy dependency kind"
                 );
                 ResourceKind::Policy
-            }
-            Definition::Checkpoint { evidence } => {
-                let _ = evidence;
-                anyhow::bail!("retired learned route checkpoint")
             }
             Definition::Credential {
                 credential,
@@ -331,13 +323,11 @@ impl Import {
 
 impl Definition {
     pub(super) fn validate_current_profile(&self) -> Result<()> {
-        match self {
-            Self::Route { exploration, .. } => ensure!(
+        if let Self::Route { exploration, .. } = self {
+            ensure!(
                 exploration.is_empty(),
                 "retired route exploration in retained resource"
-            ),
-            Self::Checkpoint { .. } => anyhow::bail!("retired learned route checkpoint"),
-            _ => {}
+            );
         }
         Ok(())
     }
@@ -347,24 +337,21 @@ impl Definition {
 
     /// Mature resource entrypoints never turn experimental members into authority.
     pub(super) fn require_service(&self) -> Result<()> {
-        match self {
-            Self::Route {
-                exploration,
-                core_choice,
-                assessment,
-                block,
-                ..
-            } => {
-                ensure!(
-                    exploration.is_empty()
-                        && core_choice.is_none()
-                        && assessment.is_none()
-                        && block.is_none(),
-                    "experimental routes require the explicit BRO harness"
-                );
-            }
-            Self::Checkpoint { .. } => anyhow::bail!("learned checkpoints require BRO ownership"),
-            _ => {}
+        if let Self::Route {
+            exploration,
+            core_choice,
+            assessment,
+            block,
+            ..
+        } = self
+        {
+            ensure!(
+                exploration.is_empty()
+                    && core_choice.is_none()
+                    && assessment.is_none()
+                    && block.is_none(),
+                "experimental routes require the explicit BRO harness"
+            );
         }
         Ok(())
     }
@@ -374,13 +361,11 @@ impl Definition {
             cfg!(all(feature = "core", feature = "harness")),
             "BRO capture requires core and harness"
         );
-        match self {
-            Self::Route { exploration, .. } => ensure!(
+        if let Self::Route { exploration, .. } = self {
+            ensure!(
                 exploration.is_empty(),
                 "retired route exploration is not a current BRO obligation"
-            ),
-            Self::Checkpoint { .. } => anyhow::bail!("learned route checkpoint retired"),
-            _ => {}
+            );
         }
         Ok(())
     }
@@ -517,7 +502,6 @@ impl Definition {
                 .chain(core_choice.iter().map(|profile| profile.route.clone()))
                 .collect(),
             Self::Policy { dependencies, .. } => dependencies.clone(),
-            Self::Checkpoint { evidence } => evidence.dependencies(),
             Self::Credential { .. } => Vec::new(),
         };
         let mut seen = HashSet::new();

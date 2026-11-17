@@ -241,8 +241,15 @@ async fn shared_retained_loader_rejects_missing_heads_and_authenticated_conflict
         import_v2(&resources, &db, vec![original.clone()]).await?;
         let mut reimport = original.clone();
         if case == "missing_head" {
-            db.execute_unprepared("DELETE FROM tenancy_resource_lifecycle")
+            // Keep the current producer's exact lifecycle record, but remove
+            // its head designation to isolate admission's missing-head check.
+            db.execute_unprepared("UPDATE tenancy_resource_lifecycle SET is_head=0")
                 .await?;
+            let reference = serde_json::from_value(original["reference"].clone())?;
+            let exact = lifecycle::exact(&db, &resources.installation, &reference)
+                .await?
+                .context("current lifecycle metadata missing")?;
+            ensure!(!exact.is_head);
         } else {
             let mut invalid = if case == "changed_family" {
                 profile("local-replacement")?

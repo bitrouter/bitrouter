@@ -200,33 +200,14 @@ fn fixture_root() -> PathBuf {
 }
 
 #[tokio::test]
-async fn reliability_report_cli_replays_persisted_events_without_mutating_database()
+async fn local_reliability_report_replays_persisted_events_without_mutating_database()
 -> anyhow::Result<()> {
     let root = temp_path("reliability-report");
     std::fs::create_dir_all(&root)?;
     let database_path = root.join("bitrouter.db");
     let database_url = format!("sqlite://{}", database_path.display());
-    let config_path = root.join("bitrouter.yaml");
     let first_output = root.join("reliability-first.json");
     let second_output = root.join("reliability-second.json");
-    std::fs::write(
-        &config_path,
-        "inherit_defaults: false\npolicy:\n  path: './policy.yaml'\n",
-    )?;
-    let source: bitrouter_ai::policy::Document = serde_saphyr::from_str(
-        r#"
-spec_version: policy/1.0.0-beta.1
-policies:
-  auto:
-    tiers:
-      strong: {model: mock:strong}
-    default_tier: strong
-"#,
-    )?;
-    std::fs::write(
-        root.join("policy.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&source)?,
-    )?;
     let db = bitrouter::db::connect(&database_url).await?;
     bitrouter::db::run_migrations(&db).await?;
     let store = AdequacyStore::new(db.clone());
@@ -248,27 +229,14 @@ policies:
         .await?;
 
     for output_path in [&first_output, &second_output] {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
-            .args([
-                "workflow-state",
-                "reliability-report",
-                "--database-url",
-                &database_url,
-                "--config",
-                config_path
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
-                "--output",
-                output_path
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
-            ])
-            .output()?;
-        assert!(
-            output.status.success(),
-            "reliability report failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        // The independent local report consumes facts directly. The former
+        // Policy compiler CLI is no longer a report or activation backend.
+        let events = store.load_reliability_events().await?;
+        let report = bitrouter::core::adequacy::report::ReliabilityReport::build(
+            &bitrouter::config::AdequacyConfig::default(),
+            &events,
+        )?;
+        std::fs::write(output_path, serde_json::to_vec_pretty(&report)?)?;
     }
 
     let first = std::fs::read(&first_output)?;

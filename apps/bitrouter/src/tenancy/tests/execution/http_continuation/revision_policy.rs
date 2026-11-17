@@ -33,7 +33,7 @@ async fn configured(provider: &Server) -> Result<(Ready, ResourceRef, ResourceRe
     let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
     let credential = |reference: &ResourceRef| json!({"reference":reference,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}});
     resources.provision_bytes(&fixture.db, &serde_json::to_vec(&json!({
-        "format":1,"installation_id":fixture.installation,"resources":[
+        "format":4,"installation_id":fixture.installation,"resources":[
             credential(&first), credential(&second),
             {"reference":policy,"definition":{"kind":"policy","name":"selected","document":document}},
             {"reference":route,"definition":{"kind":"route","selector":"bitrouter/choice","policy":policy,

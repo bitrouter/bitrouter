@@ -431,35 +431,48 @@ async fn canonical_chain_golden_keeps_heads_accounts_endpoints_models_and_wire_p
 
 #[tokio::test]
 async fn literal_resource_name_can_equal_a_current_router_target() -> TestResult<()> {
-    let mut input = basic("fixture:fast:fast")?;
+    const PUBLIC: &str = "fixture:fast:fast";
+    let mut input = basic(PUBLIC)?;
     if let Definition::Route {
         routing, selector, ..
     } = &mut input.definition
     {
         *selector = "bitrouter/fixed".into();
-        routing["routers"] = json!({"fixed":{"selection":{"kind":"model","model":"fixture:fast"}}});
+        routing["routers"] = json!({"fixed":{"selection":{"kind":"model","model":PUBLIC}}});
 
-        routing["providers"]["fixture"]["models"] = json!([{"id":"fast"},{"id":"fixture"}]);
+        routing["providers"]["fixture"]["models"] =
+            json!([{"id":"fast:fast"},{"id":"fast"},{"id":"fixture"}]);
     }
     let view = view(envelope(&input, None)?)?;
-    let native = checked(view.select_native("fixture:fast:fast", ModelOperation::Generation))?;
-    assert_eq!(
-        native.resolve_model("fixture:fast:fast").await?.clean_model,
-        "bitrouter/fixed"
-    );
+    let native = checked(view.select_native(PUBLIC, ModelOperation::Generation))?;
+    let resolution = native.resolve_model(PUBLIC).await?;
+    assert_eq!(resolution.clean_model, "bitrouter/fixed");
     for chain in [
-        targets(&native, "fixture:fast:fast").await?,
+        targets(&native, PUBLIC).await?,
         native
             .route_resolved(
-                "fixture:fast:fast",
+                &resolution.clean_model,
                 &RoutingPrefs::default(),
                 &CallerContext::local(),
             )
             .await?,
     ] {
         ensure!(chain.len() == 1);
-        assert_eq!(chain.first().context("candidate")?.service_id, "fast");
+        let target = chain.first().context("candidate")?;
+        assert_eq!(target.service_id, "fast:fast");
+        assert_eq!(
+            checked(native.match_candidate(target))?,
+            reference(ResourceKind::Credential, "slot")?
+        );
     }
+    // A public resource identifier is accepted at ingress, not as an alias for
+    // the retained internal selector at the already-resolved stage.
+    ensure!(
+        native
+            .route_resolved(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -468,7 +481,7 @@ async fn same_selector_and_exact_credential_are_required_even_when_another_chain
 -> TestResult<()> {
     let mut input = basic("literal")?;
     let policy = bind_tiers(&mut input, vec!["fixture:other".into()])?;
-    let original = envelope(&input, Some(policy))?;
+    let original = envelope(&input, Some(policy.clone()))?;
     let mut changed: Envelope = serde_json::from_value(serde_json::to_value(&original)?)?;
     let route = changed.routes.first_mut().context("route")?;
     let base_target = route
@@ -504,7 +517,7 @@ async fn same_selector_and_exact_credential_are_required_even_when_another_chain
     );
 
     // A different immutable ref cannot be substituted for a matching projection.
-    let mut changed = envelope(&input, None)?;
+    let mut changed = envelope(&input, Some(policy))?;
     let data = retained::decode(serde_json::from_value(serde_json::to_value(&changed)?)?)?;
     let data = data.routes.get("literal").context("typed route")?;
     let source = changed.artifacts.first_mut().context("artifact")?;

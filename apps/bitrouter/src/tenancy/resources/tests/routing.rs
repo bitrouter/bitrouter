@@ -63,22 +63,20 @@ async fn model_tier_selectors_resolve_once_and_keep_named_router_preferences() -
     input["definition"]["selector"] = json!("bitrouter/choice");
     input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
     input["definition"]["routing"]["routers"] = json!({"choice": {
-        "selection":{"kind":"policy", "policy":"selected", "base_model":"fixture:base"}
+        "selection":{"kind":"policy", "policy":"selected", "base_model":"fixture:base",
+            "routing":{"ignore":["other"]}}
     }});
-    input["definition"]["routing"]["routers"]["shared"] =
-        json!({"selection":{"kind":"model","model":"shared","routing":{"ignore":["other"]}}});
 
-    input["definition"]["routing"]["providers"]["fixture"]["models"] =
-        json!([{"id":"base"}, {"id":"fast:fast"}, {"id":"fixture"}, {"id":"shared"}]);
+    input["definition"]["routing"]["providers"]["fixture"]["models"] = json!([{"id":"base"}, {"id":"fast:fast"}, {"id":"fixture"}, {"id":"shared"}, {"id":"strong"}]);
     input["definition"]["routing"]["providers"]["other"] = json!({
         "api_base":"https://example.com/v1", "models":[{"id":"shared"}]
     });
 
-    // One suffix is a variant; the remaining ':fast' is a literal provider
-    // model. A second Stage-0 pass would incorrectly retain model fixture.
+    // The complete provider-model suffix is literal. Named-router preferences
+    // apply to every tier without making another router a Policy target.
     let mut policy = policy_with_economy("tenant", "policy", "fixture:fast:fast")?;
     policy["definition"]["document"]["policies"]["selected"]["tiers"]["shared"] =
-        json!({"model":"bitrouter/shared"});
+        json!({"model":"shared"});
     import(&resources, &db, vec![credential("tenant")?, policy, input]).await?;
     let doc = document(
         vec![reference("tenant", ResourceKind::Route, "choice")?],
@@ -91,7 +89,7 @@ async fn model_tier_selectors_resolve_once_and_keep_named_router_preferences() -
         ("bitrouter/choice", "base"),
         ("fixture:fast:fast", "fast:fast"),
         ("fixture:strong", "strong"),
-        ("bitrouter/shared", "shared"),
+        ("shared", "shared"),
     ] {
         let selected: Vec<_> = chains
             .iter()

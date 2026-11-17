@@ -1,4 +1,4 @@
-//! Read the actual pre-refactor database, including its compressed row envelopes.
+//! Read independent BRO history without making an old dataset serveable.
 
 use std::time::Duration;
 
@@ -7,7 +7,6 @@ use bitrouter::agent_store::DatabaseExecutionStore;
 use bitrouter::db;
 use bitrouter::harness::storage::{ExecutionRecord, ExecutionStore};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
-use sea_orm_migration::MigratorTrait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -17,7 +16,7 @@ const DATABASE: &[u8] = include_bytes!("../fixtures/baseline-runtime-v7/database
 const JOURNAL: &[u8] = include_bytes!("../fixtures/baseline-runtime-v7/journal.json.zst");
 
 #[tokio::test]
-async fn baseline_v7_database_reopens_without_rewriting_records() -> Result<()> {
+async fn baseline_v7_history_is_read_only_and_never_adopts_an_old_store() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(60), exercise())
         .await
         .context("baseline database read exceeded its deadline")?
@@ -39,18 +38,30 @@ async fn exercise() -> Result<()> {
     let expected: Value = serde_json::from_slice(&journal)?;
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("baseline.sqlite");
-    std::fs::write(&path, database)?;
+    std::fs::write(&path, &database)?;
     let url = format!("sqlite://{}", path.display());
+    ensure!(
+        db::connect(&url).await.is_err(),
+        "old dataset became writable"
+    );
+    ensure!(
+        std::fs::read(&path)? == database,
+        "refusal rewrote old bytes"
+    );
     let mut original = None;
-    // Each pass uses a fresh pool; repeated migration application must preserve
-    // ledger timestamps, opaque record bytes and the stopped writer's authority.
+    // Each independent history read uses a fresh read-only pool. No migration,
+    // serving authority, live restoration or data conversion is implied.
     for _ in 0..2 {
-        let connection = db::connect(&url).await?;
+        let connection = db::connect(&format!("{url}?mode=ro")).await?;
         let result = check_database(&connection, &expected, &mut original).await;
         let closed = connection.close().await;
         result?;
         closed?;
     }
+    ensure!(
+        std::fs::read(&path)? == database,
+        "history reads rewrote old bytes"
+    );
     Ok(())
 }
 
@@ -106,31 +117,6 @@ async fn check_database(
             "baseline migration ledger changed"
         );
     }
-    db::run_migrations(connection).await?;
-    let migrated = raw_state(connection).await?;
-    ensure!(
-        migrated.records == before.records,
-        "migration rewrote baseline records"
-    );
-    for historical in &before.ledger {
-        ensure!(
-            migrated.ledger.contains(historical),
-            "migration rewrote historical ledger metadata"
-        );
-    }
-    let mut expected_migrations = db::migration::Migrator::migrations()
-        .iter()
-        .map(|migration| migration.name().to_owned())
-        .collect::<Vec<_>>();
-    expected_migrations.sort();
-    ensure!(
-        migrated
-            .ledger
-            .iter()
-            .map(|(version, _)| version)
-            .eq(expected_migrations.iter()),
-        "migration ledger differs from the registered migrations"
-    );
     let store = DatabaseExecutionStore::new(connection.clone());
     let owner = store.read_owner(OWNER).await.map_err(anyhow::Error::msg)?;
     ensure!(
@@ -212,9 +198,9 @@ async fn check_database(
     ensure!(accepted == 2);
     ensure!(store.read_owner(OWNER).await.map_err(anyhow::Error::msg)? == owner);
     ensure!(
-        raw_state(connection).await? == migrated,
-        "reads changed migrated baseline bytes"
+        raw_state(connection).await? == before,
+        "reads changed historical baseline bytes"
     );
-    *original = Some(migrated);
+    *original = Some(before);
     Ok(())
 }

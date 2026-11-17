@@ -129,7 +129,7 @@ pub struct Assembled {
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
-    /// Live named routing policies loaded from `policy-lock.yaml`. The model
+    /// Live named routing policies loaded from current `policy.yaml` source. The model
     /// selector and daemon reloader share this last-known-good registry.
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
@@ -1320,7 +1320,7 @@ async fn assemble_app(
             trajectory_runtime,
         )
         .await
-        .context("loading policy-lock.yaml")?,
+        .context("loading model Policy source")?,
     };
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(feature = "core")]
@@ -1330,14 +1330,21 @@ async fn assemble_app(
         policy_runtime.clone(),
     )
     .with_storage_budget(metering_storage.clone());
-    let block_policies = (!is_shared).then(|| {
-        crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-            db.clone(),
-            routing_table.clone(),
-            policy_runtime.clone(),
-        )
-        .with_storage_budget(metering_storage.clone())
-    });
+    // Experimental adoption must never override a mature gateway's published
+    // source, including when its database retains unrelated local Block state.
+    let block_policies: Option<crate::gateway::routing::blocks::runtime::BlockPolicyRouter> =
+        match scope {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            AssemblyScope::BroHarness if !is_shared => Some(
+                crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+                    db.clone(),
+                    routing_table.clone(),
+                    policy_runtime.clone(),
+                )
+                .with_storage_budget(metering_storage.clone()),
+            ),
+            _ => None,
+        };
     let canonical_binding = (!is_shared).then(|| {
         let binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
             db.clone(),
@@ -3228,7 +3235,7 @@ mod trajectory_assembly_tests {
 server:
   skip_auth: true
 database:
-  url: sqlite::memory:
+  url: "sqlite::memory:"
 trajectory:
   enabled: {trajectory_enabled}
 policy:
@@ -3291,6 +3298,14 @@ policies:
             .ok_or_else(|| anyhow::anyhow!("language model pipeline absent"))?
             .execute(request)
             .await?;
+        let requests = upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("upstream request recording absent"))?;
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+        assert_eq!(body["model"], "economy-model");
+        assert_eq!(body["messages"][0]["content"], "generic request");
         #[cfg(feature = "core")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
@@ -3339,7 +3354,7 @@ policies:
         assert_eq!(subject.decisions[0].selected_tier, "economy");
         assert_eq!(
             subject.decisions[0].baseline_tier.as_deref(),
-            Some("strong")
+            Some("economy")
         );
         assert!(
             assembled
@@ -3375,7 +3390,7 @@ policies:
         assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
         assert_eq!(
             subjects[0].decisions[0].baseline_tier.as_deref(),
-            Some("strong")
+            Some("economy")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
         assert_eq!(assembled.response_observer.buffered_request_count(), 0);

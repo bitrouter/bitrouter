@@ -302,10 +302,7 @@ fn separate_profile_read_schemas_preserve_required_null_and_ref_bounds() -> Test
         );
         let rendered = format!("{}\n", serde_json::to_string_pretty(&schema)?);
         let path = directory.join(name);
-        // Only bootstrap new artifacts. Existing schemas are never overwritten.
-        if std::env::var("BITROUTER_WRITE_PROFILE_OBSERVATION_SCHEMAS").as_deref() == Ok("1")
-            && !path.exists()
-        {
+        if std::env::var("BITROUTER_BLESS").as_deref() == Ok("1") {
             std::fs::write(&path, &rendered)?;
         }
         assert_eq!(std::fs::read_to_string(path)?, rendered);

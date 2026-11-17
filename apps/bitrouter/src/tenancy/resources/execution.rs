@@ -82,7 +82,6 @@ pub(crate) struct RetainedExecutionRevision {
 pub(super) struct ValidatedEnvelope {
     pub(super) bro_capture: bool,
     document: Configuration,
-    learned_checkpoint: bool,
 
     routes: HashMap<String, Arc<RouteData>>,
 }
@@ -102,9 +101,6 @@ impl ValidatedEnvelope {
     /// Create/activate/restore qualify every exposed route. Integrity-only
     /// reads keep the same authenticated decode without enabling execution.
     pub(super) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
-        if self.learned_checkpoint {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
         for route in self.routes.values() {
             route.require_capabilities()?;
         }
@@ -112,7 +108,7 @@ impl ValidatedEnvelope {
     }
 
     pub(super) fn require_bro_capture(&self) -> std::result::Result<(), ErrorCode> {
-        if !cfg!(all(feature = "core", feature = "harness")) || self.learned_checkpoint {
+        if !cfg!(all(feature = "core", feature = "harness")) {
             return Err(ErrorCode::CapabilityMismatch);
         }
         for route in self.routes.values() {
@@ -199,9 +195,6 @@ impl RetainedExecutionRevision {
         authority_revision: AuthorityRevision,
         validated: ValidatedEnvelope,
     ) -> std::result::Result<Self, ErrorCode> {
-        if validated.learned_checkpoint && !cfg!(feature = "core") {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
         let mut value = Self {
             bro_capture: validated.bro_capture,
             installation,

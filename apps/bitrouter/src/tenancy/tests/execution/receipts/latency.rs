@@ -88,7 +88,9 @@ fn actual_receipt_latency_transport_and_lifecycle() -> Result<()> {
         .worker_threads(2)
         .enable_all()
         .build()?
-        .block_on(async {
+        // Keep the composed multi-scenario future off the libtest thread's
+        // stack; do not increase process or production worker stack limits.
+        .block_on(Box::pin(async {
             positive_after_run_export("").await?;
             #[cfg(feature = "otel-http")]
             for endpoint_path in ["/", "/v1/metrics", "/v1/metrics?source=receipt-test"] {
@@ -108,7 +110,7 @@ fn actual_receipt_latency_transport_and_lifecycle() -> Result<()> {
             #[cfg(unix)]
             capacity::sealed_gauges_do_not_retain_file_owner().await?;
             Ok::<_, anyhow::Error>(())
-        })?;
+        }))?;
     use std::io::Write;
     let marker = std::env::var_os(MARKER).context("child completion path")?;
     let mut file = std::fs::OpenOptions::new()

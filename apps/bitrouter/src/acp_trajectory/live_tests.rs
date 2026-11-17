@@ -274,14 +274,18 @@ async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> a
             .is_err()
     );
     assert!(old > 0);
+    let after = store.transcript(&identity("s")).await?;
+    assert_eq!(after.session.head, old);
+    assert_eq!(i64::try_from(after.events.len())?, old);
+    // The failed insert rolls back without deleting earlier captured events.
+    // Incompleteness comes from the interrupted connection, not lost history.
     assert!(
-        store
-            .transcript(&identity("s"))
-            .await?
+        after
             .gaps
             .iter()
-            .any(|gap| gap == "canonical_sequence_gap")
+            .any(|gap| gap.starts_with("connection_interrupted:"))
     );
+    assert!(!after.gaps.iter().any(|gap| gap == "canonical_sequence_gap"));
     assert!(
         connections::Entity::find()
             .all(&store.db)

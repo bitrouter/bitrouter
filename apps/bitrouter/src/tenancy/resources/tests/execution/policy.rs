@@ -183,7 +183,7 @@ async fn public_resource_name_equal_to_a_policy_tier_stays_distinct_through_pipe
 async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<()> {
     use bitrouter_ai::routing::SortOrder;
     let (db, resources) = fixture().await?;
-    const PUBLIC: &str = "shared:fast";
+    const PUBLIC: &str = "shared";
     let mut input = route("tenant", PUBLIC, "base")?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
     input["definition"]["selector"] = json!("bitrouter/choice");
@@ -226,8 +226,13 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
     assert_eq!(ingress.clean_model, "bitrouter/choice");
     assert_eq!(
         checked(route.routing_sort(&ingress.clean_model))?,
-        SortOrder::Alphabetical
+        SortOrder::Cost
     );
+    let base = route
+        .route_chain(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
+        .await?;
+    assert_eq!(base.len(), 1);
+    assert_eq!(base[0].service_id, "base");
     let tier = route
         .route_resolved(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
         .await?;

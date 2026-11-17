@@ -224,6 +224,18 @@ async fn empty_retained_marker_requires_exact_binding_without_a_key() -> Result<
 async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_and_restore()
 -> Result<()> {
     let (db, resources) = fixture().await?;
+    // Retained configurations require a real current tenant, including inactive rows.
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO tenancy_tenants (id, revision, state, created_at) VALUES (?, ?, ?, ?)",
+        [
+            "tenant".into(),
+            "v1".into(),
+            "active".into(),
+            "2026-01-01T00:00:00Z".into(),
+        ],
+    ))
+    .await?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
     let mut input = route("tenant", "visible", "base")?;
     input["definition"]["selector"] = json!("bitrouter/choice");
@@ -250,7 +262,15 @@ async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_an
         let mut row = stored(document.clone(), compiled)?;
         row.revision.tenant_id = tenant.clone();
         row.revision.revision_id = revision;
+        resources
+            .validate_compiled(&row)
+            .map_err(|code| anyhow::anyhow!("current retained fixture: {code:?}"))?;
         if n == 34 {
+            // The first page and its current overflow authenticate before adding corruption.
+            resources.bootstrap(&db, None).await?;
+            resources
+                .inspect_all_retained_in(&db, 64 * 1024 * 1024, &|| Ok(()))
+                .await?;
             let binding = (
                 &resources.installation,
                 &row.revision.tenant_id,
@@ -266,6 +286,7 @@ async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_an
                 .context("current fixture key")?
                 .open_bound("configuration", &binding, &sealed)?;
             let mut envelope: Value = serde_json::from_slice(&bytes)?;
+            let mut changed = 0;
             for artifact in envelope["artifacts"]
                 .as_array_mut()
                 .context("current artifacts")?
@@ -273,9 +294,12 @@ async fn inactive_old_policy_envelope_after_a_page_boundary_refuses_bootstrap_an
                 if artifact["definition"]["kind"] == "policy" {
                     artifact["definition"]["document"] =
                         json!({"lockfileVersion":4,"policies":{},"certificates":{}});
+                    changed += 1;
                 }
             }
+            ensure!(changed == 1);
             reseal(&resources, &mut row, &envelope)?;
+            ensure!(resources.validate_compiled(&row) == Err(ErrorCode::AuthorityUnavailable));
             original_last = Some(serde_json::to_value(&row.compiled)?);
         }
         crate::tenancy::configuration_store::insert_configuration(&db, &row).await?;

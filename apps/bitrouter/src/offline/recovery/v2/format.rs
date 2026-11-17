@@ -330,7 +330,6 @@ pub(crate) fn resource_key(reference: &ResourceRef) -> Result<[u8; 416]> {
         ResourceKind::Route => "route",
         ResourceKind::Policy => "policy",
         ResourceKind::Credential => "credential",
-        ResourceKind::Checkpoint => "checkpoint",
         ResourceKind::Configuration => "configuration",
         ResourceKind::Execution => "execution",
     };

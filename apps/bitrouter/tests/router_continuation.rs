@@ -522,7 +522,12 @@ async fn current_source_continuation_pins_hidden_or_uncommitted_history_and_deta
                 [None, (!detached).then(|| "provider-response-0".to_owned())]
             );
             let forwarded = bodies.get(1).context("followup was not forwarded")?;
-            assert_eq!(forwarded["input"], input);
+            let expected_input = if let Some(text) = input.as_str() {
+                json!([{"type":"message","role":"user","content":[{"type":"input_text","text":text}]}])
+            } else {
+                input.clone()
+            };
+            assert_eq!(forwarded["input"], expected_input);
             assert_eq!(forwarded["instructions"], "repository rules");
             assert_eq!(forwarded["tools"], tools);
             assert_eq!(forwarded["tool_choice"], "auto");
@@ -616,16 +621,17 @@ async fn current_source_stream_and_json_continuations_resume_after_restart_witho
             let value: String = row.try_get("", "value")?;
             assert!(!value.contains("provider-response-"));
         }
-        let state = fixture
-            .state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Responses state poisoned"))?;
-        assert_eq!(state.served_models, ["selected-model", "selected-model"]);
-        assert_eq!(
-            state.forwarded_parents,
-            [None, Some("provider-response-0".to_owned())]
-        );
-        drop(state);
+        {
+            let state = fixture
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Responses state poisoned"))?;
+            assert_eq!(state.served_models, ["selected-model", "selected-model"]);
+            assert_eq!(
+                state.forwarded_parents,
+                [None, Some("provider-response-0".to_owned())]
+            );
+        }
         assert!(
             fixture
                 .alternate

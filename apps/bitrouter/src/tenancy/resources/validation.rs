@@ -181,7 +181,6 @@ pub(super) fn compiled_with_operation(
                     }
                     (
                         Definition::Policy { .. }
-                        | Definition::Checkpoint { .. }
                         | Definition::AdmissionProfile { .. }
                         | Definition::AdmissionProfileV2 { .. },
                         None,

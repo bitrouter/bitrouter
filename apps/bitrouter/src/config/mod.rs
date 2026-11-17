@@ -517,7 +517,7 @@ impl RegistryConfig {
 }
 
 /// Frozen named-policy inputs consumed by the shared semantic action selector.
-/// This is the internal table projection of a versioned lock, not a top-level
+/// This is an internal routing projection, not a top-level
 /// configuration entry or an ingress transform.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -659,8 +659,8 @@ pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct AdequacyConfig {
-    /// Legacy input compatibility only. Effective activation is derived from
-    /// [`PolicyConfig::mode`] and this field is omitted from new output.
+    /// Explicit in-memory BRO adequacy switch. Mature model Policy compilation
+    /// leaves it disabled; it is not part of the public Policy source.
     #[serde(skip_serializing)]
     #[schemars(skip)]
     pub enabled: bool,

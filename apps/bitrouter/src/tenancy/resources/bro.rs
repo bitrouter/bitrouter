@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 impl Service {
     #[cfg(all(feature = "core", feature = "harness"))]
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) async fn open_owned_bro_profile(
         database: crate::db::OwnedDatabase,
         config: &crate::config::tenancy::TenancyConfig,

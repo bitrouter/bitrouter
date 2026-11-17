@@ -165,7 +165,6 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         first.authority_revision,
         super::super::ValidatedEnvelope {
             bro_capture: false,
-            learned_checkpoint: false,
             document: first.document,
             routes: first.routes,
         },
@@ -251,7 +250,6 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         second.authority_revision,
         super::super::ValidatedEnvelope {
             bro_capture: false,
-            learned_checkpoint: false,
             document: second.document,
             routes: second.routes,
         },
@@ -425,7 +423,6 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         1.try_into()?,
         super::super::ValidatedEnvelope {
             bro_capture: false,
-            learned_checkpoint: false,
             document,
             routes: HashMap::from([("route".into(), Arc::new(data))]),
         },

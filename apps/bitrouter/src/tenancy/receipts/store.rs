@@ -71,7 +71,7 @@ pub(in crate::tenancy) struct Candidate {
 }
 
 impl Candidate {
-    #[cfg(all(test, feature = "core", feature = "harness"))]
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn dispatch_state(&self) -> Result<DispatchState> {
         let disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
         Ok(disposition.dispatch)

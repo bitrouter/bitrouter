@@ -762,8 +762,16 @@ async fn bundled_auto_source_dispatches_with_tools_effort_and_complete_context()
                 ensure!(sent.body["model"] == expected_model, "bundled strong/tool-safe target was not served");
                 ensure!(sent.body["reasoning"]["effort"] == "low", "provider default replaced caller effort");
                 ensure!(sent.body["instructions"] == instructions, "instructions changed");
-                ensure!(&sent.body["input"] == input, "earlier context or tool exchange changed: {}", sent.body);
-                if with_tools { ensure!(sent.body["tools"] == tools && sent.body["tool_choice"] == "auto"); }
+                // The Codex transport moves declarations into an additional_tools
+                // item. The complete ordered conversation still follows it.
+                let mut expected_input = Vec::new();
+                if with_tools {
+                    expected_input.push(json!({"type":"additional_tools","role":"developer","tools":tools}));
+                    ensure!(sent.body["tool_choice"] == "auto");
+                }
+                expected_input.extend(input.as_array().context("fixture input array")?.iter().cloned());
+                ensure!(sent.body["input"] == json!(expected_input), "earlier context or tool exchange changed: {}", sent.body);
+                ensure!(sent.body.get("tools").is_none(), "transport duplicated tool declarations");
             }
         }
         ensure!(upstream.calls.lock().await.len() == 4, "generation was duplicated or sent to an unexpected endpoint");

@@ -524,7 +524,7 @@ impl PolicyTableRouter {
         self
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn eval_policy_name(&self) -> Option<&str> {
         self.eval_observer
             .as_ref()

@@ -148,7 +148,7 @@ async fn policy_fixture_with_existing(
         .provision_bytes(
             &fixture.db,
             &serde_json::to_vec(&json!({
-                "format":1, "installation_id":fixture.installation, "resources":imports
+                "format":4, "installation_id":fixture.installation, "resources":imports
             }))?,
         )
         .await?;
