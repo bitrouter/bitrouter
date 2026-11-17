@@ -25,7 +25,10 @@ use axum::{
 };
 use bitrouter_ai::gateway::{
     execution::{AttemptState, ExecutionState, GatewayExecution, TerminalOutcome},
-    operator::{Command as MutationCommand, Mutation, OperationLookup, ResourcePut, TenantPut},
+    operator::{
+        Command as MutationCommand, CredentialBinding, Mutation, OperationLookup, ResourcePut,
+        TenantPut,
+    },
 };
 use bitrouter_sdk::operator::OperatorClient;
 use tokio::{
@@ -402,9 +405,21 @@ fn seed_plan(base: &str, keys: &[crate::auth::keys::GeneratedKey; 4]) -> Value {
             "active":true,"auto_discover":false,"api_protocol":[{"*":"chat_completions"}],
             "models":[{"id":"mock"}]}),
         );
-        bindings.push(json!({"provider":provider,"account":"default",
-            "credential_provider":"fixture","credential_account":account}));
+        bindings.push(CredentialBinding {
+            provider: provider.into(),
+            account: "default".into(),
+            credential_provider: "fixture".into(),
+            credential_account: account.into(),
+        });
     }
+    let configuration = Publication {
+        format: 2,
+        routing: json!({"providers":providers}),
+        policies: Vec::new(),
+        model_policy: None,
+        credentials: bindings,
+        require_known_pricing: false,
+    };
     json!({
         "resources": pools.iter().map(|pool| json!({"resource_pool_id":pool,
             "expected_revision":null,"concurrent_attempts":8})).collect::<Vec<_>>(),
@@ -420,8 +435,7 @@ fn seed_plan(base: &str, keys: &[crate::auth::keys::GeneratedKey; 4]) -> Value {
             .map(|((account,pool),secret)| json!({"provider":"fixture","account":account,
                 "resource_pool_id":pool,"expected_version":null,
                 "credential":{"type":"api_key","value":secret}})).collect::<Vec<_>>()),
-        "configuration":{"format":1,"routing":{"providers":providers},"policies":[],
-            "policy_lock":null,"credentials":bindings,"require_known_pricing":false}
+        "configuration":configuration
     })
 }
 
