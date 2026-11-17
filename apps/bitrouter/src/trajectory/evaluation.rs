@@ -49,7 +49,7 @@ pub(crate) fn validate_evaluation_envelope(envelope: &TrajectoryEvaluationEnvelo
     Ok(())
 }
 
-#[cfg(any(feature = "core", feature = "multi-instance"))]
+#[cfg(feature = "core")]
 pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
     use crate::trajectory::evaluation::{
         TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,

@@ -1,25 +1,34 @@
 //! Refuse old datasets; preserve independently produced current BRO history.
 
 use super::*;
+#[cfg(feature = "harness")]
 use bitrouter::agent_store::DatabaseExecutionStore;
-use bitrouter::client::agent_local::{self, Operation, ReplyError, ReplyResult};
+use bitrouter::client::agent_local;
+#[cfg(feature = "harness")]
+use bitrouter::client::agent_local::{Operation, ReplyError, ReplyResult};
+#[cfg(feature = "harness")]
 use bitrouter::gateway::caller::CallerContext;
+#[cfg(feature = "harness")]
 use bitrouter::harness::{
     agent::AgentConfigExt,
     storage::{AcceptedKey, ExecutionRecord, ExecutionStore, RUNTIME_FORMAT_VERSION},
 };
+#[cfg(feature = "harness")]
 use bitrouter_ai::harness::{
     agent::AgentConfig,
     runtime::{ErrorCode, OwnerClaim},
     thread::{PermissionProfile, ThreadChange, ThreadEvent, ThreadSnapshot, ThreadStatus},
 };
+#[cfg(feature = "harness")]
 use bitrouter_ai::types::{Message, Role};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use sha2::{Digest, Sha256};
 use wiremock::MockServer;
 
 const OLD_OWNER: &str = "46c9adc1-3b84-42b3-8495-24d9b26e9e5f";
+#[cfg(feature = "harness")]
 const THREAD: &str = "current-profile-thread";
+#[cfg(feature = "harness")]
 const OWNER: &str = "current-profile-fixture-owner";
 const TABLES: [&str; 6] = [
     "bro_executions",
@@ -40,6 +49,7 @@ struct StoredState {
     authority: Vec<String>,
 }
 
+#[cfg(feature = "harness")]
 impl StoredState {
     fn preserved(&self, original: &Self) -> bool {
         self.ledger == original.ledger
@@ -268,6 +278,7 @@ fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 fn seed_current_history(fixture: &Fixture) -> Result<()> {
     let workspace = fixture.directory.path().join("ungranted-history");
     fs::create_dir(&workspace)?;
@@ -353,6 +364,7 @@ fn seed_current_history(fixture: &Fixture) -> Result<()> {
     })
 }
 
+#[cfg(feature = "harness")]
 fn inspect_harness(fixture: &Fixture, native: bool) -> Result<()> {
     let socket = agent_local::socket_path(&fixture.socket);
     fixture.runtime.block_on(async {
@@ -418,6 +430,7 @@ fn inspect_harness(fixture: &Fixture, native: bool) -> Result<()> {
     })
 }
 
+#[cfg(feature = "harness")]
 fn owner_head(state: &StoredState) -> Result<(u64, String, Option<u64>)> {
     ensure!(
         state.authority.len() == 1,
@@ -433,6 +446,7 @@ fn owner_head(state: &StoredState) -> Result<(u64, String, Option<u64>)> {
     ))
 }
 
+#[cfg(feature = "harness")]
 fn exercise_current_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<()> {
     let identities = artifacts(fixture, binaries)?;
     let provider = fixture.runtime.block_on(MockServer::start());
@@ -544,6 +558,7 @@ fn historical_dataset_is_refused_by_full_minimum_and_harness_artifacts() -> Resu
 
 #[test]
 #[ignore = "requires separately built full, minimum and harness-only artifacts"]
+#[cfg(feature = "harness")]
 fn current_records_survive_full_minimum_full_harness_full_transitions() -> Result<()> {
     let binaries = binaries()?;
     let mut fixture = Fixture::new()?;

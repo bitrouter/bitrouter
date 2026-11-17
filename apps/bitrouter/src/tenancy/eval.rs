@@ -40,7 +40,7 @@ pub(super) struct State {
     pub producers_open: AtomicBool,
     failed: AtomicBool,
     live: Arc<AtomicBool>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "core"))]
     pub producer_waiting: tokio::sync::Notify,
     #[cfg(test)]
     pub handoff: std::sync::Mutex<Option<Arc<Handoff>>>,
@@ -52,7 +52,7 @@ impl State {
             producers_open: AtomicBool::new(true),
             failed: AtomicBool::new(false),
             live,
-            #[cfg(test)]
+            #[cfg(all(test, feature = "core"))]
             producer_waiting: tokio::sync::Notify::new(),
             #[cfg(test)]
             handoff: std::sync::Mutex::new(None),

@@ -1,5 +1,6 @@
 //! Actual process death cannot turn a persisted open row into a live provider link.
 use super::*;
+use base64::Engine;
 use bitrouter_ai::tenancy::{
     identity::{InstallationId, RevisionId, TenantId},
     operation::OperationResult,
@@ -9,6 +10,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 const ROOT: &str = "BITROUTER_BLOCK_RESTART_ROOT";
+const KEY: &str = "BITROUTER_BLOCK_RESTART_KEY";
 const MODE: &str = "BITROUTER_BLOCK_RESTART_MODE";
 const UPSTREAM: &str = "BITROUTER_BLOCK_RESTART_UPSTREAM";
 const CHILD: &str =
@@ -38,7 +40,7 @@ async fn actual_block_restart_child() -> Result<()> {
     ensure!(root.is_absolute() && root.is_dir() && matches!(mode.as_str(), "produce" | "reopen"));
     let directory = tempfile::tempdir_in(&root)?;
     if mode == "produce" {
-        let mut host = Host::new_in(directory, Some(&url)).await?;
+        let mut host = Host::new_in(directory, Some(&url), Some(KEY)).await?;
         host.marker = root.join("producer-controller.json");
         let checked = std::panic::AssertUnwindSafe(async {
             let native = host.open().await?;
@@ -123,7 +125,7 @@ async fn actual_block_restart_child() -> Result<()> {
         db.clone(),
         Some(owner),
         snapshot,
-        Arc::new(Resources::with_key(transfer.installation.clone(), [29; 32])?.for_bro_capture()),
+        Arc::new(Resources::fixture_key(&transfer.installation, Some(KEY))?.for_bro_capture()),
         crate::tenancy::Provisioning {
             import: None,
             continuations: &crate::config::ContinuationConfig::default(),
@@ -222,7 +224,7 @@ struct Process {
     consumed: usize,
 }
 impl Process {
-    fn start(root: &Path, url: &str, mode: &str) -> Result<Self> {
+    fn start(root: &Path, url: &str, mode: &str, wrapping_key: &[u8; 32]) -> Result<Self> {
         let mut child = tokio::process::Command::new(std::env::current_exe()?)
             .args([
                 "--exact",
@@ -234,6 +236,10 @@ impl Process {
             .env(ROOT, root)
             .env(UPSTREAM, url)
             .env(MODE, mode)
+            .env(
+                KEY,
+                base64::engine::general_purpose::STANDARD.encode(wrapping_key),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -369,7 +375,8 @@ async fn crash_and_reopen(root: &Path) -> Result<()> {
     Mock::given(method("POST")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"actual-block","object":"chat.completion","created":0,"model":"model-a",
         "choices":[{"index":0,"message":{"role":"assistant","content":"native reply"},"finish_reason":"stop"}],
         "usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}))).mount(&server).await;
-    let mut producer = Process::start(root, &server.uri(), "produce")?;
+    let wrapping_key = rand::random();
+    let mut producer = Process::start(root, &server.uri(), "produce", &wrapping_key)?;
     let ready = producer.ready().await;
     let crash = ready.is_ok();
     let killed = producer.finish(crash, ready).await;
@@ -387,7 +394,7 @@ async fn crash_and_reopen(root: &Path) -> Result<()> {
         serde_json::from_slice(&tokio::fs::read(root.join("actual-transfer.json")).await?)?;
     let owner = crate::tenancy::ownership::acquire_path(&transfer.database, false)?;
     drop(owner);
-    let reopened = Process::start(root, &server.uri(), "reopen")?;
+    let reopened = Process::start(root, &server.uri(), "reopen", &wrapping_key)?;
     let result = reopened.finish(false, Ok(())).await;
     let contained = contain_controller(root, &["reopened-controller.json"]).await;
     result.and(contained)?;

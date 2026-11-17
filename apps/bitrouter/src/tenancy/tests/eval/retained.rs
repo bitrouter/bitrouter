@@ -1,5 +1,6 @@
 //! Isolated Eval rows are validated before startup mutation or restore publication.
 use super::*;
+use crate::tenancy::resources::Resources;
 use bitrouter_ai::{
     eval::EvalSubjectIdentity,
     tenancy::{
@@ -9,33 +10,22 @@ use bitrouter_ai::{
     },
 };
 use sea_orm::{ConnectionTrait, Statement};
+use std::sync::Arc;
 use std::{os::unix::fs::PermissionsExt, path::Path};
 
 const KEY_ENV: &str = "BITROUTER_TEST_RECOVERY_KEY";
 
 async fn open_keyed(
     database: crate::db::OwnedDatabase,
-    installation: &InstallationId,
-    key_env: Option<&str>,
+    resources: Arc<Resources>,
 ) -> Result<Service> {
     let (db, owner, claim) = database.claim()?;
-    let resources = if let Some(key_env) = key_env {
-        super::super::super::resources::Resources::load_key(
-            installation,
-            &crate::config::tenancy::TenancyConfig {
-                wrapping_key_env: Some(key_env.into()),
-                ..Default::default()
-            },
-        )?
-    } else {
-        super::super::super::resources::Resources::with_key(installation.clone(), [43; 32])?
-    };
     let initial = super::super::super::store::load(&db, Utc::now()).await?;
     Service::start_resources_with_continuations(
         db,
         Some(owner),
         initial,
-        std::sync::Arc::new(resources),
+        resources,
         crate::tenancy::Provisioning {
             import: None,
             continuations: &crate::config::ContinuationConfig::default(),
@@ -163,6 +153,7 @@ async fn seed_model_policy(fixture: &Fixture) -> Result<()> {
 
 struct Seeded {
     installation: InstallationId,
+    resources: Arc<Resources>,
     gateway: EvalSubject,
 }
 
@@ -175,12 +166,14 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     let db = database.database().clone();
     let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     fixture.service.shutdown().await?;
-    fixture.service = open_keyed(database, &fixture.installation, key_env).await?;
+    let resources = Arc::new(Resources::fixture_key(&fixture.installation, key_env)?);
+    fixture.service = open_keyed(database, resources.clone()).await?;
     seed_generic(&fixture).await?;
     seed_model_policy(&fixture).await?;
     seed_gateway(&fixture).await?;
     let seeded = Seeded {
         installation: fixture.installation.clone(),
+        resources,
         gateway: gateway_subject(&fixture)?,
     };
     fixture.service.shutdown().await?;
@@ -385,7 +378,7 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
             let original = std::fs::read(&source)?;
             let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", source.display())).await?;
             let db = database.database().clone();
-            let opened = open_keyed(database, &fixture.installation, None).await;
+            let opened = open_keyed(database, fixture.resources.clone()).await;
             if let Ok(service) = opened {
                 service.shutdown().await?;
                 anyhow::bail!("invalid retained Eval subject started: {expression}");
@@ -395,7 +388,7 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
         }
         let database = crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
         let db = database.database().clone();
-        let service = open_keyed(database, &fixture.installation, None).await?;
+        let service = open_keyed(database, fixture.resources.clone()).await?;
         read_gateway(db.clone(), &fixture.gateway).await?;
         service.shutdown().await?;
         drop(service);
@@ -440,7 +433,7 @@ async fn actual_restore_rejects_isolated_old_subject_and_preserves_current_mixed
             crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", restored.display()))
                 .await?;
         let db = database.database().clone();
-        let service = open_keyed(database, &fixture.installation, Some(KEY_ENV)).await?;
+        let service = open_keyed(database, fixture.resources.clone()).await?;
         read_gateway(db.clone(), &fixture.gateway).await?;
         service.shutdown().await?;
         drop(service);

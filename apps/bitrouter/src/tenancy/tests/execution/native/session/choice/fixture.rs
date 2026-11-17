@@ -37,8 +37,12 @@ pub(super) async fn prepare(
 ) -> Result<Bound> {
     let mut fixture = Fixture::with_database(db, started).await?;
     fixture.service.shutdown().await?;
+    #[cfg(unix)]
+    let key_env = std::env::var_os(super::recovery::KEY).map(|_| super::recovery::KEY);
+    #[cfg(not(unix))]
+    let key_env = None;
     let resources =
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?.for_bro_capture());
+        Arc::new(Resources::fixture_key(&fixture.installation, key_env)?.for_bro_capture());
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {
             owner_kind: OwnerKind::Tenant,

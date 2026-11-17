@@ -90,15 +90,18 @@ async fn hidden_choice_survives_source_loss_and_keeps_exact_cache_root_pin() -> 
     };
     use crate::tenancy::cache::{Cache, CacheError};
     use bitrouter_ai::types::{ApiProtocol, ModelOperation};
-    let (db, resources) = fixture().await?;
-    let resources = resources.for_bro_capture();
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let key = rand::random();
+    let installation = "installation".to_owned().try_into()?;
+    let mature = Resources::with_key(installation, key)?;
+    let resources = Resources::with_key(mature.installation.clone(), key)?.for_bro_capture();
     import(&resources, &db, rows()?).await?;
     let parent_ref = reference("tenant", ResourceKind::Route, "parent")?;
     let child_ref = reference("tenant", ResourceKind::Route, "child")?;
     let doc = document(vec![parent_ref.clone()], None)?;
     let compiled = compile(&resources, &db, &doc).await?;
     let row = validation::stored(doc, compiled)?;
-    let mature = Resources::with_key(resources.installation.clone(), [7; 32])?;
     ensure!(matches!(
         mature.open_execution(&row),
         Err(ErrorCode::CapabilityMismatch)

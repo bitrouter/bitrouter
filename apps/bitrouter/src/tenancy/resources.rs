@@ -442,6 +442,23 @@ impl Resources {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn fixture_key(
+        installation: &InstallationId,
+        key_env: Option<&str>,
+    ) -> Result<Self> {
+        match key_env {
+            Some(name) => Self::load_key(
+                installation,
+                &TenancyConfig {
+                    wrapping_key_env: Some(name.into()),
+                    ..Default::default()
+                },
+            ),
+            None => Self::with_key(installation.clone(), rand::random()),
+        }
+    }
+
     pub(super) async fn read_import(path: Option<&Path>) -> Result<Option<Vec<u8>>> {
         let Some(path) = path else {
             return Ok(None);

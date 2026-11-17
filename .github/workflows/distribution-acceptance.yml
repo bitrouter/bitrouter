@@ -314,15 +314,16 @@ jobs:
         cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
         for selector in \
           artifact_profiles_preserve_residents_and_gate_explicit_replacement \
-          persistence::historical_dataset_is_refused_by_full_minimum_and_harness_artifacts \
-          persistence::current_records_survive_full_minimum_full_harness_full_transitions; do
+          persistence::historical_dataset_is_refused_by_full_minimum_and_harness_artifacts; do
           cargo nextest run --locked -p bitrouter --no-default-features --jobs 2 \
             --test artifact_profiles --test-threads 1 --retries 0 \
             --run-ignored only --no-tests fail -E "test(=$selector)"
         done
-        # Core seeds published state and dispatches the original judge attempt.
-        # Serving/replay requests use the preserved full/minimum binaries.
+        # Full-feature fixtures create current BRO history, publish state and
+        # dispatch the original judge attempt. The test campaigns serve and
+        # replay requests through the separately built immutable binaries.
         for selector in \
+          persistence::current_records_survive_full_minimum_full_harness_full_transitions \
           gateway_state::published_policy_and_accounting_survive_full_minimum_full \
           gateway_state::judge::reserved_judge_charge_survives_full_minimum_full \
           gateway_state::trajectory::explicit_trajectory_facts_and_outbox_survive_full_minimum_full; do
