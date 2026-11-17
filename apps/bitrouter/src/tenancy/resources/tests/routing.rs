@@ -26,14 +26,14 @@ fn owned_compilation_disables_registry_and_rejects_host_catalog_settings() -> Re
 }
 
 #[tokio::test]
-async fn fixed_router_base_does_not_reinterpret_its_model_as_a_variant() -> Result<()> {
+async fn fixed_router_base_keeps_its_literal_model() -> Result<()> {
     let (db, resources) = fixture().await?;
     let mut input = route("tenant", "fixed", "fast")?;
     input["definition"]["selector"] = json!("bitrouter/fixed");
     input["definition"]["routing"]["routers"] = json!({"fixed": {
         "selection":{"kind":"model", "model":"fixture:fast"}
     }});
-    input["definition"]["routing"]["variants"] = json!({"fast":{}});
+
     input["definition"]["routing"]["providers"]["fixture"]["models"] =
         json!([{"id":"fast"}, {"id":"fixture"}]);
     import(&resources, &db, vec![credential("tenant")?, input]).await?;
@@ -56,7 +56,7 @@ async fn fixed_router_base_does_not_reinterpret_its_model_as_a_variant() -> Resu
 }
 
 #[tokio::test]
-async fn tier_and_exploration_selectors_resolve_once_and_keep_their_preferences() -> Result<()> {
+async fn model_tier_selectors_resolve_once_and_keep_named_router_preferences() -> Result<()> {
     let (db, resources) = fixture().await?;
     let mut input = route("tenant", "choice", "base")?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
@@ -65,17 +65,20 @@ async fn tier_and_exploration_selectors_resolve_once_and_keep_their_preferences(
     input["definition"]["routing"]["routers"] = json!({"choice": {
         "selection":{"kind":"policy", "policy":"selected", "base_model":"fixture:base"}
     }});
-    input["definition"]["routing"]["presets"] = json!({"experiment":{"model":"shared"}});
-    input["definition"]["routing"]["variants"] = json!({"fast":{"routing":{"ignore":["other"]}}});
+    input["definition"]["routing"]["routers"]["shared"] =
+        json!({"selection":{"kind":"model","model":"shared","routing":{"ignore":["other"]}}});
+
     input["definition"]["routing"]["providers"]["fixture"]["models"] =
-        json!([{"id":"base"}, {"id":"fast"}, {"id":"fixture"}, {"id":"shared"}]);
+        json!([{"id":"base"}, {"id":"fast:fast"}, {"id":"fixture"}, {"id":"shared"}]);
     input["definition"]["routing"]["providers"]["other"] = json!({
         "api_base":"https://example.com/v1", "models":[{"id":"shared"}]
     });
-    input["definition"]["exploration"] = json!(["@experiment:fast"]);
+
     // One suffix is a variant; the remaining ':fast' is a literal provider
     // model. A second Stage-0 pass would incorrectly retain model fixture.
-    let policy = policy_with_economy("tenant", "policy", "fixture:fast:fast")?;
+    let mut policy = policy_with_economy("tenant", "policy", "fixture:fast:fast")?;
+    policy["definition"]["document"]["policies"]["selected"]["tiers"]["shared"] =
+        json!({"model":"bitrouter/shared"});
     import(&resources, &db, vec![credential("tenant")?, policy, input]).await?;
     let doc = document(
         vec![reference("tenant", ResourceKind::Route, "choice")?],
@@ -86,9 +89,9 @@ async fn tier_and_exploration_selectors_resolve_once_and_keep_their_preferences(
     let chains = &envelope.routes[0].chains;
     for (selector, model) in [
         ("bitrouter/choice", "base"),
-        ("fixture:fast:fast", "fast"),
+        ("fixture:fast:fast", "fast:fast"),
         ("fixture:strong", "strong"),
-        ("@experiment:fast", "shared"),
+        ("bitrouter/shared", "shared"),
     ] {
         let selected: Vec<_> = chains
             .iter()

@@ -156,20 +156,9 @@ jobs:
     - name: Validate independent consumer lockfiles before compilation
       run: |
         cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
-    - name: Cache the pinned historical producer
-      id: pre_m0_cache
-      uses: actions/cache@v5
-      with:
-        # Cache only the executable and identity, never old workspace dependencies.
-        path: |
-          target/debug/examples/pre_m0_policy_producer
-          target/debug/examples/pre_m0_policy_producer.revision
-        key: pre-m0-producer-v1-${{ runner.os }}-${{ runner.arch }}-rust-1.99.1-${{ hashFiles('.github/scripts/build-pre-m0-producer.sh', '.github/fixtures/pre-m0-terminal-export.patch') }}
     - name: Build tests and process fixtures once
       # Leave time for diagnostics upload if this bounded build is interrupted.
       timeout-minutes: 110
-      env:
-        PRE_M0_CACHE_HIT: ${{ steps.pre_m0_cache.outputs.cache-hit }}
       run: |
         set -euo pipefail
         mkdir -p ci-evidence
@@ -188,11 +177,6 @@ jobs:
         trap finish_build EXIT
         trap 'exit 143' TERM
         trap 'exit 130' INT
-        if [[ "$PRE_M0_CACHE_HIT" != true ]]; then
-          /usr/bin/time -v -o ci-evidence/build-pre-m0-producer.txt bash .github/scripts/build-pre-m0-producer.sh
-        fi
-        [[ -x target/debug/examples/pre_m0_policy_producer ]]
-        [[ -s target/debug/examples/pre_m0_policy_producer.revision ]]
         /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
         /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
         # Archive without recompiling, including the now-built process fixtures.
@@ -395,12 +379,16 @@ jobs:
         | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_consuming_commit_error_keeps_owner_until_death_then_repairs_once)
         | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_known_commit_publishes_readiness_only_after_ack_without_resending)
         | test(=tenancy::tests::execution::native::capture::learning::recovery::commit::paid_repair_disconnected_opener_keeps_custody_until_late_known_commit)'
-    - name: verify actual offline Eval CLI import and readers
+    - name: verify current resource and Eval dataset cutover through actual restore
+      timeout-minutes: 15
+      run: |
+        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+        bash .github/scripts/ci-test.sh resource-cutover --test-threads 1 --run-ignored only -E 'test(tenancy::resources::tests::cutover::)'
+        bash .github/scripts/ci-test.sh eval-retained-restore --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::eval::retained::actual_restore_rejects_isolated_old_subject_and_preserves_current_mixed_namespaces)'
+    - name: verify current tenant Eval and Policy update through the SDK
       timeout-minutes: 10
-      env:
-        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/debug/bro
-      run: bash .github/scripts/ci-test.sh 6 --test-threads 1 --run-ignored only -E 'test(=offline::evaluation::tests::cli::built_cli_inventory_backfill_rejections_and_real_scoped_readers)'
-    - name: verify exact Block and native repair consumers serially
+      run: bash .github/scripts/ci-test.sh eval-policy --test-threads 1 -E 'test(=tenancy::tests::execution::model_policy::sdk_policy_submit_read_activate_and_dispatch_use_the_public_contract)'
+    - name: verify current local Block consumers serially
       timeout-minutes: 30
       shell: bash
       env:
@@ -423,14 +411,7 @@ jobs:
           tenancy::tests::execution::native::capture::block::coexistence::actual_paid_block_head_validates_original_receipt_and_never_relabels_human_or_refunds \
           tenancy::tests::execution::native::capture::block::coexistence::actual_block_human_wins_held_judge_and_retraction_preserves_both_paid_facts \
           tenancy::tests::execution::native::capture::block::coexistence::integrity::actual_selected_paid_block_rejects_missing_job_changed_output_and_missing_judge_receipt \
-          tenancy::tests::execution::native::capture::block::pricing::real_cached_usage_requires_the_effective_retained_tariff \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_begin_error_retains_claim_then_fresh_repairs_twice \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_rollback_error_retains_claim_then_fresh_repairs_twice \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_caught_unwind_retains_claim_then_fresh_repairs_twice \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_begin_waiter_keeps_claim_until_process_exit \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_actual_commit_error_retains_candidate_then_fresh_repairs_twice \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_known_commit_publishes_readiness_only_after_ack \
-          tenancy::tests::execution::native::session::experiment::paid::recovery::integrity::repair::native_paid_repair_cancelled_commit_waiter_keeps_custody_until_known_ack; do
+          tenancy::tests::execution::native::capture::block::pricing::real_cached_usage_requires_the_effective_retained_tariff; do
           bash .github/scripts/ci-test.sh block --test-threads 1 --run-ignored only -E "test(=$case)"
         done
     - name: verify actual archive, restart and refusal
@@ -491,31 +472,18 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
-    - name: verify eval ownership migration before populating the test database
+    - name: provision isolated MySQL baseline test databases
+      if: matrix.backend == 'mysql'
+      run: |
+        docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
+        GRANT ALL PRIVILEGES ON `m0\_baseline\_%`.* TO 'fixture'@'%';
+        SQL
+    - name: verify current schema baseline and refusal before populating the database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+        BACKEND: ${{ matrix.backend }}
       run: |
-        bash .github/scripts/ci-test.sh db-2 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(server_migration030_preserves_legacy_resumes_and_refuses_owned_down)'
-    - name: verify native continuation epoch durability before populating the test database
-      env:
-        BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-3 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000031_native_continuation_epoch::tests::server::server_migration031_epoch_is_permanent_exact_and_restartable)'
-    - name: verify trajectory ownership migration before populating the test database
-      env:
-        BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-4 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000032_trajectory_storage_scope::tests::server_migration032_preserves_legacy_and_refuses_partial_down)'
-    - name: verify HTTP continuation ownership before populating the test database
-      env:
-        BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-5 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000034_continuation_storage_scope::tests::server::server_migration034_preserves_legacy_bytes_exact_scopes_and_dependencies)'
-    - name: verify native harness ownership before populating the test database
-      env:
-        BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-6 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000036_native_harness_scope::tests::server_native36_legacy_resume_and_down_matrix)'
+        bash .github/scripts/ci-test.sh db-baseline --test-threads 1 --run-ignored only -E "(kind(lib)) & test(=db::migration::baseline::server_tests::${BACKEND}_current_baseline_catalog_and_refusal)"
     - name: exercise migrations and gateway persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -535,7 +503,7 @@ jobs:
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-9 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(core::eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator)'
+        bash .github/scripts/ci-test.sh db-9 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator)'
     - name: provision isolated MySQL evaluation test databases
       if: matrix.backend == 'mysql'
       run: |
@@ -547,38 +515,26 @@ jobs:
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-11 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(core::eval::store::owned_tests::server::)'
-    - name: verify tenant trajectory scope and immutable replay on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-12 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=trajectory::store::owned::tests::server_owned_trajectory_store_preserves_transaction_and_scope)'
+        bash .github/scripts/ci-test.sh db-11 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(eval::store::owned_tests::server::)'
     - name: verify directory projections and receipt history on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
         bash .github/scripts/ci-test.sh db-13 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(tenancy::tests::execution::evaluation::server::)'
-    - name: verify Legacy capture and checkpoint isolation on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-14 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(db::migration::m20240101_000033_capture_legacy_scope::tests::server::)'
     - name: verify owned HTTP continuation consumers on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
         bash .github/scripts/ci-test.sh db-15 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart)'
-    - name: verify execution receipt migration and persistence on the selected backend
+    - name: verify current execution receipt persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-16 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000035_execution_receipts::tests::server::server_receipt035_exact_indexes_persistent_restart_and_populated_down)'
         bash .github/scripts/ci-test.sh db-16 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict)'
-    - name: verify owned OAuth migration and compound receipts on the selected backend
+    - name: verify current owned OAuth and compound receipts on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000037_owned_oauth::tests::server::owned_oauth_additive_schema_real_commit_rollback_down_and_reconnect)'
         bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect)'
     - name: verify native harness consumers on the selected backend
       env:
@@ -629,6 +585,8 @@ jobs:
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
+        bash .github/scripts/ci-test.sh db-shared-schema --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::schema::current_validation::tests::)'
+        bash .github/scripts/ci-test.sh db-shared-subjects --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=gateway::shared::tests::evaluation::preflight::postgres_shared_eval_subject_prejoin)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
         bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
@@ -1011,7 +969,7 @@ jobs:
             | test(=update::tests::official_basename_is_required_even_in_the_same_install_prefix)
             | test(=update::tests::reduced_profiles_delegate_for_every_install_method_and_channel)
             | test(=daemon_locator::tests::config_identity_survives_file_deletion_and_recreation)
-            | test(=policy_lock::tests::publish_preserves_exact_parent_bytes_for_rollback)
+            | test(=policy_lock::files_tests::current_source_history_cas_and_exact_rollback)
             | test(=db::tests::relative_sqlite_urls_anchor_to_config_home_and_preserve_queries)
             | (binary(=invocation) & (test(=canonical_help_is_bro_and_has_no_alias_warning) | test(=alias_preserves_help_and_structured_stdout)))
     steps:

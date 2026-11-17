@@ -210,7 +210,7 @@ jobs:
         case "$QUALIFICATION_GROUP" in
           history) suites=(history) ;;
           offline)
-            suites=(fresh credentials evaluation cli)
+            suites=(fresh credentials cli)
             export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
             ;;
           *) exit 1 ;;
@@ -220,7 +220,6 @@ jobs:
             history) selector=tenancy::tests::capacity_history::large_history_qualification ;;
             fresh) selector=tenancy::audit::recovery::v2::tests::scale::large_fresh_target_streams_complete_sections_and_rejects_late_mismatch ;;
             credentials) selector=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match ;;
-            evaluation) selector=offline::evaluation::tests::scale::bounded_selected_graph_imports_into_large_fresh_authority_and_refuses_replay ;;
             cli) selector=tenancy::audit::recovery::v2::tests::cli_scale::real_cli_dense_and_sparse_snapshot_verify_audit_restore ;;
             *) exit 1 ;;
           esac

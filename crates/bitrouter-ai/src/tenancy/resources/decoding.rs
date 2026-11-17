@@ -67,7 +67,7 @@ struct Route {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-enum LegacyDefinition {
+enum IndependentDefinition {
     Credential {
         secret: String,
     },
@@ -89,7 +89,7 @@ impl<'de> Deserialize<'de> for Definition {
                 let value: ModelPolicy =
                     serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
                 Ok(Self::Policy {
-                    document: serde_json::to_value(value.document).map_err(D::Error::custom)?,
+                    document: value.document,
                     name: value.name,
                     dependencies: value.dependencies,
                 })
@@ -110,8 +110,10 @@ impl<'de> Deserialize<'de> for Definition {
                     attachments: value.attachments,
                 })
             }
-            _ => LegacyDefinition::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
-                .map_err(D::Error::custom),
+            _ => IndependentDefinition::deserialize(&mut serde_json::Deserializer::from_str(
+                raw.get(),
+            ))
+            .map_err(D::Error::custom),
         }
     }
 }

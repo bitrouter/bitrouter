@@ -189,25 +189,15 @@ mod tests {
     }
 
     #[test]
-    fn objective_is_signed_and_legacy_cost_gate_keeps_its_wire_identity() -> Result<()> {
+    fn objective_changes_the_experiment_content_identity() -> Result<()> {
         let mut gate = experiment().gate;
         let legacy = serde_json::to_value(&gate)?;
-        let cost_config =
-            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
-                "auto", "economy", 100_000, &gate,
-            )?;
         assert!(legacy.get("objective").is_none());
         assert_eq!(
             serde_json::from_value::<OptimizationGate>(legacy.clone())?,
             gate
         );
         gate.objective = OptimizationObjective::Latency;
-        assert_ne!(
-            cost_config,
-            crate::gateway::routing::experiment_identity::explore_compiler_config_digest(
-                "auto", "economy", 100_000, &gate,
-            )?
-        );
         let latency = serde_json::to_value(&gate)?;
         assert_eq!(latency["objective"], "latency");
         assert_ne!(

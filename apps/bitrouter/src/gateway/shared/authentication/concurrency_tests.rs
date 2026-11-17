@@ -54,13 +54,13 @@ async fn exercise(independent: bool) -> anyhow::Result<()> {
             )
             .await?;
         let publication = super::super::publication::Configuration {
-            format: 1,
+            format: 2,
             routing: serde_json::json!({"providers": {
                 "fixture": {"api_base":"https://example.invalid/v1", "auto_discover":false},
                 "anthropic": {"api_base":"https://example.invalid/v1", "auto_discover":false}
             }}),
             policies: vec![],
-            policy_lock: None,
+            model_policy: None,
             credentials: ["fixture", "anthropic"]
                 .map(|provider| CredentialBinding {
                     provider: provider.into(),

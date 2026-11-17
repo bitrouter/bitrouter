@@ -337,14 +337,14 @@ async fn partial_projection_variant(first: &Store, second: &Store, variant: &str
         context::PipelineContext, routing::ModelSelector, types::PipelineRequest,
     };
     use crate::gateway::shared::capture::Requirements;
-    use crate::policy_lock::{PolicyLock, PolicyRuntime, semantic_digest};
+    use crate::policy_lock::{PolicyRuntime, semantic_digest};
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     let fixture = Fixture::new(first, 2).await?;
     let config = crate::config::parse(
-        "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+        "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: policy\n      base_model: fixture:strong\n      policy: auto\n",
     )?;
-    let mut document: PolicyLock =
+    let mut document: bitrouter_ai::policy::Document =
         serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
     document.policies.insert(
         "auto:cost".into(),
@@ -385,10 +385,24 @@ async fn partial_projection_variant(first: &Store, second: &Store, variant: &str
     admission.attach(&mut pipeline);
     let mut context = PipelineContext::new(pipeline);
     runtime
-        .prepare_selection("auto", Some(variant), &mut context)
+        .prepare_selection(
+            if variant == "cost" {
+                "auto:cost"
+            } else {
+                "auto"
+            },
+            &mut context,
+        )
         .await?;
     runtime
-        .select_variant("auto", Some(variant), &mut context)
+        .select_policy(
+            if variant == "cost" {
+                "auto:cost"
+            } else {
+                "auto"
+            },
+            &mut context,
+        )
         .await?;
     let invocation = context
         .extension::<EvalInvocation>()

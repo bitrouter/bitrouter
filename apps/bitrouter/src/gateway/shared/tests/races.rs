@@ -9,7 +9,6 @@ use bitrouter_ai::types::ModelOperation;
 use sea_orm::sea_query::Expr;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::Value;
-use sha2::Digest;
 
 use crate::auth::{
     db::{NewApiKey, insert_api_key, upsert_user},
@@ -19,7 +18,7 @@ use crate::gateway::providers::auth::{credentials::Credential, store::Credential
 use crate::gateway::shared::{
     authority::{Authority, Revision},
     credentials::{CredentialStamp, Credentials},
-    engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits, TrajectoryBinding},
+    engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits},
     store::{Kind, NewRecord, Store, Stored},
 };
 
@@ -430,23 +429,9 @@ async fn finalization_rollback_and_recovery_isolation(first: &Store, second: &St
     let owner = Engine::join(authority, 1_000).await?;
     let bad = accepted(&owner, &fixture.first, fixture.revision).await?;
     let good = accepted(&owner, &fixture.second, fixture.revision).await?;
-    let binding = TrajectoryBinding {
-        owner_user_id: fixture.first.tenant.clone(),
-        episode_id: uuid::Uuid::new_v4().to_string(),
-        request_id: "fixture-request".into(),
-        correlation_epoch: "fixture-epoch".into(),
-    };
-    let tx = first.begin().await?;
-    owner.bind_trajectory(&tx, &bad, &binding).await?;
-    tx.commit().await?;
     let attempt = owner
         .prepare_attempt(&fixture.first.hash, &bad, &fixture.stamp)
         .await?;
-    let fence_key = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&(
-        "gateway-episode-fence-v1",
-        &binding.owner_user_id,
-        &binding.episode_id,
-    ))?));
     let event_id = format!("gateway-terminal-{bad}");
     // Inject a durable collision after all earlier transaction writes would run.
     // Keep it outside the delivery queue; this is a private fixture-only fault.
@@ -487,7 +472,6 @@ async fn finalization_rollback_and_recovery_isolation(first: &Store, second: &St
         row(first, Kind::Attempt, &attempt.attempt_id).await?["view"]["state"]["status"]
             == "prepared"
     );
-    ensure!(row(first, Kind::EpisodeFence, &fence_key).await?["pending"] == serde_json::json!([]));
     ensure!(
         row(first, Kind::Outbox, &event_id).await? == serde_json::json!({"fault": "collision"})
     );

@@ -306,12 +306,13 @@ put shapes with `expected_revision: null`; principal entries use
 `expected_authorization_revision: null`; credential imports use
 `expected_version: null`. All are unique creates. Referenced tenants, resource
 pools and credential slots must be included in this seed. Configuration uses
-`format: 1`, explicit `routing`, embedded `policies`, optional `policy_lock`,
+`format: 2`, explicit `routing`, embedded `policies`, optional `model_policy`,
 credential bindings and `require_known_pricing`; it contains no process settings.
 Inputs are literal JSON, with no environment or file expansion inside the seed.
-An embedded `policy_lock` now carries `spec_version: policy/1.0.0-beta.1`
-model-only source. Numeric lockfiles and context/trajectory/optimization Policy
-fields are rejected during publish/bootstrap and retained-generation reload.
+An embedded `model_policy` is a typed `policy::Document` with
+`spec_version: policy/1.0.0-beta.1` and model-only source. Publication format 1,
+the old publication field, numeric lockfiles and context/trajectory/optimization
+Policy fields are rejected during publish/bootstrap and retained-generation reload.
 `policies` remains the independent access-control policy collection.
 
 A minimal seed for verifying installation and replica readiness is:
@@ -319,10 +320,10 @@ A minimal seed for verifying installation and replica readiness is:
 ```json
 {
   "configuration": {
-    "format": 1,
+    "format": 2,
     "routing": {},
     "policies": [],
-    "policy_lock": null,
+    "model_policy": null,
     "credentials": [],
     "require_known_pricing": false
   }

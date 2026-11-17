@@ -304,12 +304,18 @@ fn mock_reply(path: &str, body: &Value) -> Result<Response> {
 }
 
 async fn mock_upstream() -> Result<MockUpstream> {
+    mock_upstream_with_key(PROVIDER_KEY).await
+}
+
+async fn mock_upstream_with_key(provider_key: &str) -> Result<MockUpstream> {
+    let provider_key = provider_key.to_owned();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}", listener.local_addr()?);
     let calls = Arc::new(Mutex::new(Vec::new()));
     let recorded = calls.clone();
     let router = axum::Router::new().fallback(any(move |request: Request| {
         let calls = recorded.clone();
+        let provider_key = provider_key.clone();
         async move {
             let result: Result<Response> = async {
                 let (parts, body) = request.into_parts();
@@ -317,12 +323,12 @@ async fn mock_upstream() -> Result<MockUpstream> {
                     .headers
                     .get("authorization")
                     .and_then(|value| value.to_str().ok())
-                    .is_some_and(|value| value == format!("Bearer {PROVIDER_KEY}"))
+                    .is_some_and(|value| value == format!("Bearer {provider_key}"))
                     || parts
                         .headers
                         .get("x-api-key")
                         .and_then(|value| value.to_str().ok())
-                        == Some(PROVIDER_KEY);
+                        == Some(provider_key.as_str());
                 // Count arrival before parsing: malformed/replayed requests
                 // must not disappear from the dispatch evidence.
                 let index = {
@@ -620,4 +626,306 @@ async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
         }
     }
     result
+}
+
+/// Defaults are exercised only here: target names come from the shipped Policy,
+/// not from registry inventory or a hand-authored substitute source.
+#[tokio::test]
+async fn bundled_auto_source_dispatches_with_tools_effort_and_complete_context() -> Result<()> {
+    use bitrouter_ai::{
+        control::administration::{PolicyInput, PolicyView},
+        policy::Document,
+    };
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
+    let home = tempfile::tempdir()?;
+    let logs = tempfile::tempdir()?;
+    // A static fixture credential supplies Codex's account-identity claim so
+    // native Responses continuation authority is available. There is no OAuth
+    // login, credential-store seed, refresh, signature trust or external host.
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json!({
+        "https://api.openai.com/auth":{"chatgpt_account_id":"bundled-fixture-account"}
+    }))?);
+    let provider_key = format!("e30.{payload}.fixture");
+    let upstream = mock_upstream_with_key(&provider_key).await?;
+    let token = format!("bundled-control-{}", uuid::Uuid::new_v4());
+    let inference = TcpListener::bind("127.0.0.1:0")?;
+    let control = TcpListener::bind("127.0.0.1:0")?;
+    let inference_address = inference.local_addr()?;
+    let control_address = control.local_addr()?;
+    let inference_endpoint = format!("http://{inference_address}");
+    let control_endpoint = format!("http://{control_address}");
+    let config_path = home.path().join("bitrouter.yaml");
+    let socket = home.path().join("bundled.sock");
+    let bundled: Document = serde_saphyr::from_str(include_str!("../policy/default.yaml"))?;
+    let auto = bundled
+        .policies
+        .get("auto")
+        .context("bundled auto missing")?;
+    ensure!(auto.default_tier == "strong");
+    ensure!(auto.tool_use_tier.as_deref() == Some("strong"));
+    ensure!(auto.tool_safe_tiers.contains(&"strong".to_owned()));
+    let strong = auto.tiers.get("strong").context("bundled strong missing")?;
+    let (_, expected_model) = strong
+        .model
+        .split_once(':')
+        .context("default target is not provider-qualified")?;
+
+    let mut providers = serde_json::Map::new();
+    for target in auto.tiers.values() {
+        let (provider, model) = target
+            .model
+            .split_once(':')
+            .context("bundled target is not provider-qualified")?;
+        let provider = providers.entry(provider.to_owned()).or_insert_with(|| {
+            json!({
+                "api_base":upstream.endpoint,"api_key":provider_key,"auto_discover":false,
+                "api_protocol":[{"*":"responses"}],
+                // Explicit protocol endpoints prevent inherited provider defaults
+                // from directing any generation to an external subscription host.
+                "protocol_endpoints":{"responses":upstream.endpoint},"models":[],
+            })
+        });
+        provider["models"]
+            .as_array_mut()
+            .context("fixture models not an array")?
+            .push(json!({
+                "id":model,"provider_model_id":model,"capabilities":["tools","reasoning"],
+                "reasoning_effort":{"levels":["low","high"],"default":"high"},
+            }));
+    }
+    // No routers, policy path, or policy.yaml: the child must install the real
+    // bundled auto binding/source. Only its provider transport is redirected.
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&json!({
+            "inherit_defaults":true,"registry":{"enabled":false},
+            "server":{"listen":inference_address.to_string(),"skip_auth":true,"control_socket":socket},
+            "database":{"url":DATABASE},
+            "control":{"enabled":true,"listen":control_address.to_string(),"credentials":[{
+                "id":"default-reader","token_env":"BITROUTER_PACKAGED_CONTROL_TOKEN","scopes":["control:read"]
+            }]},"providers":providers,
+        }))?,
+    )?;
+    ensure!(!home.path().join("policy.yaml").exists());
+    drop((inference, control));
+    let mut child = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .args(["serve", "--config"])
+            .arg(&config_path),
+        logs.path(),
+        "bundled",
+    )?;
+    let exercise: Result<()> = async {
+        ready(&mut child, &inference_endpoint, &control_endpoint, &token).await?;
+        let operator = ControlClient::new(&control_endpoint, &token)?;
+        let active = operator.policy(&PolicyInput { view:PolicyView::Active, name:Some("auto".into()) }).await?;
+        ensure!(active.source.as_ref() == Some(&bundled), "child is not serving the bundled source");
+        ensure!(active.bindings.get("auto").map(String::as_str) == Some("auto"));
+        ensure!(upstream.calls.lock().await.is_empty(), "startup invoked a provider");
+        let client = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build()?;
+        let instructions = "Keep every turn and the complete tool exchange.";
+        let history = json!([
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"earlier requirement"}]},
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"earlier response"}]},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"current requirement"}]},
+        ]);
+        let tool_history = json!([
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"earlier requirement"}]},
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"earlier response"}]},
+            {"type":"function_call","call_id":"bundled-call","name":"read_file","arguments":"{\"path\":\"src/lib.rs\"}"},
+            {"type":"function_call_output","call_id":"bundled-call","output":"complete source, including earlier requirements"},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"current requirement"}]},
+        ]);
+        let tools = json!([{"type":"function","name":"read_file","description":"Read an explicit file",
+            "parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]);
+        for stream in [false,true] {
+            for with_tools in [false,true] {
+                let input = if with_tools {&tool_history} else {&history};
+                let mut body = json!({"model":"bitrouter/auto","input":input,"instructions":instructions,
+                    "reasoning":{"effort":"low"},"stream":stream});
+                if with_tools { body["tools"] = tools.clone(); body["tool_choice"] = json!("auto"); }
+                let response = client.post(format!("{inference_endpoint}/v1/responses")).json(&body).send().await?;
+                let status = response.status();
+                let text = response.text().await?;
+                ensure!(status.is_success(), "bundled request failed: {status}: {text}");
+                if stream {
+                    ensure!(text.contains("response.completed") && text.contains(TEXT), "missing successful SSE output: {text}");
+                } else {
+                    let value:Value = serde_json::from_str(&text)?;
+                    ensure!(value["status"] == "completed" && value["output"][0]["content"][0]["text"] == TEXT);
+                }
+                let calls = upstream.calls.lock().await;
+                let sent = calls.last().context("no generation reached mock upstream")?;
+                ensure!(sent.authorized && sent.path == "/responses", "wrong provider credential or protocol");
+                ensure!(sent.body["model"] == expected_model, "bundled strong/tool-safe target was not served");
+                ensure!(sent.body["reasoning"]["effort"] == "low", "provider default replaced caller effort");
+                ensure!(sent.body["instructions"] == instructions, "instructions changed");
+                ensure!(&sent.body["input"] == input, "earlier context or tool exchange changed: {}", sent.body);
+                if with_tools { ensure!(sent.body["tools"] == tools && sent.body["tool_choice"] == "auto"); }
+            }
+        }
+        ensure!(upstream.calls.lock().await.len() == 4, "generation was duplicated or sent to an unexpected endpoint");
+        let active_after = operator.policy(&PolicyInput { view:PolicyView::Active, name:Some("auto".into()) }).await?;
+        ensure!(active_after.source == active.source && active_after.source_digest == active.source_digest);
+        ensure!(!home.path().join("policy.yaml").exists(), "default serving rewrote a policy file");
+        Ok(())
+    }.await;
+    exercise.with_context(|| {
+        format!(
+            "bundled source process failed: {}",
+            std::fs::read_to_string(&child.stderr).map_or_else(
+                |error| format!("stderr unavailable: {error}"),
+                |contents| contents
+            )
+        )
+    })?;
+    let mut stop = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .args(["stop", "--config"])
+            .arg(&config_path)
+            .arg("--socket")
+            .arg(&socket),
+        logs.path(),
+        "bundled-stop",
+    )?;
+    stop.success(Duration::from_secs(15)).await?;
+    child.success(Duration::from_secs(20)).await?;
+    closed(inference_address).await?;
+    closed(control_address).await?;
+    Ok(())
+}
+
+/// Submit the shipped template through the real service, without a local Policy
+/// file or application-library assembly. Tenant ownership is Unix-only.
+#[cfg(unix)]
+#[tokio::test]
+async fn shipped_auto_template_submits_and_reads_back_through_the_service_api() -> Result<()> {
+    use bitrouter_ai::{
+        policy::Document,
+        tenancy::{
+            authority::{OwnerKind, ResourceKey, ResourceKind, TenantPut, TenantState},
+            configuration::ResourceRef,
+            identity::TenantId,
+            operation::OperationStatus,
+            resources::{Definition, ResourcePut},
+        },
+    };
+    use bitrouter_sdk::tenancy::TenancyClient;
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_bro"));
+    let home = tempfile::tempdir()?;
+    let logs = tempfile::tempdir()?;
+    let token = format!("template-operator-{}", uuid::Uuid::new_v4());
+    let inference = TcpListener::bind("127.0.0.1:0")?;
+    let control = TcpListener::bind("127.0.0.1:0")?;
+    let inference_address = inference.local_addr()?;
+    let control_address = control.local_addr()?;
+    let inference_endpoint = format!("http://{inference_address}");
+    let control_endpoint = format!("http://{control_address}");
+    let config_path = home.path().join("bitrouter.yaml");
+    let socket = home.path().join("template.sock");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&json!({
+            "inherit_defaults":false,"registry":{"enabled":false},
+            "server":{"listen":inference_address.to_string(),"skip_auth":false,"control_socket":socket},
+            "database":{"url":DATABASE},"tenancy":{"enabled":true,"wrapping_key_env":"BITROUTER_TEMPLATE_WRAP"},
+            "control":{"enabled":true,"listen":control_address.to_string(),"credentials":[{
+                "id":"template-operator","token_env":"BITROUTER_PACKAGED_CONTROL_TOKEN","scopes":["control:read","control:tenancy"]
+            }]},
+        }))?,
+    )?;
+    drop((inference, control));
+    let mut child = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .env(
+                "BITROUTER_TEMPLATE_WRAP",
+                "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            )
+            .args(["serve", "--config"])
+            .arg(&config_path),
+        logs.path(),
+        "template-service",
+    )?;
+    ready(&mut child, &inference_endpoint, &control_endpoint, &token).await?;
+    let client = TenancyClient::new(&control_endpoint, &token)?;
+    let capabilities = client.capabilities().await?;
+    let installation = capabilities.installation_id;
+    let tenant: TenantId = "template-tenant".try_into()?;
+    let created = client
+        .put_tenant(
+            &tenant,
+            &TenantPut {
+                operation_id: "template-tenant-create".try_into()?,
+                expected_revision: None,
+                state: TenantState::Active,
+                installation_id: installation.clone(),
+            },
+        )
+        .await?;
+    ensure!(created.status == OperationStatus::Applied);
+    let template: Document =
+        serde_saphyr::from_str(include_str!("../../../templates/auto-router/policy.yaml"))?;
+    let key = ResourceKey {
+        owner_kind: OwnerKind::Tenant,
+        owner_id: tenant.as_str().try_into()?,
+        resource_kind: ResourceKind::Policy,
+        resource_id: "template-auto".try_into()?,
+    };
+    let command = ResourcePut {
+        format: 1,
+        operation_id: "template-source-submit".try_into()?,
+        installation_id: installation.clone(),
+        key: key.clone(),
+        expected_revision: None,
+        definition: Definition::Policy {
+            document: template.clone(),
+            name: "auto".into(),
+            dependencies: Vec::new(),
+        },
+    };
+    let written = client.put_resource(&tenant, &command).await?;
+    ensure!(written.status == OperationStatus::Applied);
+    let reference = ResourceRef {
+        owner_kind: key.owner_kind,
+        owner_id: key.owner_id,
+        resource_kind: key.resource_kind,
+        resource_id: key.resource_id,
+        revision_id: written
+            .resource_revision
+            .clone()
+            .context("template resource revision missing")?,
+    };
+    let shown = client
+        .policy_source(&installation, &tenant, &reference)
+        .await?;
+    ensure!(
+        shown.document == template && shown.name == "auto" && shown.status.reference == reference,
+        "template source was changed or returned under another immutable identity"
+    );
+    let replay = client.put_resource(&tenant, &command).await?;
+    ensure!(
+        replay.resource_revision == written.resource_revision,
+        "replay published another source revision"
+    );
+    ensure!(
+        !home.path().join("policy.yaml").exists(),
+        "API submission wrote a host policy file"
+    );
+    let mut stop = OwnedChild::spawn(
+        host_command(binary, home.path(), &token)
+            .args(["stop", "--config"])
+            .arg(&config_path)
+            .arg("--socket")
+            .arg(&socket),
+        logs.path(),
+        "template-stop",
+    )?;
+    stop.success(Duration::from_secs(15)).await?;
+    child.success(Duration::from_secs(20)).await?;
+    closed(inference_address).await?;
+    closed(control_address).await?;
+    Ok(())
 }

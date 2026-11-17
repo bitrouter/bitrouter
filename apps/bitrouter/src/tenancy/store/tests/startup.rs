@@ -35,7 +35,6 @@ async fn seed(db: &DatabaseConnection) -> Result<()> {
     installation(&tx, &Snapshot::from_header(&header)).await?;
     write_in(&tx, &Snapshot::from_header(&header), &[], &operation).await?;
     tx.commit().await?;
-    sql(db, "UPDATE tenancy_installation SET schema_version=1").await?;
     Ok(())
 }
 
@@ -70,7 +69,7 @@ async fn header_loader_validates_all_pages_and_returns_no_directory() -> Result<
             credentials: 300
         }
     );
-    assert_eq!(loaded.format, Format::V1);
+    assert_eq!(loaded.format, Format::V6);
     assert_eq!(loaded.header.installation, header()?.installation);
     assert_eq!(loaded.header.operation_ids, 1);
     let facts = Snapshot::from_header(&loaded.header);
@@ -94,76 +93,27 @@ async fn header_loader_validates_all_pages_and_returns_no_directory() -> Result<
 }
 
 #[tokio::test]
-async fn format_upgrade_is_explicit_transactional_and_preserves_stop() -> Result<()> {
+async fn historical_authority_formats_refuse_without_changing_stop_or_counters() -> Result<()> {
     let db = database().await?;
     seed(&db).await?;
-    sql(&db, "UPDATE tenancy_installation SET saturated=1").await?;
-    let loaded = loader::load_header_in(&db, budget(3))
-        .await?
-        .context("missing header")?;
-    assert!(loaded.header.saturated);
-    assert_eq!(loaded.format, Format::V1);
-    let tx = db.begin().await?;
-    let validated = loader::load_header_in(&tx, budget(3))
-        .await?
-        .context("missing header")?;
-    loader::upgrade_format_in(&tx, &validated).await?;
-    assert_eq!(
-        loader::read_header_in(&tx, ROW_BYTES)
+    for format in [1, 2, 3, 4, 5, 7] {
+        sql(
+            &db,
+            &format!("UPDATE tenancy_installation SET schema_version={format},saturated=1"),
+        )
+        .await?;
+        assert!(loader::read_header_in(&db, ROW_BYTES).await.is_err());
+        let row = db
+            .query_one(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT schema_version,saturated,operation_ids FROM tenancy_installation",
+            ))
             .await?
-            .context("missing header")?
-            .format,
-        Format::V6
-    );
-    tx.rollback().await?;
-    assert_eq!(
-        loader::read_header_in(&db, ROW_BYTES)
-            .await?
-            .context("missing header")?
-            .format,
-        Format::V1
-    );
-    let tx = db.begin().await?;
-    let validated = loader::load_header_in(&tx, budget(3))
-        .await?
-        .context("missing header")?;
-    loader::upgrade_format_in(&tx, &validated).await?;
-    tx.commit().await?;
-    let mut loaded = loader::load_header_in(&db, budget(3))
-        .await?
-        .context("missing header")?;
-    assert_eq!(loaded.format, Format::V6);
-    assert!(loaded.header.saturated);
-    // The new reader accepts v2 without rebuilding the retained directory.
-    assert!(load_existing(&db, Utc::now()).await?.credentials.is_empty());
-    let tx = db.begin().await?;
-    loader::write_header_in(&tx, &loaded).await?;
-    loaded.header.saturated = false;
-    assert!(loader::write_header_in(&tx, &loaded).await.is_err());
-    loaded.header.saturated = true;
-    loaded.format = Format::V1;
-    assert!(loader::write_header_in(&tx, &loaded).await.is_err());
-    loaded.format = Format::V6;
-    loaded.header.operation_ids = u64::from(u32::MAX) + 1;
-    loader::write_header_in(&tx, &loaded).await?;
-    assert_eq!(
-        loader::read_header_in(&tx, ROW_BYTES)
-            .await?
-            .context("missing header")?
-            .header
-            .operation_ids,
-        u64::from(u32::MAX) + 1
-    );
-    loaded.header.operation_ids = u64::MAX;
-    assert!(loader::write_header_in(&tx, &loaded).await.is_err());
-    tx.rollback().await?;
-    assert!(
-        loader::read_header_in(&db, ROW_BYTES)
-            .await?
-            .context("missing header")?
-            .header
-            .saturated
-    );
+            .context("header")?;
+        assert_eq!(row.try_get::<i32>("", "schema_version")?, format);
+        assert!(row.try_get::<bool>("", "saturated")?);
+        assert_eq!(row.try_get::<i64>("", "operation_ids")?, 1);
+    }
     Ok(())
 }
 
@@ -172,10 +122,6 @@ async fn operation_history_crosses_100000_and_validates_the_last_row() -> Result
     let db = database().await?;
     seed(&db).await?;
     let tx = db.begin().await?;
-    let validated = loader::load_header_in(&tx, budget(3))
-        .await?
-        .context("missing header")?;
-    loader::upgrade_format_in(&tx, &validated).await?;
     // Accelerated durable fixture: all original indexed identities and complete
     // response bodies remain, while each operation gets its own stable ID.
     sql(
@@ -229,7 +175,7 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
     capacity(loader::load_header_in(&db, Budget { rows: 1, bytes: 1 }).await)?;
     sql(
         &db,
-        "UPDATE tenancy_installation SET schema_version=2,operation_ids=4294967296, safety_operation_ids=2147483648",
+        "UPDATE tenancy_installation SET operation_ids=4294967296,safety_operation_ids=2147483648",
     )
     .await?;
     let loaded = loader::read_header_in(&db, ROW_BYTES)
@@ -248,7 +194,10 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
     assert!(loader::load_header_in(&db, budget(3)).await.is_err());
     sql(
         &db,
-        "UPDATE tenancy_installation SET schema_version=1,created_at=zeroblob(1000000)",
+        &format!(
+            "UPDATE tenancy_installation SET schema_version={},created_at=zeroblob(1000000)",
+            crate::tenancy::AUTHORITY_SCHEMA_VERSION,
+        ),
     )
     .await?;
     let error = loader::read_header_in(&db, bytes)
@@ -256,27 +205,6 @@ async fn header_projection_has_exact_byte_boundary_and_rejects_bad_format() -> R
         .err()
         .context("malformed cell accepted")?;
     assert!(!error.is::<CapacityExceeded>());
-    Ok(())
-}
-
-#[tokio::test]
-async fn v1_header_enforces_historical_counts_and_missing_latch_only() -> Result<()> {
-    let db = database().await?;
-    seed(&db).await?;
-    for (ordinary, safety, saturated, valid) in [
-        (99_487, 511, false, true),
-        (99_488, 512, true, true),
-        (99_488, 512, false, false),
-        (99_489, 512, true, false),
-        (99_487, 513, true, false),
-        // A different stop cause remains readable but cannot qualify for reset.
-        (1, 0, true, true),
-    ] {
-        sql(&db, &format!("UPDATE tenancy_installation SET operation_ids={ordinary},safety_operation_ids={safety},saturated={}", i32::from(saturated))).await?;
-        assert_eq!(loader::read_header_in(&db, ROW_BYTES).await.is_ok(), valid);
-    }
-    sql(&db, "UPDATE tenancy_installation SET schema_version=2,operation_ids=100001,safety_operation_ids=513,saturated=0").await?;
-    assert!(loader::read_header_in(&db, ROW_BYTES).await?.is_some());
     Ok(())
 }
 

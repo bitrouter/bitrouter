@@ -4,15 +4,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::eval::EvalService;
-use crate::core::eval::admission::SubmissionPrincipal;
 use crate::core::workflow_state::archive::{
     RequestTransportOutcome, SemanticPolicyTransitionCandidate, SemanticSettlementOutcome,
 };
+use crate::eval::EvalService;
+use crate::eval::admission::SubmissionPrincipal;
 use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
-    bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
+    bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
     bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
     bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
     bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
@@ -97,12 +97,11 @@ pub async fn import_semantic_reward_feedback(
             attributes,
         }];
         let subject = EvalSubject {
-            schema_version: EVAL_SCHEMA_VERSION,
+            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: eval_id.clone(),
             scope: EvalScope::Task,
             subject_id: candidate.task_id.clone(),
-            policy_digest: policy_digest.clone(),
-            preset: Some(policy.clone()),
             cohort: Some(candidate.session_key.clone()),
             holdout: false,
             decisions: vec![EvalDecisionRef {
@@ -126,7 +125,7 @@ pub async fn import_semantic_reward_feedback(
         service.store().insert_subject(&subject).await?;
         let passed = candidate.reward >= 1.0;
         let result = EvaluationResult {
-            schema_version: EVAL_SCHEMA_VERSION,
+            schema_version: EVAL_RESULT_SCHEMA_VERSION,
             eval_id: eval_id.clone(),
             evidence_digest: subject.evidence_digest,
             evaluator: EvaluatorIdentity {
@@ -191,9 +190,9 @@ fn import_skip(summary: &mut RewardEvalImportSummary, reason: &str) {
 mod tests {
     use super::*;
     use crate::core::adequacy::store::AdequacyStore;
-    use crate::core::eval::EvalService;
-    use crate::core::eval::store::EvalStore;
     use crate::db;
+    use crate::eval::EvalService;
+    use crate::eval::store::EvalStore;
 
     const IMPLEMENT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
 

@@ -151,7 +151,6 @@ pub(in crate::gateway::shared) async fn resolve_in(
         .context("resource reservation underflow")?;
     store.save(tx, &mut resource, "active", None, now).await?;
     replace_attempt(&mut execution.value, &attempt.value.view)?;
-    super::finalization::install_projection_fence(store, tx, &execution.value, now).await?;
     if let Some(inputs) = execution.value.projection.as_mut() {
         inputs.seal()?;
     }

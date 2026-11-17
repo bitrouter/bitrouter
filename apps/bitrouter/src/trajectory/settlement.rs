@@ -334,9 +334,9 @@ mod tests {
         build_operational_evaluation, build_settlement,
     };
     #[cfg(feature = "core")]
-    use crate::core::eval::publisher::TrajectoryOutboxPublisher;
+    use crate::eval::publisher::TrajectoryOutboxPublisher;
     #[cfg(feature = "core")]
-    use crate::core::eval::{
+    use crate::eval::{
         EvalService, admission::SubmissionPrincipal, settlement::EvalSettlementRecorder,
         store::EvalStore,
     };

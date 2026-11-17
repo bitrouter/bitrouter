@@ -134,9 +134,6 @@ pub(super) mod outbox_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[cfg(feature = "core")]
-pub(crate) mod owned;
-
 fn legacy_scope(table: &str) -> sea_orm::sea_query::Condition {
     use sea_orm::sea_query::Alias;
     let mut condition = sea_orm::sea_query::Condition::all();

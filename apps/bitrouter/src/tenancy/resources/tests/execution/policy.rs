@@ -11,8 +11,21 @@ use std::sync::Mutex;
 struct CaptureTargets(Arc<Mutex<Vec<String>>>);
 
 #[tokio::test]
-async fn authentic_old_policy_remains_inspectable_but_cannot_be_reopened_for_execution()
--> Result<()> {
+async fn old_policy_input_is_rejected_before_any_resource_write() -> Result<()> {
+    let (db, resources) = fixture().await?;
+    let mut old = policy("tenant", "policy")?;
+    old["definition"]["document"] = json!({"lockfileVersion":4,"policies":{},"certificates":{}});
+    assert!(
+        import(&resources, &db, vec![credential("tenant")?, old])
+            .await
+            .is_err()
+    );
+    assert!(storage::references(&db).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn authenticated_old_policy_bytes_are_refused_on_every_current_open() -> Result<()> {
     let (db, resources) = fixture().await?;
     let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
     let mut input = route("tenant", "visible", "base")?;
@@ -32,59 +45,28 @@ async fn authentic_old_policy_remains_inspectable_but_cannot_be_reopened_for_exe
         Some(policy_ref),
     )?;
     let compiled = compile(&resources, &db, &config).await?;
-    let mut envelope = decrypt(&resources, &config, &compiled)?;
-    let mut historical = validation::stored(config, compiled)?;
-    for artifact in &mut envelope.artifacts {
-        if let Definition::Policy { document, .. } = &mut artifact.definition {
-            document.artifact.as_mut().context("compiler")?.compiler.id =
-                "bitrouter-policy-compiler".into();
-            for policy in document.policies.values_mut() {
-                for target in policy.tiers.values_mut() {
-                    target.context = bitrouter_ai::routing::ContextStrategy::Evidence;
-                }
-            }
+    let mut envelope = serde_json::to_value(decrypt(&resources, &config, &compiled)?)?;
+    for artifact in envelope["artifacts"].as_array_mut().context("artifacts")? {
+        if artifact["definition"]["kind"] == "policy" {
+            artifact["definition"]["document"] =
+                json!({"lockfileVersion":4,"policies":{},"certificates":{}});
         }
     }
-    validation::reseal(
-        &resources,
-        &mut historical,
-        &serde_json::to_value(envelope)?,
-    )?;
-    checked(resources.validate_compiled(&historical))?;
+    let mut historical = validation::stored(config, compiled)?;
+    validation::reseal(&resources, &mut historical, &envelope)?;
+    assert!(resources.validate_compiled(&historical).is_err());
+    assert!(resources.validate_executable(&historical).is_err());
+    assert!(resources.open_execution(&historical).is_err());
     #[cfg(all(feature = "core", feature = "harness"))]
     {
         let check = || Ok(());
         let budget = crate::storage::operation_budget::OperationBudget::new(&check);
-        resources.open_paid_recovery(&historical, &budget)?;
+        assert!(
+            resources
+                .open_obligation_recovery(&historical, &budget)
+                .is_err()
+        );
     }
-    assert!(matches!(
-        resources.validate_executable(&historical),
-        Err(ErrorCode::CapabilityMismatch)
-    ));
-    assert!(matches!(
-        resources.open_execution(&historical),
-        Err(ErrorCode::CapabilityMismatch)
-    ));
-
-    let mut legacy = policy("tenant", "legacy")?;
-    legacy["definition"]["document"]["artifact"]["compiler"]["id"] =
-        json!("bitrouter-policy-compiler");
-    import(&resources, &db, vec![legacy]).await?;
-    let hidden = document(
-        Vec::new(),
-        Some(reference("tenant", ResourceKind::Policy, "legacy")?),
-    )?;
-    assert!(matches!(
-        resources
-            .compile(
-                &db,
-                &"tenant".try_into()?,
-                &"legacy-config".try_into()?,
-                &hidden
-            )
-            .await,
-        Err(ErrorCode::CapabilityMismatch)
-    ));
     Ok(())
 }
 
@@ -209,9 +191,9 @@ async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<
     let routing = &mut input["definition"]["routing"];
     routing["routers"] = json!({"choice": {
         "selection": {"kind":"policy", "policy":"selected", "base_model":"fixture:base",
-            "routing":{"sort":"alphabetical"}}
+            "routing":{"sort":"cost"}}
     }});
-    routing["variants"] = json!({"fast":{"routing":{"sort":"cost"}}});
+
     routing["providers"]["fixture"]["models"] = json!([
         {"id":"base"}, {"id":"expensive", "routing_weight":100},
         {"id":"cheap", "routing_weight":1}, {"id":"strong"}

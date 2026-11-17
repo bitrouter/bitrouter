@@ -40,7 +40,7 @@ pub(super) async fn preflight(
 ) -> Result<()> {
     charge(64, 1024 * 1024)?;
     crate::db::migration::validate_unknown_obligations(db).await?;
-    crate::db::migration::m20240101_000040_usage_evidence::validate(db).await?;
+    crate::db::migration::validate_usage_evidence(db).await?;
     for table in [
         TABLE,
         "tenancy_execution_receipts",

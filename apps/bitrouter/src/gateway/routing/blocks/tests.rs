@@ -69,7 +69,7 @@ async fn persisted_adoption_survives_gateway_reassembly_and_preserves_replay_pro
     for named in [false, true] {
         let fixture = fixture_with_persistence(named, true).await?;
         let (selector, candidate) = if named {
-            ("@coding", "@candidate")
+            ("bitrouter/coding", "bitrouter/candidate")
         } else {
             ("coding", "candidate")
         };

@@ -39,21 +39,28 @@ stores externally attributed subjects, results and snapshots. Evaluation,
 candidate compilation and serving publication are separate actions; recording
 or submitting an assessment cannot silently change the active policy.
 
-Evolution uses explicit mode, rubric and budget selection, immutable checkpoint
-inputs and identified evaluation jobs. Reward, experiment assignment and policy
-certificates retain their cohort and evidence provenance. Repeated assessment
-revisions or correlated forks do not create independent trials. Replacing a
-rubric/model or updating a policy does not retroactively rescore old evidence or
-reassign already accepted sessions. Unknown effects and unconfirmed costs must
-not be converted into positive reward. Policy file formats and guarded
-publication for the local harness are described in the
-[configuration contract](../specs/configuration/README.md#existing-local-harness-lock-artifact).
-The tenant service instead accepts the independent
-[model-only Policy contract](../specs/policy/README.md). Its executable
-qualification rejects old experimental Policy artifacts, including references
-from an imported manifest; authenticated historical inspection/recovery remains
-available. Evolution's retained experimental components do not imply service
-eligibility or permission to activate their output.
+BRO evolution uses explicit mode, rubric and budget selection, immutable
+checkpoint inputs and identified evaluation jobs. Repeated assessment revisions
+or correlated forks do not create independent trials. Replacing a rubric/model
+or updating a policy does not retroactively rescore old evidence or reassign
+accepted sessions. Unknown effects and unconfirmed costs must not become reward.
+
+Model routing uses the [Policy source contract](../specs/policy/README.md) in
+defaults, local files and the tenant/shared service. The application validates
+source and builds a private model-only execution view; it does not publish old
+lockfiles, experiment certificates or context actions. The old compiler and
+route learner are retired. An external evaluator runs inference against a pinned
+configuration and submits a schema-2 subject/result through Eval exchange.
+Tenant model-policy evidence binds the installation, tenant, configuration
+revision, exact Policy resource and selected name; policy-free tenant and gateway
+subjects use separate closed profiles and authorization.
+
+Submitting or freezing evidence never changes active routing. A client explicitly
+authors new source, creates an immutable revision and separately activates a
+configuration using its authority/CAS checks. Current-format revisions and receipts
+remain inspectable and recoverable. Unsupported old datasets are refused before
+migration or execution authority; new code does not migrate or resend old work.
+See the [tenant service boundary](tenant-service.md#model-only-policy-boundary-and-upgrades).
 
 The current code is organized under `harness/acp`, `acp_trajectory`,
 `storage/checkpoint` and `core/evolution` in the application. Keep dated campaigns,

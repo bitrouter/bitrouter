@@ -9,6 +9,52 @@ use super::{Attempt, Engine, Execution, Outbox, validate_id};
 use crate::gateway::shared::store::{Kind, Stored};
 use crate::metering::shared::record::{AttemptEvidence, Record};
 
+impl crate::gateway::shared::authority::Authority {
+    /// Read every execution and receipt before join can register an incarnation.
+    pub(in crate::gateway::shared) async fn preflight_execution_current(
+        &self,
+        tx: &DatabaseTransaction,
+    ) -> Result<()> {
+        self.store().reject_retired_guard_records(tx).await?;
+        let mut after = String::new();
+        loop {
+            let page = self
+                .store()
+                .record_page::<Execution>(tx, Kind::Execution, &after)
+                .await?;
+            if page.is_empty() {
+                break;
+            }
+            for execution in page {
+                ensure!(
+                    execution.key() > after.as_str(),
+                    "shared execution key order"
+                );
+                ensure!(
+                    execution.value.trajectory.is_none(),
+                    "retired guarded execution binding"
+                );
+                ensure!(
+                    execution.key() == execution.value.view.execution_id,
+                    "shared execution identity mismatch"
+                );
+                execution
+                    .value
+                    .projection
+                    .as_ref()
+                    .context("original projection requirements are missing")?
+                    .check_identity(
+                        execution.key(),
+                        &execution.value.tenant_id,
+                        execution.value.view.operation,
+                    )?;
+                after = execution.key().to_owned();
+            }
+        }
+        coordinator::preflight_receipts(self.store(), tx).await
+    }
+}
+
 impl Engine {
     #[cfg(test)]
     pub async fn fixture_projection_inputs(
@@ -28,9 +74,7 @@ impl Engine {
         Ok(inputs)
     }
 
-    /// No new row locks: finalization locks execution before the episode fence.
-    /// A receiver already holding that fence must not reverse this order. Reads
-    /// use the enclosing serializable snapshot; only committed terminal facts
+    /// Reads use the enclosing serializable snapshot; only committed terminal facts
     /// are accepted, and database-proven aborts retry the whole outer operation.
     pub async fn metering_record_in(
         &self,
@@ -63,6 +107,10 @@ impl Engine {
                 && execution.revision()? == event.execution.revision,
             "terminal execution differs from its event"
         );
+        ensure!(
+            execution.value.trajectory.is_none(),
+            "retired guarded execution binding"
+        );
         let mut attempts = Vec::with_capacity(event.execution.attempts.len());
         for view in &event.execution.attempts {
             let attempt: Stored<Attempt> = self
@@ -81,11 +129,6 @@ impl Engine {
                 terminal: attempt.value.terminal_facts,
             });
         }
-        Record::new(
-            event,
-            execution.value.principal_id,
-            execution.value.trajectory.map(|binding| binding.request_id),
-            attempts,
-        )
+        Record::new(event, execution.value.principal_id, None, attempts)
     }
 }

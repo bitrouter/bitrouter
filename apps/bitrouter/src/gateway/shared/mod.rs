@@ -16,7 +16,7 @@ mod operator_service;
 mod ownership;
 mod publication;
 pub(crate) mod runtime;
-mod schema;
+pub(crate) mod schema;
 mod store;
 pub(crate) mod telemetry;
 

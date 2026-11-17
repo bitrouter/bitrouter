@@ -173,11 +173,10 @@ mod shared {
     use crate::gateway::pipeline::routing::ModelSelector;
     use crate::gateway::shared::continuation::SharedContinuationDb;
     use crate::gateway::shared::telemetry::Telemetry;
-    use crate::policy_lock::{PolicyDefinition, PolicyLock};
     use futures::FutureExt as _;
     use sea_orm::{ConnectOptions, Database, DatabaseConnection};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
+    use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
     use tokio::time::Instant;
 
     #[tokio::test]
@@ -261,10 +260,12 @@ providers:
         pricing:
           input_micro_usd_per_token: 1.0
           output_micro_usd_per_token: 2.0
-presets:
+routers:
   coding:
-    model: vendor:model
-    policy: coding
+    selection:
+      kind: policy
+      base_model: vendor:model
+      policy: coding
 "#
             ),
             |_| None,
@@ -272,19 +273,10 @@ presets:
         .map_err(Into::into)
     }
 
-    fn lock() -> PolicyLock {
-        let mut document = PolicyLock::default();
-        document.policies.insert(
-            "coding".into(),
-            PolicyDefinition {
-                tiers: BTreeMap::from([("economy".into(), "vendor:model".into())]),
-                default_tier: Some("economy".into()),
-                tool_use_tier: Some("economy".into()),
-                tool_safe_tiers: vec!["economy".into()],
-                ..Default::default()
-            },
-        );
-        document
+    fn model_policy() -> Result<bitrouter_ai::policy::Document> {
+        Ok(serde_saphyr::from_str(
+            "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers:\n      economy: {model: vendor:model}\n    default_tier: economy\n    tool_use_tier: economy\n    tool_safe_tiers: [economy]\n",
+        )?)
     }
 
     async fn counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
@@ -330,11 +322,11 @@ presets:
         let mut ctx = context("shared-writer-fixture", "vendor:model");
         assembled
             .policy_runtime
-            .prepare_selection("coding", None, &mut ctx)
+            .prepare_selection("coding", &mut ctx)
             .await?;
         assembled
             .policy_runtime
-            .select_variant("coding", None, &mut ctx)
+            .select_policy("coding", &mut ctx)
             .await?;
         ensure!(ctx.model() == "vendor:model");
         let invocation = ctx
@@ -479,7 +471,7 @@ presets:
                 rand::random(),
             )?,
             policies: Vec::new(),
-            policy_lock: Some(lock()),
+            model_policy: Some(model_policy()?),
         };
         let config = config(capability.namespace(), trajectory)?;
         // Construction is not inside a cancellable exercise timeout. Shared

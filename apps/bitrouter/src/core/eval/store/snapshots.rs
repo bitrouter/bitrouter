@@ -259,7 +259,7 @@ impl EvalStore {
         )
         .await?
         .context("eval snapshot identity conflict")?;
-        let existing = self.decode_snapshot_in(db, &row, budget).await?;
+        let existing = self.decode_snapshot(&row)?;
         ensure!(
             existing == *snapshot,
             "eval snapshot immutable content conflict"
@@ -312,7 +312,7 @@ impl EvalStore {
             query = query.filter(snapshot_entity::Column::OwnerUserId.eq(owner));
         }
         if let Some(row) = io::one(db, query, budget).await? {
-            let snapshot = self.decode_snapshot_in(db, &row, budget).await?;
+            let snapshot = self.decode_snapshot(&row)?;
             ensure!(
                 snapshot.evidence_root == root,
                 "eval snapshot logical root conflict"
@@ -341,32 +341,7 @@ impl EvalStore {
         Ok(value)
     }
 
-    /// The authenticated native reader already owns H's stable transaction.
-    #[cfg(feature = "harness")]
-    pub(crate) async fn snapshot_records_native_in(
-        &self,
-        tx: &sea_orm::DatabaseTransaction,
-        root: &str,
-        shared: &crate::storage::operation_budget::OperationBudget<'_>,
-    ) -> Result<Option<SnapshotRecords>> {
-        ensure!(
-            !self.scope.is_legacy(),
-            "native cohort requires owned Eval storage"
-        );
-        let mut budget = Budget::trajectory(self, shared);
-        let Some((snapshot, stored_owner)) =
-            self.read_snapshot_in(tx, root, None, &mut budget).await?
-        else {
-            return Ok(None);
-        };
-        let records = self
-            .manifest_records_in(tx, &snapshot, &mut budget, false, Some(&stored_owner))
-            .await?;
-        budget.check()?;
-        Ok(Some(SnapshotRecords { snapshot, records }))
-    }
-
-    /// Compiler bridge: one namespace, one stable read, one cumulative byte bound.
+    /// Evidence export: one namespace, one stable read, one cumulative byte bound.
     pub(crate) async fn manifest_records(
         &self,
         snapshot: &EvalSnapshot,
@@ -388,7 +363,7 @@ impl EvalStore {
         stored_owner: Option<&str>,
     ) -> Result<Vec<(StoredEvaluationResult, EvalSubject)>> {
         if !self.scope.is_legacy() {
-            self.verify_stored_or_native(db, snapshot, budget).await?;
+            self.verify_manifest(snapshot, None)?;
             budget.charge(
                 snapshot.entries.len(),
                 io::json_size(snapshot, io::MAX_BYTES)?,

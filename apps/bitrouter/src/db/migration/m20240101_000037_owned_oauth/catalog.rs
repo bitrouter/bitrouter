@@ -245,7 +245,9 @@ async fn indexes(manager: &SchemaManager<'_>, spec: &Spec, complete: bool) -> Re
             "SELECT 1 FROM sqlite_schema WHERE type='trigger' AND tbl_name=? UNION ALL SELECT 1 FROM temp.sqlite_schema WHERE type='trigger' AND tbl_name=? LIMIT 1"
         }
         DatabaseBackend::Postgres => {
-            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname=$1 AND (c.relpersistence<>'p' OR c.relrowsecurity OR c.relforcerowsecurity OR EXISTS(SELECT 1 FROM pg_trigger g WHERE g.tgrelid=c.oid AND NOT g.tgisinternal) OR EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype<>'p')) LIMIT 1"
+            // PostgreSQL 18 also catalogs NOT NULL constraints (`n`). Column
+            // nullability was checked above; they are not extra table behavior.
+            "SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname=$1 AND (c.relpersistence<>'p' OR c.relrowsecurity OR c.relforcerowsecurity OR EXISTS(SELECT 1 FROM pg_trigger g WHERE g.tgrelid=c.oid AND NOT g.tgisinternal) OR EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype NOT IN ('p','n'))) LIMIT 1"
         }
         DatabaseBackend::MySql => {
             "SELECT 1 FROM information_schema.table_constraints WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_TYPE<>'PRIMARY KEY' UNION ALL SELECT 1 FROM information_schema.triggers WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE=? LIMIT 1"
@@ -255,30 +257,6 @@ async fn indexes(manager: &SchemaManager<'_>, spec: &Spec, complete: bool) -> Re
         vec![spec.table.into()]
     } else {
         vec![spec.table.into(), spec.table.into()]
-    };
-    if !rows(manager, sql, values).await?.is_empty() {
-        return Err(incompatible());
-    }
-    Ok(())
-}
-pub(super) async fn dependencies(manager: &SchemaManager<'_>, spec: &Spec) -> Result<(), DbErr> {
-    // Conservative, read-only rejection is intentional: arbitrary trigger bodies
-    // cannot be resolved by table metadata without executing user SQL.
-    let sql = match manager.get_database_backend() {
-        DatabaseBackend::Sqlite => {
-            "SELECT 1 FROM sqlite_schema WHERE type IN ('view','trigger') UNION ALL SELECT 1 FROM temp.sqlite_schema WHERE type IN ('view','trigger') UNION ALL SELECT 1 FROM sqlite_schema t JOIN pragma_foreign_key_list(t.name) f WHERE t.type='table' AND lower(f.\"table\")=? LIMIT 1"
-        }
-        DatabaseBackend::Postgres => {
-            "SELECT 1 FROM information_schema.view_table_usage WHERE table_schema=current_schema() AND table_name=$1 UNION ALL SELECT 1 FROM pg_constraint k JOIN pg_class t ON t.oid=k.confrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=current_schema() AND t.relname=$1 UNION ALL SELECT 1 FROM pg_trigger g JOIN pg_class t ON t.oid=g.tgrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=current_schema() AND NOT g.tgisinternal LIMIT 1"
-        }
-        DatabaseBackend::MySql => {
-            "SELECT 1 FROM information_schema.view_table_usage WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? UNION ALL SELECT 1 FROM information_schema.key_column_usage WHERE REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME=? UNION ALL SELECT 1 FROM information_schema.triggers WHERE TRIGGER_SCHEMA=DATABASE() LIMIT 1"
-        }
-    };
-    let values = if manager.get_database_backend() == DatabaseBackend::MySql {
-        vec![spec.table.into(), spec.table.into()]
-    } else {
-        vec![spec.table.into()]
     };
     if !rows(manager, sql, values).await?.is_empty() {
         return Err(incompatible());

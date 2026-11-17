@@ -1,34 +1,10 @@
-//! Additive immutable original usage evidence. Existing receipts are not rewritten.
+//! Current immutable original usage evidence and read-only catalog validation.
 use super::m20240101_000028_resource_tenancy::{identity, payload};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 use sea_orm_migration::prelude::*;
 mod catalog;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
 const TABLE: &str = "tenancy_usage_evidence";
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.has_table(TABLE).await? {
-            return Err(DbErr::Custom(
-                "migration040 refuses an existing evidence object".into(),
-            ));
-        }
-        manager
-            .create_table(definition(manager.get_database_backend()))
-            .await?;
-        validate_legacy(manager.get_connection()).await
-    }
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        if manager.has_table(TABLE).await? {
-            return Err(DbErr::Custom(
-                "migration040 requires verified-backup rollback".into(),
-            ));
-        }
-        Ok(())
-    }
-}
 
 pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
     let mut table = Table::create();
@@ -184,15 +160,13 @@ async fn validate_table_on(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 
 /// Read-only schema verification for startup, archives and stopped recovery.
 pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    if db.get_database_backend() == DatabaseBackend::Sqlite
-        && super::m20240101_000042_receipt_archive::catalog::present(db).await?
-    {
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
         return super::m20240101_000042_receipt_archive::validate(db).await;
     }
-    validate_legacy(db).await
+    validate_inline_catalog(db).await
 }
 
-pub(super) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+pub(super) async fn validate_inline_catalog(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     validate_table_on(db).await?;
     validate_indexes(db).await
 }
@@ -206,13 +180,10 @@ mod tests {
     use super::*;
     use anyhow::{Result, ensure};
     #[tokio::test]
-    async fn exact_schema_validates_and_existing_objects_are_never_adopted() -> Result<()> {
+    async fn current_usage_catalog_refuses_shadow_without_writes() -> Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        let manager = SchemaManager::new(&db);
-        Migration.up(&manager).await?;
+        crate::db::run_migrations(&db).await?;
         validate(&db).await?;
-        ensure!(Migration.up(&manager).await.is_err());
-        ensure!(Migration.down(&manager).await.is_err());
         db.execute_unprepared("CREATE TEMP VIEW tenancy_usage_evidence AS SELECT 1")
             .await?;
         ensure!(validate(&db).await.is_err());
@@ -222,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn trigger_or_nonbinary_shape_cannot_be_served_as_immutable_evidence() -> Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
-        Migration.up(&SchemaManager::new(&db)).await?;
+        crate::db::run_migrations(&db).await?;
         db.execute_unprepared("CREATE TRIGGER rewrite_usage AFTER INSERT ON tenancy_usage_evidence BEGIN DELETE FROM tenancy_usage_evidence; END").await?;
         ensure!(validate(&db).await.is_err());
         db.execute_unprepared("DROP TRIGGER rewrite_usage").await?;

@@ -9,7 +9,7 @@ use crate::core::workflow_state::replay::extract_fixture_ir;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::routing::workflow::predictive::{PredictiveRouteProjection, predict_next_step};
-use crate::policy_lock::PolicyDefinition;
+use bitrouter_ai::policy::Policy;
 
 const PPM: u64 = 1_000_000;
 
@@ -80,7 +80,7 @@ struct RouteAccumulator {
 pub fn analyze_policy_counterfactual(
     traces: &[CapturedIngressTrace],
     usage: &[CloudUsageRecord],
-    policy: &PolicyDefinition,
+    policy: &Policy,
     effective_cost_factor_ppm: u32,
     target_savings_ppm: &[u32],
 ) -> Result<PolicyCounterfactualReport> {
@@ -94,9 +94,7 @@ pub fn analyze_policy_counterfactual(
             "counterfactual savings targets must be between 0 and 1000000 ppm",
         ));
     }
-    let default_tier = policy.default_tier.as_deref().ok_or_else(|| {
-        BitrouterError::bad_request("counterfactual policy requires a default_tier")
-    })?;
+    let default_tier = policy.default_tier.as_str();
     let usage_by_request = strict_usage_join(traces, usage)?;
     let mut baseline_cost_micro_usd = 0_u64;
     let mut eligible_cost_micro_usd = 0_u64;
@@ -279,17 +277,25 @@ fn strict_usage_join<'a>(
 }
 
 fn resolve_tier<'policy, 'key>(
-    policy: &'policy PolicyDefinition,
+    policy: &'policy Policy,
     primary_request_key: &'key str,
     baseline_request_key: &'key str,
     carries_tools: bool,
 ) -> Option<(&'policy str, &'key str)> {
-    let (raw, matched_request_key) = if let Some(tier) = policy.routes.get(primary_request_key) {
+    let (raw, matched_request_key) = if let Some(tier) = policy.routes.get(
+        primary_request_key
+            .strip_prefix("semantic_route/v1|")
+            .unwrap_or(primary_request_key),
+    ) {
         (tier.as_str(), primary_request_key)
-    } else if let Some(tier) = policy.routes.get(baseline_request_key) {
+    } else if let Some(tier) = policy.routes.get(
+        baseline_request_key
+            .strip_prefix("semantic_route/v1|")
+            .unwrap_or(baseline_request_key),
+    ) {
         (tier.as_str(), baseline_request_key)
     } else {
-        (policy.default_tier.as_deref()?, primary_request_key)
+        (policy.default_tier.as_str(), primary_request_key)
     };
     if carries_tools
         && !policy.tool_safe_tiers.iter().any(|tier| tier == raw)
@@ -378,7 +384,7 @@ mod tests {
     use crate::core::workflow_state::real_trace::{CapturedIngressTrace, RealTraceOutcome};
     use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
     use crate::metering::{ChargeStatus, ReconciliationStatus};
-    use crate::policy_lock::PolicyDefinition;
+    use bitrouter_ai::policy::Policy;
 
     use super::analyze_policy_counterfactual;
 
@@ -425,20 +431,32 @@ mod tests {
         }
     }
 
-    fn policy() -> PolicyDefinition {
-        PolicyDefinition {
+    fn policy() -> Policy {
+        Policy {
             tiers: BTreeMap::from([
-                ("economy".to_string(), "vendor:economy".into()),
-                ("strong".to_string(), "vendor:strong".into()),
+                (
+                    "economy".to_string(),
+                    bitrouter_ai::policy::Target {
+                        model: "vendor:economy".into(),
+                        effort: None,
+                    },
+                ),
+                (
+                    "strong".to_string(),
+                    bitrouter_ai::policy::Target {
+                        model: "vendor:strong".into(),
+                        effort: None,
+                    },
+                ),
             ]),
-            routes: BTreeMap::from([(
-                "semantic_route/v1|unknown|verify|normal".to_string(),
-                "economy".to_string(),
-            )]),
-            default_tier: Some("strong".to_string()),
+            routes: BTreeMap::from([("unknown|verify|normal".to_string(), "economy".to_string())]),
+            default_tier: "strong".to_string(),
             tool_use_tier: Some("strong".to_string()),
             tool_safe_tiers: vec!["strong".to_string(), "economy".to_string()],
-            ..PolicyDefinition::default()
+            classifier_digest: Some(
+                crate::gateway::routing::workflow::predictive::compiled_predictor_contract()
+                    .config_digest,
+            ),
         }
     }
 

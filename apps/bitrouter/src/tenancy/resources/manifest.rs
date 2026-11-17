@@ -1,7 +1,8 @@
 //! Privileged JSON import format. No public tenant request accepts this shape.
 
-use crate::{gateway::providers::auth::credentials::Credential, policy_lock::PolicyLock};
+use crate::gateway::providers::auth::credentials::Credential;
 use anyhow::{Result, ensure};
+use bitrouter_ai::policy::Document;
 use bitrouter_ai::tenancy::{
     admission::{AdmissionAttachmentV1, AdmissionProfileV1},
     admission_v2::AdmissionProfileV2,
@@ -72,7 +73,7 @@ pub(super) enum Definition {
         block: Option<Box<super::block::Profile>>,
     },
     Policy {
-        document: PolicyLock,
+        document: Document,
         name: String,
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
@@ -276,8 +277,8 @@ impl Import {
                 ResourceKind::Policy
             }
             Definition::Checkpoint { evidence } => {
-                evidence.validate(&self.reference)?;
-                ResourceKind::Checkpoint
+                let _ = evidence;
+                anyhow::bail!("retired learned route checkpoint")
             }
             Definition::Credential {
                 credential,
@@ -329,6 +330,61 @@ impl Import {
 }
 
 impl Definition {
+    pub(super) fn validate_current_profile(&self) -> Result<()> {
+        match self {
+            Self::Route { exploration, .. } => ensure!(
+                exploration.is_empty(),
+                "retired route exploration in retained resource"
+            ),
+            Self::Checkpoint { .. } => anyhow::bail!("retired learned route checkpoint"),
+            _ => {}
+        }
+        Ok(())
+    }
+    pub(super) fn uses_model_policy(&self) -> bool {
+        matches!(self, Self::Policy { .. }) || self.policy_reference().is_some()
+    }
+
+    /// Mature resource entrypoints never turn experimental members into authority.
+    pub(super) fn require_service(&self) -> Result<()> {
+        match self {
+            Self::Route {
+                exploration,
+                core_choice,
+                assessment,
+                block,
+                ..
+            } => {
+                ensure!(
+                    exploration.is_empty()
+                        && core_choice.is_none()
+                        && assessment.is_none()
+                        && block.is_none(),
+                    "experimental routes require the explicit BRO harness"
+                );
+            }
+            Self::Checkpoint { .. } => anyhow::bail!("learned checkpoints require BRO ownership"),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_bro_capture(&self) -> Result<()> {
+        ensure!(
+            cfg!(all(feature = "core", feature = "harness")),
+            "BRO capture requires core and harness"
+        );
+        match self {
+            Self::Route { exploration, .. } => ensure!(
+                exploration.is_empty(),
+                "retired route exploration is not a current BRO obligation"
+            ),
+            Self::Checkpoint { .. } => anyhow::bail!("learned route checkpoint retired"),
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub(super) fn is_admission_profile(&self) -> bool {
         matches!(
             self,

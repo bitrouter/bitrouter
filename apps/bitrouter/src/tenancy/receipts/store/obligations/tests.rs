@@ -392,56 +392,6 @@ async fn complete_pages_and_indexed_counts_have_no_lifetime_limit_or_partial_suc
     Ok(())
 }
 
-/// Canonical old-layout receipt/usage/auxiliary/OAuth data for migration043.
-pub(crate) async fn seed_legacy(db: &DatabaseConnection) -> Result<()> {
-    let installation = "installation".try_into()?;
-    let tx = db.begin().await?;
-    tx.execute_unprepared("INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',1,1,0,0,0,'2026-10-01T00:00:00Z')").await?;
-    for (resource, tenant, state) in [
-        ("ready", "tenant", 0),
-        ("started", "Tenant", 1),
-        ("quarantined", "tenant", 2),
-    ] {
-        let (crypto, row) = oauth::pending::tests::fixture(
-            &installation,
-            &tenant.try_into()?,
-            &"Execution".try_into()?,
-            resource,
-            "2026-10-01T00:00:00Z",
-        )?;
-        let mut metadata = row.metadata.clone();
-        let work = match &metadata.state {
-            oauth::State::RefreshStarted(work) => work.clone(),
-            _ => anyhow::bail!("fixture work"),
-        };
-        metadata.state = match state {
-            0 => oauth::State::Ready,
-            1 => oauth::State::RefreshStarted(work.clone()),
-            _ => oauth::State::Quarantined(work.clone()),
-        };
-        let row = oauth::Row::new(&crypto, metadata, &row.token(&crypto)?)?;
-        oauth::pending::tests::insert_legacy(&tx, &row).await?;
-        if state == 2 {
-            let receipt = unknown("Execution")?
-                .with_auxiliary(vec![auxiliary::Fact {
-                    credential: row.metadata.reference.clone(),
-                    slot: row.metadata.slot.clone(),
-                    generation: 0,
-                    work: work.id,
-                    request_digest: Some("a".repeat(64)),
-                    http_status: None,
-                    outcome: auxiliary::Outcome::Unknown,
-                }])?
-                .with_usage_evidence(
-                    crate::tenancy::receipts::usage_evidence::Snapshot::default(),
-                )?;
-            put(&tx, &receipt).await?;
-        }
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
 #[tokio::test]
 async fn full_validation_reserves_one_working_envelope_across_all_pending_pages() -> Result<()> {
     use crate::storage::operation_budget::OperationBudget;

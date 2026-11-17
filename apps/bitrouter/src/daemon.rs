@@ -2123,6 +2123,7 @@ pub enum DaemonStartOutcome {
 fn spawn_detached_serve(
     source: &crate::paths::ConfigSource,
     log_path: &Path,
+    scope: crate::assemble::AssemblyScope,
 ) -> Result<(std::process::Child, u64)> {
     let exe = std::env::current_exe().context("locating current bitrouter binary")?;
     // Capture the log's pre-spawn size so we can quote *this run's* output back
@@ -2139,7 +2140,12 @@ fn spawn_detached_serve(
         .context("duplicating log handle for stderr")?;
 
     let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("serve").arg("--managed-child");
+    cmd.arg(match scope {
+        crate::assemble::AssemblyScope::Gateway => "serve",
+        #[cfg(all(feature = "core", feature = "harness"))]
+        crate::assemble::AssemblyScope::BroHarness => "harness-host",
+    })
+    .arg("--managed-child");
     // For a `File` source pass `--config <abs path>` so the child loads the same
     // file even though it'll chdir to the home. For `Default` (zero-config) skip
     // the flag — the child re-runs `resolve_config` and lands on the same state.
@@ -2219,6 +2225,41 @@ pub async fn start_and_wait(
     socket: Option<&Path>,
     timeout: std::time::Duration,
 ) -> Result<DaemonStartOutcome> {
+    start_scoped_and_wait(
+        source,
+        log_path,
+        socket,
+        timeout,
+        crate::assemble::AssemblyScope::Gateway,
+    )
+    .await
+}
+
+/// Launch the local BRO process for an actual harness, without changing a running host.
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) async fn start_harness_and_wait(
+    source: &crate::paths::ConfigSource,
+    log_path: &Path,
+    socket: Option<&Path>,
+    timeout: std::time::Duration,
+) -> Result<DaemonStartOutcome> {
+    start_scoped_and_wait(
+        source,
+        log_path,
+        socket,
+        timeout,
+        crate::assemble::AssemblyScope::BroHarness,
+    )
+    .await
+}
+
+async fn start_scoped_and_wait(
+    source: &crate::paths::ConfigSource,
+    log_path: &Path,
+    socket: Option<&Path>,
+    timeout: std::time::Duration,
+    scope: crate::assemble::AssemblyScope,
+) -> Result<DaemonStartOutcome> {
     // Running source-owned state remains authoritative after saved YAML edits.
     // Cold starts still validate mode before creating any files or processes.
     if let Some(located) = crate::daemon_locator::locate_source(source).await?
@@ -2293,7 +2334,7 @@ pub async fn start_and_wait(
         }
     }
     let (child, log_size_before) = if existing_pid.is_none() {
-        let (mut child, offset) = spawn_detached_serve(source, log_path)?;
+        let (mut child, offset) = spawn_detached_serve(source, log_path, scope)?;
         pending.insert(identity, child.id());
         // Persist the pending process before any await. Cancellation/timeout
         // releases the lock but leaves enough evidence to avoid spawning twice.

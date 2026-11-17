@@ -242,15 +242,9 @@ async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> a
     new_session(recorder.as_ref(), "s").await?;
     let old = store.transcript(&identity("s")).await?.session.head;
     // A schema/storage failure after successful capture, without a model call.
-    use sea_orm_migration::prelude::{Alias, Table};
-    use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
-    SchemaManager::new(&store.db)
-        .drop_table(
-            Table::drop()
-                .table(Alias::new("acp_capture_events"))
-                .to_owned(),
-        )
-        .await?;
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    store.db.execute(Statement::from_string(DatabaseBackend::Sqlite,
+        "CREATE TRIGGER fail_capture_append BEFORE INSERT ON acp_capture_events BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END".to_owned())).await?;
     let failed = recorder
         .record(event(
             CaptureKind::Notification,
@@ -260,16 +254,14 @@ async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> a
         ))
         .await;
     assert!(failed.is_err());
-    crate::db::migration::m20240101_000018_create_acp_capture::Migration
-        .up(&SchemaManager::new(&store.db))
+    store
+        .db
+        .execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "DROP TRIGGER fail_capture_append".to_owned(),
+        ))
         .await?;
-    // Restore the real current table shape after the deliberate storage fault.
-    // The latched recorder must still refuse even after schema repair.
-    let scope_migration = crate::db::migration::Migrator::migrations()
-        .into_iter()
-        .find(|migration| migration.name() == "m20240101_000033_capture_legacy_scope")
-        .context("capture namespace migration missing")?;
-    scope_migration.up(&SchemaManager::new(&store.db)).await?;
+    // The latched recorder must still refuse after the storage fault is removed.
     assert!(
         recorder
             .record(event(

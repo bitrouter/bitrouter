@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
-/// Uniform result for routing-policy lock commands.
+/// Source and outcome for explicit routing-policy file operations.
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyReport {
     pub action: String,
@@ -15,11 +15,9 @@ pub struct PolicyReport {
     pub candidate_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
-    /// Additive provenance for compatibility reads. Existing local
-    /// `status` and `show` continue to read the policy lock from disk.
+    /// Explicit provenance of the inspected or written source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    pub mode: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policies: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -27,7 +25,7 @@ pub struct PolicyReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy: Option<serde_json::Value>,
+    pub policy: Option<bitrouter_ai::policy::Document>,
     pub applied: bool,
     /// Present when this command changed `bitrouter.yaml`. `saved_only` avoids
     /// implying that a running daemon consumed the edit.
@@ -50,12 +48,11 @@ impl CliReport for PolicyReport {
         if let Some(source) = &self.source {
             h.line(&format!("  source: {source}"))?;
         }
-        h.line(&format!("  mode: {}", self.mode))?;
         if !self.policies.is_empty() {
             h.line(&format!("  policies: {}", self.policies.join(", ")))?;
         }
-        for (preset, policy) in &self.bindings {
-            h.line(&format!("  @{preset} -> {policy}"))?;
+        for (router, policy) in &self.bindings {
+            h.line(&format!("  bitrouter/{router} -> {policy}"))?;
         }
         for change in &self.changes {
             h.line(&format!("  {change}"))?;
@@ -90,26 +87,34 @@ mod tests {
     use crate::output::{Format, Output};
 
     #[test]
-    fn legacy_disk_show_keeps_its_json_shape_and_marks_the_source() -> anyhow::Result<()> {
+    fn disk_source_is_resubmittable_and_marks_its_provenance() -> anyhow::Result<()> {
         let report = PolicyReport {
             action: "show".to_string(),
-            path: Some("/tmp/policy-lock.yaml".to_string()),
+            path: Some("/tmp/policy.yaml".to_string()),
             candidate_path: None,
             digest: Some("digest".to_string()),
             source: Some("disk".to_string()),
-            mode: "frozen".to_string(),
             policies: vec!["default".to_string()],
             bindings: BTreeMap::new(),
             changes: Vec::new(),
-            policy: Some(serde_json::json!({"tiers": {"fast": "openai/gpt-5"}})),
+            policy: Some(serde_json::from_value(serde_json::json!({
+                "spec_version":"policy/1.0.0-beta.1", "policies":{"default":{
+                    "tiers":{"fast":{"model":"fixture/fast"}},"default_tier":"fast"
+                }}
+            }))?),
             applied: false,
             config_activation: None,
         };
 
         let value = serde_json::to_value(report)?;
         assert_eq!(value["action"], "show");
-        assert_eq!(value["path"], "/tmp/policy-lock.yaml");
-        assert_eq!(value["policy"]["tiers"]["fast"], "openai/gpt-5");
+        assert_eq!(value["path"], "/tmp/policy.yaml");
+        let source: bitrouter_ai::policy::Document =
+            serde_json::from_value(value["policy"].clone())?;
+        assert_eq!(
+            source.policies["default"].tiers["fast"].model,
+            "fixture/fast"
+        );
         assert_eq!(value["applied"], false);
         assert_eq!(value["source"], "disk");
         Ok(())
@@ -119,11 +124,10 @@ mod tests {
     fn init_marks_config_edits_as_saved_only() -> anyhow::Result<()> {
         let report = PolicyReport {
             action: "init".to_string(),
-            path: Some("/tmp/policy-lock.yaml".to_string()),
+            path: Some("/tmp/policy.yaml".to_string()),
             candidate_path: None,
             digest: Some("digest".to_string()),
             source: Some("disk".to_string()),
-            mode: "frozen".to_string(),
             policies: vec!["default".to_string()],
             bindings: BTreeMap::from([("coding".to_string(), "default".to_string())]),
             changes: vec!["saved named policy binding".to_string()],
@@ -137,6 +141,7 @@ mod tests {
         let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
         assert!(human.contains("configuration: saved only"), "{human}");
         assert!(human.contains("status"), "{human}");
+        assert!(human.contains("bitrouter/coding -> default"), "{human}");
         assert!(
             human.contains("before assuming the running daemon changed"),
             "{human}"

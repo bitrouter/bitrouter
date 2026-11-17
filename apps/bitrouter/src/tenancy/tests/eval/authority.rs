@@ -49,7 +49,7 @@ async fn seed(fixture: &Fixture, router: &Router, secret: &str) -> Result<EvalSn
                 secret,
                 "POST",
                 "subjects",
-                serde_json::to_vec(&subject()?)?,
+                serde_json::to_vec(&subject(fixture)?)?,
             )?)
             .await?,
     )
@@ -104,7 +104,7 @@ async fn matrix(
         (
             "POST",
             "subjects".to_owned(),
-            serde_json::to_vec(&subject()?)?,
+            serde_json::to_vec(&subject(fixture)?)?,
             write,
         ),
         (
@@ -467,7 +467,7 @@ async fn host_operator_and_receipt_audit_tokens_do_not_become_ordinary_ledger_cr
                 ("GET", "subjects", Vec::new()),
                 ("GET", "subjects/owned-subject", Vec::new()),
                 ("GET", snapshot_path.as_str(), Vec::new()),
-                ("POST", "subjects", serde_json::to_vec(&subject()?)?),
+                ("POST", "subjects", serde_json::to_vec(&subject(&fixture)?)?),
                 (
                     "POST",
                     "results",
@@ -521,7 +521,7 @@ async fn admission_count(fixture: &Fixture) -> Result<i64> {
     Ok(row.try_get("", "total")?)
 }
 
-async fn second_tenant(first: &Fixture) -> Result<Fixture> {
+pub(in crate::tenancy::tests) async fn second_tenant(first: &Fixture) -> Result<Fixture> {
     let tenant: TenantId = "tenant-b".try_into()?;
     let principal: PrincipalId = "principal-b".try_into()?;
     let binding: BindingId = "binding-b".try_into()?;
@@ -665,8 +665,7 @@ async fn rotated_principal_replays_without_new_events_but_foreign_tenant_body_is
         let other = second_tenant(&fixture).await?;
         let other_key = other.issue("foreign-tenant-key").await?;
         let other_secret = other_key.secret.as_deref().context("other secret")?;
-        // Valid B authority cannot read A's path or adopt A's evaluator identity,
-        // even after a same-name B subject has been imported successfully.
+        // Valid B authority cannot read A's path or adopt A's subject identity.
         denied(
             router
                 .clone()
@@ -681,7 +680,7 @@ async fn rotated_principal_replays_without_new_events_but_foreign_tenant_body_is
             ErrorCode::Forbidden,
         )
         .await?;
-        let _: PutSubjectReport = json(
+        denied(
             router
                 .clone()
                 .oneshot(request(
@@ -689,11 +688,64 @@ async fn rotated_principal_replays_without_new_events_but_foreign_tenant_body_is
                     other_secret,
                     "POST",
                     "subjects",
-                    serde_json::to_vec(&subject()?)?,
+                    serde_json::to_vec(&subject(&fixture)?)?,
+                )?)
+                .await?,
+            ErrorCode::Forbidden,
+        )
+        .await?;
+        let absent: Vec<EvalSubject> = json(
+            router
+                .clone()
+                .oneshot(request(
+                    &other,
+                    other_secret,
+                    "GET",
+                    "subjects",
+                    Vec::new(),
                 )?)
                 .await?,
         )
         .await?;
+        ensure!(absent.is_empty());
+        ensure!(result_provenance(&other).await?.is_empty() && admission_count(&other).await? == 0);
+        ensure!(result_provenance(&fixture).await? == before);
+        ensure!(admission_count(&fixture).await? == admissions);
+        // B may create its own closure using the same logical IDs and evidence;
+        // A's evaluator body still cannot be attributed to that B-owned subject.
+        let own_subject = subject(&other)?;
+        ensure!(
+            own_subject.eval_id == body.eval_id
+                && own_subject.evidence_digest == body.evidence_digest
+        );
+        let put: PutSubjectReport = json(
+            router
+                .clone()
+                .oneshot(request(
+                    &other,
+                    other_secret,
+                    "POST",
+                    "subjects",
+                    serde_json::to_vec(&own_subject)?,
+                )?)
+                .await?,
+        )
+        .await?;
+        ensure!(put.outcome == bitrouter_ai::eval::SubjectInsertOutcome::Inserted);
+        let found: EvalSubject = json(
+            router
+                .clone()
+                .oneshot(request(
+                    &other,
+                    other_secret,
+                    "GET",
+                    "subjects/owned-subject",
+                    Vec::new(),
+                )?)
+                .await?,
+        )
+        .await?;
+        ensure!(found == own_subject);
         denied(
             router
                 .clone()
@@ -761,6 +813,9 @@ async fn rotated_principal_replays_without_new_events_but_foreign_tenant_body_is
                 && own.status == AdmissionStatus::Admitted
                 && own.result_id != replay.result_id
         );
+        let own_provenance = result_provenance(&other).await?;
+        ensure!(own_provenance.len() == 1 && own_provenance[0].1 == other.principal.as_str());
+        ensure!(admission_count(&other).await? == 1);
         ensure!(result_provenance(&fixture).await? == before);
         ensure!(admission_count(&fixture).await? == admissions);
         let unchanged: EvalSnapshot = json(
@@ -935,7 +990,7 @@ async fn held_transaction_rechecks_expiry_and_scope_without_revision_change() ->
                     secret,
                     "POST",
                     "subjects",
-                    serde_json::to_vec(&subject()?)?,
+                    serde_json::to_vec(&subject(&fixture)?)?,
                 )?),
             ));
             tokio::time::timeout(Duration::from_secs(3), async {

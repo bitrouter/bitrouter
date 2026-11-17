@@ -109,14 +109,12 @@ archive compression does not prove space was returned to the filesystem.
 Monitor real disk/WAL growth and maintain headroom: other filesystem users and
 SQLite write amplification can still cause ENOSPC after an admission probe.
 
-The format-2 store has no lifetime directory/history count quota. Startup walks
+The current store has no lifetime directory/history count quota. Startup walks
 all retained pages before serving; an insufficient validation working budget
-never authorizes a partial scan. Healthy legacy stores upgrade during validated
-startup. A verified legacy count-saturation latch requires the explicit stopped
-`tenancy offline upgrade-capacity` procedure in
-[the CLI reference](cli.md#local-db-only-offline-evidence); it is not a general
-fence-clearing command. Do not delete history or choose new operation IDs to
-work around uncertain outcomes.
+never authorizes a partial scan. Historical authority formats and count-latch
+upgrades are rejected. Start a new current-format installation and preserve
+old data separately; never delete history or reset operation IDs to bypass an
+uncertain outcome. Current authority validation remains mandatory.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
 `ordered_attempt_limit` bounds explicit ordered v2 submissions to 1–64 candidates
@@ -305,9 +303,10 @@ bro --context workstation requests --limit 50 --provider openai \
   --since 2026-09-07T00:00:00Z --until 2026-09-08T00:00:00Z
 ```
 
-Remote policy reads default to `active`; local policy reads retain their disk
-view unless `--view active` is explicit. The disk view shows host files waiting
-to be applied. Agent listing is passive and never starts an agent. Remote
+Policy reads default to `active` for every target. Select `--disk` or
+`--view disk` explicitly for host files waiting to be applied. `show` returns
+the complete resubmittable document in `source`; `source_digest`, view,
+availability and router bindings remain separate report metadata. Agent listing is passive and never starts an agent. Remote
 `agents list --remote` is rejected because that flag selects an external registry.
 
 Request intervals require both RFC3339 bounds, span at most seven days, and use
@@ -345,7 +344,7 @@ means the outcome is unknown, not that the earlier reload did not happen.
 ## Saved versus running configuration
 
 `status.config_state` is computed by the target daemon, including independently
-loaded policy-lock and access-policy evidence. Missing/invalid files, unknown
+loaded model-policy source and access-policy evidence. Missing/invalid files, unknown
 older-daemon capabilities, partial reloads, and restart-only changes are explicit;
 clients never substitute local config or credentials. Local IPC, SIGHUP, and
 remote reload now share startup-field rejection rules. Read `running` and the

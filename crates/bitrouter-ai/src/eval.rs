@@ -1,11 +1,18 @@
 //! Evaluation exchange contracts. Authority, evidence admission, digest
 //! construction and persistence are service-owned; these types perform no I/O.
 
+use crate::tenancy::{
+    configuration::ResourceRef,
+    identity::{ExecutionId, InstallationId, RevisionId, TenantId},
+};
 use crate::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const EVAL_SCHEMA_VERSION: u32 = 1;
+/// Current closed subject identity contract.
+pub const EVAL_SUBJECT_SCHEMA_VERSION: u32 = 2;
+/// Result payloads inherit identity from their validated subject.
+pub const EVAL_RESULT_SCHEMA_VERSION: u32 = 1;
 pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -110,16 +117,89 @@ pub struct EvidenceItem {
     pub attributes: BTreeMap<String, String>,
 }
 
+/// Explicit association with an actual immutable execution receipt.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvalExecutionRef {
+    /// Invocation being evaluated, in the enclosing tenant namespace.
+    pub execution_id: ExecutionId,
+    /// Configuration revision used by that invocation.
+    pub configuration_revision: RevisionId,
+}
+
+/// Closed identity profiles. Digests and policy names alone grant no identity.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "profile", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EvalSubjectIdentity {
+    /// Model-policy evidence for one exact immutable route binding.
+    TenantModelPolicy {
+        /// Persistent service installation.
+        installation_id: InstallationId,
+        /// Authenticated tenant namespace.
+        tenant_id: TenantId,
+        /// Immutable configuration containing the bound route.
+        configuration_revision: RevisionId,
+        /// Full owner/kind/resource/revision identity of the selected Policy.
+        policy: ResourceRef,
+        /// Literal selected name in that Policy document.
+        name: String,
+        /// Optional source evidence; never a resource revision or authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_digest: Option<String>,
+        /// Optional classifier evidence, distinct from the source digest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        classifier_digest: Option<String>,
+        /// Optional actual invocation; the service verifies its receipt.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<EvalExecutionRef>,
+    },
+    /// Policy-free tenant evidence, never eligible as model-policy evidence.
+    TenantGeneric {
+        /// Persistent service installation.
+        installation_id: InstallationId,
+        /// Authenticated tenant namespace.
+        tenant_id: TenantId,
+        /// Optional actual invocation, including its configuration revision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<EvalExecutionRef>,
+    },
+    /// Gateway evidence using the gateway's independent authentication authority.
+    GatewayGeneric {},
+}
+
+impl EvalSubjectIdentity {
+    /// Tenant namespace claimed by this profile; never an authorization proof.
+    pub fn tenant_namespace(&self) -> Option<(&InstallationId, &TenantId)> {
+        match self {
+            Self::TenantModelPolicy {
+                installation_id,
+                tenant_id,
+                ..
+            }
+            | Self::TenantGeneric {
+                installation_id,
+                tenant_id,
+                ..
+            } => Some((installation_id, tenant_id)),
+            Self::GatewayGeneric {} => None,
+        }
+    }
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalSubject {
+    #[serde(deserialize_with = "subject_schema_version")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 2, max = 2)))]
     pub schema_version: u32,
+    /// Exact service-validated profile and resource ownership.
+    pub identity: EvalSubjectIdentity,
     pub eval_id: String,
     pub scope: EvalScope,
     pub subject_id: String,
-    pub policy_digest: String,
-    pub preset: Option<String>,
     pub cohort: Option<String>,
     pub holdout: bool,
     #[serde(default)]
@@ -130,6 +210,19 @@ pub struct EvalSubject {
     pub evidence: Vec<EvidenceItem>,
     pub evidence_digest: String,
     pub observed_at: String,
+}
+
+fn subject_schema_version<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version == EVAL_SUBJECT_SCHEMA_VERSION {
+        Ok(version)
+    } else {
+        Err(serde::de::Error::custom(
+            "unsupported eval subject schema version",
+        ))
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

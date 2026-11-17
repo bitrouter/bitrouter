@@ -96,6 +96,7 @@ impl TrajectoryRuntime {
         .map(|(correlated, _)| correlated)
     }
 
+    #[cfg(test)]
     pub(crate) async fn begin_guarded_request(
         &self,
         owner_user_id: &str,

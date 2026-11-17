@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **accepted M0 revision, implementation pending, `service-api/1.0.0-beta.5`**. This is the single
+Status: **accepted, `service-api/1.0.0-beta.5`**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -37,11 +37,10 @@ Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
 formats retain their existing meanings and eight-attempt bound. The store boundary prevents an older binary from opening current authority data.
 
-### M0 cutover status
+### M0 cutover
 
-The following M0 decisions are accepted normative requirements pending DTO,
-schema, service, SDK and conformance implementation. They do not assert current
-binary support. Policy source remains unchanged, unpublished beta.1; Registry
+The following M0 decisions apply to DTOs, schemas, services, SDKs and conformance
+tests. Policy source remains unchanged, unpublished beta.1; Registry
 beta.7 is unchanged. Configuration and this API advance to beta.5. Historical
 PolicyLock, paid-recovery, offline conversion/backfill and dual-reader contracts
 are retired for this cutover. Current-format recovery remains mandatory.

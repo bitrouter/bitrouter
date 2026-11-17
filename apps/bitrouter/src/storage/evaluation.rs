@@ -5,9 +5,9 @@
 pub(crate) mod shared;
 
 use bitrouter_ai::eval::{
-    EVAL_SCHEMA_VERSION, EvalExperimentRef, EvalSubject, EvaluationResult, EvidenceItem,
-    ExperimentArm, ROUTE_MEASUREMENT_SCHEMA_VERSION, RouteActionCandidate,
-    RouteDecisionMeasurement,
+    EVAL_RESULT_SCHEMA_VERSION, EVAL_SUBJECT_SCHEMA_VERSION, EvalExperimentRef, EvalSubject,
+    EvalSubjectIdentity, EvaluationResult, EvidenceItem, ExperimentArm,
+    ROUTE_MEASUREMENT_SCHEMA_VERSION, RouteActionCandidate, RouteDecisionMeasurement,
 };
 use std::collections::BTreeSet;
 
@@ -48,25 +48,59 @@ pub(crate) fn route_decision_measurement(
     Ok(measurement)
 }
 
-#[cfg(any(feature = "core", feature = "multi-instance", test))]
 pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
     validate_subject(value)?;
     canonical_digest(value)
 }
 
-#[cfg(any(feature = "core", feature = "multi-instance"))]
+/// Current identity projection, domain-separated from source and evidence digests.
+pub(crate) fn identity_digest(identity: &EvalSubjectIdentity) -> Result<String> {
+    canonical_digest(&("bitrouter.eval.subject.identity.v2", identity))
+}
+
 pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
     validate_result(value)?;
     canonical_digest(value)
 }
 
 pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
-    if subject.schema_version != EVAL_SCHEMA_VERSION {
+    if subject.schema_version != EVAL_SUBJECT_SCHEMA_VERSION {
         anyhow::bail!("unsupported eval subject schema version")
     }
     validate_identifier(&subject.eval_id, "eval_id")?;
     validate_identifier(&subject.subject_id, "subject_id")?;
-    validate_digest(&subject.policy_digest, "policy_digest")?;
+    if let EvalSubjectIdentity::TenantModelPolicy {
+        policy,
+        name,
+        source_digest,
+        classifier_digest,
+        configuration_revision,
+        execution,
+        ..
+    } = &subject.identity
+    {
+        anyhow::ensure!(
+            policy.resource_kind == bitrouter_ai::tenancy::authority::ResourceKind::Policy,
+            "eval policy reference kind"
+        );
+        validate_identifier(name, "identity.name")?;
+        if let Some(digest) = source_digest {
+            validate_digest(digest, "identity.source_digest")?;
+        }
+        if let Some(digest) = classifier_digest {
+            validate_digest(digest, "identity.classifier_digest")?;
+        }
+        anyhow::ensure!(execution.as_ref().is_none_or(|execution|
+            &execution.configuration_revision == configuration_revision),
+            "eval execution configuration mismatch");
+        anyhow::ensure!(
+            subject
+                .decisions
+                .iter()
+                .all(|decision| &decision.policy == name),
+            "eval decision selected name mismatch"
+        );
+    }
     chrono::DateTime::parse_from_rfc3339(&subject.observed_at)
         .context("observed_at must be RFC3339")?;
     let mut decision_ids = BTreeSet::new();
@@ -255,7 +289,7 @@ fn validate_model_id(value: &str, field: &str) -> Result<()> {
 }
 
 pub fn validate_result(result: &EvaluationResult) -> Result<()> {
-    if result.schema_version != EVAL_SCHEMA_VERSION {
+    if result.schema_version != EVAL_RESULT_SCHEMA_VERSION {
         anyhow::bail!("unsupported evaluation result schema version")
     }
     validate_identifier(&result.eval_id, "eval_id")?;
@@ -470,7 +504,7 @@ mod tests {
         ] {
             let subject = subject_fixture();
             let result = EvaluationResult {
-                schema_version: EVAL_SCHEMA_VERSION,
+                schema_version: EVAL_RESULT_SCHEMA_VERSION,
                 eval_id: subject.eval_id.clone(),
                 evidence_digest: subject.evidence_digest.clone(),
                 evaluator: EvaluatorIdentity {
@@ -478,7 +512,9 @@ mod tests {
                     evaluator_id: "fixture-evaluator".into(),
                     kind,
                     version: "1".into(),
-                    config_digest: subject.policy_digest.clone(),
+                    config_digest:
+                        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                            .to_owned(),
                 },
                 verdict: EvalVerdict::Pass,
                 metrics: BTreeMap::from([(
@@ -562,7 +598,7 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("balanced".into()),
             baseline_effort: None,
-            policy_digest: subject.policy_digest.clone(),
+            policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             experiment: None,
             route_measurement: None,
         });
@@ -581,7 +617,8 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            policy_digest: subject.policy_digest.clone(),
+            policy_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             experiment: None,
             route_measurement: None,
         };
@@ -708,12 +745,17 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            policy_digest: subject.policy_digest.clone(),
+            policy_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             experiment: Some(EvalExperimentRef {
-                experiment_id: subject.policy_digest.clone(),
+                experiment_id:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_owned(),
                 arm: ExperimentArm::Control,
                 assignment_unit: ExperimentAssignmentUnit::Task,
-                assignment_id_digest: subject.policy_digest.clone(),
+                assignment_id_digest:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_owned(),
                 challenger_propensity_ppm: 100_000,
             }),
             route_measurement: Some(crate::storage::evaluation::route_decision_measurement(
@@ -837,7 +879,7 @@ mod tests {
     fn result_cannot_reference_missing_subject_evidence() -> anyhow::Result<()> {
         let subject = subject_fixture();
         let result = EvaluationResult {
-            schema_version: EVAL_SCHEMA_VERSION,
+            schema_version: EVAL_RESULT_SCHEMA_VERSION,
             eval_id: subject.eval_id.clone(),
             evidence_digest: subject.evidence_digest.clone(),
             evaluator: EvaluatorIdentity {
@@ -845,7 +887,9 @@ mod tests {
                 evaluator_id: "task-runner".into(),
                 kind: EvaluatorKind::TaskNative,
                 version: "1".into(),
-                config_digest: subject.policy_digest.clone(),
+                config_digest:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_owned(),
             },
             verdict: EvalVerdict::Pass,
             metrics: BTreeMap::new(),
@@ -871,13 +915,11 @@ mod tests {
             attributes: Default::default(),
         }];
         EvalSubject {
-            schema_version: 1,
+            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: "eval-1".into(),
             scope: EvalScope::Request,
             subject_id: "request-1".into(),
-            policy_digest:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            preset: Some("auto".into()),
             cohort: None,
             holdout: false,
             decisions: Vec::new(),

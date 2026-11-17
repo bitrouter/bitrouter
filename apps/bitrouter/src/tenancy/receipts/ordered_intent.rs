@@ -351,7 +351,7 @@ pub(in crate::tenancy) async fn inventory(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
 ) -> Result<PendingInventory> {
-    crate::db::migration::m20240101_000045_ordered_receipts::validate(db).await?;
+    crate::db::migration::validate_ordered_receipts(db).await?;
     let backend = db.get_database_backend();
     let length = octets(backend, "intent_json");
     let invalid=Query::select().from(Alias::new(TABLE)).expr(Expr::val(1)).and_where(Expr::cust(format!("{length} NOT BETWEEN 1 AND {MAX_BYTES} OR byte_count != {length} OR {} != 64 OR {} >128 OR {} >128 OR {} >128",octets(backend,"content_digest"),octets(backend,"installation_id"),octets(backend,"tenant_id"),octets(backend,"execution_id")))).limit(1).to_owned();

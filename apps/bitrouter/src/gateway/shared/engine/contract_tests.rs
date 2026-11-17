@@ -11,8 +11,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use serde_json::json;
 
 use super::{
-    Admission, AdmissionResult, Engine, EpisodeFence, Execution, Outbox, Resource, Tenant,
-    TenantLimits, TrajectoryBinding,
+    Admission, AdmissionResult, Engine, Execution, Outbox, Resource, Tenant, TenantLimits,
 };
 use crate::auth::db::{NewApiKey, insert_api_key, upsert_user};
 use crate::gateway::providers::auth::{credentials::Credential, store::CredentialKey};
@@ -27,13 +26,6 @@ use crate::gateway::shared::{
 };
 use crate::metering::shared::{SharedMetering, evidence::Attribution};
 use crate::runtime_crypto::DeploymentKey;
-use crate::trajectory::{
-    shared::SharedTrajectory,
-    types::{
-        BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, TRAJECTORY_SCHEMA_VERSION,
-        TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence,
-    },
-};
 
 struct Fixture {
     engine: Engine,
@@ -91,10 +83,10 @@ impl Fixture {
             )
             .await?;
         let publication = Configuration {
-            format: 1,
+            format: 2,
             routing: json!({"trajectory": {"enabled": true}}),
             policies: vec![],
-            policy_lock: Some(crate::model_policy::parse(&json!({
+            model_policy: Some(crate::model_policy::parse(&json!({
                 "spec_version": "policy/1.0.0-beta.1",
                 "policies": {"auto": {
                     "tiers": {"standard": {"model": "fixture:small"}},
@@ -121,7 +113,7 @@ impl Fixture {
             .admit(&Admission {
                 requirements: Requirements::from_config(
                     &config,
-                    self.publication.policy_lock.as_ref(),
+                    self.publication.model_policy.as_ref(),
                 )?,
                 key_hash: &self.key_hash,
                 correlation_id: "contract-fixture",
@@ -174,33 +166,20 @@ impl Fixture {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_legacy_publication_rejection_preserves_authority() -> Result<()> {
+async fn postgres_invalid_source_publication_rejection_preserves_authority() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let f = Fixture::new(&mut database).await?;
         let head = f.engine.authority.head().await?;
         let before = f.snapshot().await?;
         let mut rejected = f.publication.clone();
-        let mut legacy: crate::policy_lock::PolicyLock =
-            serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
-        legacy
+        let mut invalid = rejected.model_policy.take().context("source missing")?;
+        invalid
             .policies
             .get_mut("auto")
-            .context("legacy policy missing")?
-            .progress_guard = Some(crate::trajectory::guard::ProgressGuardPolicy {
-            escalation_tier: "strong".into(),
-            protected_tiers: ["strong".into()].into(),
-            max_consecutive_unprotected: None,
-            max_same_projection_unprotected: None,
-            max_recovery_count: None,
-            max_episode_requests: Some(1),
-            max_episode_elapsed_ms: None,
-            max_episode_cost_micro_usd: None,
-            hold_for_requests: 2,
-            incomplete_history: crate::trajectory::guard::IncompleteHistoryAction::Observe,
-        });
-        crate::policy_lock::validate_document(&legacy)?;
-        rejected.policy_lock = Some(legacy);
+            .context("policy missing")?
+            .default_tier = "missing".into();
+        rejected.model_policy = Some(invalid);
         let error = f
             .engine
             .authority
@@ -208,7 +187,7 @@ async fn postgres_legacy_publication_rejection_preserves_authority() -> Result<(
             .await
             .err()
             .context("legacy publication accepted")?;
-        ensure!(error.to_string().contains("model-only contract"));
+        ensure!(error.to_string().contains("default tier"));
         ensure!(f.snapshot().await? == before);
         let retained = f.engine.authority.head().await?;
         ensure!(retained.revision() == head.revision());
@@ -363,80 +342,22 @@ async fn postgres_capture_identity_rejects_before_attempt_or_terminal_writes() -
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]
-async fn postgres_read_committed_terminal_invalidates_serializable_fence_snapshot() -> Result<()> {
+async fn postgres_read_committed_terminal_invalidates_serializable_execution_snapshot() -> Result<()>
+{
     let mut database = EmptyDatabase::create().await?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let f = Fixture::new(&mut database).await?;
         let id = f.admit().await?;
-        // Exercise the ordinary binding/finalization primitives directly. There
-        // is no guarded route, escalation or experimental policy publication.
-        let binding = TrajectoryBinding {
-            owner_user_id: "tenant".into(),
-            episode_id: "ordinary-episode".into(),
-            request_id: "ordinary-request".into(),
-            correlation_epoch: "ordinary-epoch".into(),
-        };
-        let setup = f.observer.begin().await?;
-        let digest = KeyedDigest::parse(format!("hmac-sha256:ordinary-epoch:{}", "a".repeat(64)))?;
-        let mut event = TrajectoryEvent {
-            schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: format!("start-{id}"),
-            owner_user_id: binding.owner_user_id.clone(),
-            episode_id: binding.episode_id.clone(),
-            request_id: Some(binding.request_id.clone()),
-            sequence: 1,
-            kind: TrajectoryEventKind::RequestStarted,
-            evidence: TrajectoryEvidence {
-                structural: Default::default(),
-                categorical: [
-                    ("correlation.source".into(), "explicit_root".into()),
-                    ("history.completeness".into(), "complete".into()),
-                ]
-                .into(),
-                digests: Default::default(),
-                route_measurement: None,
-                routing_evidence: vec![],
-            },
-            captured_at: "2026-01-01T00:00:00Z".into(),
-            content_digest: String::new(),
-        };
-        event.content_digest = event.semantic_digest()?;
-        SharedTrajectory::new(f.observer.namespace())?
-            .begin_in(
-                &setup,
-                "tenant",
-                &BeginRequest {
-                    episode: EpisodeStart {
-                        episode_id: binding.episode_id.clone(),
-                        correlation_digest: digest.clone(),
-                        correlation_key_id: binding.correlation_epoch.clone(),
-                        correlation_source: "explicit_root".into(),
-                        completeness: HistoryCompleteness::Complete,
-                    },
-                    event,
-                    full_input_digest: digest,
-                    native_parent_id: None,
-                    protocol: "responses".into(),
-                },
-            )
-            .await?;
-        f.engine.bind_trajectory(&setup, &id, &binding).await?;
-        let fence = f
-            .engine
-            .episode_fence(&setup, &binding, Store::now(&setup).await?)
-            .await?;
-        let key = fence.key().to_owned();
-        setup.commit().await?;
         let stale = f.observer.begin().await?;
         let result = async {
             // This awaited MVCC read fixes the old snapshot without holding a
             // row lock that could block the Read Committed terminal writer.
-            let before: Stored<EpisodeFence> = f
+            let before: Stored<Execution> = f
                 .observer
-                .read(&stale, Kind::EpisodeFence, &key)
+                .read(&stale, Kind::Execution, &id)
                 .await?
-                .context("original fence missing")?;
-            ensure!(before.value.pending.is_empty());
+                .context("execution missing")?;
+            ensure!(matches!(before.value.view.state, ExecutionState::Accepted));
             let failure = TerminalOutcome::Failed {
                 code: "fixture_before_dispatch".into(),
             };
@@ -448,7 +369,7 @@ async fn postgres_read_committed_terminal_invalidates_serializable_fence_snapsho
                 .await?
                 .context("terminal execution missing")?;
             ensure!(execution.value.view == finished && execution.revision()? == finished.revision);
-            ensure!(execution.value.trajectory.as_ref() == Some(&binding));
+            ensure!(execution.value.trajectory.is_none());
             let outbox: Stored<Outbox> = f
                 .observer
                 .get(Kind::Outbox, &format!("gateway-terminal-{id}"))
@@ -460,11 +381,11 @@ async fn postgres_read_committed_terminal_invalidates_serializable_fence_snapsho
             );
             let committed = f.snapshot().await?;
             let error = f
-                .engine
-                .episode_fence(&stale, &binding, Store::now(&stale).await?)
+                .observer
+                .lock::<Execution>(&stale, Kind::Execution, &id)
                 .await
                 .err()
-                .context("stale terminal fence remained lockable")?;
+                .context("stale execution snapshot remained lockable")?;
             ensure!(
                 is_serialization_abort(&error),
                 "expected SQLSTATE 40001, got {error:#}"
@@ -484,13 +405,6 @@ async fn postgres_read_committed_terminal_invalidates_serializable_fence_snapsho
             f.snapshot().await? == committed,
             "stale abort changed durable state"
         );
-        let pending: Stored<EpisodeFence> = f
-            .observer
-            .get(Kind::EpisodeFence, &key)
-            .await?
-            .context("pending fence missing")?;
-        ensure!(pending.value.pending == [id].into());
-        ensure!(pending.revision()? == fence.revision()? + 1);
         Ok(())
     })
     .await

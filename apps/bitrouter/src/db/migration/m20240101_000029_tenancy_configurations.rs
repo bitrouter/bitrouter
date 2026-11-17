@@ -5,9 +5,6 @@ use sea_orm_migration::prelude::*;
 
 use super::m20240101_000028_resource_tenancy::{identity, payload};
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 const TABLES: [&str; 3] = [
     "tenancy_resource_revisions",
     "tenancy_configurations",
@@ -108,26 +105,12 @@ pub(super) fn statements(backend: DatabaseBackend) -> Vec<TableCreateStatement> 
     ]
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Every lookup uses a table's primary key. No separate CREATE INDEX is
-        // needed, so resuming MySQL's committed DDL cannot duplicate an index.
-        for statement in statements(manager.get_database_backend()) {
-            manager.create_table(statement).await?;
-        }
-        Ok(())
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    // Every lookup uses a table's primary key. No separate CREATE INDEX is
+    // needed, so resuming MySQL's committed DDL cannot duplicate an index.
+    for statement in statements(manager.get_database_backend()) {
+        manager.create_table(statement).await?;
     }
-
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        for name in TABLES.into_iter().rev() {
-            manager
-                .drop_table(Table::drop().table(Alias::new(name)).to_owned())
-                .await?;
-        }
-        Ok(())
-    }
+    Ok(())
 }
-
-#[cfg(test)]
-mod tests;

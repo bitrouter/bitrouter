@@ -25,15 +25,15 @@ M0 要交付一个贯通默认值、文件、CLI、SDK、API 和持久化的 mod
 
 ## 2. 已核实的分歧与处理归属
 
-下表是实施入口清单；同名函数的调用方、生成物和测试必须随之更新，不能仅修改列出的文件。
+下表记录核查基线的问题及处理归属，不描述重构后的当前行为。保留文件的链接用于定位实施入口；已退役模块仅保留为删除清单名称。调用方、生成物和测试必须随之更新，不能仅修改列出的文件。
 
-| ID | 当前事实与入口 | M0 处理 |
+| ID | 基线问题与实施入口 | M0 处理 |
 | --- | --- | --- |
-| F01 | [内置默认值](../../apps/bitrouter/policy/default.yaml) 是 `lockfileVersion: 4`，tiers 含 `context: evidence`；[auto-router 模板](../../templates/auto-router/policy-lock.yaml) 另含 progress guard | 重写为公共 Policy source；默认只选择模型和 effort，保留完整上下文。模板和内置值共用语义校验 |
+| F01 | 旧默认值与模板曾使用 v4、context 和 guard；替代文件为[内置 source](../../apps/bitrouter/policy/default.yaml) 和 [auto-router source](../../templates/auto-router/policy.yaml) | 重写为公共 Policy source；默认只选择模型和 effort，保留完整上下文。模板和内置值共用语义校验 |
 | F02 | [policy_lock.rs](../../apps/bitrouter/src/policy_lock.rs) 的 `load_for_config`、`load`、`write_atomic*`、history/publish/rollback 直接读写旧 lock；[assemble.rs](../../apps/bitrouter/src/assemble.rs)、[reload.rs](../../apps/bitrouter/src/reload.rs) 继续使用它 | 统一 source 加载与发布；删除旧文件 decoder/writer、v4 校验、转换和回退。保留原子写入、冲突检查与 reload 事务语义 |
 | F03 | 同文件 `initialize_*` 创建旧 `PolicyLock` 和 adequacy；[main.rs](../../apps/bitrouter/src/main.rs) 的 `PolicyAction::Compile` 帮助写 v3，实际 compiler 输出 v4 | init 输出新 source；更新全部命令输出。旧 compile/evolve/evidence-verify 退出成熟 Policy 命令，不能只改帮助或序列化字段 |
-| F04 | [core/policy](../../apps/bitrouter/src/core/policy/mod.rs)、[core/policy/files.rs](../../apps/bitrouter/src/core/policy/files.rs) 把证书、优化和 guard 写进候选；新服务 `model_policy::source` 反向校验会拒绝非新编译器产物 | 删除旧候选交换链。Eval 事实、候选生成与显式 Policy 更新分开，成熟闭环使用同一公共 source；试验算法归 BRO 或删除 |
-| F05 | [config/mod.rs](../../apps/bitrouter/src/config/mod.rs) 接受 `writeback`、`locked`、`evolve` 别名；[config/router.rs](../../apps/bitrouter/src/config/router.rs) 将旧 presets 归一化；[router_migration.rs](../../apps/bitrouter/src/router_migration.rs) 提供历史迁移 | 删除这些路由/Policy 兼容入口，统一 `routers` 和 `bitrouter/<id>`。旧 `--preset`、旧路由地址及配置迁移命令不再提供转换 |
+| F04 | 旧 `core/policy/{mod,files}.rs` 候选交换链和 compiler marker 桥均为退役对象；替代入口是 [model_policy](../../apps/bitrouter/src/model_policy.rs) 的公共 source 编译 | 删除旧候选交换链。Eval 事实、候选生成与显式 Policy 更新分开，成熟闭环使用同一公共 source；试验算法归 BRO 或删除 |
+| F05 | [config/mod.rs](../../apps/bitrouter/src/config/mod.rs) 接受 `writeback`、`locked`、`evolve` 别名；[config/router.rs](../../apps/bitrouter/src/config/router.rs) 将旧 presets 归一化；旧 `router_migration.rs` 是本次退役的历史转换入口 | 删除这些路由/Policy 兼容入口，统一 `routers` 和 `bitrouter/<id>`。旧 `--preset`、旧路由地址及配置迁移命令不再提供转换 |
 | F06 | [main.rs](../../apps/bitrouter/src/main.rs) 的 `is_legacy_local_policy_read` 保留另一条 status/show 输出路径；[actions/administration.rs](../../apps/bitrouter/src/actions/administration.rs) 暴露旧 artifact/certificates/含 context 的 target；[output/reports/policy.rs](../../apps/bitrouter/src/output/reports/policy.rs) 仍打印 `@preset` | 统一 active/disk 视图及 source DTO，报告明确来源和修订；CLI、远端控制、SDK 不暴露旧运行时 IR |
 | F07 | [model_policy.rs](../../apps/bitrouter/src/model_policy.rs) 将新 source 编译为旧 `PolicyLock`，依赖 compiler marker 和再编译相等恢复 source；`PolicyRuntime::preserves_context` 依赖这个 marker | 引入服务私有、只表达模型选择的编译结果。保存公共 source，取消旧结构的编译/反编译桥；上下文保留由类型和执行边界保证 |
 | F08 | [shared/publication.rs](../../apps/bitrouter/src/gateway/shared/publication.rs) 持久化旧 `PolicyLock`；[operator DTO](../../crates/bitrouter-ai/src/gateway/operator.rs) 用 `policy_lock: Value` 携带新 source | 新共享发布字段命名为 `model_policy`，使用公共 source 类型；旧字段拒绝。ACL 的 `policies` 集合保持独立，不冒充路由 Policy |

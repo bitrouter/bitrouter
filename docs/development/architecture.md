@@ -22,6 +22,42 @@ The `extensions/` directory expresses ownership and delivery boundaries; it does
 For the native runtime module map, execution reading order and test layout, see
 the [core and harness source guide](../../apps/bitrouter/HARNESS.md).
 
+### Accepted M0 product boundary
+
+The [canonical specs](../specs/README.md) define the M0 cutover and the product
+boundary below. CI and the implementation PR carry conformance evidence.
+
+BitRouter owns gateway execution, automatic model/effort selection, tenant
+isolation, immutable source/revisions, explicit Policy updates and Eval fact
+exchange. AI owns lightweight typed contracts; application model_policy owns
+validation and private compiled selection; SDK owns service transport. Source
+is retained directly. Files/defaults/CLI/SDK/API/export share that source, with
+no PolicyLock bridge, compiler marker or inferred source reconstruction.
+
+Context rewriting, orchestration, exploration, learning and paid assessment have
+an explicit BRO local harness owner or are removed. Mature tenant/shared product
+entry points reject those routes/dependencies even without Policy and in
+all-feature builds. Feature compilation is not product authority. Necessary
+runtime entry isolation is part of M0; large crate/binary splits are deferred.
+Current BRO producers require explicit ownership and matching current recovery;
+historical session formats are not automatically included in this cutover.
+
+Mature Policy and tenant Eval exchange are available in the minimum gateway
+profile independently of core/harness. External evaluators run revision-bound
+inference and submit facts. Service validation binds their installation, tenant,
+configuration, Policy ResourceRef and literal name; generic profiles have their
+own scope. Freeze and drafting never activate a revision. Publication/activation
+remain explicit authenticated CAS operations. No server Eval job runner or
+implicit learning backend is introduced.
+
+Affected service stores use current-only baseline/content validation before
+ready, registration or recovery writes. Old data stays with its old binary;
+new data locations/installation identities are explicit. Current receipt,
+stream-cancellation, unknown usage, cumulative budgets and recovery obligations
+remain required. See [tenant service](tenant-service.md) for ownership and the
+[store contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback)
+for actual format selection/refusal. A Policy-free active head is no exception.
+
 ### External interfaces
 
 Clients reach BitRouter through its external **interfaces** — the ways *in*. These are distinct from the gateway's internal *wire-protocol adapters* (Chat Completions / Responses / Messages, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.
@@ -328,13 +364,13 @@ The generation pipeline retains its hooks, request checks, execution, stream
 processing and settlement; MCP has its own routing contract. ACP belongs to
 harness execution, not a gateway protocol pipeline.
 
-Serving-time workflow extraction, identity, predictor contracts and decision
-records live in `gateway::routing::workflow`. Published experiment state and
-stable assignment live in `gateway::routing::exploration`; certificate identity
-and compiler-digest helpers live in `gateway::routing::experiment_identity`.
-Learning and replay consumers import these owners rather than supplying a second
-projection or assignment algorithm. The existing model/provider wire formats,
-experiment digest domains and policy-decision records are unchanged.
+Serving-time model classification and decision capture belong to gateway
+routing. Classifier contract identity is separate from source digest, compiled
+cache identity and immutable resource/configuration revisions. Experimental
+assignment, certificates and predictor/learner state have BRO ownership and
+cannot qualify a mature model Policy or become service publication authority.
+Retained experiment consumers must be moved together or retired; they do not
+justify keeping a second Policy format.
 
 Gateway `observability::decision` owns bounded pending policy observations and
 routing receipts; `observability::prediction` owns the response observer.
@@ -345,31 +381,20 @@ silently replace or erase the captured decision. Shared durable evaluation
 validation/digests live in application `storage::evaluation`, without publishing
 service algorithms through AI.
 
-Trajectory settlement always follows authoritative metering and persists its
-terminal fact and outbox envelope together. Without core, assembly does not
-construct an eval service/publisher or mount eval HTTP routes; outbox rows remain
-pending and retention protects them. Core-enabled assembly retains startup,
-request-triggered and shutdown drains. Evaluation, outbox publication, policy
-compilation/publication, optimization, adequacy and workflow research now live
-under `core::{eval,policy,optimization,adequacy,workflow_state}`. The file-based
-policy producer is `core::policy::files`; gateway `policy_lock` retains published
-artifact loading, validation and operator configuration/rollback operations.
-`eval`, `optimize`, `workflow-state` and policy compilation/publication commands
-require core, as does `BITROUTER_WORKFLOW_TRACE_JSONL` capture. Unavailable work
-is rejected before its input files or execution stores are opened. Ordinary
-trajectory inspection/replay/pruning remains available without core.
+Trajectory settlement follows authoritative metering and retains its terminal
+fact and outbox ownership. Experimental publishers, optimization, adequacy and
+workflow research remain BRO concerns when retained. Their feature gates do not
+own mature Policy file loading/publication or tenant Eval transport. Policy
+loading/init/show/publish/reload/rollback use the public source and preserve
+atomicity/conflict semantics without core learning. Legacy compile/evolve/
+evidence-verification entry points leave mature Policy commands. Unavailable
+experimental work is refused before input files or execution stores are opened.
 
-Checkpoint learning, scoring, operator controls and the background worker now
-live in `core::evolution`. Published block contracts, allocation draws, session
-membership, request intents and live dispatch fences belong to
-`gateway::routing::blocks`. Every build uses the same serving implementation,
-including adopted policies while evolution mode is Off. Core supplies posterior
-learning and operator/publication mutations through separate implementations.
-Without core, no evolution worker starts; unavailable CLI and local control
-operations reject execution. Shared
-checkpoint codecs and historical records live in application storage; live
-capture and conversation commits remain harness-owned. The progress ledger
-records the isolated dependency/runtime checks and outstanding final validation.
+Retained BRO checkpoint learning, scoring, block experiments and background
+workers require explicit local harness assembly. Tenant/shared endpoints never
+inherit their execution authority from core/harness features. Current codecs,
+obligation writers and recovery move together under that owner. No historical
+paid-recovery decoder is retained as an exception to the current-store fence.
 
 Reserved judge request admission and attempt bookkeeping now belong to
 `gateway::metering::judge::JudgeCosts`. They retain their pre-authentication
@@ -384,8 +409,9 @@ execution, settlement and route-intent data live in `storage::execution`, the
 native `SessionIdentity` index in `storage::session_identity`, and shared
 capture ORM definitions in `storage::capture`. Capture, gateway and learning
 consumers use the same definitions. Storage table names, digest domains,
-serialized fields and validation remain unchanged. These are internal application
-records, not new SDK contracts or authority to execute a session.
+serialized fields and validation follow their own current discriminators. M0
+changes affected Policy-bearing records explicitly; other current consumers
+retain their identities. Internal records grant no authority to execute a session.
 
 `gateway::observability::requests::GatewayRequestTracker` owns canonical request
 identification, duplicate rejection and admission inventory, plus hop, terminal
@@ -394,11 +420,11 @@ capture-registration consumers so they share the serving epoch. The tracker runs
 before learning selection. `CanonicalRequestBinding` then creates the bound
 execution record and validates routing/policy generations and the recorded
 session before dispatch or context revalidation. `EvolutionRuntime` supplies an
-optional selection and retains live learning-control validation. Gateway
-bookkeeping does not construct the learning service or mutate canonical
-conversation content. Optional learning
-startup, source and command gates remain unfinished; this move alone does not
-establish the complete minimum-gateway dependency closure.
+optional selection for explicitly assembled BRO experiments and retains their
+live validation. Gateway bookkeeping does not construct a learner or mutate
+canonical conversation content. Mature Policy selection neither enables this
+runtime nor obtains context treatment from it. Minimum-gateway dependency and
+all-feature product isolation must both be verified for the M0 cutover.
 
 `bitrouter-ai` contains no model execution or authentication implementation.
 Optional guardrails adapters and telemetry remain application modules; enabling
@@ -636,7 +662,9 @@ When the optional authenticated HTTP control listener is enabled, it exposes
 typed operator reads and reload operations behind its own bearer gate and
 loopback exposure policy. It does not mount an MCP origin endpoint. See
 `apps/bitrouter/src/{daemon,remote_control}.rs`. Portable control transport,
-capability discovery and reload recovery now live in `bitrouter_sdk::control`;
+capability discovery and reload recovery live in `bitrouter_sdk::control`.
+The accepted M0 contract requires protocol2 and exact action descriptor checks
+on every SDK path, without legacy name discovery or local-file fallback;
 `apps/bitrouter/src/client/control.rs` retains profile/environment integration
 and CLI error classification.
 

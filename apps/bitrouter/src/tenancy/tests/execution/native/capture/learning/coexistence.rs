@@ -20,7 +20,7 @@ async fn combined(
     let db = crate::db::connect_tenancy(&url, &lease).await?;
     let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
     fixture.service.shutdown().await?;
-    let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
+    let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?.for_bro_capture();
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {
             owner_kind: OwnerKind::Tenant,
@@ -221,7 +221,7 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
     drop((service, db));
     let lease = crate::tenancy::ownership::acquire(&url)?;
     let db = crate::db::connect_tenancy(&url, &lease).await?;
-    let resources = Resources::with_key(installation.clone(), [29; 32])?;
+    let resources = Resources::with_key(installation.clone(), [29; 32])?.for_bro_capture();
     let snapshot = store::load(&db, Utc::now()).await?;
     let service =
         Service::start_prepared(db.clone(), Some(lease), snapshot, Arc::new(resources)).await?;

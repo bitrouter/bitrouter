@@ -1,6 +1,6 @@
-//! Terminal winners, whole-transaction rollback and bounded episode barriers.
+//! Terminal winners and whole-transaction rollback for ordinary execution.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::execution::{
@@ -9,21 +9,16 @@ use bitrouter_ai::gateway::execution::{
 };
 use bitrouter_ai::types::UsageOrigin;
 use serde_json::Value;
-use sha2::Digest;
 
 use super::{Fixture, accepted, row};
-use crate::gateway::shared::{
-    engine::TrajectoryBinding,
-    store::{Kind, NewRecord, Store, Stored},
-};
+use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     competing_resolutions(first, second).await?;
     for provider_first in [true, false] {
         resolution_and_observation(first, second, provider_first).await?;
     }
-    resolution_rollback(first, second).await?;
-    projection_saturation(first, second).await
+    resolution_rollback(first, second).await
 }
 
 fn observation() -> TerminalObservation {
@@ -177,27 +172,9 @@ async fn resolution_and_observation(
     Ok(())
 }
 
-async fn bind(store: &Store, fixture: &Fixture, id: &str) -> Result<String> {
-    let binding = TrajectoryBinding {
-        owner_user_id: fixture.first.tenant.clone(),
-        episode_id: uuid::Uuid::new_v4().to_string(),
-        request_id: id.into(),
-        correlation_epoch: "fixture-epoch".into(),
-    };
-    let tx = store.begin().await?;
-    fixture.a.bind_trajectory(&tx, id, &binding).await?;
-    tx.commit().await?;
-    Ok(hex::encode(sha2::Sha256::digest(serde_json::to_vec(&(
-        "gateway-episode-fence-v1",
-        &binding.owner_user_id,
-        &binding.episode_id,
-    ))?)))
-}
-
 async fn resolution_rollback(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 1).await?;
     let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
-    let fence = bind(first, &fixture, &id).await?;
     let attempt = fixture
         .a
         .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
@@ -230,7 +207,6 @@ async fn resolution_rollback(first: &Store, second: &Store) -> Result<()> {
         (Kind::Attempt, attempt.attempt_id.as_str()),
         (Kind::Resource, fixture.pool.as_str()),
         (Kind::Tenant, fixture.first.tenant.as_str()),
-        (Kind::EpisodeFence, fence.as_str()),
         (Kind::Outbox, event_id.as_str()),
     ];
     let mut before = Vec::new();
@@ -249,56 +225,6 @@ async fn resolution_rollback(first: &Store, second: &Store) -> Result<()> {
             row(first, kind, key).await? == expected,
             "resolution partially committed {key}"
         );
-    }
-    Ok(())
-}
-
-async fn projection_saturation(first: &Store, second: &Store) -> Result<()> {
-    for already_pending in [true, false] {
-        let fixture = Fixture::new(first, second, 1).await?;
-        let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
-        let fence_key = bind(first, &fixture, &id).await?;
-        let attempt = fixture
-            .a
-            .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
-            .await?;
-        fixture
-            .a
-            .dispatch(&fixture.first.hash, &id, &attempt.attempt_id)
-            .await?;
-        let tx = first.begin().await?;
-        let mut fence: Stored<Value> = first.lock(&tx, Kind::EpisodeFence, &fence_key).await?;
-        let mut pending: BTreeSet<String> = (0..256).map(|i| format!("pending-{i}")).collect();
-        if already_pending {
-            pending.remove("pending-0");
-            pending.insert(id.clone());
-        }
-        fence.value["pending"] = serde_json::to_value(pending)?;
-        first
-            .save(&tx, &mut fence, "pending", None, Store::now(&tx).await?)
-            .await?;
-        tx.commit().await?;
-        let execution_before = row(first, Kind::Execution, &id).await?;
-        let attempt_before = row(first, Kind::Attempt, &attempt.attempt_id).await?;
-        let terminal = fixture
-            .a
-            .record_terminal(&id, &attempt.attempt_id, &observation())
-            .await;
-        if already_pending {
-            terminal?;
-            fixture.a.finish(&id, &TerminalOutcome::Succeeded).await?;
-            released_once(first, &fixture, &id).await?;
-        } else {
-            ensure!(
-                terminal.is_err(),
-                "full episode barrier admitted a new pending execution"
-            );
-            ensure!(row(first, Kind::Execution, &id).await? == execution_before);
-            ensure!(row(first, Kind::Attempt, &attempt.attempt_id).await? == attempt_before);
-            ensure!(row(first, Kind::Resource, &fixture.pool).await?["active"] == 1);
-            ensure!(row(first, Kind::Tenant, &fixture.first.tenant).await?["active"] == 1);
-        }
-        ensure!(row(first, Kind::EpisodeFence, &fence_key).await? == fence.value);
     }
     Ok(())
 }

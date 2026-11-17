@@ -96,27 +96,6 @@ impl Connections {
         // remain fenced until publication. https://sqlite.org/uri.html#uriimmutable
         Ok(())
     }
-    pub(super) async fn open_destination(&mut self, path: &Path) -> Result<()> {
-        self.check()?;
-        // One direct worker under the same file-first owner; no pool, migrations,
-        // initialize-if-empty or cancellation-selected consuming SQL futures.
-        self.open_options(options(path, false).read_only(false), false, None)
-            .await
-    }
-    #[cfg(feature = "core")]
-    pub(crate) async fn open_destination_budgeted(
-        &mut self,
-        path: &Path,
-        workspace: &super::large::Workspace,
-    ) -> Result<()> {
-        self.check()?;
-        self.open_options(
-            options(path, false).read_only(false),
-            false,
-            Some(workspace),
-        )
-        .await
-    }
     pub(super) async fn destination_cleanup_budget(&mut self) -> Result<()> {
         self.source
             .as_mut()

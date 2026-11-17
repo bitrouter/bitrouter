@@ -1,48 +1,79 @@
-//! Compile the public model-only policy source into the current private routing IR.
-//!
-//! The IR also serves harness experiments. It is never the public Policy format.
+//! Compile the public source into a private, model-selection-only execution view.
 
-use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::{
-    policy::{Document, Policy, SpecVersion},
-    routing::{ContextStrategy, PolicyModelTarget},
-};
+use bitrouter_ai::policy::{Document, Target};
+use sha2::{Digest, Sha256};
 
-use crate::{
-    gateway::routing::workflow::predictive::{
-        PredictiveRouteProjection, compiled_predictor_contract,
-    },
-    policy_lock::{
-        CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
-        RouteOwner,
-    },
+use crate::gateway::routing::workflow::predictive::{
+    PredictiveRouteProjection, compiled_predictor_contract,
 };
 
 const MAX_BYTES: usize = 1024 * 1024;
-const COMPILER_ID: &str = "bitrouter-model-policy";
 
-pub(crate) fn is_model_only(document: &PolicyLock) -> bool {
-    document
-        .artifact
-        .as_ref()
-        .is_some_and(|artifact| artifact.compiler.id == COMPILER_ID)
+/// Validated source and its execution indexes. This is never a serialized format.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledPolicy {
+    source: Document,
+    source_digest: String,
+    selections: BTreeMap<String, CompiledSelection>,
 }
 
-#[cfg(test)]
-mod tests;
+/// Model targets and classifier indexes contain no context or learning actions.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledSelection {
+    pub(crate) tiers: BTreeMap<String, Target>,
+    pub(crate) routes: BTreeMap<String, String>,
+    pub(crate) default_tier: String,
+    pub(crate) tool_use_tier: Option<String>,
+    pub(crate) tool_safe_tiers: Vec<String>,
+}
 
-/// Admit only the exact public contract; old lockfiles are not a fallback.
-pub(crate) fn parse(value: &serde_json::Value) -> Result<PolicyLock> {
+impl CompiledPolicy {
+    pub(crate) fn source(&self) -> &Document {
+        &self.source
+    }
+
+    pub(crate) fn digest(&self) -> &str {
+        &self.source_digest
+    }
+
+    pub(crate) fn selections(&self) -> &BTreeMap<String, CompiledSelection> {
+        &self.selections
+    }
+}
+
+/// Validate an already-decoded current source. Raw ingress must decode directly
+/// into Document so duplicate keys cannot disappear inside a generic Value.
+#[cfg(test)]
+pub(crate) fn parse(value: &serde_json::Value) -> Result<Document> {
     let source: Document =
         serde_json::from_value(value.clone()).context("invalid model policy contract")?;
-    compile(&source)
+    compile(&source)?;
+    Ok(source)
+}
+
+/// Strict raw source decoding shared by files and retained history.
+pub(crate) fn decode(raw: &str) -> Result<Document> {
+    ensure!(raw.len() <= MAX_BYTES, "policy byte capacity exceeded");
+    let source: Document = serde_saphyr::from_str(raw).context("invalid model policy source")?;
+    compile(&source)?;
+    Ok(source)
+}
+
+/// Canonical source identity, independent of file presentation or resource revision.
+pub(crate) fn source_digest(source: &Document) -> Result<String> {
+    let mut value = serde_json::to_value(source).context("normalizing policy source")?;
+    // preserve_order is enabled for service JSON. Sort every object explicitly,
+    // including target fields, without changing array order or typed omissions.
+    value.sort_all_objects();
+    let canonical = serde_json::to_vec(&value).context("serializing canonical policy source")?;
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
 /// Compile immutable source without filesystem, provider, session or learner access.
-pub(crate) fn compile(source: &Document) -> Result<PolicyLock> {
+pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
     ensure!(
         serde_json::to_vec(source)?.len() <= MAX_BYTES,
         "policy byte capacity exceeded"
@@ -52,19 +83,9 @@ pub(crate) fn compile(source: &Document) -> Result<PolicyLock> {
         "policy count must be 1..=256"
     );
     let predictor = compiled_predictor_contract();
-    let mut document = PolicyLock::default();
-    let artifact = document
-        .artifact
-        .as_mut()
-        .context("policy compiler metadata missing")?;
-    artifact.compiler.id = COMPILER_ID.into();
-    artifact.compiler.version = 1;
-    artifact.compiler.config_digest = format!(
-        "sha256:{}",
-        hex::encode(Sha256::digest(serde_json::to_vec(source)?))
-    );
+    let mut selections = BTreeMap::new();
     for (name, policy) in &source.policies {
-        crate::policy_lock::validate_name(name)?;
+        validate_name(name)?;
         ensure!(name.len() <= 256, "policy name capacity exceeded");
         ensure!(
             !policy.tiers.is_empty() && policy.tiers.len() <= 256,
@@ -93,14 +114,7 @@ pub(crate) fn compile(source: &Document) -> Result<PolicyLock> {
                 "unsupported policy classifier digest"
             );
         }
-        let mut definition = PolicyDefinition {
-            default_tier: Some(policy.default_tier.clone()),
-            tool_use_tier: policy.tool_use_tier.clone(),
-            tool_safe_tiers: policy.tool_safe_tiers.clone(),
-            ..Default::default()
-        };
-        // Model selection cannot initiate paid adequacy inference or context work.
-        definition.adequacy.enabled = false;
+        let mut targets = BTreeSet::new();
         for (tier, target) in &policy.tiers {
             ensure!(
                 !tier.is_empty() && tier.len() <= 256,
@@ -110,125 +124,79 @@ pub(crate) fn compile(source: &Document) -> Result<PolicyLock> {
                 !target.model.trim().is_empty() && target.model.len() <= 512,
                 "invalid policy model selector"
             );
-            definition.tiers.insert(
-                tier.clone(),
-                PolicyModelTarget {
-                    model: target.model.clone(),
-                    effort: target.effort,
-                    context: ContextStrategy::Preserve,
-                },
+            ensure!(
+                !target.model.starts_with('@')
+                    && !crate::config::resolution::is_reserved(&target.model)
+                    && !matches!(target.model.as_str(), "bitrouter:auto" | "bitrouter:fusion"),
+                "policy targets cannot refer to a router or preset"
+            );
+            ensure!(
+                targets.insert(serde_json::to_string(target)?),
+                "duplicate policy model/effort target"
             );
         }
-        let mut certificates = BTreeMap::new();
+        if let Some(tier) = &policy.tool_use_tier {
+            ensure!(
+                policy.tiers.contains_key(tier),
+                "policy tool fallback tier must exist"
+            );
+            ensure!(
+                policy.tool_safe_tiers.contains(tier),
+                "policy tool fallback must be tool-safe"
+            );
+        }
+        for tier in &policy.tool_safe_tiers {
+            ensure!(
+                policy.tiers.contains_key(tier),
+                "policy tool-safe tier must exist"
+            );
+        }
+        let mut routes = BTreeMap::new();
         for (class, tier) in &policy.routes {
             let key = format!("semantic_route/v1|{class}");
             ensure!(
                 PredictiveRouteProjection::parse_key(&key).is_some(),
                 "invalid policy route class"
             );
-            definition.routes.insert(key.clone(), tier.clone());
-            // These attest an explicit submitted rule, not learned quality evidence.
-            certificates.insert(
-                key,
-                PolicyCertificate {
-                    classifier_digest: None,
-                    owner: RouteOwner::Operator,
-                    selected_tier: tier.clone(),
-                    baseline_tier: None,
-                    source: CertificateSource::Operator,
-                    eligible_episodes: 0,
-                    independent_tasks: 0,
-                    quality: None,
-                    economics: None,
-                    latency: None,
-                    critical_violations: 0,
-                    verdict: PromotionVerdict::Retain,
-                    evaluator_config_digest: None,
-                    compiler_config_digest: predictor.config_digest.clone(),
-                    evidence_digest: document
-                        .artifact
-                        .as_ref()
-                        .context("policy compiler metadata missing")?
-                        .evidence_root
-                        .clone(),
-                },
-            );
-        }
-        if !certificates.is_empty() {
-            definition.predictor = Some(predictor.clone());
-            document.certificates.insert(name.clone(), certificates);
-        }
-        document.policies.insert(name.clone(), definition);
-    }
-    crate::policy_lock::validate_document(&document)?;
-    Ok(document)
-}
-
-/// Project compatible retained model policies; experimental state is never erased.
-pub(crate) fn source(document: &PolicyLock) -> Result<Document> {
-    ensure!(
-        is_model_only(document),
-        "policy was not compiled from the model-only contract"
-    );
-    let mut policies = BTreeMap::new();
-    for (name, policy) in &document.policies {
-        ensure!(
-            policy.progress_guard.is_none()
-                && policy.optimization.is_none()
-                && !policy.adequacy.enabled,
-            "experimental policy has no model-only source projection"
-        );
-        let mut tiers = BTreeMap::new();
-        for (name, target) in &policy.tiers {
             ensure!(
-                target.context == ContextStrategy::Preserve,
-                "context policy has no model-only source projection"
+                policy.tiers.contains_key(tier),
+                "policy route tier must exist"
             );
-            tiers.insert(
-                name.clone(),
-                bitrouter_ai::policy::Target {
-                    model: target.model.clone(),
-                    effort: target.effort,
-                },
-            );
+            routes.insert(key, tier.clone());
         }
-        let routes = policy
-            .routes
-            .iter()
-            .map(|(key, value)| {
-                Ok((
-                    key.strip_prefix("semantic_route/v1|")
-                        .context("unsupported internal route class")?
-                        .to_owned(),
-                    value.clone(),
-                ))
-            })
-            .collect::<Result<_>>()?;
-        policies.insert(
+        selections.insert(
             name.clone(),
-            Policy {
-                tiers,
-                default_tier: policy
-                    .default_tier
-                    .clone()
-                    .context("policy default tier missing")?,
+            CompiledSelection {
+                tiers: policy.tiers.clone(),
                 routes,
-                classifier_digest: policy
-                    .predictor
-                    .as_ref()
-                    .map(|value| value.config_digest.clone()),
+                default_tier: policy.default_tier.clone(),
                 tool_use_tier: policy.tool_use_tier.clone(),
                 tool_safe_tiers: policy.tool_safe_tiers.clone(),
             },
         );
     }
-    let source = Document {
-        spec_version: SpecVersion::Beta1,
-        policies,
-    };
-    ensure!(
-        compile(&source)? == *document,
-        "runtime policy is not fully representable by the public contract"
-    );
-    Ok(source)
+    Ok(CompiledPolicy {
+        source: source.clone(),
+        source_digest: source_digest(source)?,
+        selections,
+    })
 }
+
+pub(crate) fn validate_name(name: &str) -> Result<()> {
+    let segments: Vec<_> = name.split(':').collect();
+    ensure!(
+        (1..=2).contains(&segments.len())
+            && segments.iter().all(|segment| {
+                !segment.is_empty()
+                    && !segment.starts_with('.')
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+            }),
+        "invalid policy name '{name}'"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

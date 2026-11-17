@@ -239,7 +239,6 @@ required-features = ["core"]
 
 [[test]]
 name = "policy_eval_control_plane"
-required-features = ["core"]
 
 [[example]]
 name = "checkpoint_ts_publication"
@@ -315,10 +314,5 @@ required-features = ["core", "harness"]
 
 [[example]]
 name = "owned_capture_handler"
-crate-type = ["lib"]
-required-features = ["core", "harness"]
-
-[[example]]
-name = "owned_native_experiment"
 crate-type = ["lib"]
 required-features = ["core", "harness"]

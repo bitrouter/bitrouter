@@ -8,6 +8,8 @@ use super::*;
 mod bounds;
 mod checkpoint;
 mod core_choice;
+#[cfg(unix)]
+mod cutover;
 mod execution;
 mod format;
 mod native_generate_content;
@@ -61,7 +63,7 @@ async fn import(resources: &Resources, db: &DatabaseConnection, rows: Vec<Value>
         .provision_bytes(
             db,
             &serde_json::to_vec(&json!({
-                "format":1, "installation_id":resources.installation, "resources":rows
+                "format": if rows.iter().any(|row| row["definition"]["kind"] == "policy" || !row["definition"]["policy"].is_null()) { 4 } else { 1 }, "installation_id":resources.installation, "resources":rows
             }))?,
         )
         .await
@@ -103,7 +105,7 @@ fn decrypt(
         &resources.installation,
         &tenant,
         &revision,
-        COMPILER_VERSION,
+        compiled.compiler_version.as_str(),
         document,
         &compiled.dependencies,
     );

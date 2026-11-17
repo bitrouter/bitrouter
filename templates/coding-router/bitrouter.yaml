@@ -3,6 +3,4 @@
 # provider or model automatically.
 inherit_defaults: true
 
-policy:
-  path: ./policy-lock.yaml
-  mode: frozen
+# `bro policy init` creates policy.yaml and saves its explicit router binding.

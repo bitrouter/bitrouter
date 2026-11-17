@@ -1,9 +1,8 @@
 # Model-routing policy
 
-Status: **accepted M0 contract, implementation pending, `policy/1.0.0-beta.1`**.
+Status: **accepted, `policy/1.0.0-beta.1`**.
 The source fields and meaning are unchanged from the unpublished beta.1; its
-identifier is retained. Cutover requirements are normative targets pending
-implementation and conformance qualification. This is the canonical contract for
+identifier is retained. This is the canonical contract for
 portable model-only policy source, authored as JSON or YAML and submitted to
 the service through JSON. Consumers are policy authors, SDK clients, gateway
 publication, tenant resource management and the serving compiler. MUST, MUST NOT,
@@ -180,6 +179,6 @@ source digests, source read/resubmission, literal selected-name failure, hidden
 experimental closures and Policy-free experimental routes in minimum and
 all-feature builds. Eval facts for same-name different-revision policies remain
 distinct; generic and cross-endpoint profiles cannot impersonate them. These
-cases remain pending implementation. Current-format recovery remains required;
+cases are required for conformance. Current-format recovery remains required;
 old stores are refused without conversion or inference replay under the
 [store contract](../service-api/README.md#resource-and-evidence-migration-and-rollback).

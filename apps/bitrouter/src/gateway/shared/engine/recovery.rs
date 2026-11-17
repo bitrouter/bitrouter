@@ -99,8 +99,8 @@ impl Engine {
                     tx.commit().await?;
                     return Ok(());
                 }
-                // Acquire affected resource/attempt/episode rows before the instance
-                // fence, matching dispatch and trajectory start. A queued heartbeat
+                // Acquire affected resource/attempt rows before the instance
+                // fence, matching dispatch. A queued heartbeat
                 // must not introduce an inverse lock order through a shared lock.
                 let active = execution
                     .value
@@ -127,10 +127,6 @@ impl Engine {
                     let _: Stored<Attempt> = self
                         .store()
                         .lock(&tx, Kind::Attempt, &attempt.attempt_id)
-                        .await?;
-                }
-                if let Some(binding) = &execution.value.trajectory {
-                    self.episode_fence(&tx, binding, Store::now(&tx).await?)
                         .await?;
                 }
                 let owner: Stored<Instance> = self

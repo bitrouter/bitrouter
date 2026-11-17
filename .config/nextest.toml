@@ -41,7 +41,7 @@ slow-timeout = { period = "60s", terminate-after = 35 }
 # Complete history checks each retain the ordinary five-minute deadline. Reserve
 # the runner while hashing/revalidating their real histories and archive cycles.
 [[profile.default.overrides]]
-filter = 'test(=tenancy::audit::upgrade::tests::reset_is_atomic_replay_bound_and_never_clears_a_later_fence) | test(=tenancy::tests::capacity_history::archive_cycles_preserve_unknowns_and_current_read_authority)'
+filter = 'test(=tenancy::tests::capacity_history::archive_cycles_preserve_unknowns_and_current_read_authority)'
 threads-required = "num-test-threads"
 
 # Each shared process campaign owns a PostgreSQL workload and multiple servers.

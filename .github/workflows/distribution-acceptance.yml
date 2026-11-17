@@ -139,7 +139,7 @@ jobs:
       if: matrix.features == '' || matrix.features == 'harness'
       env:
         PROFILE_FEATURES: ${{ matrix.features }}
-      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test core_disabled --test trajectory_progress_control --test gateway_workflow
+      run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test core_disabled --test policy_eval_control_plane --test policy_cli --test offline_cutover_cli --test gateway_workflow
         --test feature_ingress
     - name: verify noninteractive setup and source boundaries
       if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
@@ -180,28 +180,7 @@ jobs:
       if: matrix.features == 'core'
       run: cargo nextest run --locked -p bitrouter --no-default-features --features core --test core_contract --test core_execution --build-jobs 2 --test-threads
         2
-    - name: verify guarded drafts across core feature removal
-      if: matrix.features == 'core'
-      shell: bash
-      run: |
-        set -euo pipefail
-        bash .github/scripts/build-pre-m0-producer.sh
-        historical_producer="$PWD/target/debug/examples/pre_m0_policy_producer"
-        cargo test --locked -p bitrouter --no-default-features \
-          --lib --no-run --message-format=json > "$RUNNER_TEMP/tenancy-no-core.json"
-        fixture_gateway_binary=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "bitrouter" and .profile.test and (.target.kind | index("lib")) and .executable != null) | .executable] | if length == 1 then .[0] else error("expected one gateway libtest") end' "$RUNNER_TEMP/tenancy-no-core.json")
-        cp "$fixture_gateway_binary" "$RUNNER_TEMP/tenancy-no-core-test"
-        selector=tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition
-        # libtest accepts zero matches; require the outer parent as well as its child acknowledgement.
-        "$historical_producer" --exact "$selector" --ignored --list \
-          > "$RUNNER_TEMP/tenancy-core-selection.txt"
-        cat "$RUNNER_TEMP/tenancy-core-selection.txt"
-        awk -v expected="$selector: test" '
-          /: test$/ { total++; if ($0 == expected) matched++ }
-          END { exit !(total == 1 && matched == 1) }
-        ' "$RUNNER_TEMP/tenancy-core-selection.txt"
-        BITROUTER_TEST_NO_CORE_LIBTEST="$RUNNER_TEMP/tenancy-no-core-test" \
-          "$historical_producer" --exact "$selector" --ignored --nocapture
+
     - name: verify execution SDK against the headless service
       if: matrix.features == 'core,harness'
       run: cargo test -p bitrouter --no-default-features --features core,harness --test harness_sdk --jobs 2
@@ -248,10 +227,6 @@ jobs:
       with:
         cache-save-if: false
     - uses: taiki-e/install-action@nextest
-    - name: build the pinned historical producer
-      run: |
-        bash .github/scripts/build-pre-m0-producer.sh
-        printf 'BITROUTER_PRE_M0_LIBTEST=%s/target/debug/examples/pre_m0_policy_producer\n' "$PWD" >> "$GITHUB_ENV"
     - name: compile and identify the three reduced consumers
       shell: bash
       run: |
@@ -280,15 +255,14 @@ jobs:
           printf '%s=%s\n' "$variable" "$binary" >> "$GITHUB_ENV"
         done
     - name: compile the full producer and public parents
-      run: cargo nextest run --locked -p bitrouter --all-features --lib --no-run -E 'test(tenancy::tests::learning_startup::driver::) | test(tenancy::tests::execution::native::session::experiment::paid::recovery::reduced::)'
-    - name: verify both real sources with every reduced consumer
+      run: cargo nextest run --locked -p bitrouter --all-features --lib --no-run -E 'test(tenancy::tests::learning_startup::driver::)'
+    - name: verify current paid obligations with every reduced consumer
       timeout-minutes: 20
       shell: bash
       run: |
         for profile in gateway core_only harness_only; do
           for selector in \
-            "tenancy::tests::learning_startup::driver::${profile}_refuses_pending_inactive_paid_draft" \
-            "tenancy::tests::execution::native::session::experiment::paid::recovery::reduced::${profile}_refuses_stopped_native_paid_v4_with_clean_control"; do
+            "tenancy::tests::learning_startup::driver::${profile}_refuses_pending_inactive_paid_draft"; do
             cargo nextest run --locked -p bitrouter --all-features --lib \
               --test-threads 1 --retries 0 --run-ignored only --no-tests fail \
               -E "test(=$selector)"

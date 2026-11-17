@@ -2,7 +2,7 @@
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
-//! `policy create` / `providers (list|check|login|logout)` / `agents` / `run` /
+//! `access-policy create` / `providers (list|check|login|logout)` / `agents` / `run` /
 //! `threads` / `launch` / `cloud` / `skills` / `mcp (list|show|add|edit|remove|check)` / `acp serve`.
 //! Resource configuration administration uses `tenancy` over the HTTP SDK.
 //! Cloud-account sign-in lives under
@@ -59,16 +59,11 @@ use bitrouter::output::reports::agents::{
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::DaemonActionReport;
-#[cfg(feature = "core")]
 use bitrouter::output::reports::eval::EvalReport;
 #[cfg(feature = "mcp")]
 use bitrouter::output::reports::mcp::{McpCheckReport, McpCheckRow};
 use bitrouter::output::reports::mcp::{McpRegistryReport, McpRegistryRow};
 use bitrouter::output::reports::observe::ObserveStatusReport;
-#[cfg(feature = "core")]
-use bitrouter::output::reports::optimization::{
-    ArmReport, OptimizationControllerReport, TreatmentReport,
-};
 use bitrouter::output::reports::policy::PolicyReport;
 use bitrouter::output::reports::routing::{ProviderRow, ProvidersReport};
 #[cfg(feature = "mcp")]
@@ -259,6 +254,15 @@ enum Command {
         #[arg(short, long)]
         config: Option<PathBuf>,
         /// Set only by the `start` launcher for an owned detached daemon.
+        #[arg(long, hide = true)]
+        managed_child: bool,
+    },
+    /// Internal local-harness process entry, selected by the run/ACP launchers.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    #[command(hide = true)]
+    HarnessHost {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
         #[arg(long, hide = true)]
         managed_child: bool,
     },
@@ -474,7 +478,12 @@ enum Command {
         #[command(subcommand)]
         action: ObserveAction,
     },
-    /// Policy management.
+    /// Access-control policy management for virtual keys.
+    AccessPolicy {
+        #[command(subcommand)]
+        action: AccessPolicyAction,
+    },
+    /// Model routing policy management.
     Policy {
         #[command(subcommand)]
         action: PolicyAction,
@@ -483,11 +492,6 @@ enum Command {
     Eval {
         #[command(subcommand)]
         action: EvalAction,
-    },
-    /// Advance or inspect history-driven routing optimization.
-    Optimize {
-        #[command(subcommand)]
-        action: OptimizeAction,
     },
     /// Inspect, replay, and retain durable trajectory history in the local database.
     Trajectory {
@@ -790,21 +794,6 @@ enum ContextAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
-    /// Preview a source-preserving migration from presets to named routers.
-    MigrateRouters {
-        /// Source bitrouter.yaml; standard local config resolution applies.
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-        /// Candidate output path for preview, or reviewed input path for apply.
-        #[arg(long)]
-        candidate: Option<PathBuf>,
-        /// Apply the reviewed candidate and retain a backup of the source.
-        #[arg(long, requires_all = ["candidate", "source_digest"])]
-        apply: bool,
-        /// Exact source digest returned by the preview; refuses stale edits.
-        #[arg(long, requires = "apply")]
-        source_digest: Option<String>,
-    },
     /// Validate a config file: structure, provider `derives` resolution, and
     /// upstream-URL (SSRF) safety. Exits non-zero on an invalid config — safe
     /// to run in CI. Unset `${VAR}` references are substituted with a
@@ -816,36 +805,6 @@ enum ConfigAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-}
-
-fn parse_unit_interval_ppm(value: &str) -> std::result::Result<u32, String> {
-    let value = value.trim();
-    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
-    if !matches!(whole, "0" | "1")
-        || fractional.len() > 6
-        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
-        || (whole == "1" && fractional.bytes().any(|byte| byte != b'0'))
-    {
-        return Err(format!(
-            "expected a decimal between 0 and 1 with at most six fractional digits, got {value}"
-        ));
-    }
-    let fractional_value = if fractional.is_empty() {
-        0
-    } else {
-        fractional
-            .parse::<u32>()
-            .map_err(|error| format!("expected a decimal between 0 and 1, got {value}: {error}"))?
-    };
-    let scale = 10_u32.pow(
-        u32::try_from(6_usize.saturating_sub(fractional.len()))
-            .map_err(|error| format!("could not scale unit interval {value}: {error}"))?,
-    );
-    Ok(if whole == "1" {
-        1_000_000
-    } else {
-        fractional_value.saturating_mul(scale)
-    })
 }
 
 #[derive(Subcommand)]
@@ -903,46 +862,6 @@ enum WorkflowStateAction {
         /// Exclusive RFC3339 upper bound. Only used with --since; defaults to now.
         #[arg(long)]
         until: Option<String>,
-    },
-    /// Replay persisted provider reliability state into a deterministic JSON report.
-    ReliabilityReport {
-        /// Database URL for the daemon policy DB.
-        #[arg(long)]
-        database_url: String,
-        /// Frozen BitRouter config that defines the reliability thresholds.
-        #[arg(long)]
-        config: PathBuf,
-        /// Named policy supplying reliability thresholds.
-        #[arg(long, default_value = "auto")]
-        policy: String,
-        /// Output JSON report path.
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Estimate policy cost coverage and savings without changing live routing.
-    PolicyOracle {
-        /// Protocol-native daemon workflow trace JSONL from the baseline run.
-        #[arg(long)]
-        traces: PathBuf,
-        /// Request-settled usage JSONL for the same baseline run.
-        #[arg(long)]
-        cloud_usage: PathBuf,
-        /// Policy lock containing the candidate routes to replay.
-        #[arg(long)]
-        policy_lock: PathBuf,
-        /// Named policy within the lock.
-        #[arg(long)]
-        policy: String,
-        /// Candidate effective cost divided by baseline cost, including any
-        /// expected token, retry, or turn inflation (for example 0.24).
-        #[arg(long = "effective-cost-factor", value_parser = parse_unit_interval_ppm)]
-        effective_cost_factor_ppm: u32,
-        /// Desired end-to-end savings fraction. Repeat for multiple targets.
-        #[arg(long = "target-savings", required = true, value_parser = parse_unit_interval_ppm)]
-        target_savings_ppm: Vec<u32>,
-        /// Output JSON report path.
-        #[arg(long)]
-        output: PathBuf,
     },
     /// Reconcile selected metering rows against request-scoped receipts.
     ReconcileMetering {
@@ -1214,122 +1133,88 @@ enum OperationsAction {
 }
 
 #[derive(Subcommand)]
-enum PolicyAction {
-    /// Write a starter access-control policy file to the policy dir.
+enum AccessPolicyAction {
+    /// Write a starter access-control policy for virtual-key authorization.
     Create {
-        /// Policy id (becomes the file stem and the `id:` field).
+        /// Policy id used as its file stem and `id` field.
         id: String,
-        /// Policy directory. Default matches the assembly default.
         #[arg(long, default_value = "./policies")]
         dir: PathBuf,
     },
-    /// Create a routing policy lock and bind it to a router.
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Create model-only policy source and bind it to a named router.
     Init {
-        /// Policy name written under `policies:`.
         name: String,
-        /// Router users select as `bitrouter/<id>`. Defaults to `coding` when
-        /// neither binding flag is supplied.
-        #[arg(long, conflicts_with = "preset")]
-        router: Option<String>,
-        /// Legacy preset binding kept for compatibility.
-        #[arg(long, conflicts_with = "router")]
-        preset: Option<String>,
-        /// Strong base model. Inferred from an existing router or preset when omitted.
+        /// Router addressed as `bitrouter/<id>`; defaults to `coding`.
+        #[arg(long, default_value = "coding")]
+        router: String,
+        /// Strong base model; inferred from an existing router when omitted.
         #[arg(long)]
         strong: Option<String>,
-        /// Exact reasoning effort owned by the strong target.
         #[arg(long, requires = "strong")]
         strong_effort: Option<bitrouter_ai::types::ReasoningEffort>,
-        /// Economy model explored as a replacement.
         #[arg(long)]
         economy: String,
-        /// Exact reasoning effort owned by the economy target.
         #[arg(long)]
         economy_effort: Option<bitrouter_ai::types::ReasoningEffort>,
-        /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Parse and cross-validate `bitrouter.yaml` and its policy lock.
+    /// Validate configuration and its model-only policy source on disk.
     Check {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Verify the lock's compiled evidence root against the local ledger.
-    Verify {
-        #[arg(long)]
-        evidence: bool,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Show policy path, digest, runtime mode, and preset bindings.
+    /// Inspect the selected instance's active policy; use --disk offline.
     Status {
-        /// Read `disk` locally by default; a remote context defaults to `active`.
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with = "disk")]
         view: Option<PolicyViewArg>,
+        #[arg(long)]
+        disk: bool,
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Explicit local control socket for an active policy read.
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Show one named policy after validation.
+    /// Export complete resubmittable source after checking an optional name.
     Show {
-        name: String,
-        /// Read `disk` locally by default; a remote context defaults to `active`.
-        #[arg(long, value_enum)]
+        name: Option<String>,
+        #[arg(long, value_enum, conflicts_with = "disk")]
         view: Option<PolicyViewArg>,
+        #[arg(long)]
+        disk: bool,
         #[arg(short, long)]
         config: Option<PathBuf>,
-        /// Explicit local control socket for an active policy read.
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Hot-reload the policy lock through the daemon control socket.
+    /// Atomically reload the selected daemon's saved configuration and source.
     Reload {
         #[arg(short, long)]
         config: Option<PathBuf>,
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Compile a deterministic v3 candidate without changing the active lock.
-    Compile {
-        /// Candidate output path.
-        #[arg(long, value_name = "FILE")]
-        output: PathBuf,
-        /// Frozen evidence snapshot time in Unix milliseconds.
-        #[arg(long, value_name = "UNIX_MS")]
-        snapshot_time: Option<i64>,
-        /// Immutable admitted-evidence root from `eval snapshot freeze`.
-        #[arg(long, value_name = "SHA256")]
-        eval_snapshot: Option<String>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Compare explicit routes in two policy lock artifacts.
+    /// Compare two current policy source documents.
     Diff { active: PathBuf, candidate: PathBuf },
-    /// Publish one already-compiled candidate after lineage validation.
+    /// Publish model-only source using an explicit compare-and-swap digest.
     Publish {
         candidate: PathBuf,
+        #[arg(long, value_name = "SHA256")]
+        expected_digest: String,
         #[arg(short, long)]
         config: Option<PathBuf>,
         #[arg(long)]
         socket: Option<PathBuf>,
     },
-    /// Project qualified database evidence into a deterministic policy lock.
-    Evolve {
-        /// Publish the candidate. Without this flag, print a dry-run report.
-        #[arg(long, conflicts_with = "output")]
-        apply: bool,
-        /// Export the candidate without changing the active policy lock.
-        #[arg(long, value_name = "FILE", conflicts_with = "apply")]
-        output: Option<PathBuf>,
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Restore an exact lock snapshot from local promotion history.
+    /// Reactivate a current-format history source using compare-and-swap.
     Rollback {
         digest: String,
+        #[arg(long, value_name = "SHA256")]
+        expected_digest: String,
         #[arg(short, long)]
         config: Option<PathBuf>,
         #[arg(long)]
@@ -1375,42 +1260,6 @@ enum EvalAction {
     Status {
         #[arg(short, long)]
         config: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-enum OptimizeAction {
-    /// Perform one deterministic controller transition from admitted Eval history.
-    Run {
-        #[arg(long, default_value = "auto")]
-        policy: String,
-        /// Challenger tier; defaults to the policy's adequacy explore tier.
-        #[arg(long)]
-        candidate_tier: Option<String>,
-        /// Complete-task resource to minimize while retaining the quality gate.
-        #[arg(long, value_enum, default_value = "cost")]
-        objective: bitrouter::gateway::routing::exploration::OptimizationObjective,
-        #[arg(long, default_value_t = 100_000)]
-        exploration_ppm: u32,
-        #[arg(long, default_value_t = 3)]
-        minimum_tasks: u32,
-        #[arg(long, default_value_t = 20)]
-        maximum_tasks: u32,
-        #[arg(long, default_value_t = 900_000)]
-        minimum_pass_rate_ppm: u32,
-        #[arg(long)]
-        evaluator_config_digest: Option<String>,
-        #[arg(short, long, default_value = "bitrouter.yaml")]
-        config: PathBuf,
-        #[arg(long)]
-        socket: Option<PathBuf>,
-    },
-    /// Inspect the current controller state without changing files or the database.
-    Status {
-        #[arg(long, default_value = "auto")]
-        policy: String,
-        #[arg(short, long, default_value = "bitrouter.yaml")]
-        config: PathBuf,
     },
 }
 
@@ -2187,6 +2036,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 bitrouter::managed_task::answer(args, output).await
             }
         },
+        #[cfg(all(feature = "core", feature = "harness"))]
+        Command::HarnessHost {
+            config,
+            managed_child,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            bitrouter::host::serve_harness_cli(&source, managed_child).await
+        }
         Command::Serve {
             config,
             managed_child,
@@ -2397,6 +2254,16 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .await
         }
+        Command::AccessPolicy { action } => {
+            let AccessPolicyAction::Create { id, dir } = action;
+            let path = commands::create_policy(&dir, &id).await?;
+            output.emit(&PolicyCreateReport {
+                id,
+                path: path.display().to_string(),
+                created: true,
+            })?;
+            Ok(())
+        }
         Command::Policy { action } => {
             administration_policy(
                 action,
@@ -2407,7 +2274,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             .await
         }
         Command::Eval { action } => eval(action, output).await,
-        Command::Optimize { action } => optimize(action, output).await,
         Command::Trajectory { config, action } => {
             trajectory(config.as_deref(), action, output).await
         }
@@ -3063,24 +2929,6 @@ fn emit_task_json(value: serde_json::Value) -> Result<()> {
 
 async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
     match action {
-        ConfigAction::MigrateRouters {
-            config,
-            candidate,
-            apply,
-            source_digest,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let path = require_policy_config_path(&source)?;
-            let report = bitrouter::router_migration::migrate(
-                path,
-                candidate.as_deref(),
-                apply,
-                source_digest.as_deref(),
-            )
-            .await?;
-            output.emit(&report)?;
-            Ok(())
-        }
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             // A `chat.commands` name that shadows one of BitRouter's own is a
@@ -3125,16 +2973,6 @@ async fn settlement_api_key(
 #[cfg(not(feature = "core"))]
 async fn workflow_state_cmd(_action: WorkflowStateAction) -> Result<()> {
     anyhow::bail!("workflow-state requires the core feature")
-}
-
-#[cfg(not(feature = "core"))]
-async fn optimize(_action: OptimizeAction, _output: &Output) -> Result<()> {
-    anyhow::bail!("optimize requires the core feature")
-}
-
-#[cfg(not(feature = "core"))]
-async fn eval(_action: EvalAction, _output: &Output) -> Result<()> {
-    anyhow::bail!("eval requires the core feature")
 }
 
 #[cfg(feature = "core")]
@@ -3256,91 +3094,6 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             );
             Ok(())
         }
-        WorkflowStateAction::ReliabilityReport {
-            policy,
-            database_url,
-            config,
-            output,
-        } => {
-            use bitrouter::core::adequacy::report::ReliabilityReport;
-            use bitrouter::core::adequacy::store::AdequacyStore;
-
-            let config_document = bitrouter::config::load(&config)
-                .await
-                .with_context(|| format!("load reliability config {}", config.display()))?;
-            let db = bitrouter::db::connect(&database_url)
-                .await
-                .context("connect reliability database")?;
-            let rows = AdequacyStore::new(db)
-                .load_reliability_events()
-                .await
-                .with_context(|| format!("load reliability events from {database_url}"))?;
-            let lock = bitrouter::policy_lock::load_for_config(&config_document, Some(&config))
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("reliability report requires a named policy lock")
-                })?;
-            let policy = lock.document.policies.get(&policy).ok_or_else(|| {
-                anyhow::anyhow!("reliability report policy is absent from the lock")
-            })?;
-            let report = ReliabilityReport::build(&policy.adequacy, &rows)
-                .context("replay provider reliability events")?;
-            report
-                .write(&output)
-                .with_context(|| format!("write reliability report {}", output.display()))?;
-            println!(
-                "✓ wrote {} reliability events to {}",
-                report.event_count,
-                output.display()
-            );
-            Ok(())
-        }
-        WorkflowStateAction::PolicyOracle {
-            traces,
-            cloud_usage,
-            policy_lock,
-            policy,
-            effective_cost_factor_ppm,
-            target_savings_ppm,
-            output,
-        } => {
-            use bitrouter::core::workflow_state::archive::{CloudUsageRecord, TraceArchive};
-            use bitrouter::core::workflow_state::counterfactual::analyze_policy_counterfactual;
-
-            let traces = TraceArchive::read_jsonl(&traces)
-                .with_context(|| format!("read workflow traces {}", traces.display()))?;
-            let usage = CloudUsageRecord::load_snapshot_jsonl(&cloud_usage)
-                .with_context(|| format!("read cloud usage {}", cloud_usage.display()))?;
-            let lock = bitrouter::policy_lock::load(&policy_lock)
-                .await
-                .with_context(|| format!("load policy lock {}", policy_lock.display()))?;
-            let definition = lock.document.policies.get(&policy).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "policy {policy} does not exist in {}",
-                    policy_lock.display()
-                )
-            })?;
-            let report = analyze_policy_counterfactual(
-                &traces,
-                &usage,
-                definition,
-                effective_cost_factor_ppm,
-                &target_savings_ppm,
-            )
-            .context("analyze policy counterfactual")?;
-            let encoded = serde_json::to_vec_pretty(&report)
-                .context("serialize policy counterfactual report")?;
-            std::fs::write(&output, encoded)
-                .with_context(|| format!("write policy oracle report {}", output.display()))?;
-            println!(
-                "✓ analyzed {} requests: {:.1}% cost coverage, {:.1}% projected savings -> {}",
-                report.trace_count,
-                f64::from(report.cost_weighted_coverage_ppm) / 10_000.0,
-                f64::from(report.projected_savings_ppm) / 10_000.0,
-                output.display()
-            );
-            Ok(())
-        }
         WorkflowStateAction::ReconcileMetering {
             database_url,
             api_base,
@@ -3421,13 +3174,13 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             outcomes,
             policy_decisions,
         } => {
-            use bitrouter::core::eval::EvalService;
-            use bitrouter::core::eval::store::EvalStore;
             use bitrouter::core::workflow_state::archive::{
                 CloudUsageRecord, TraceArchive, WorkflowRunArtifact,
             };
             use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
             use bitrouter::core::workflow_state::reward_feedback::import_semantic_reward_feedback;
+            use bitrouter::eval::EvalService;
+            use bitrouter::eval::store::EvalStore;
             use bitrouter::gateway::routing::workflow::decision::PolicyDecisionRecord;
 
             let traces = TraceArchive::read_jsonl(&traces)
@@ -3531,8 +3284,6 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
                     path.display().to_string(),
                     cfg.providers.len(),
                     cfg.models.len(),
-                    cfg.presets.len(),
-                    cfg.variants.len(),
                     missing
                         .into_iter()
                         .map(|name| UnsetVar { unset_env: name })
@@ -4359,86 +4110,12 @@ async fn inspection_target(
     InspectionTarget::resolve(remote, config, socket).await
 }
 
-fn selected_policy_view(view: Option<PolicyViewArg>, remote: bool) -> PolicyView {
-    match view {
-        Some(view) => view.into(),
-        None if remote => PolicyView::Active,
-        None => PolicyView::Disk,
+fn selected_policy_view(view: Option<PolicyViewArg>, disk: bool) -> PolicyView {
+    if disk {
+        PolicyView::Disk
+    } else {
+        view.map(PolicyView::from).unwrap_or(PolicyView::Active)
     }
-}
-
-async fn administration_policy(
-    action: PolicyAction,
-    output: &Output,
-    remote_context: Option<&bitrouter::contexts::RemoteContext>,
-    context_name: Option<&str>,
-) -> Result<()> {
-    if remote_context.is_none() && is_legacy_local_policy_read(&action) {
-        return policy(action, output).await;
-    }
-    match action {
-        PolicyAction::Status {
-            view,
-            config,
-            socket,
-        } => {
-            let target = inspection_target(
-                remote_context,
-                context_name,
-                config.as_deref(),
-                socket.as_deref(),
-            )
-            .await?;
-            output.emit(
-                &target
-                    .policy(PolicyInput {
-                        view: selected_policy_view(view, remote_context.is_some()),
-                        name: None,
-                    })
-                    .await?,
-            )?;
-            Ok(())
-        }
-        PolicyAction::Show {
-            name,
-            view,
-            config,
-            socket,
-        } => {
-            let target = inspection_target(
-                remote_context,
-                context_name,
-                config.as_deref(),
-                socket.as_deref(),
-            )
-            .await?;
-            output.emit(
-                &target
-                    .policy(PolicyInput {
-                        view: selected_policy_view(view, remote_context.is_some()),
-                        name: Some(name),
-                    })
-                    .await?,
-            )?;
-            Ok(())
-        }
-        action => {
-            if remote_context.is_some() {
-                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
-                    "this policy action is local-only for a remote context",
-                )
-                .into());
-            }
-            policy(action, output).await
-        }
-    }
-}
-
-fn is_legacy_local_policy_read(action: &PolicyAction) -> bool {
-    matches!(
-        action,
-        PolicyAction::Status { view: None, .. } | PolicyAction::Show { view: None, .. }
-    )
 }
 
 async fn administration_providers(
@@ -4594,27 +4271,27 @@ async fn administration_agents(
     }
 }
 
-async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
+async fn administration_policy(
+    action: PolicyAction,
+    output: &Output,
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+) -> Result<()> {
+    if remote_context.is_some()
+        && !matches!(
+            &action,
+            PolicyAction::Status { .. } | PolicyAction::Show { .. }
+        )
+    {
+        return Err(bitrouter::gateway::error::BitrouterError::bad_request(
+            "this policy action is local-only for a remote context",
+        )
+        .into());
+    }
     match action {
-        #[cfg(not(feature = "core"))]
-        PolicyAction::Compile { .. }
-        | PolicyAction::Verify { .. }
-        | PolicyAction::Evolve { .. }
-        | PolicyAction::Publish { .. } => {
-            anyhow::bail!("policy evidence compilation and publication require the core feature");
-        }
-        PolicyAction::Create { id, dir } => {
-            let path = commands::create_policy(&dir, &id).await?;
-            output.emit(&PolicyCreateReport {
-                id,
-                path: path.display().to_string(),
-                created: true,
-            })?;
-        }
         PolicyAction::Init {
             name,
             router,
-            preset,
             strong,
             strong_effort,
             economy,
@@ -4623,68 +4300,27 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
-            let source_raw = tokio::fs::read_to_string(config_path).await?;
-            let source_config = bitrouter::config::parse(&source_raw)?;
-            if let Some(strong_model) = strong.as_deref() {
-                bitrouter::policy_lock::validate_routable_model(&source_config, strong_model)
+            let cfg = config::load(config_path).await?;
+            if let Some(model) = strong.as_deref() {
+                bitrouter::policy_lock::validate_routable_model(&cfg, model).await?;
+                bitrouter::policy_lock::validate_routable_effort(&cfg, model, strong_effort)
                     .await?;
-                bitrouter::policy_lock::validate_routable_effort(
-                    &source_config,
-                    strong_model,
-                    strong_effort,
-                )
-                .await?;
             }
-            bitrouter::policy_lock::validate_routable_model(&source_config, &economy).await?;
-            bitrouter::policy_lock::validate_routable_effort(
-                &source_config,
+            bitrouter::policy_lock::validate_routable_model(&cfg, &economy).await?;
+            bitrouter::policy_lock::validate_routable_effort(&cfg, &economy, economy_effort)
+                .await?;
+            let update = bitrouter::policy_lock::initialize_router_files_with_efforts(
+                config_path,
+                &name,
+                &router,
+                strong.as_deref(),
+                strong_effort,
                 &economy,
                 economy_effort,
             )
             .await?;
-            let update = match (router.as_deref(), preset.as_deref()) {
-                (Some(router), None) => {
-                    bitrouter::policy_lock::initialize_router_files_with_efforts(
-                        config_path,
-                        &name,
-                        router,
-                        strong.as_deref(),
-                        strong_effort,
-                        &economy,
-                        economy_effort,
-                    )
-                    .await?
-                }
-                (None, Some(preset)) => {
-                    bitrouter::policy_lock::initialize_files_with_efforts(
-                        config_path,
-                        &name,
-                        preset,
-                        strong.as_deref(),
-                        strong_effort,
-                        &economy,
-                        economy_effort,
-                    )
-                    .await?
-                }
-                (None, None) => {
-                    bitrouter::policy_lock::initialize_router_files_with_efforts(
-                        config_path,
-                        &name,
-                        "coding",
-                        strong.as_deref(),
-                        strong_effort,
-                        &economy,
-                        economy_effort,
-                    )
-                    .await?
-                }
-                (Some(_), Some(_)) => {
-                    anyhow::bail!("--router and --preset are mutually exclusive")
-                }
-            };
             let mut report =
-                routing_policy_report(config_path, "init", true, update.changes, None).await?;
+                routing_policy_report(config_path, "init", true, update.changes).await?;
             report.config_activation =
                 Some(bitrouter::output::reports::config::ConfigActivation::SavedOnly);
             output.emit(&report)?;
@@ -4692,49 +4328,51 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         PolicyAction::Check { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
+            output.emit(&routing_policy_report(config_path, "check", false, Vec::new()).await?)?;
+        }
+        PolicyAction::Status {
+            view,
+            disk,
+            config,
+            socket,
+        } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
             output.emit(
-                &routing_policy_report(config_path, "check", false, Vec::new(), None).await?,
+                &target
+                    .policy(PolicyInput {
+                        view: selected_policy_view(view, disk),
+                        name: None,
+                    })
+                    .await?,
             )?;
         }
-        #[cfg(feature = "core")]
-        PolicyAction::Verify { evidence, config } => {
-            if !evidence {
-                anyhow::bail!("policy verify currently requires `--evidence`");
-            }
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            let verification =
-                bitrouter::core::policy::files::verify_evidence_files(config_path).await?;
-            output.emit(&PolicyReport {
-                action: "verify-evidence".into(),
-                path: Some(config_path.display().to_string()),
-                candidate_path: None,
-                digest: Some(verification.policy_digest.clone()),
-                source: None,
-                mode: "n/a".into(),
-                policies: Vec::new(),
-                bindings: Default::default(),
-                changes: vec![format!(
-                    "verified {} eval results under {}",
-                    verification.eval_results, verification.evidence_root
-                )],
-                policy: Some(serde_json::to_value(verification)?),
-                applied: false,
-                config_activation: None,
-            })?;
-        }
-        PolicyAction::Status { config, .. } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
+        PolicyAction::Show {
+            name,
+            view,
+            disk,
+            config,
+            socket,
+        } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
             output.emit(
-                &routing_policy_report(config_path, "status", false, Vec::new(), None).await?,
-            )?;
-        }
-        PolicyAction::Show { name, config, .. } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            output.emit(
-                &routing_policy_report(config_path, "show", false, Vec::new(), Some(&name)).await?,
+                &target
+                    .policy(PolicyInput {
+                        view: selected_policy_view(view, disk),
+                        name,
+                    })
+                    .await?,
             )?;
         }
         PolicyAction::Reload { config, socket } => {
@@ -4742,344 +4380,69 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
         }
-        #[cfg(feature = "core")]
-        PolicyAction::Compile {
-            output: candidate_path,
-            snapshot_time,
-            eval_snapshot,
-            config,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            let snapshot_time =
-                snapshot_time.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            let update = bitrouter::core::policy::files::compile_files_with_eval(
-                config_path,
-                snapshot_time,
-                eval_snapshot.as_deref(),
-            )
-            .await?;
-            let digest = bitrouter::policy_lock::export_candidate_file(
-                &update.path,
-                &candidate_path,
-                &update.document,
-            )?;
-            let mut changes = update.changes;
-            changes.extend(
-                update
-                    .conflicts
-                    .into_iter()
-                    .map(|conflict| format!("conflict: {conflict}")),
-            );
-            let mut report =
-                routing_policy_report(config_path, "compile", false, changes, None).await?;
-            report.candidate_path = Some(candidate_path.display().to_string());
-            report.digest = Some(digest);
-            output.emit(&report)?;
-        }
         PolicyAction::Diff { active, candidate } => {
-            let active_lock = bitrouter::policy_lock::load(&active).await?;
-            let candidate_lock = bitrouter::policy_lock::load(&candidate).await?;
+            let active_source = bitrouter::policy_lock::load(&active).await?;
+            let candidate_source = bitrouter::policy_lock::load(&candidate).await?;
             let changes = bitrouter::policy_lock::diff_explanations(
-                &active_lock.document,
-                &candidate_lock.document,
+                &active_source.document,
+                &candidate_source.document,
             );
             output.emit(&PolicyReport {
                 action: "diff".into(),
                 path: Some(active.display().to_string()),
                 candidate_path: Some(candidate.display().to_string()),
-                digest: Some(candidate_lock.digest),
-                source: None,
-                mode: "n/a".into(),
-                policies: candidate_lock.document.policies.keys().cloned().collect(),
+                digest: Some(candidate_source.digest),
+                source: Some("disk".into()),
+                policies: candidate_source.document.policies.keys().cloned().collect(),
                 bindings: Default::default(),
                 changes,
-                policy: None,
+                policy: Some(candidate_source.document),
                 applied: false,
                 config_activation: None,
             })?;
         }
-        #[cfg(feature = "core")]
         PolicyAction::Publish {
             candidate,
+            expected_digest,
+            config,
+            socket,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let config_path = require_policy_config_path(&source)?;
+            let update = bitrouter::policy_lock::publish_candidate_file(
+                config_path,
+                &candidate,
+                &expected_digest,
+            )
+            .await?;
+            reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
+            let mut report =
+                routing_policy_report(config_path, "publish", true, update.changes).await?;
+            report.candidate_path = Some(candidate.display().to_string());
+            output.emit(&report)?;
+        }
+        PolicyAction::Rollback {
+            digest,
+            expected_digest,
             config,
             socket,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             let update =
-                bitrouter::core::policy::files::publish_candidate_file(config_path, &candidate)
+                bitrouter::policy_lock::rollback_files(config_path, &digest, &expected_digest)
                     .await?;
             reload_published_policy_or_restore(&source, &update, socket.as_deref()).await?;
-            let changes = update.changes.clone();
-            let mut report =
-                routing_policy_report(config_path, "publish", true, changes, None).await?;
-            report.candidate_path = Some(candidate.display().to_string());
-            report.digest = Some(update.digest);
-            output.emit(&report)?;
-        }
-        #[cfg(feature = "core")]
-        PolicyAction::Evolve {
-            apply,
-            output: candidate_output,
-            config,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            let update = bitrouter::core::policy::files::evolve_files(config_path, apply).await?;
-            let action = if candidate_output.is_some() {
-                "evolve-export"
-            } else if apply {
-                "evolve"
-            } else {
-                "evolve-dry-run"
-            };
-            let published = apply;
-            if published {
-                reload_published_policy_or_restore(&source, &update, None).await?;
-            }
-            let mut changes = update.changes.clone();
-            changes.extend(
-                update
-                    .conflicts
-                    .iter()
-                    .map(|conflict| format!("conflict: {conflict}")),
-            );
-            let mut report =
-                routing_policy_report(config_path, action, published, changes, None).await?;
-            if let Some(candidate_path) = candidate_output {
-                report.digest = Some(bitrouter::policy_lock::export_candidate_file(
-                    &update.path,
-                    &candidate_path,
-                    &update.document,
-                )?);
-                report.candidate_path = Some(candidate_path.display().to_string());
-            } else {
-                report.digest = Some(update.digest);
-            }
-            output.emit(&report)?;
-        }
-        PolicyAction::Rollback {
-            digest,
-            config,
-            socket,
-        } => {
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let config_path = require_policy_config_path(&source)?;
-            let cfg = config::load(config_path).await?;
-            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
-                anyhow::bail!("policy runtime mode is frozen; rollback requires adaptive mode");
-            }
-            if cfg.policy.mode == config::PolicyRuntimeMode::Frozen {
-                anyhow::bail!(
-                    "policy runtime mode is frozen; use adaptive mode for policy publication"
-                );
-            }
-            let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path))
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-            let history_dir = bitrouter::policy_lock::default_history_dir(loaded.file_path()?);
-            let record = bitrouter::policy_lock::rollback_to_digest(
-                loaded.file_path()?,
-                &loaded.digest,
-                &digest,
-                &history_dir,
-            )?;
-            if let Err(error) = reload_policy_if_reachable(&source, socket.as_deref()).await {
-                bitrouter::policy_lock::rollback_to_digest(
-                    loaded.file_path()?,
-                    &record.child_digest,
-                    &record.parent_digest,
-                    &history_dir,
-                )?;
-                let _ = reload_policy_if_reachable(&source, socket.as_deref()).await;
-                return Err(error.context("daemon rejected rollback; restored previous lock"));
-            }
             output.emit(
-                &routing_policy_report(
-                    config_path,
-                    "rollback",
-                    true,
-                    vec![format!("restored {}", record.child_digest)],
-                    None,
-                )
-                .await?,
+                &routing_policy_report(config_path, "rollback", true, update.changes).await?,
             )?;
         }
     }
     Ok(())
 }
 
-#[cfg(feature = "core")]
-async fn optimize(action: OptimizeAction, output: &Output) -> Result<()> {
-    match action {
-        OptimizeAction::Run {
-            policy,
-            candidate_tier,
-            objective,
-            exploration_ppm,
-            minimum_tasks,
-            maximum_tasks,
-            minimum_pass_rate_ppm,
-            evaluator_config_digest,
-            config,
-            socket,
-        } => {
-            let source = bitrouter::paths::resolve_config(Some(&config))?;
-            let config_path = require_policy_config_path(&source)?.to_path_buf();
-            let options = bitrouter::core::optimization::controller::OptimizationOptions {
-                policy: policy.clone(),
-                candidate_tier,
-                objective,
-                challenger_exposure_ppm: exploration_ppm,
-                minimum_tasks_per_arm: minimum_tasks,
-                maximum_challenger_tasks: maximum_tasks,
-                minimum_pass_rate_ppm,
-                evaluator_config_digest,
-            };
-            let prepared =
-                bitrouter::core::optimization::controller::prepare_files(&config_path, options)
-                    .await?;
-            let mut report = optimization_run_report(&policy, &prepared);
-            let publication =
-                bitrouter::core::optimization::controller::publish_prepared(prepared).await?;
-            report.active_policy_digest = publication.active_policy_digest.clone();
-            report.published = publication.published;
-            if publication.update.is_some() {
-                let endpoint = resolve_client_socket_from(&source, socket.as_deref()).await?;
-                report.reload_attempted = daemon::endpoint_in_use(&endpoint);
-                reload_optimization_publication_or_restore(
-                    &source,
-                    &publication,
-                    socket.as_deref(),
-                )
-                .await?;
-            }
-            output.emit(&report)?;
-            Ok(())
-        }
-        OptimizeAction::Status { policy, config } => {
-            let source = bitrouter::paths::resolve_config(Some(&config))?;
-            let config_path = require_policy_config_path(&source)?;
-            let status =
-                bitrouter::core::optimization::controller::read_status(config_path, &policy)
-                    .await?;
-            output.emit(&optimization_status_report(status))?;
-            Ok(())
-        }
-    }
-}
-
-#[cfg(feature = "core")]
-fn optimization_run_report(
-    policy: &str,
-    prepared: &bitrouter::core::optimization::controller::PreparedOptimizationStep,
-) -> OptimizationControllerReport {
-    let cohort = prepared.step.evidence.cohort.as_ref();
-    OptimizationControllerReport {
-        action: "optimize.run",
-        policy: policy.into(),
-        decision: controller_action_name(prepared.step.action),
-        parent_policy_digest: Some(prepared.parent_policy_digest.clone()),
-        active_policy_digest: prepared.parent_policy_digest.clone(),
-        eval_snapshot_root: Some(prepared.step.evidence.eval_snapshot_root.clone()),
-        observed_subject_digest: Some(prepared.step.evidence.observed_subject_digest.clone()),
-        treatment: prepared.treatment.as_ref().map(treatment_report),
-        control: cohort.map(|assessment| arm_report(&assessment.control)),
-        challenger: cohort.map(|assessment| arm_report(&assessment.challenger)),
-        cost_delta_micro_usd: cohort.and_then(|assessment| assessment.cost_delta_micro_usd),
-        latency_delta_ms: cohort.and_then(|assessment| assessment.latency_delta_ms),
-        evaluator_config_digest: cohort
-            .and_then(|assessment| assessment.evaluator_config_digest.clone())
-            .or_else(|| {
-                prepared
-                    .treatment
-                    .as_ref()
-                    .and_then(|treatment| treatment.gate.evaluator_config_digest.clone())
-            }),
-        published: false,
-        reload_attempted: false,
-    }
-}
-
-#[cfg(feature = "core")]
-fn optimization_status_report(
-    status: bitrouter::core::optimization::controller::OptimizationStatus,
-) -> OptimizationControllerReport {
-    let decision = if status.active_experiment.is_some() {
-        "exploring"
-    } else {
-        "idle"
-    };
-    OptimizationControllerReport {
-        action: "optimize.status",
-        policy: status.policy,
-        decision,
-        parent_policy_digest: status.parent_policy_digest,
-        active_policy_digest: status.active_policy_digest,
-        eval_snapshot_root: status.eval_snapshot_root,
-        observed_subject_digest: status.observed_subject_digest,
-        treatment: status.active_experiment.as_ref().map(treatment_report),
-        control: None,
-        challenger: None,
-        cost_delta_micro_usd: None,
-        latency_delta_ms: None,
-        evaluator_config_digest: status
-            .active_experiment
-            .and_then(|experiment| experiment.gate.evaluator_config_digest),
-        published: false,
-        reload_attempted: false,
-    }
-}
-
-#[cfg(feature = "core")]
-fn treatment_report(
-    exploration: &bitrouter::gateway::routing::exploration::RouteExploration,
-) -> TreatmentReport {
-    TreatmentReport {
-        objective: exploration.gate.objective,
-        target_request_key: exploration.target_request_key.clone(),
-        champion_tier: exploration.champion_tier.clone(),
-        challenger_tier: exploration.challenger_tier.clone(),
-        challenger_exposure_ppm: exploration.challenger_exposure_ppm,
-        minimum_tasks_per_arm: exploration.gate.minimum_tasks_per_arm,
-        maximum_challenger_tasks: exploration.gate.maximum_challenger_tasks,
-        minimum_pass_rate_ppm: exploration.gate.minimum_pass_rate_ppm,
-    }
-}
-
-#[cfg(feature = "core")]
-fn arm_report(assessment: &bitrouter::core::optimization::cohort::ArmAssessment) -> ArmReport {
-    ArmReport {
-        observed: assessment.observed,
-        eligible: assessment.eligible,
-        excluded: assessment.excluded,
-        conclusive: assessment.conclusive,
-        pass: assessment.pass,
-        fail: assessment.fail,
-        hard_violations: assessment.hard_violations,
-        pass_rate_ppm: assessment.pass_rate_ppm,
-        mean_cost_micro_usd: assessment.mean_cost_micro_usd,
-        mean_latency_ms: assessment.mean_latency_ms,
-    }
-}
-
-#[cfg(feature = "core")]
-fn controller_action_name(
-    action: bitrouter::core::optimization::controller::ControllerAction,
-) -> &'static str {
-    match action {
-        bitrouter::core::optimization::controller::ControllerAction::Explore => "explore",
-        bitrouter::core::optimization::controller::ControllerAction::Promote => "promote",
-        bitrouter::core::optimization::controller::ControllerAction::Retreat => "retreat",
-        bitrouter::core::optimization::controller::ControllerAction::Hold => "hold",
-        bitrouter::core::optimization::controller::ControllerAction::Converged => "converged",
-    }
-}
-
-#[cfg(feature = "core")]
 async fn eval(action: EvalAction, output: &Output) -> Result<()> {
-    use bitrouter::core::eval::admission::SubmissionPrincipal;
+    use bitrouter::eval::admission::SubmissionPrincipal;
     use {bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluationResult};
 
     let (action_name, data) = match action {
@@ -5236,21 +4599,17 @@ async fn local_trajectory_store(
     ))
 }
 
-#[cfg(feature = "core")]
-async fn local_eval_service(
-    config_path: Option<&Path>,
-) -> Result<bitrouter::core::eval::EvalService> {
+async fn local_eval_service(config_path: Option<&Path>) -> Result<bitrouter::eval::EvalService> {
     let source = bitrouter::paths::resolve_config(config_path)?;
     let config = bitrouter::paths::load_config(&source).await?;
     let db = bitrouter::db::connect(&config.database.url).await?;
     bitrouter::db::run_migrations(&db).await?;
-    Ok(bitrouter::core::eval::EvalService::new(
-        bitrouter::core::eval::store::EvalStore::new(db),
+    Ok(bitrouter::eval::EvalService::new(
+        bitrouter::eval::store::EvalStore::new(db),
         config.eval,
     ))
 }
 
-#[cfg(feature = "core")]
 fn read_eval_file<T>(path: &Path) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
@@ -5269,430 +4628,57 @@ async fn reload_policy_if_reachable(
     socket_override: Option<&Path>,
 ) -> Result<()> {
     let socket = resolve_client_socket_from(source, socket_override).await?;
-    if !daemon::endpoint_in_use(&socket) {
+    if socket_override.is_none() && !daemon::endpoint_in_use(&socket) {
         return Ok(());
     }
     reload(&socket).await.map(|_| ())
 }
 
-#[derive(Debug, Eq, PartialEq)]
-#[cfg(feature = "core")]
-enum OptimizationRecoveryRevision {
-    Parent,
-    Child,
-    Both,
-    Other(String),
-}
-
-#[derive(Debug, Eq, PartialEq)]
-#[cfg(feature = "core")]
-struct OptimizationRecoveryPair {
-    config: OptimizationRecoveryRevision,
-    policy: OptimizationRecoveryRevision,
-}
-
-#[cfg(feature = "core")]
-impl OptimizationRecoveryPair {
-    fn description(&self) -> String {
-        format!(
-            "config={}, policy={}",
-            self.config.description(),
-            self.policy.description()
-        )
-    }
-}
-
-#[cfg(feature = "core")]
-impl OptimizationRecoveryRevision {
-    fn description(&self) -> &str {
-        match self {
-            Self::Parent => "parent",
-            Self::Child => "child",
-            Self::Both => "parent and child (identical bytes)",
-            Self::Other(detail) => detail,
-        }
-    }
-
-    fn is_child(&self) -> bool {
-        matches!(self, Self::Child | Self::Both)
-    }
-}
-
-#[cfg(feature = "core")]
-async fn observe_optimization_recovery_pair(
-    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
-    update: &bitrouter::policy_lock::PolicyFileUpdate,
-) -> Result<OptimizationRecoveryPair> {
-    let config = std::fs::read_to_string(&publication.config_path)
-        .with_context(|| format!("reading {}", publication.config_path.display()))?;
-    let config = if publication.config_before == publication.config_after
-        && config == publication.config_before
-    {
-        OptimizationRecoveryRevision::Both
-    } else if config == publication.config_before {
-        OptimizationRecoveryRevision::Parent
-    } else if config == publication.config_after {
-        OptimizationRecoveryRevision::Child
-    } else {
-        OptimizationRecoveryRevision::Other("different bytes".into())
-    };
-    let active = bitrouter::policy_lock::load(&update.path).await?;
-    let policy = if active.digest == publication.parent_policy_digest {
-        OptimizationRecoveryRevision::Parent
-    } else if active.digest == publication.active_policy_digest {
-        OptimizationRecoveryRevision::Child
-    } else {
-        OptimizationRecoveryRevision::Other(active.digest)
-    };
-    Ok(OptimizationRecoveryPair { config, policy })
-}
-
-#[cfg(feature = "core")]
-fn optimizer_recovery_failure(
-    initial_error: &anyhow::Error,
-    message: impl std::fmt::Display,
-    recovery_errors: &[String],
-) -> anyhow::Error {
-    let recovery_detail = if recovery_errors.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "; recovery operation errors: {}",
-            recovery_errors.join("; ")
-        )
-    };
-    anyhow::anyhow!("{initial_error:#}").context(format!("{message}{recovery_detail}"))
-}
-
-#[cfg(feature = "core")]
-async fn reload_reconciled_optimization_pair<Reload, ReloadFuture>(
-    reload: &Reload,
-    initial_error: &anyhow::Error,
-    pair: &str,
-    recovery_errors: &[String],
-) -> Result<()>
-where
-    Reload: Fn() -> ReloadFuture,
-    ReloadFuture: std::future::Future<Output = Result<()>>,
-{
-    match reload().await {
-        Ok(()) => Err(optimizer_recovery_failure(
-            initial_error,
-            format!(
-                "daemon rejected optimization publication; reconciled and reloaded the {pair} config and policy"
-            ),
-            recovery_errors,
-        )),
-        Err(reload_error) => {
-            let mut errors = recovery_errors.to_vec();
-            errors.push(format!(
-                "reloading reconciled {pair} pair: {reload_error:#}"
-            ));
-            Err(optimizer_recovery_failure(
-                initial_error,
-                format!(
-                    "daemon rejected optimization publication; reconciled the {pair} config and policy but recovery reload failed"
-                ),
-                &errors,
-            ))
-        }
-    }
-}
-
-#[cfg(feature = "core")]
 async fn reload_published_policy_or_restore(
     source: &bitrouter::paths::ConfigSource,
     update: &bitrouter::policy_lock::PolicyFileUpdate,
     socket_override: Option<&Path>,
 ) -> Result<()> {
-    if let Err(error) = reload_policy_if_reachable(source, socket_override).await {
-        let parent_digest = update
-            .document
-            .artifact
-            .as_ref()
-            .and_then(|artifact| artifact.parent_digest.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("published policy has no parent digest"))?;
-        let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
-        let restore = bitrouter::policy_lock::rollback_to_digest(
-            &update.path,
-            &update.digest,
-            parent_digest,
-            &history_dir,
-        );
-        let restore_reload = if restore.is_ok() {
-            reload_policy_if_reachable(source, socket_override).await
-        } else {
-            Ok(())
-        };
-        return match (restore, restore_reload) {
-            (Ok(_), Ok(())) => {
-                Err(error.context("daemon rejected candidate; restored previous lock"))
-            }
-            (restore, restore_reload) => Err(error.context(format!(
-                "daemon rejected candidate and recovery failed (policy: {}; reload: {})",
-                restore
-                    .err()
-                    .map(|value| format!("{value:#}"))
-                    .unwrap_or_else(|| "ok".into()),
-                restore_reload
-                    .err()
-                    .map(|value| format!("{value:#}"))
-                    .unwrap_or_else(|| "ok".into()),
-            ))),
-        };
-    }
-    Ok(())
-}
-
-#[cfg(feature = "core")]
-async fn reload_optimization_publication_or_restore(
-    source: &bitrouter::paths::ConfigSource,
-    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
-    socket_override: Option<&Path>,
-) -> Result<()> {
-    reload_optimization_publication_or_restore_with(
-        publication,
-        move || reload_policy_if_reachable(source, socket_override),
-        || Ok(()),
-    )
+    reload_published_policy_or_restore_with(update, || {
+        reload_policy_if_reachable(source, socket_override)
+    })
     .await
 }
 
-#[cfg(feature = "core")]
-async fn reload_optimization_publication_or_restore_with<Reload, ReloadFuture, BeforeRecovery>(
-    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
+async fn reload_published_policy_or_restore_with<Reload, ReloadFuture>(
+    update: &bitrouter::policy_lock::PolicyFileUpdate,
     reload: Reload,
-    before_recovery: BeforeRecovery,
 ) -> Result<()>
 where
     Reload: Fn() -> ReloadFuture,
     ReloadFuture: std::future::Future<Output = Result<()>>,
-    BeforeRecovery: FnOnce() -> Result<()>,
-{
-    reload_optimization_publication_or_restore_with_mutations(
-        publication,
-        reload,
-        before_recovery,
-        |path, expected_digest, target_digest, history_dir| {
-            bitrouter::policy_lock::rollback_to_digest_unlocked(
-                path,
-                expected_digest,
-                target_digest,
-                history_dir,
-            )
-            .map(|_| ())
-        },
-        bitrouter::policy_lock::write_text_atomic_unlocked,
-    )
-    .await
-}
-
-#[cfg(feature = "core")]
-async fn reload_optimization_publication_or_restore_with_mutations<
-    Reload,
-    ReloadFuture,
-    BeforeRecovery,
-    MutatePolicy,
-    MutateConfig,
->(
-    publication: &bitrouter::core::optimization::controller::OptimizationPublication,
-    reload: Reload,
-    before_recovery: BeforeRecovery,
-    mutate_policy: MutatePolicy,
-    mutate_config: MutateConfig,
-) -> Result<()>
-where
-    Reload: Fn() -> ReloadFuture,
-    ReloadFuture: std::future::Future<Output = Result<()>>,
-    BeforeRecovery: FnOnce() -> Result<()>,
-    MutatePolicy: Fn(&Path, &str, &str, &Path) -> Result<()>,
-    MutateConfig: Fn(&Path, &str, &str) -> Result<()>,
 {
     let initial_error = match reload().await {
         Ok(()) => return Ok(()),
         Err(error) => error,
     };
-    let initial_detail = format!("{initial_error:#}");
-    if let Err(seam_error) = before_recovery() {
-        return Err(initial_error.context(format!(
-            "daemon rejected optimization publication and recovery setup failed: {seam_error:#}"
-        )));
-    }
-    let Some(update) = publication.update.as_ref() else {
-        return Err(anyhow::anyhow!(
-            "daemon rejected optimization publication ({initial_detail}); recovery has no policy update"
-        ));
-    };
-    let _config_guard =
-        bitrouter::policy_lock::acquire_publication_lock(&publication.config_path).map_err(
-            |recovery| {
-                anyhow::anyhow!(
-                    "daemon rejected optimization publication ({initial_detail}); acquiring config recovery lock failed: {recovery:#}"
-                )
-            },
-        )?;
-    let _policy_guard = bitrouter::policy_lock::acquire_publication_lock(&update.path).map_err(
-        |recovery| {
-            anyhow::anyhow!(
-                "daemon rejected optimization publication ({initial_detail}); acquiring policy recovery lock failed: {recovery:#}"
-            )
+    let parent_digest = update.parent_digest.as_deref().ok_or_else(|| {
+        anyhow::anyhow!("daemon rejected publication; publication has no previous source digest: {initial_error:#}")
+    })?;
+    let history = bitrouter::policy_lock::default_history_dir(&update.path);
+    match bitrouter::policy_lock::rollback_to_digest(
+        &update.path,
+        &update.digest,
+        parent_digest,
+        &history,
+    ) {
+        Ok(_) => match reload().await {
+            Ok(()) => Err(initial_error.context(
+                "daemon rejected publication; restored and reloaded previous policy source",
+            )),
+            Err(recovery_error) => Err(initial_error.context(format!(
+                "daemon rejected publication; restored previous policy source but recovery reload failed: {recovery_error:#}",
+            ))),
         },
-    )?;
-    if update.digest != publication.active_policy_digest {
-        return Err(initial_error.context(format!(
-            "daemon rejected optimization publication; recovery is stale because update {} does not match published policy {}",
-            update.digest, publication.active_policy_digest
-        )));
+        Err(restore_error) => Err(initial_error.context(format!(
+            "daemon rejected publication; recovery refused or failed without overwriting a concurrent source: {restore_error:#}",
+        ))),
     }
-    let initial_pair = observe_optimization_recovery_pair(publication, update)
-        .await
-        .map_err(|recovery| {
-            anyhow::anyhow!(
-                "daemon rejected optimization publication ({initial_detail}); reading recovery state failed: {recovery:#}"
-            )
-        })?;
-    if !initial_pair.config.is_child() || initial_pair.policy != OptimizationRecoveryRevision::Child
-    {
-        return Err(initial_error.context(format!(
-            "daemon rejected optimization publication; recovery is stale because the active pair is {}",
-            initial_pair.description()
-        )));
-    }
-    let history_dir = bitrouter::policy_lock::default_history_dir(&update.path);
-    let mut recovery_errors = Vec::new();
-    if let Err(policy_error) = mutate_policy(
-        &update.path,
-        &publication.active_policy_digest,
-        &publication.parent_policy_digest,
-        &history_dir,
-    ) {
-        recovery_errors.push(format!("restoring parent policy: {policy_error:#}"));
-    }
-    let after_policy = observe_optimization_recovery_pair(publication, update)
-        .await
-        .map_err(|recovery| {
-            optimizer_recovery_failure(
-                &initial_error,
-                format!(
-                    "daemon rejected optimization publication; reconciling disk state after policy recovery failed: {recovery:#}"
-                ),
-                &recovery_errors,
-            )
-        })?;
-    match (&after_policy.config, &after_policy.policy) {
-        (
-            OptimizationRecoveryRevision::Child | OptimizationRecoveryRevision::Both,
-            OptimizationRecoveryRevision::Child,
-        ) => {
-            return reload_reconciled_optimization_pair(
-                &reload,
-                &initial_error,
-                "child",
-                &recovery_errors,
-            )
-            .await;
-        }
-        (OptimizationRecoveryRevision::Both, OptimizationRecoveryRevision::Parent) => {
-            return reload_reconciled_optimization_pair(
-                &reload,
-                &initial_error,
-                "parent",
-                &recovery_errors,
-            )
-            .await;
-        }
-        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Parent) => {}
-        _ => {
-            return Err(optimizer_recovery_failure(
-                &initial_error,
-                format!(
-                    "daemon rejected optimization publication; recovery is stale after policy recovery because the pair is {}",
-                    after_policy.description()
-                ),
-                &recovery_errors,
-            ));
-        }
-    }
-    if let Err(config_error) = mutate_config(
-        &publication.config_path,
-        &publication.config_after,
-        &publication.config_before,
-    ) {
-        recovery_errors.push(format!("restoring parent config: {config_error:#}"));
-    }
-    let after_config = observe_optimization_recovery_pair(publication, update)
-        .await
-        .map_err(|recovery| {
-            optimizer_recovery_failure(
-                &initial_error,
-                format!(
-                    "daemon rejected optimization publication; reconciling disk state after config recovery failed: {recovery:#}"
-                ),
-                &recovery_errors,
-            )
-        })?;
-    match (&after_config.config, &after_config.policy) {
-        (OptimizationRecoveryRevision::Parent, OptimizationRecoveryRevision::Parent) => {
-            return reload_reconciled_optimization_pair(
-                &reload,
-                &initial_error,
-                "parent",
-                &recovery_errors,
-            )
-            .await;
-        }
-        (OptimizationRecoveryRevision::Child, OptimizationRecoveryRevision::Parent) => {}
-        _ => {
-            return Err(optimizer_recovery_failure(
-                &initial_error,
-                format!(
-                    "daemon rejected optimization publication; recovery is stale after config recovery because the pair is {}",
-                    after_config.description()
-                ),
-                &recovery_errors,
-            ));
-        }
-    }
-    if let Err(compensation_error) = mutate_policy(
-        &update.path,
-        &publication.parent_policy_digest,
-        &publication.active_policy_digest,
-        &history_dir,
-    ) {
-        recovery_errors.push(format!(
-            "restoring child policy after config recovery failure: {compensation_error:#}"
-        ));
-    }
-    let after_compensation = observe_optimization_recovery_pair(publication, update)
-        .await
-        .map_err(|recovery| {
-            optimizer_recovery_failure(
-                &initial_error,
-                format!(
-                    "daemon rejected optimization publication; reconciling disk state after policy compensation failed: {recovery:#}"
-                ),
-                &recovery_errors,
-            )
-        })?;
-    if after_compensation.config.is_child()
-        && after_compensation.policy == OptimizationRecoveryRevision::Child
-    {
-        return reload_reconciled_optimization_pair(
-            &reload,
-            &initial_error,
-            "child",
-            &recovery_errors,
-        )
-        .await;
-    }
-    Err(optimizer_recovery_failure(
-        &initial_error,
-        format!(
-            "daemon rejected optimization publication; recovery is stale after policy compensation because the pair is {}",
-            after_compensation.description()
-        ),
-        &recovery_errors,
-    ))
 }
 
 fn require_policy_config_path(source: &bitrouter::paths::ConfigSource) -> Result<&Path> {
@@ -5710,59 +4696,37 @@ async fn routing_policy_report(
     action: &str,
     applied: bool,
     changes: Vec<String>,
-    show: Option<&str>,
 ) -> Result<PolicyReport> {
-    let raw = tokio::fs::read_to_string(config_path)
-        .await
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let mut cfg = config::parse(&raw).context("parsing bitrouter.yaml")?;
+    let mut cfg = config::load(config_path).await?;
     bitrouter::policy_lock::apply_defaults(&mut cfg, Some(config_path));
     let loaded = bitrouter::policy_lock::load_for_config(&cfg, Some(config_path)).await?;
-    let policy = match show {
-        Some(name) => {
-            let lock = loaded
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("no policy lock is configured"))?;
-            let definition = lock
-                .document
-                .policies
-                .get(name)
-                .ok_or_else(|| anyhow::anyhow!("policy '{name}' does not exist"))?;
-            Some(serde_json::to_value(definition).context("serializing policy")?)
-        }
-        None => None,
-    };
     let bindings = cfg
         .router_policy_bindings()
         .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
         .collect();
-    let path = loaded.as_ref().and_then(|lock| lock.path.clone());
-    let policies = loaded
-        .as_ref()
-        .map(|lock| lock.document.policies.keys().cloned().collect())
-        .unwrap_or_default();
     Ok(PolicyReport {
         action: action.to_string(),
-        path: path.map(|path| path.display().to_string()),
+        path: loaded
+            .as_ref()
+            .and_then(|source| source.path.as_ref())
+            .map(|path| path.display().to_string()),
         candidate_path: None,
-        digest: loaded.as_ref().map(|lock| lock.digest.clone()),
-        source: matches!(action, "status" | "show").then(|| {
-            if loaded.as_ref().is_some_and(|lock| lock.path.is_none()) {
-                "bundled"
-            } else {
+        digest: loaded.as_ref().map(|source| source.digest.clone()),
+        source: Some(
+            if loaded.as_ref().is_some_and(|source| source.path.is_some()) {
                 "disk"
+            } else {
+                "bundled"
             }
-            .to_string()
-        }),
-        mode: match cfg.policy.mode {
-            config::PolicyRuntimeMode::Frozen => "frozen",
-            config::PolicyRuntimeMode::Adaptive => "adaptive",
-        }
-        .to_string(),
-        policies,
+            .to_string(),
+        ),
+        policies: loaded
+            .as_ref()
+            .map(|source| source.document.policies.keys().cloned().collect())
+            .unwrap_or_default(),
         bindings,
         changes,
-        policy,
+        policy: loaded.map(|source| source.document),
         applied,
         config_activation: None,
     })
@@ -6775,6 +5739,53 @@ fn pid_path_for(socket: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn harness_host_is_a_distinct_hidden_feature_gated_process_entry() -> anyhow::Result<()> {
+        let command = Cli::command();
+        #[cfg(all(feature = "core", feature = "harness"))]
+        {
+            assert!(
+                command
+                    .find_subcommand("harness-host")
+                    .is_some_and(clap::Command::is_hide_set)
+            );
+            let cli = Cli::try_parse_from([
+                "bro",
+                "harness-host",
+                "--config",
+                "owned.yaml",
+                "--managed-child",
+            ])?;
+            assert!(matches!(cli.command, Some(Command::HarnessHost {
+                    config: Some(path), managed_child: true,
+                }) if path == Path::new("owned.yaml")));
+        }
+        #[cfg(not(all(feature = "core", feature = "harness")))]
+        {
+            assert!(command.find_subcommand("harness-host").is_none());
+            assert!(Cli::try_parse_from(["bro", "harness-host"]).is_err());
+        }
+        let serve =
+            Cli::try_parse_from(["bro", "serve", "--config", "owned.yaml", "--managed-child"])?;
+        assert!(matches!(serve.command, Some(Command::Serve {
+                config: Some(path), managed_child: true,
+            }) if path == Path::new("owned.yaml")));
+        let start = Cli::try_parse_from(["bro", "start", "--config", "owned.yaml"])?;
+        assert!(
+            matches!(start.command, Some(Command::Start { config: Some(path), .. })
+                if path == Path::new("owned.yaml"))
+        );
+        for entry in ["serve", "start"] {
+            for flag in ["--bro", "--harness", "--scope", "--harness-host"] {
+                assert!(
+                    Cli::try_parse_from(["bro", entry, flag]).is_err(),
+                    "{entry} unexpectedly accepts the product-scope flag {flag}"
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn run_is_the_unambiguous_headless_agent_surface() -> anyhow::Result<()> {
@@ -7932,26 +6943,6 @@ mod tests {
     }
 
     #[test]
-    fn local_policy_reads_without_view_keep_the_legacy_contract() {
-        assert!(is_legacy_local_policy_read(&PolicyAction::Status {
-            view: None,
-            config: None,
-            socket: None,
-        }));
-        assert!(is_legacy_local_policy_read(&PolicyAction::Show {
-            name: "default".to_string(),
-            view: None,
-            config: None,
-            socket: None,
-        }));
-        assert!(!is_legacy_local_policy_read(&PolicyAction::Status {
-            view: Some(PolicyViewArg::Disk),
-            config: None,
-            socket: None,
-        }));
-    }
-
-    #[test]
     fn cli_definition_is_valid() {
         use clap::CommandFactory;
         // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
@@ -8085,47 +7076,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn policy_oracle_accepts_human_readable_cost_assumptions() {
-        use clap::Parser;
-
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "workflow-state",
-            "policy-oracle",
-            "--traces",
-            "traces.jsonl",
-            "--cloud-usage",
-            "usage.jsonl",
-            "--policy-lock",
-            "policy-lock.yaml",
-            "--policy",
-            "auto",
-            "--effective-cost-factor",
-            "0.24",
-            "--target-savings",
-            "0.30",
-            "--target-savings",
-            "0.40",
-            "--output",
-            "oracle.json",
-        ])
-        .expect("parse policy counterfactual oracle");
-
-        assert!(matches!(
-            cli.command,
-            Some(Command::WorkflowState {
-                action: WorkflowStateAction::PolicyOracle {
-                    effective_cost_factor_ppm: 240_000,
-                    target_savings_ppm,
-                    ..
-                }
-            }) if target_savings_ppm == vec![300_000, 400_000]
-        ));
-    }
-
     #[tokio::test]
-    #[cfg(feature = "core")]
     async fn eval_subject_seal_derives_a_digest_without_the_ledger() -> Result<()> {
         use clap::Parser;
 
@@ -8137,12 +7088,11 @@ mod tests {
         std::fs::write(
             &draft,
             r#"{
-  "schema_version": 1,
+  "schema_version": 2,
+  "identity": {"profile": "gateway_generic"},
   "eval_id": "eval-generic-1",
   "scope": "task",
   "subject_id": "task-generic-1",
-  "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "preset": null,
   "cohort": null,
   "holdout": false,
   "decisions": [
@@ -8488,1166 +7438,7 @@ mod tests {
     }
 
     #[test]
-    fn routing_policy_init_and_evolve_flags_parse() {
-        use clap::Parser;
-        let init = Cli::try_parse_from([
-            "bitrouter",
-            "policy",
-            "init",
-            "terminal-bench",
-            "--router",
-            "coding",
-            "--strong",
-            "openai-codex:gpt-5.6-sol",
-            "--strong-effort",
-            "high",
-            "--economy",
-            "openai-codex:gpt-5.6-sol",
-            "--economy-effort",
-            "low",
-            "--config",
-            "team/bitrouter.yaml",
-        ])
-        .expect("parse init");
-        match init.command {
-            Some(Command::Policy {
-                action:
-                    PolicyAction::Init {
-                        name,
-                        router,
-                        preset,
-                        strong,
-                        strong_effort,
-                        economy,
-                        economy_effort,
-                        config,
-                    },
-            }) => {
-                assert_eq!(name, "terminal-bench");
-                assert_eq!(router.as_deref(), Some("coding"));
-                assert_eq!(preset, None);
-                assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
-                assert_eq!(
-                    strong_effort,
-                    Some(bitrouter_ai::types::ReasoningEffort::High)
-                );
-                assert_eq!(economy, "openai-codex:gpt-5.6-sol");
-                assert_eq!(
-                    economy_effort,
-                    Some(bitrouter_ai::types::ReasoningEffort::Low)
-                );
-                assert_eq!(config, Some(PathBuf::from("team/bitrouter.yaml")));
-            }
-            _ => panic!("expected policy init"),
-        }
-
-        let default_coding = Cli::try_parse_from([
-            "bitrouter",
-            "policy",
-            "init",
-            "coding",
-            "--strong",
-            "openai-codex:gpt-5.6-sol",
-            "--economy",
-            "openai-codex:gpt-5.6-luna",
-        ]);
-        assert!(matches!(
-            default_coding,
-            Ok(Cli {
-                command: Some(Command::Policy {
-                    action: PolicyAction::Init {
-                        router: None,
-                        preset: None,
-                        ..
-                    }
-                }),
-                ..
-            })
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "init",
-                "coding",
-                "--router",
-                "coding",
-                "--preset",
-                "coding",
-                "--economy",
-                "openai-codex:gpt-5.6-luna",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "init",
-                "coding",
-                "--strong",
-                "openai-codex:gpt-5.6-sol",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "init",
-                "auto",
-                "--preset",
-                "auto",
-                "--strong",
-                "openai-codex:gpt-5.6-sol",
-                "--economy",
-                "openai-codex:gpt-5.6-luna",
-            ])
-            .is_ok()
-        );
-
-        let evolve = Cli::try_parse_from(["bitrouter", "policy", "evolve", "--apply"])
-            .expect("parse evolve");
-        assert!(matches!(
-            evolve.command,
-            Some(Command::Policy {
-                action: PolicyAction::Evolve { apply: true, .. }
-            })
-        ));
-
-        let export = Cli::try_parse_from([
-            "bitrouter",
-            "policy",
-            "evolve",
-            "--output",
-            "candidate.yaml",
-        ])
-        .expect("parse candidate export");
-        assert!(matches!(
-            export.command,
-            Some(Command::Policy {
-                action: PolicyAction::Evolve {
-                    apply: false,
-                    output: Some(path),
-                    ..
-                }
-            }) if path == Path::new("candidate.yaml")
-        ));
-
-        assert!(Cli::try_parse_from(["bitrouter", "policy", "evolve", "--freeze"]).is_err());
-        assert!(Cli::try_parse_from(["bitrouter", "policy", "lock"]).is_err());
-        assert!(Cli::try_parse_from(["bitrouter", "policy", "unlock"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "evolve",
-                "--apply",
-                "--output",
-                "candidate.yaml",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn policy_compile_diff_and_rollback_commands_parse() {
-        use clap::Parser;
-
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "compile",
-                "--output",
-                "candidate.yaml"
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from(["bitrouter", "policy", "diff", "active.yaml", "next.yaml"])
-                .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "policy",
-                "publish",
-                "candidate.yaml",
-                "--config",
-                "bitrouter.yaml",
-            ])
-            .is_ok()
-        );
-        assert!(Cli::try_parse_from(["bitrouter", "policy", "rollback", "sha256:abc"]).is_ok());
-    }
-
-    #[test]
-    fn optimize_accepts_only_history_controller_commands() -> anyhow::Result<()> {
-        use clap::Parser;
-
-        assert!(
-            Cli::try_parse_from([
-                "bitrouter",
-                "optimize",
-                "run",
-                "--policy",
-                "auto",
-                "--candidate-tier",
-                "economy",
-            ])
-            .is_ok()
-        );
-        assert!(
-            Cli::try_parse_from(["bitrouter", "optimize", "status", "--policy", "auto",]).is_ok()
-        );
-
-        for removed in ["setup", "resolve", "review", "publish", "rollback"] {
-            assert!(
-                Cli::try_parse_from(["bitrouter", "optimize", removed]).is_err(),
-                "removed optimize command {removed} still parses"
-            );
-        }
-        for removed_args in [
-            &["run", "--workflow-command", "./run-eval"][..],
-            &["run", "--workflow-arg", "--smoke"][..],
-            &["run", "--workflow-input", ".venv"][..],
-            &["run", "--evaluator-agent", "codex-acp"][..],
-            &["run", "--evaluator-model", "gpt-5.6"][..],
-            &["run", "--evaluator-via-cloud"][..],
-            &["run", "--enable-adaptive"][..],
-        ] {
-            let mut command = vec!["bitrouter", "optimize"];
-            command.extend_from_slice(removed_args);
-            assert!(
-                Cli::try_parse_from(command).is_err(),
-                "removed optimize arguments {removed_args:?} still parse"
-            );
-        }
-
-        let latency = Cli::try_parse_from(["bro", "optimize", "run", "--objective", "latency"])?;
-        assert!(matches!(
-            latency.command,
-            Some(Command::Optimize {
-                action: OptimizeAction::Run {
-                    objective:
-                        bitrouter::gateway::routing::exploration::OptimizationObjective::Latency,
-                    ..
-                }
-            })
-        ));
-        let run = Cli::try_parse_from(["bitrouter", "optimize", "run"])?;
-        assert!(matches!(
-            run.command,
-            Some(Command::Optimize {
-                action: OptimizeAction::Run {
-                    policy,
-                    candidate_tier: None,
-                    objective: bitrouter::gateway::routing::exploration::OptimizationObjective::Cost,
-                    exploration_ppm: 100_000,
-                    minimum_tasks: 3,
-                    maximum_tasks: 20,
-                    minimum_pass_rate_ppm: 900_000,
-                    evaluator_config_digest: None,
-                    config,
-                    socket: None,
-                }
-            }) if policy == "auto"
-                && config == Path::new("bitrouter.yaml")
-        ));
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "core")]
-    fn optimize_status_without_active_exploration_is_idle() {
-        let report = optimization_status_report(
-            bitrouter::core::optimization::controller::OptimizationStatus {
-                policy: "auto".into(),
-                policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
-                active_policy_digest:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                parent_policy_digest: None,
-                eval_snapshot_root: None,
-                observed_subject_digest: None,
-                active_experiment: None,
-            },
-        );
-
-        assert_eq!(report.action, "optimize.status");
-        assert_eq!(report.decision, "idle");
-    }
-
-    #[test]
-    #[cfg(feature = "core")]
-    fn optimize_status_with_active_exploration_is_exploring() {
-        let report = optimization_status_report(
-            bitrouter::core::optimization::controller::OptimizationStatus {
-                policy: "auto".into(),
-                policy_mode: bitrouter::config::PolicyRuntimeMode::Adaptive,
-                active_policy_digest:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-                parent_policy_digest: None,
-                eval_snapshot_root: None,
-                observed_subject_digest: None,
-                active_experiment: Some(
-                    bitrouter::gateway::routing::exploration::RouteExploration {
-                        experiment_id: "experiment-1".into(),
-                        target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
-                        champion_tier: "strong".into(),
-                        challenger_tier: "economy".into(),
-                        challenger_exposure_ppm: 100_000,
-                        gate: bitrouter::gateway::routing::exploration::OptimizationGate {
-                            objective: Default::default(),
-                            minimum_tasks_per_arm: 3,
-                            maximum_challenger_tasks: 20,
-                            minimum_pass_rate_ppm: 900_000,
-                            evaluator_config_digest: None,
-                        },
-                    },
-                ),
-            },
-        );
-
-        assert_eq!(report.action, "optimize.status");
-        assert_eq!(report.decision, "exploring");
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimize_explore_json_reports_the_explicit_evaluator_pin() -> anyhow::Result<()> {
-        use std::collections::{BTreeMap, BTreeSet};
-
-        use bitrouter::core::eval::EvalService;
-        use bitrouter::core::eval::admission::SubmissionPrincipal;
-        use bitrouter::core::eval::store::EvalStore;
-        use {
-            bitrouter::storage::evaluation::evidence_digest,
-            bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
-            bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-            bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
-            bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
-            bitrouter_ai::eval::EvidenceItem,
-        };
-
-        const PIN: &str = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let directory = tempfile::tempdir()?;
-        let config_path = directory.path().join("bitrouter.yaml");
-        let database_path = directory.path().join("eval.db");
-        let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
-        std::fs::write(
-            &config_path,
-            "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n",
-        )?;
-        let database = bitrouter::db::connect(&database_url).await?;
-        bitrouter::db::run_migrations(&database).await?;
-        drop(database);
-        let initialized = bitrouter::policy_lock::initialize_files(
-            &config_path,
-            "auto",
-            "auto",
-            Some("strong-model"),
-            "economy-model",
-        )
-        .await?;
-        let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
-        let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
-        for (scope, subject_id, cost) in [
-            (EvalScope::Request, "request-report-pin", Some("900")),
-            (EvalScope::Task, "task-report-pin", None),
-        ] {
-            let evidence = cost.map_or_else(Vec::new, |cost| {
-                vec![EvidenceItem {
-                    evidence_id: format!("evidence-{subject_id}"),
-                    kind: "request.outcome".into(),
-                    digest: PIN.into(),
-                    redacted: true,
-                    attributes: BTreeMap::from([("cost_micro_usd".into(), cost.into())]),
-                }]
-            });
-            let digest = evidence_digest(&evidence)?;
-            let eval_id = format!("eval-{subject_id}");
-            let subject = EvalSubject {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: eval_id.clone(),
-                scope,
-                subject_id: subject_id.into(),
-                policy_digest: initialized.digest.clone(),
-                preset: Some("auto".into()),
-                cohort: None,
-                holdout: false,
-                decisions: vec![EvalDecisionRef {
-                    decision_id: format!("decision-{subject_id}"),
-                    policy: "auto".into(),
-                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
-                    selected_tier: "strong".into(),
-                    selected_effort: None,
-                    baseline_tier: None,
-                    baseline_effort: None,
-                    policy_digest: initialized.digest.clone(),
-                    experiment: None,
-                    route_measurement: None,
-                }],
-                requested_dimensions: BTreeSet::new(),
-                evidence,
-                evidence_digest: digest.clone(),
-                observed_at: "2026-08-17T00:00:00Z".into(),
-            };
-            store.insert_subject(&subject).await?;
-            service
-                .submit(
-                    EvaluationResult {
-                        schema_version: EVAL_SCHEMA_VERSION,
-                        eval_id,
-                        evidence_digest: digest,
-                        evaluator: EvaluatorIdentity {
-                            authority_id: "local".into(),
-                            evaluator_id: "history".into(),
-                            kind: EvaluatorKind::TaskNative,
-                            version: "1".into(),
-                            config_digest: PIN.into(),
-                        },
-                        verdict: if scope == EvalScope::Request {
-                            EvalVerdict::Inconclusive
-                        } else {
-                            EvalVerdict::Pass
-                        },
-                        metrics: BTreeMap::new(),
-                        hard_violations: Vec::new(),
-                        confidence_ppm: None,
-                        evidence_refs: Vec::new(),
-                        decision_credit: BTreeMap::new(),
-                        idempotency_key: format!("result-{subject_id}"),
-                        submitted_at: "2026-08-17T00:00:01Z".into(),
-                    },
-                    SubmissionPrincipal::LocalOperator,
-                )
-                .await?;
-        }
-        let prepared = bitrouter::core::optimization::controller::prepare_files(
-            &config_path,
-            bitrouter::core::optimization::controller::OptimizationOptions {
-                evaluator_config_digest: Some(PIN.into()),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let report = optimization_run_report("auto", &prepared);
-        let json = serde_json::to_value(report)?;
-
-        assert_eq!(json["decision"], "explore");
-        assert_eq!(json["evaluator_config_digest"], PIN);
-        Ok(())
-    }
-
-    #[cfg(feature = "core")]
-    struct RecoveryFixture {
-        _directory: tempfile::TempDir,
-        config_path: PathBuf,
-        policy_path: PathBuf,
-        config_before: String,
-        config_after: String,
-        parent_digest: String,
-        child_document: bitrouter::policy_lock::PolicyLock,
-        publication: bitrouter::core::optimization::controller::OptimizationPublication,
-    }
-
-    #[cfg(feature = "core")]
-    fn recovery_fixture() -> anyhow::Result<RecoveryFixture> {
-        let directory = tempfile::tempdir()?;
-        let config_path = directory.path().join("bitrouter.yaml");
-        let policy_path = directory.path().join("policy-lock.yaml");
-        let config_before =
-            "# keep operator bytes\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\n"
-                .to_string();
-        let config_after = bitrouter::policy_lock::edit_config_mode(
-            &config_before,
-            config::PolicyRuntimeMode::Adaptive,
-        )?;
-        std::fs::write(&config_path, &config_after)?;
-        let parent = bitrouter::policy_lock::PolicyLock::default();
-        let parent_digest =
-            bitrouter::policy_lock::write_atomic_unlocked(&policy_path, None, &parent)?;
-        let mut child_document = parent;
-        let artifact = child_document
-            .artifact
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("default compiled policy has no artifact"))?;
-        artifact.parent_digest = Some(parent_digest.clone());
-        artifact.source_snapshot_time_unix_ms = 1;
-        let history = bitrouter::policy_lock::default_history_dir(&policy_path);
-        let record = bitrouter::policy_lock::publish_candidate_unlocked(
-            &policy_path,
-            &parent_digest,
-            &child_document,
-            &history,
-        )?;
-        let update = bitrouter::policy_lock::PolicyFileUpdate {
-            path: policy_path.clone(),
-            digest: record.child_digest.clone(),
-            document: child_document.clone(),
-            changes: Vec::new(),
-            conflicts: Vec::new(),
-        };
-        let publication = bitrouter::core::optimization::controller::OptimizationPublication {
-            action: bitrouter::core::optimization::controller::ControllerAction::Explore,
-            parent_policy_digest: parent_digest.clone(),
-            active_policy_digest: record.child_digest,
-            eval_snapshot_root:
-                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
-            published: true,
-            config_activated: true,
-            config_path: config_path.clone(),
-            config_before: config_before.clone(),
-            config_after: config_after.clone(),
-            update: Some(update),
-        };
-        Ok(RecoveryFixture {
-            _directory: directory,
-            config_path,
-            policy_path,
-            config_before,
-            config_after,
-            parent_digest,
-            child_document,
-            publication,
-        })
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_restores_an_adaptive_publication_with_identical_config()
-    -> anyhow::Result<()> {
-        use std::collections::{BTreeMap, BTreeSet};
-
-        use bitrouter::core::eval::EvalService;
-        use bitrouter::core::eval::admission::SubmissionPrincipal;
-        use bitrouter::core::eval::store::EvalStore;
-        use {
-            bitrouter::storage::evaluation::evidence_digest,
-            bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
-            bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-            bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
-            bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
-            bitrouter_ai::eval::EvidenceItem,
-        };
-
-        const EVIDENCE_DIGEST: &str =
-            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let directory = tempfile::tempdir()?;
-        let config_path = directory.path().join("bitrouter.yaml");
-        let database_path = directory.path().join("eval.db");
-        let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
-        std::fs::write(
-            &config_path,
-            "database:\n  url: sqlite://./eval.db\npolicy:\n  mode: frozen\n  path: policy-lock.yaml\npresets:\n  auto:\n    model: strong-model\n",
-        )?;
-        let database = bitrouter::db::connect(&database_url).await?;
-        bitrouter::db::run_migrations(&database).await?;
-        drop(database);
-        let initialized = bitrouter::policy_lock::initialize_files(
-            &config_path,
-            "auto",
-            "auto",
-            Some("strong-model"),
-            "economy-model",
-        )
-        .await?;
-        let frozen_config = std::fs::read_to_string(&config_path)?;
-        let adaptive_config = bitrouter::policy_lock::edit_config_mode(
-            &frozen_config,
-            config::PolicyRuntimeMode::Adaptive,
-        )?;
-        std::fs::write(&config_path, &adaptive_config)?;
-        let store = EvalStore::new(bitrouter::db::connect(&database_url).await?);
-        let service = EvalService::new(store.clone(), bitrouter::config::EvalConfig::default());
-        for (scope, subject_id, cost) in [
-            (EvalScope::Request, "request-adaptive-recovery", Some("900")),
-            (EvalScope::Task, "task-adaptive-recovery", None),
-        ] {
-            let evidence = cost.map_or_else(Vec::new, |cost| {
-                vec![EvidenceItem {
-                    evidence_id: format!("evidence-{subject_id}"),
-                    kind: "request.outcome".into(),
-                    digest: EVIDENCE_DIGEST.into(),
-                    redacted: true,
-                    attributes: BTreeMap::from([("cost_micro_usd".into(), cost.into())]),
-                }]
-            });
-            let digest = evidence_digest(&evidence)?;
-            let eval_id = format!("eval-{subject_id}");
-            let subject = EvalSubject {
-                schema_version: EVAL_SCHEMA_VERSION,
-                eval_id: eval_id.clone(),
-                scope,
-                subject_id: subject_id.into(),
-                policy_digest: initialized.digest.clone(),
-                preset: Some("auto".into()),
-                cohort: None,
-                holdout: false,
-                decisions: vec![EvalDecisionRef {
-                    decision_id: format!("decision-{subject_id}"),
-                    policy: "auto".into(),
-                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
-                    selected_tier: "strong".into(),
-                    selected_effort: None,
-                    baseline_tier: None,
-                    baseline_effort: None,
-                    policy_digest: initialized.digest.clone(),
-                    experiment: None,
-                    route_measurement: None,
-                }],
-                requested_dimensions: BTreeSet::new(),
-                evidence,
-                evidence_digest: digest.clone(),
-                observed_at: "2026-08-17T00:00:00Z".into(),
-            };
-            store.insert_subject(&subject).await?;
-            service
-                .submit(
-                    EvaluationResult {
-                        schema_version: EVAL_SCHEMA_VERSION,
-                        eval_id,
-                        evidence_digest: digest,
-                        evaluator: EvaluatorIdentity {
-                            authority_id: "local".into(),
-                            evaluator_id: "history".into(),
-                            kind: EvaluatorKind::TaskNative,
-                            version: "1".into(),
-                            config_digest: EVIDENCE_DIGEST.into(),
-                        },
-                        verdict: if scope == EvalScope::Request {
-                            EvalVerdict::Inconclusive
-                        } else {
-                            EvalVerdict::Pass
-                        },
-                        metrics: BTreeMap::new(),
-                        hard_violations: Vec::new(),
-                        confidence_ppm: None,
-                        evidence_refs: Vec::new(),
-                        decision_credit: BTreeMap::new(),
-                        idempotency_key: format!("result-{subject_id}"),
-                        submitted_at: "2026-08-17T00:00:01Z".into(),
-                    },
-                    SubmissionPrincipal::LocalOperator,
-                )
-                .await?;
-        }
-        let prepared = bitrouter::core::optimization::controller::prepare_files(
-            &config_path,
-            bitrouter::core::optimization::controller::OptimizationOptions::default(),
-        )
-        .await?;
-        let publication =
-            bitrouter::core::optimization::controller::publish_prepared(prepared).await?;
-        let policy_path = publication
-            .update
-            .as_ref()
-            .map(|update| update.path.clone())
-            .context("adaptive optimizer publication has no policy update")?;
-        assert_eq!(publication.config_before, adaptive_config);
-        assert_eq!(publication.config_after, adaptive_config);
-        assert!(!publication.config_activated);
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let live = Arc::new(std::sync::Mutex::new((
-            config::PolicyRuntimeMode::Adaptive,
-            initialized.digest.clone(),
-        )));
-        let reload = {
-            let attempts = attempts.clone();
-            let live = live.clone();
-            let config_path = config_path.clone();
-            let policy_path = policy_path.clone();
-            move || {
-                let attempts = attempts.clone();
-                let live = live.clone();
-                let config_path = config_path.clone();
-                let policy_path = policy_path.clone();
-                async move {
-                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                        anyhow::bail!("injected adaptive daemon rejection of child policy")
-                    }
-                    let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
-                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
-                    *live
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
-                        (mode, digest);
-                    Ok(())
-                }
-            }
-        };
-
-        let error =
-            reload_optimization_publication_or_restore_with(&publication, reload, || Ok(()))
-                .await
-                .err()
-                .context("injected adaptive daemon rejection unexpectedly succeeded")?;
-        let detail = format!("{error:#}");
-
-        assert!(detail.contains("injected adaptive daemon rejection of child policy"));
-        assert!(detail.contains("reconciled and reloaded the parent"));
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(std::fs::read_to_string(&config_path)?, adaptive_config);
-        assert_eq!(
-            bitrouter::config::parse(&std::fs::read_to_string(&config_path)?)?
-                .policy
-                .mode,
-            config::PolicyRuntimeMode::Adaptive
-        );
-        assert_eq!(
-            bitrouter::policy_lock::load(&policy_path).await?.digest,
-            initialized.digest
-        );
-        assert_eq!(
-            *live
-                .lock()
-                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
-            (config::PolicyRuntimeMode::Adaptive, initialized.digest)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_restores_one_disk_and_live_parent_pair() -> anyhow::Result<()>
-    {
-        let fixture = recovery_fixture()?;
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let live = Arc::new(std::sync::Mutex::new((
-            config::PolicyRuntimeMode::Frozen,
-            fixture.parent_digest.clone(),
-        )));
-        let reload = {
-            let attempts = attempts.clone();
-            let live = live.clone();
-            let config_path = fixture.config_path.clone();
-            let policy_path = fixture.policy_path.clone();
-            move || {
-                let attempts = attempts.clone();
-                let live = live.clone();
-                let config_path = config_path.clone();
-                let policy_path = policy_path.clone();
-                async move {
-                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                        anyhow::bail!("injected daemon rejection of child policy")
-                    }
-                    let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
-                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
-                    *live
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
-                        (mode, digest);
-                    Ok(())
-                }
-            }
-        };
-
-        let error = reload_optimization_publication_or_restore_with(
-            &fixture.publication,
-            reload,
-            || Ok(()),
-        )
-        .await
-        .err()
-        .context("injected daemon rejection unexpectedly succeeded")?;
-
-        assert!(format!("{error:#}").contains("injected daemon rejection"));
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(
-            std::fs::read_to_string(&fixture.config_path)?,
-            fixture.config_before
-        );
-        assert_eq!(
-            bitrouter::policy_lock::load(&fixture.policy_path)
-                .await?
-                .digest,
-            fixture.parent_digest
-        );
-        assert_eq!(
-            *live
-                .lock()
-                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
-            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_reconciles_a_post_commit_policy_error() -> anyhow::Result<()>
-    {
-        let fixture = recovery_fixture()?;
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let live = Arc::new(std::sync::Mutex::new((
-            config::PolicyRuntimeMode::Frozen,
-            fixture.parent_digest.clone(),
-        )));
-        let reload = {
-            let attempts = attempts.clone();
-            let events = events.clone();
-            let live = live.clone();
-            let config_path = fixture.config_path.clone();
-            let policy_path = fixture.policy_path.clone();
-            move || {
-                let attempts = attempts.clone();
-                let events = events.clone();
-                let live = live.clone();
-                let config_path = config_path.clone();
-                let policy_path = policy_path.clone();
-                async move {
-                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                        events
-                            .lock()
-                            .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                            .push("reload-child-rejected".into());
-                        anyhow::bail!("injected daemon rejection of child policy")
-                    }
-                    let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
-                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
-                    events
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                        .push("reload-parent".into());
-                    *live
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
-                        (mode, digest);
-                    Ok(())
-                }
-            }
-        };
-        let policy_events = events.clone();
-        let config_events = events.clone();
-
-        let error = reload_optimization_publication_or_restore_with_mutations(
-            &fixture.publication,
-            reload,
-            || Ok(()),
-            move |path, expected, target, history| {
-                bitrouter::policy_lock::rollback_to_digest_unlocked(
-                    path, expected, target, history,
-                )?;
-                policy_events
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                    .push("policy-parent-post-commit-error".into());
-                anyhow::bail!("injected post-commit policy failure")
-            },
-            move |path, expected, updated| {
-                bitrouter::policy_lock::write_text_atomic_unlocked(path, expected, updated)?;
-                config_events
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                    .push("config-parent".into());
-                Ok(())
-            },
-        )
-        .await
-        .err()
-        .context("post-commit policy failure unexpectedly succeeded")?;
-        let detail = format!("{error:#}");
-
-        assert!(detail.contains("injected daemon rejection of child policy"));
-        assert!(detail.contains("injected post-commit policy failure"));
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(
-            *events
-                .lock()
-                .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?,
-            [
-                "reload-child-rejected",
-                "policy-parent-post-commit-error",
-                "config-parent",
-                "reload-parent",
-            ]
-        );
-        assert_eq!(
-            std::fs::read_to_string(&fixture.config_path)?,
-            fixture.config_before
-        );
-        assert_eq!(
-            bitrouter::policy_lock::load(&fixture.policy_path)
-                .await?
-                .digest,
-            fixture.parent_digest
-        );
-        assert_eq!(
-            *live
-                .lock()
-                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
-            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_reconciles_a_post_rename_config_error() -> anyhow::Result<()>
-    {
-        let fixture = recovery_fixture()?;
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let live = Arc::new(std::sync::Mutex::new((
-            config::PolicyRuntimeMode::Frozen,
-            fixture.parent_digest.clone(),
-        )));
-        let reload = {
-            let attempts = attempts.clone();
-            let events = events.clone();
-            let live = live.clone();
-            let config_path = fixture.config_path.clone();
-            let policy_path = fixture.policy_path.clone();
-            move || {
-                let attempts = attempts.clone();
-                let events = events.clone();
-                let live = live.clone();
-                let config_path = config_path.clone();
-                let policy_path = policy_path.clone();
-                async move {
-                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                        events
-                            .lock()
-                            .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                            .push("reload-child-rejected".into());
-                        anyhow::bail!("injected daemon rejection of child policy")
-                    }
-                    let raw = std::fs::read_to_string(config_path)?;
-                    let mode = bitrouter::config::parse(&raw)?.policy.mode;
-                    let digest = bitrouter::policy_lock::load(&policy_path).await?.digest;
-                    events
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                        .push("reload-parent".into());
-                    *live
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
-                        (mode, digest);
-                    Ok(())
-                }
-            }
-        };
-        let policy_events = events.clone();
-        let config_events = events.clone();
-
-        let error = reload_optimization_publication_or_restore_with_mutations(
-            &fixture.publication,
-            reload,
-            || Ok(()),
-            move |path, expected, target, history| {
-                bitrouter::policy_lock::rollback_to_digest_unlocked(
-                    path, expected, target, history,
-                )?;
-                policy_events
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                    .push("policy-parent".into());
-                Ok(())
-            },
-            move |path, expected, updated| {
-                bitrouter::policy_lock::write_text_atomic_unlocked(path, expected, updated)?;
-                config_events
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?
-                    .push("config-parent-post-rename-error".into());
-                anyhow::bail!("injected post-rename config failure")
-            },
-        )
-        .await
-        .err()
-        .context("post-rename config failure unexpectedly succeeded")?;
-        let detail = format!("{error:#}");
-
-        assert!(detail.contains("injected daemon rejection of child policy"));
-        assert!(detail.contains("injected post-rename config failure"));
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-        assert_eq!(
-            *events
-                .lock()
-                .map_err(|_| anyhow::anyhow!("recovery event lock poisoned"))?,
-            [
-                "reload-child-rejected",
-                "policy-parent",
-                "config-parent-post-rename-error",
-                "reload-parent",
-            ]
-        );
-        assert_eq!(
-            std::fs::read_to_string(&fixture.config_path)?,
-            fixture.config_before
-        );
-        assert_eq!(
-            bitrouter::policy_lock::load(&fixture.policy_path)
-                .await?
-                .digest,
-            fixture.parent_digest
-        );
-        assert_eq!(
-            *live
-                .lock()
-                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
-            (config::PolicyRuntimeMode::Frozen, fixture.parent_digest)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_never_overwrites_a_concurrent_policy_winner()
-    -> anyhow::Result<()> {
-        let fixture = recovery_fixture()?;
-        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let winner_digest = Arc::new(std::sync::Mutex::new(None::<String>));
-        let live = Arc::new(std::sync::Mutex::new((
-            config::PolicyRuntimeMode::Frozen,
-            fixture.parent_digest.clone(),
-        )));
-        let reload = {
-            let attempts = attempts.clone();
-            move || {
-                let attempts = attempts.clone();
-                async move {
-                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    anyhow::bail!("injected daemon rejection before concurrent publication")
-                }
-            }
-        };
-        let before_recovery = {
-            let policy_path = fixture.policy_path.clone();
-            let child_digest = fixture.publication.active_policy_digest.clone();
-            let mut winner = fixture.child_document.clone();
-            let winner_digest = winner_digest.clone();
-            let live = live.clone();
-            move || {
-                let artifact = winner
-                    .artifact
-                    .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("winner artifact is missing"))?;
-                artifact.parent_digest = Some(child_digest.clone());
-                artifact.source_snapshot_time_unix_ms = 2;
-                let record = bitrouter::policy_lock::publish_candidate(
-                    &policy_path,
-                    &child_digest,
-                    &winner,
-                    &bitrouter::policy_lock::default_history_dir(&policy_path),
-                )?;
-                *winner_digest
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("winner digest lock poisoned"))? =
-                    Some(record.child_digest.clone());
-                *live
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))? =
-                    (config::PolicyRuntimeMode::Adaptive, record.child_digest);
-                Ok(())
-            }
-        };
-
-        let error = reload_optimization_publication_or_restore_with(
-            &fixture.publication,
-            reload,
-            before_recovery,
-        )
-        .await
-        .err()
-        .context("stale recovery unexpectedly succeeded")?;
-        let winner_digest = winner_digest
-            .lock()
-            .map_err(|_| anyhow::anyhow!("winner digest lock poisoned"))?
-            .clone()
-            .context("concurrent winner was not published")?;
-
-        assert!(error.to_string().contains("recovery is stale"));
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_eq!(
-            std::fs::read_to_string(&fixture.config_path)?,
-            fixture.config_after
-        );
-        assert_eq!(
-            bitrouter::policy_lock::load(&fixture.policy_path)
-                .await?
-                .digest,
-            winner_digest
-        );
-        assert_eq!(
-            *live
-                .lock()
-                .map_err(|_| anyhow::anyhow!("modeled daemon state lock poisoned"))?,
-            (config::PolicyRuntimeMode::Adaptive, winner_digest)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "core")]
-    async fn optimizer_reload_recovery_reports_rejection_and_recovery_failures()
-    -> anyhow::Result<()> {
-        let fixture = recovery_fixture()?;
-        let config_path = fixture.config_path.clone();
-
-        let error = reload_optimization_publication_or_restore_with(
-            &fixture.publication,
-            || async { anyhow::bail!("injected daemon rejection for combined error") },
-            move || {
-                std::fs::remove_file(&config_path)?;
-                Ok(())
-            },
-        )
-        .await
-        .err()
-        .context("recovery with a missing config unexpectedly succeeded")?;
-        let detail = format!("{error:#}");
-
-        assert!(detail.contains("injected daemon rejection for combined error"));
-        assert!(detail.contains("reading"));
-        assert!(detail.contains("bitrouter.yaml"));
-        Ok(())
-    }
-
-    #[test]
-    fn workflow_state_reliability_report_flags_parse() {
-        use clap::Parser;
-
-        let cli = Cli::try_parse_from([
-            "bitrouter",
-            "workflow-state",
-            "reliability-report",
-            "--database-url",
-            "sqlite:///tmp/bitrouter.db",
-            "--config",
-            "/tmp/bitrouter.yaml",
-            "--output",
-            "/tmp/reliability.json",
-        ])
-        .expect("parse reliability report");
-
-        match cli.command {
-            Some(Command::WorkflowState {
-                action:
-                    WorkflowStateAction::ReliabilityReport {
-                        policy,
-                        database_url,
-                        config,
-                        output,
-                    },
-            }) => {
-                assert_eq!(policy, "auto");
-                assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
-                assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
-                assert_eq!(output, PathBuf::from("/tmp/reliability.json"));
-            }
-            _ => panic!("expected reliability report"),
-        }
-    }
-
-    #[test]
-    fn cloud_api_owns_header_short_flag_in_full_command_tree() {
+    fn cloud_api_owns_header_short_flag_in_full_command_tree() -> Result<()> {
         let cli = Cli::try_parse_from([
             "bitrouter",
             "cloud",
@@ -9655,39 +7446,275 @@ mod tests {
             "/v1/models",
             "-H",
             "X-Test: value",
-        ])
-        .unwrap();
+        ])?;
 
         match cli.command {
             Some(Command::Cloud {
                 action: bitrouter::cloud::cli::CloudAction::Api(args),
             }) => assert_eq!(args.headers, ["X-Test: value"]),
-            _ => panic!("expected cloud API command"),
+            _ => anyhow::bail!("expected cloud API command"),
         }
 
-        let human = Cli::try_parse_from(["bitrouter", "-H", "cloud", "whoami"]).unwrap();
+        let human = Cli::try_parse_from(["bitrouter", "-H", "cloud", "whoami"])?;
         assert!(human.human_short);
+        Ok(())
+    }
+
+    #[test]
+    fn historical_offline_writers_are_retired_and_current_backup_commands_remain() -> Result<()> {
+        for operation in ["upgrade-capacity", "eval-inventory", "eval-backfill"] {
+            anyhow::ensure!(
+                Cli::try_parse_from(["bro", "tenancy", "offline", operation]).is_err(),
+                "historical offline operation still parses: {operation}"
+            );
+        }
+        for format in ["v1", "v2"] {
+            Cli::try_parse_from([
+                "bro",
+                "tenancy",
+                "offline",
+                "snapshot",
+                "--database",
+                "/tmp/current.sqlite",
+                "--bundle",
+                "/tmp/current-bundle",
+                "--format",
+                format,
+            ])?;
+        }
+        Cli::try_parse_from([
+            "bro",
+            "tenancy",
+            "offline",
+            "restore",
+            "--bundle",
+            "/tmp/current-bundle",
+            "--evidence-digest",
+            "digest",
+            "--database",
+            "/tmp/restored.sqlite",
+            "--expected-installation-id",
+            "install-current",
+            "--wrapping-key-env",
+            "WRAPPING_KEY",
+            "--scratch-directory",
+            "/tmp/private-scratch",
+        ])?;
+        Ok(())
+    }
+
+    #[test]
+    fn policy_reads_default_to_active_and_require_explicit_disk() -> Result<()> {
+        anyhow::ensure!(selected_policy_view(None, false) == PolicyView::Active);
+        anyhow::ensure!(selected_policy_view(None, true) == PolicyView::Disk);
+        anyhow::ensure!(selected_policy_view(Some(PolicyViewArg::Disk), false) == PolicyView::Disk);
+        let cli = Cli::try_parse_from(["bro", "policy", "show", "--disk"])?;
+        anyhow::ensure!(matches!(
+            cli.command,
+            Some(Command::Policy {
+                action: PolicyAction::Show {
+                    name: None,
+                    disk: true,
+                    ..
+                }
+            })
+        ));
+        anyhow::ensure!(
+            Cli::try_parse_from(["bro", "policy", "show", "--disk", "--view", "active"]).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn policy_publication_requires_cas_and_retired_commands_do_not_parse() -> Result<()> {
+        for args in [
+            vec!["bro", "policy", "publish", "candidate.yaml"],
+            vec!["bro", "policy", "rollback", "sha256:old"],
+            vec!["bro", "policy", "create", "acl"],
+            vec!["bro", "policy", "compile", "--output", "candidate.yaml"],
+            vec!["bro", "policy", "evolve", "--apply"],
+            vec!["bro", "policy", "verify", "--evidence"],
+            vec![
+                "bro",
+                "policy",
+                "init",
+                "auto",
+                "--preset",
+                "auto",
+                "--economy",
+                "fixture:cheap",
+            ],
+            vec!["bro", "optimize", "run"],
+            vec!["bro", "optimize", "status"],
+            vec!["bro", "config", "migrate-routers"],
+        ] {
+            anyhow::ensure!(
+                Cli::try_parse_from(&args).is_err(),
+                "retired or unsafe command parsed: {args:?}"
+            );
+        }
+        for operation in ["publish", "rollback"] {
+            Cli::try_parse_from([
+                "bro",
+                "policy",
+                operation,
+                "candidate",
+                "--expected-digest",
+                "sha256:current",
+            ])?;
+        }
+        Cli::try_parse_from(["bro", "access-policy", "create", "acl"])?;
+        let initialized = Cli::try_parse_from([
+            "bro",
+            "policy",
+            "init",
+            "coding",
+            "--strong",
+            "fixture:strong",
+            "--economy",
+            "fixture:cheap",
+        ])?;
+        anyhow::ensure!(matches!(initialized.command, Some(Command::Policy {
+            action: PolicyAction::Init { router, .. }
+        }) if router == "coding"));
+        Ok(())
+    }
+
+    fn recovery_source(model: &str) -> Result<bitrouter_ai::policy::Document> {
+        serde_saphyr::from_str(&format!(
+            "spec_version: policy/1.0.0-beta.1\npolicies:\n  auto:\n    tiers:\n      strong: {{model: '{model}'}}\n    default_tier: strong\n"
+        )).context("constructing current policy source")
+    }
+
+    fn source_recovery_fixture()
+    -> Result<(tempfile::TempDir, bitrouter::policy_lock::PolicyFileUpdate)> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("policy.yaml");
+        let parent = recovery_source("fixture:strong")?;
+        let parent_digest = bitrouter::policy_lock::write_atomic(&path, None, &parent)?;
+        let document = recovery_source("fixture:economy")?;
+        let history = bitrouter::policy_lock::default_history_dir(&path);
+        let publication =
+            bitrouter::policy_lock::publish_candidate(&path, &parent_digest, &document, &history)?;
+        Ok((
+            directory,
+            bitrouter::policy_lock::PolicyFileUpdate {
+                path,
+                digest: publication.child_digest,
+                document,
+                parent_digest: Some(parent_digest),
+                changes: Vec::new(),
+            },
+        ))
     }
 
     #[tokio::test]
-    async fn config_validate_rejects_a_missing_bound_policy() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn rejected_source_publication_restores_disk_and_reloads_parent() -> Result<()> {
+        let (_directory, update) = source_recovery_fixture()?;
+        let attempts = std::cell::Cell::new(0);
+        let live = std::cell::RefCell::new(update.digest.clone());
+        let error = reload_published_policy_or_restore_with(&update, || async {
+            let attempt = attempts.get();
+            attempts.set(attempt + 1);
+            if attempt == 0 {
+                anyhow::bail!("injected candidate rejection");
+            }
+            *live.borrow_mut() = bitrouter::policy_lock::load(&update.path).await?.digest;
+            Ok(())
+        })
+        .await
+        .err()
+        .context("rejected publication unexpectedly succeeded")?;
+        anyhow::ensure!(format!("{error:#}").contains("injected candidate rejection"));
+        anyhow::ensure!(attempts.get() == 2, "recovery did not reload the parent");
+        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        anyhow::ensure!(Some(disk.digest.as_str()) == update.parent_digest.as_deref());
+        anyhow::ensure!(
+            *live.borrow() == disk.digest,
+            "disk and modeled active source differ"
+        );
+        anyhow::ensure!(disk.document == recovery_source("fixture:strong")?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn source_recovery_preserves_a_concurrent_publisher() -> Result<()> {
+        let (_directory, update) = source_recovery_fixture()?;
+        let winner = recovery_source("fixture:winner")?;
+        let winner_digest = bitrouter::policy_lock::semantic_digest(&winner)?;
+        let attempts = std::cell::Cell::new(0);
+        let error = reload_published_policy_or_restore_with(&update, || async {
+            attempts.set(attempts.get() + 1);
+            bitrouter::policy_lock::publish_candidate(
+                &update.path,
+                &update.digest,
+                &winner,
+                &bitrouter::policy_lock::default_history_dir(&update.path),
+            )?;
+            anyhow::bail!("injected rejection after concurrent winner");
+        })
+        .await
+        .err()
+        .context("stale recovery unexpectedly succeeded")?;
+        anyhow::ensure!(format!("{error:#}").contains("recovery refused or failed"));
+        anyhow::ensure!(
+            attempts.get() == 1,
+            "stale recovery reloaded its rejected source"
+        );
+        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        anyhow::ensure!(disk.digest == winner_digest && disk.document == winner);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn source_recovery_reports_both_reload_failures() -> Result<()> {
+        let (_directory, update) = source_recovery_fixture()?;
+        let attempts = std::cell::Cell::new(0);
+        let error = reload_published_policy_or_restore_with(&update, || async {
+            attempts.set(attempts.get() + 1);
+            anyhow::bail!("injected reload failure {}", attempts.get());
+        })
+        .await
+        .err()
+        .context("rejected recovery reload unexpectedly succeeded")?;
+        let detail = format!("{error:#}");
+        anyhow::ensure!(
+            detail.contains("injected reload failure 1")
+                && detail.contains("injected reload failure 2")
+        );
+        anyhow::ensure!(attempts.get() == 2);
+        anyhow::ensure!(
+            Some(
+                bitrouter::policy_lock::load(&update.path)
+                    .await?
+                    .digest
+                    .as_str()
+            ) == update.parent_digest.as_deref()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn successful_source_reload_keeps_the_published_document() -> Result<()> {
+        let (_directory, update) = source_recovery_fixture()?;
+        reload_published_policy_or_restore_with(&update, || async { Ok(()) }).await?;
+        let disk = bitrouter::policy_lock::load(&update.path).await?;
+        anyhow::ensure!(disk.digest == update.digest && disk.document == update.document);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_validate_rejects_a_missing_bound_policy() -> Result<()> {
+        let dir = tempfile::tempdir()?;
         let path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
             &path,
-            r#"presets:
-  coding:
-    model: anthropic/claude-opus-4.8
-    policy: missing
-"#,
-        )
-        .await
-        .unwrap();
+            "routers:\n  coding:\n    selection:\n      kind: policy\n      base_model: fixture/strong\n      policy: missing\n",
+        ).await?;
         let source = bitrouter::paths::ConfigSource::File(path);
-
-        let report = validate_config(&source).await.unwrap();
-
-        assert!(!report.valid);
-        assert!(report.errors[0].contains("missing policy"));
+        let report = validate_config(&source).await?;
+        anyhow::ensure!(!report.valid, "missing policy unexpectedly validated");
+        anyhow::ensure!(report.errors.iter().any(|error| error.contains("missing")));
+        Ok(())
     }
 }

@@ -397,10 +397,10 @@ models:
 
 #[tokio::test]
 async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions() -> Result<()> {
-    use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
     use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
+    use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
     let home = tempfile::tempdir()?;
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))
@@ -409,19 +409,44 @@ async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions()
             "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
         }))).mount(&upstream).await;
-    let mut lock = PolicyLock::default();
-    lock.policies.insert("auto".into(), PolicyDefinition {
-        tiers:BTreeMap::from([("strong".into(), "mock:strong".into()), ("cheap".into(), "mock:cheap".into())]),
-        routes:BTreeMap::from([("semantic_route/v1|code:generation|implement|normal".into(), "cheap".into())]),
-        default_tier:Some("strong".into()),
-        tool_use_tier:Some("strong".into()), tool_safe_tiers:vec!["strong".into(),"cheap".into()],
-        progress_guard:Some(serde_json::from_value(json!({"escalation_tier":"strong","protected_tiers":["strong"],"max_consecutive_unprotected":10,"hold_for_requests":1,"incomplete_history":"observe"}))?),
-        ..PolicyDefinition::default()
-    });
-    decision::certify_routes(&mut lock);
+    let mut source = Document {
+        spec_version: SpecVersion::Beta1,
+        policies: BTreeMap::from([(
+            "auto".into(),
+            Policy {
+                tiers: BTreeMap::from([
+                    (
+                        "strong".into(),
+                        Target {
+                            model: "mock:strong".into(),
+                            effort: None,
+                        },
+                    ),
+                    (
+                        "cheap".into(),
+                        Target {
+                            model: "mock:cheap".into(),
+                            effort: None,
+                        },
+                    ),
+                ]),
+                routes: BTreeMap::from([(
+                    "code:generation|implement|normal".into(),
+                    "cheap".into(),
+                )]),
+                classifier_digest: None,
+                default_tier: "strong".into(),
+                tool_use_tier: Some("strong".into()),
+                tool_safe_tiers: vec!["strong".into(), "cheap".into()],
+            },
+        )]),
+    };
+    decision::pin_classifier(&mut source);
+    // Native Core does not run semantic assessment; the current source's
+    // conservative default still selects strong and retains the routing receipt.
     std::fs::write(
-        home.path().join("policy-lock.yaml"),
-        bitrouter::policy_lock::deterministic_yaml(&lock)?,
+        home.path().join("policy.yaml"),
+        bitrouter::policy_lock::deterministic_yaml(&source)?,
     )?;
     let mut config = bitrouter::config::parse_with(
         &format!(
@@ -442,7 +467,7 @@ routers:
   auto:
     selection: {{kind: policy, policy: auto, base_model: 'mock:strong'}}
 policy:
-  path: './policy-lock.yaml'
+  path: './policy.yaml'
 "#,
             upstream.uri()
         ),
@@ -454,7 +479,7 @@ policy:
     .await?;
     let assembled =
         bitrouter::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml"))).await?;
-    let store = bitrouter::core::eval::store::EvalStore::new(assembled.db.clone());
+    let store = bitrouter::eval::store::EvalStore::new(assembled.db.clone());
     let publisher = assembled
         .trajectory_outbox_publisher
         .clone()

@@ -25,7 +25,7 @@ impl Resources {
         );
         let manifest: Manifest = serde_json::from_slice(approved)?;
         ensure!(
-            manifest.format == 1
+            (manifest.format == 1 || manifest.format == 4)
                 && manifest.installation_id == self.installation
                 && manifest.resources.len() <= MAX_RESOURCES,
             "approved static manifest identity"

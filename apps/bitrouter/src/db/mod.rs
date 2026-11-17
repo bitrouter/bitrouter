@@ -12,20 +12,16 @@
 //!    `sea-orm-migration` code, so the same table definitions apply
 //!    verbatim on whichever backend is configured.
 
+pub(crate) mod current_schema;
 #[cfg(all(test, unix))]
 mod exclusive_migrations;
 pub mod migration;
 #[cfg(test)]
 mod migration_atomicity;
-mod migration_fence;
 mod sqlite;
-#[cfg(test)]
-pub(crate) mod test_migrations;
+pub(crate) mod store_format;
 
-use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
-    TransactionTrait,
-};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
 use crate::gateway::error::BitrouterError;
@@ -205,6 +201,9 @@ async fn connect_inner(
         ));
     }
     if !readonly && wants_wal(url) {
+        store_format::inspect(&db).await.map_err(|error| {
+            BitrouterError::internal(format!("selecting current database format: {error}"))
+        })?;
         enable_wal(&db).await;
     }
     Ok(db)
@@ -275,35 +274,12 @@ async fn enable_wal(db: &DatabaseConnection) {
 /// Apply every pending migration in [`migration::Migrator`]. Idempotent —
 /// already-applied migrations are skipped, tracked in `seaql_migrations`.
 pub async fn run_migrations(db: &DatabaseConnection) -> Result<()> {
-    run_migrations_with::<migration::Migrator>(db).await
-}
-
-async fn run_migrations_with<M: MigratorTrait>(db: &DatabaseConnection) -> Result<()> {
-    let result = match db.get_database_backend() {
-        DatabaseBackend::Sqlite => migrate_sqlite::<M>(db).await,
-        DatabaseBackend::MySql => migration_fence::mysql::<M>(db).await,
-        DatabaseBackend::Postgres => M::up(db, None).await,
-    };
-    result.map_err(|e| BitrouterError::internal(format!("running database migrations: {e}")))?;
-    Ok(())
-}
-
-async fn migrate_sqlite<M: MigratorTrait>(
-    db: &DatabaseConnection,
-) -> std::result::Result<(), sea_orm::DbErr> {
-    // SeaORM wraps PostgreSQL migrations in a transaction, but not SQLite.
-    // Keep SQLite DDL, validation and the migration ledger in one transaction:
-    // a failed or cancelled startup must not leave unrecorded schema objects
-    // that a later startup would correctly refuse to adopt.
-    // https://github.com/SeaQL/sea-orm/blob/1.1.20/sea-orm-migration/src/migrator.rs
-    let transaction = db.begin().await?;
-    match M::up(&transaction, None).await {
-        Ok(()) => transaction.commit().await,
-        Err(error) => {
-            transaction.rollback().await?;
-            Err(error)
-        }
-    }
+    store_format::inspect(db).await.map_err(|error| {
+        BitrouterError::internal(format!("selecting current database format: {error}"))
+    })?;
+    migration::Migrator::up(db, None).await.map_err(|error| {
+        BitrouterError::internal(format!("initializing current database schema: {error}"))
+    })
 }
 
 /// Anchor a relative SQLite file URL to the resolved config home without

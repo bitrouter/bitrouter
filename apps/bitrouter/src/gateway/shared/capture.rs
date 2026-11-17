@@ -18,7 +18,8 @@ use bitrouter_ai::types::ModelOperation;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::policy_lock::{PolicyLock, semantic_digest};
+use crate::policy_lock::semantic_digest;
+use bitrouter_ai::policy::Document;
 
 const MAX_BYTES: usize = 64 * 1024;
 
@@ -26,7 +27,7 @@ const MAX_BYTES: usize = 64 * 1024;
 #[serde(deny_unknown_fields)]
 pub(super) struct Requirements {
     format: u32,
-    policy_lock_digest: Option<String>,
+    source_digest: Option<String>,
     trajectory: TrajectoryRequirement,
     policy_evaluation: PolicyEvaluation,
 }
@@ -35,7 +36,6 @@ pub(super) struct Requirements {
 #[serde(rename_all = "snake_case")]
 enum TrajectoryRequirement {
     Disabled,
-    GuardedPolicies,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,18 +45,14 @@ enum PolicyEvaluation {
 }
 
 impl Requirements {
-    pub fn from_config(config: &Config, document: Option<&PolicyLock>) -> Result<Self> {
+    pub fn from_config(config: &Config, document: Option<&Document>) -> Result<Self> {
         if let Some(document) = document {
             crate::policy_lock::validate_for_config(config, document)?;
         }
         let value = Self {
             format: 1,
-            policy_lock_digest: document.map(semantic_digest).transpose()?,
-            trajectory: if config.trajectory.enabled {
-                TrajectoryRequirement::GuardedPolicies
-            } else {
-                TrajectoryRequirement::Disabled
-            },
+            source_digest: document.map(semantic_digest).transpose()?,
+            trajectory: TrajectoryRequirement::Disabled,
             policy_evaluation: PolicyEvaluation::SelectedUntrackedRequestSubject,
         };
         value.validate()?;
@@ -65,7 +61,7 @@ impl Requirements {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(self.format == 1, "unsupported projection requirements");
-        if let Some(digest) = &self.policy_lock_digest {
+        if let Some(digest) = &self.source_digest {
             validate_digest(digest)?;
         }
         Ok(())
@@ -75,7 +71,7 @@ impl Requirements {
     pub fn fixture() -> Self {
         Self {
             format: 1,
-            policy_lock_digest: None,
+            source_digest: None,
             trajectory: TrajectoryRequirement::Disabled,
             policy_evaluation: PolicyEvaluation::SelectedUntrackedRequestSubject,
         }
@@ -100,7 +96,6 @@ enum Policy {
     Evaluated {
         policy: String,
         digest: String,
-        guarded: bool,
         treatment: Option<Box<Treatment>>,
     },
 }
@@ -139,24 +134,6 @@ pub(super) struct Inputs {
 }
 
 impl Inputs {
-    /// Guard writes must use the contract admitted before policy selection.
-    pub fn check_guard_policy(&self, name: &str, digest: &str) -> Result<()> {
-        self.validate()?;
-        ensure!(
-            self.requirements.trajectory == TrajectoryRequirement::GuardedPolicies
-                && self.requirements.policy_lock_digest.as_deref() == Some(digest)
-                && !matches!(self.phase, Phase::Terminal { .. }),
-            "guard differs from original admitted contract"
-        );
-        ensure!(
-            matches!(&self.policy, Policy::Pending)
-                || matches!(&self.policy, Policy::Evaluated { policy, digest: original, guarded: true, .. }
-                    if policy == name && original == digest),
-            "guard differs from retained policy selection"
-        );
-        Ok(())
-    }
-
     #[cfg(test)]
     pub fn fixture_ready(&mut self) -> Result<()> {
         if self.phase == Phase::Preparing && self.policy == Policy::Pending {
@@ -217,19 +194,14 @@ impl Inputs {
         if let Policy::Evaluated {
             policy,
             digest,
-            guarded,
             treatment,
         } = &self.policy
         {
             identifier(policy)?;
             validate_digest(digest)?;
             ensure!(
-                self.requirements.policy_lock_digest.as_ref() == Some(digest),
+                self.requirements.source_digest.as_ref() == Some(digest),
                 "projection policy differs from admitted lock"
-            );
-            ensure!(
-                !guarded || self.requirements.trajectory == TrajectoryRequirement::GuardedPolicies,
-                "guarded projection was not enabled"
             );
             if let Some(treatment) = treatment {
                 ensure!(

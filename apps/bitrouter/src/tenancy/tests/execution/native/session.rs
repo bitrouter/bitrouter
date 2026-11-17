@@ -8,7 +8,6 @@ mod consumer;
 #[cfg(unix)]
 mod custody;
 mod discovery;
-mod experiment;
 mod input_count;
 mod server;
 mod verification;

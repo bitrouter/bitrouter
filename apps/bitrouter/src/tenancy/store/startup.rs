@@ -20,16 +20,8 @@ use super::directory::{
 };
 use crate::tenancy::model::AuthorityHeader;
 
-// These are properties of the historical v1 format, never v2 admission limits.
-pub(in crate::tenancy) const LEGACY_ORDINARY_OPERATIONS: u64 = 99_488;
-pub(in crate::tenancy) const LEGACY_SAFETY_OPERATIONS: u64 = 512;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::tenancy) enum Format {
-    V1,
-    V2,
-    V3,
-    V4,
     V5,
     V6,
 }
@@ -37,10 +29,6 @@ pub(in crate::tenancy) enum Format {
 impl Format {
     fn number(self) -> i32 {
         match self {
-            Self::V1 => 1,
-            Self::V2 => 2,
-            Self::V3 => 3,
-            Self::V4 => 4,
             Self::V5 => 5,
             Self::V6 => 6,
         }
@@ -87,10 +75,6 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
         "invalid authority singleton"
     );
     let format = match row.try_get::<i32>("", "schema_version")? {
-        1 => Format::V1,
-        2 => Format::V2,
-        3 => Format::V3,
-        4 => Format::V4,
         5 => Format::V5,
         6 => Format::V6,
         _ => anyhow::bail!("unsupported authority store format"),
@@ -108,17 +92,6 @@ fn decode_header(row: &QueryResult) -> Result<LoadedHeader> {
             created_at,
         },
     };
-    if format == Format::V1 {
-        ensure!(
-            loaded.header.operation_ids <= LEGACY_ORDINARY_OPERATIONS
-                && loaded.header.safety_operation_ids <= LEGACY_SAFETY_OPERATIONS,
-            "invalid legacy operation counters"
-        );
-        ensure!(
-            loaded.header.operation_ids < LEGACY_ORDINARY_OPERATIONS || loaded.header.saturated,
-            "missing legacy saturation latch"
-        );
-    }
     Ok(loaded)
 }
 
@@ -300,16 +273,6 @@ pub(in crate::tenancy) async fn write_header_in(
     next: &LoadedHeader,
 ) -> Result<()> {
     write::write_header_in(db, next).await
-}
-
-/// Format-only transition after complete validation in the SAME exclusive
-/// transaction. Healthy startup may commit it automatically. A stopped legacy
-/// latch needs the separate acknowledged offline action; this never clears it.
-pub(in crate::tenancy) async fn upgrade_format_in(
-    db: &impl ConnectionTrait,
-    validated: &LoadedHeader,
-) -> Result<()> {
-    write::upgrade_format_in(db, validated).await
 }
 
 /// Header-based equivalent of the legacy writer, under the original transaction.

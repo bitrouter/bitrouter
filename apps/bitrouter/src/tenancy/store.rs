@@ -25,10 +25,6 @@ use super::configuration_store::{self, StoredConfiguration};
 use super::model::{AuthorityClass, Binding, Credential, Principal, ReadContext, Snapshot, Tenant};
 use super::transaction::Control;
 
-pub(super) const MAX_OPERATIONS: u32 = 100_000;
-pub(super) const SAFETY_OPERATIONS: u32 = 512;
-pub(super) const ORDINARY_OPERATIONS: u32 = MAX_OPERATIONS - SAFETY_OPERATIONS;
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",

@@ -422,7 +422,9 @@ async fn revoked_policy_lock_and_shared_profile_keys_cannot_change_family_after_
     let mut policy = local_input(&fixture, "create-policy")?;
     policy.key.resource_id = "policy-lock".try_into()?;
     policy.definition = Definition::Policy {
-        document: serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
+        document: serde_json::from_value(
+            serde_json::json!({"spec_version":"policy/1.0.0-beta.1","policies":{"selected":{"tiers":{"only":{"model":"fixture:model"}},"default_tier":"only"}}}),
+        )?,
         name: "selected".into(),
         dependencies: Vec::new(),
     };

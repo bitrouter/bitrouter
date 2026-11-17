@@ -358,10 +358,8 @@ async fn retained_policy_accessors_and_tier_exploration_chains_are_immutable() -
     assert_eq!(retained_policy.reference(), &policy_ref);
     assert_eq!(retained_policy.name(), "selected");
     assert_eq!(
-        retained_policy.document().policies["selected"]
-            .default_tier
-            .as_deref(),
-        Some("economy")
+        retained_policy.document().policies["selected"].default_tier,
+        "economy"
     );
     assert!(
         checked(retained_policy.configuration())?

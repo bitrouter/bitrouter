@@ -15,13 +15,11 @@ async fn store() -> anyhow::Result<EvalStore> {
 pub(super) fn subject() -> anyhow::Result<EvalSubject> {
     let evidence = Vec::new();
     Ok(EvalSubject {
-        schema_version: 1,
+        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: "eval-1".into(),
         scope: EvalScope::Request,
         subject_id: "request-1".into(),
-        policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .into(),
-        preset: Some("auto".into()),
         cohort: None,
         holdout: false,
         decisions: Vec::new(),
@@ -105,7 +103,8 @@ async fn snapshot_root_commits_subject_decisions() -> anyhow::Result<()> {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            policy_digest: subject.policy_digest.clone(),
+            policy_digest:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             experiment: None,
             route_measurement: None,
         }];

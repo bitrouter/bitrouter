@@ -158,13 +158,17 @@ pub struct CredentialBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Publication {
+    /// Exact shared publication contract; older and future formats are refused.
+    #[serde(deserialize_with = "deserialize_publication_format")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 2, max = 2)))]
     pub format: u32,
     pub routing: serde_json::Value,
+    /// Independent access-control policies; these do not define model selection.
     #[serde(default)]
     pub policies: Vec<serde_json::Value>,
-    #[serde(default, deserialize_with = "deserialize_policy_source")]
-    #[cfg_attr(feature = "schema", schemars(with = "Option<crate::policy::Document>"))]
-    pub policy_lock: Option<serde_json::Value>,
+    /// Complete portable model-policy source, compiled by the service.
+    #[serde(default)]
+    pub model_policy: Option<crate::policy::Document>,
     pub credentials: Vec<CredentialBinding>,
     #[serde(default)]
     pub require_known_pricing: bool,
@@ -179,14 +183,16 @@ pub struct PublicationPut {
     pub configuration: Publication,
 }
 
-fn deserialize_policy_source<'de, D: serde::Deserializer<'de>>(
+fn deserialize_publication_format<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<Option<serde_json::Value>, D::Error> {
-    let source = Option::<crate::policy::Document>::deserialize(deserializer)?;
-    source
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(serde::de::Error::custom)
+) -> Result<u32, D::Error> {
+    let format = u32::deserialize(deserializer)?;
+    if format != 2 {
+        return Err(serde::de::Error::custom(
+            "unsupported shared publication format",
+        ));
+    }
+    Ok(format)
 }
 
 /// A bounded, create-only seed for explicit local bootstrap. The service commits

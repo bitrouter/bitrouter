@@ -3,11 +3,7 @@ use super::m20240101_000028_resource_tenancy::{identity, payload};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 use sea_orm_migration::prelude::*;
 mod catalog;
-#[cfg(test)]
-mod tests;
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
 #[derive(Clone, Copy)]
 enum Kind {
     Id(u32),
@@ -104,79 +100,37 @@ pub(super) fn sqlite_definitions() -> Vec<TableCreateStatement> {
         .collect()
 }
 
-/// Exact format-1 SQLite layout; never accepts added projection columns.
-pub(super) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    super::m20240101_000043_unknown_obligations::catalog::validate_legacy(db).await
-}
-
-/// Select one complete SQLite profile, with no fallback on validation failure.
+/// Validate the complete current OAuth lookup and obligation catalog.
 pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        return Err(incompatible());
-    }
-    if super::m20240101_000043_unknown_obligations::catalog::present(db).await? {
-        super::m20240101_000043_unknown_obligations::validate(db).await
-    } else {
-        validate_legacy(db).await
-    }
+    super::m20240101_000043_unknown_obligations::validate(db).await
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Validate every pre-existing definition before the first CREATE.
-        for spec in SPECS {
-            catalog::names(manager, spec).await?;
-            // Additive CREATE needs collision/definition validation, not the
-            // destructive down path's refusal of unresolved external SQL.
-            if manager.has_table(spec.table).await? {
-                catalog::validate(manager, spec, false).await?;
-            }
+/// DDL-only component of the fresh current baseline; never accepts an old dataset.
+pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    // Validate every pre-existing definition before the first CREATE.
+    for spec in SPECS {
+        catalog::names(manager, spec).await?;
+        // Additive CREATE needs collision/definition validation, not the
+        // destructive down path's refusal of unresolved external SQL.
+        if manager.has_table(spec.table).await? {
+            catalog::validate(manager, spec, false).await?;
         }
-        for spec in SPECS {
-            if !manager.has_table(spec.table).await? {
-                manager
-                    .create_table(definition(spec, manager.get_database_backend()))
-                    .await?;
-            }
-            if let Some((name, _)) = spec.index
-                && !manager.has_index(spec.table, name).await?
-                && let Some(index) = index(spec)
-            {
-                manager.create_index(index).await?;
-            }
-        }
-        for spec in SPECS {
-            catalog::validate(manager, spec, true).await?;
-        }
-        Ok(())
     }
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        for spec in SPECS {
-            catalog::names(manager, spec).await?;
-            if manager.has_table(spec.table).await? {
-                catalog::validate(manager, spec, false).await?;
-                catalog::dependencies(manager, spec).await?;
-                if manager
-                    .get_connection()
-                    .query_one(Statement::from_string(
-                        manager.get_database_backend(),
-                        format!("SELECT 1 FROM {} LIMIT 1", spec.table),
-                    ))
-                    .await?
-                    .is_some()
-                {
-                    return Err(incompatible());
-                }
-            }
+    for spec in SPECS {
+        if !manager.has_table(spec.table).await? {
+            manager
+                .create_table(definition(spec, manager.get_database_backend()))
+                .await?;
         }
-        for spec in SPECS.iter().rev() {
-            if manager.has_table(spec.table).await? {
-                manager
-                    .drop_table(Table::drop().table(Alias::new(spec.table)).to_owned())
-                    .await?;
-            }
+        if let Some((name, _)) = spec.index
+            && !manager.has_index(spec.table, name).await?
+            && let Some(index) = index(spec)
+        {
+            manager.create_index(index).await?;
         }
-        Ok(())
     }
+    for spec in SPECS {
+        catalog::validate(manager, spec, true).await?;
+    }
+    Ok(())
 }

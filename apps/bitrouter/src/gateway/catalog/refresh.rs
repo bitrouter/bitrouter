@@ -115,7 +115,7 @@ mod tests {
 
     fn yaml(url: &str, auto: bool, marker: &str) -> String {
         format!(
-            "registry:\n  url: '{url}'\n  auto_refresh: {auto}\npresets:\n  saved:\n    model: 'manual:{marker}'\nproviders:\n  manual:\n    api_base: 'https://manual.example/v1'\n    models: [{{id: '{marker}'}}]\n"
+            "registry:\n  url: '{url}'\n  auto_refresh: {auto}\nrouters:\n  saved:\n    selection:\n      kind: model\n      model: 'manual:{marker}'\nproviders:\n  manual:\n    api_base: 'https://manual.example/v1'\n    models: [{{id: '{marker}'}}]\n"
         )
     }
     async fn fixture(
@@ -223,8 +223,13 @@ mod tests {
             (200, super::super::tests::document("two"));
         wait_model(&table, "two").await?;
         assert_eq!(
-            table.snapshot_config().presets["saved"].model.as_deref(),
-            Some("manual:applied")
+            Some(
+                table
+                    .snapshot_config()
+                    .resolve_router("bitrouter/saved")?
+                    .clean_model
+            ),
+            Some("manual:applied".to_owned())
         );
         *state.write().unwrap_or_else(|p| p.into_inner()) = (500, json!({"error":"unavailable"}));
         let current = count.load(Ordering::SeqCst);
@@ -246,8 +251,13 @@ mod tests {
             .await
             .map_err(|error| anyhow::anyhow!("{error}; report={:?}", reloader.reload_state()))?;
         assert_eq!(
-            table.snapshot_config().presets["saved"].model.as_deref(),
-            Some("manual:pending")
+            Some(
+                table
+                    .snapshot_config()
+                    .resolve_router("bitrouter/saved")?
+                    .clean_model
+            ),
+            Some("manual:pending".to_owned())
         );
         stop.cancel();
         worker.await?;

@@ -248,7 +248,7 @@ fn escaped_route_at_admitted_limit_fits_every_observation_and_terminal() -> Resu
 }
 
 #[test]
-fn request_and_trajectory_projection_use_the_same_optional_response_facts() -> Result<()> {
+fn request_projection_preserves_optional_response_facts() -> Result<()> {
     let mut record = fixture()?;
     resolve(
         &mut record,
@@ -283,33 +283,17 @@ fn request_and_trajectory_projection_use_the_same_optional_response_facts() -> R
     ] {
         ensure!(!attributes.contains_key(key));
     }
-    let trajectory = terminal.trajectory_evidence(&record)?;
     ensure!(
-        trajectory
-            .structural
-            .get("routing.observation_confidence_ppm")
-            == Some(&850_000)
-    );
-    ensure!(
-        trajectory
-            .categorical
-            .get("routing.observed_action")
+        attributes
+            .get("observation_confidence_ppm")
             .map(String::as_str)
-            == Some("mutate")
+            == Some("850000")
     );
     ensure!(
-        trajectory
-            .categorical
-            .get("routing.observation_reason_code")
+        attributes
+            .get("observation_reason_code")
             .map(String::as_str)
             == Some("canonical_response_signal")
-    );
-    ensure!(
-        trajectory
-            .categorical
-            .get("routing.action_match")
-            .map(String::as_str)
-            == Some("true")
     );
     ensure!(terminal.policy == input.policy);
     Ok(())
@@ -348,11 +332,7 @@ fn action_match_requires_known_original_prediction_and_actual_observation() -> R
 }
 
 #[test]
-fn response_projection_stays_within_reserved_future_settlement_event() -> Result<()> {
-    use crate::trajectory::types::{
-        TRAJECTORY_SCHEMA_VERSION, TrajectoryEvent, TrajectoryEventKind, validate_event,
-    };
-
+fn response_projection_stays_within_reserved_request_subject() -> Result<()> {
     let record = fixture()?;
     let mut input = untracked(&record)?;
     input.phase = Phase::Ready;
@@ -388,34 +368,22 @@ fn response_projection_stays_within_reserved_future_settlement_event() -> Result
     ensure!(serde_json::to_vec(&input)?.len() == limit);
     let mut absent = input.clone();
     absent.seal()?;
-    let baseline = serde_json::to_vec(&absent.trajectory_evidence(&record)?)?.len();
+    let EvaluationInput::Request(subject) = absent.evaluation(&record, false)? else {
+        anyhow::bail!("missing request subject");
+    };
+    let baseline = serde_json::to_vec(&subject)?.len();
     for action in ACTIONS {
         let capture = capture(input.clone())?;
         capture.ready()?;
         observe(&capture, action)?;
         let terminal = capture.terminal()?.context("missing terminal")?;
-        let evidence = terminal.trajectory_evidence(&record)?;
-        // The four response fields fit in the already reserved event. No new
-        // receipt, event, reference, or settlement obligation is introduced.
-        ensure!(serde_json::to_vec(&evidence)?.len() <= baseline + 512);
-        let mut event = TrajectoryEvent {
-            schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: "\\".repeat(512),
-            owner_user_id: "\\".repeat(512),
-            episode_id: "\\".repeat(512),
-            request_id: Some("\\".repeat(512)),
-            sequence: u64::MAX,
-            kind: TrajectoryEventKind::RequestSettled,
-            evidence,
-            captured_at: "2026-10-21T00:00:00.999999999Z".into(),
-            content_digest: String::new(),
+        let EvaluationInput::Request(subject) = terminal.evaluation(&record, false)? else {
+            anyhow::bail!("missing request subject");
         };
-        event.content_digest = event.semantic_digest()?;
-        validate_event(&event)?;
-        ensure!(
-            serde_json::to_vec(&event)?.len()
-                <= crate::trajectory::shared::MAX_GUARDED_SETTLEMENT_BYTES
-        );
+        crate::storage::evaluation::validate_subject(&subject)?;
+        // Response facts consume only the headroom reserved by Capture::ready.
+        ensure!(serde_json::to_vec(&subject)?.len() <= baseline + 512);
+        ensure!(serde_json::to_vec(&subject)?.len() <= 1024 * 1024);
     }
     Ok(())
 }

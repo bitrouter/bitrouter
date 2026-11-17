@@ -4,7 +4,6 @@ use bitrouter_ai::tenancy::{
     configuration::{GenerationDefaults, Learning, LearningMode, Limits},
 };
 use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
-use sea_orm_migration::{MigratorTrait, SchemaManager};
 use serde_json::json;
 
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
@@ -13,14 +12,7 @@ mod server;
 
 async fn database() -> Result<DatabaseConnection> {
     let db = crate::db::connect("sqlite::memory:").await?;
-    let manager = SchemaManager::new(&db);
-    for migration in crate::db::migration::Migrator::migrations() {
-        if migration.name().starts_with("m20240101_000028_")
-            || migration.name().starts_with("m20240101_000029_")
-        {
-            migration.up(&manager).await?;
-        }
-    }
+    crate::db::run_migrations(&db).await?;
     for tenant in ["tenant-a", "tenant-b", "Tenant-a"] {
         add_tenant(&db, tenant).await?;
     }
@@ -419,6 +411,7 @@ async fn invalid_retained_schema_and_dependency_metadata_fail_closed() -> Result
     let db = database().await?;
     let record = draft("tenant-a", "v1", 1)?;
     insert_configuration(&db, &record).await?;
+    // Public ConfigurationRevision remains schema 1, independently of authority format 5.
     for schema_version in [-1, 2] {
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,

@@ -2496,14 +2496,6 @@
             "null"
           ]
         },
-        "learning_registrations": {
-          "default": null,
-          "description": "Optional local learning registration manifest, authenticated after H bootstrap.\nOmission preserves startup behavior and does not erase durable schedules.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "ordered_attempt_limit": {
           "default": 8,
           "description": "Maximum candidates in an explicit ordered v2 submission, from 1 through\n64. This is a per-execution work budget; ordinary v1 stays bounded at 8.",

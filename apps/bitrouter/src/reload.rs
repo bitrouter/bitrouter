@@ -656,7 +656,7 @@ fn collect_unclassified_schema_paths(
                 for (name, child) in values {
                     let child_path = schema_child_path(path, name);
                     let child_location = schema_child_location(location, name);
-                    if let Some(property) = schema_property(properties, path, name) {
+                    if let Some(property) = schema_property(properties, name) {
                         collect_unclassified_schema_paths(
                             child,
                             property,
@@ -791,18 +791,11 @@ fn changed_unclassified_config_paths(
 
 fn schema_property<'a>(
     properties: Option<&'a serde_json::Map<String, serde_json::Value>>,
-    parent_path: &str,
     name: &str,
 ) -> Option<&'a serde_json::Value> {
     let properties = properties?;
     if let Some(property) = properties.get(name) {
         return Some(property);
-    }
-    // This accepted serde alias predates remote administration. Schemars
-    // documents the canonical `mode` name only, but the parser gives
-    // `policy.writeback` the exact same live meaning.
-    if parent_path == "policy" && name == "writeback" {
-        return properties.get("mode");
     }
     None
 }
@@ -1088,8 +1081,6 @@ fn fixed_top_level_field(name: &str) -> &'static str {
         "models" => "models",
         "routers" => "routers",
         "checkers" => "checkers",
-        "presets" => "presets",
-        "variants" => "variants",
         "plugins" => "plugins",
         "mcp" => "mcp",
         "mcp_servers" => "mcp_servers",
@@ -2436,7 +2427,9 @@ impl AppReloader {
         );
         if active.availability == "not_configured" && disk.availability == "not_configured" {
             AuxiliaryConfigState::NotConfigured
-        } else if active.availability == disk.availability && active.digest == disk.digest {
+        } else if active.availability == disk.availability
+            && active.source_digest == disk.source_digest
+        {
             AuxiliaryConfigState::InSync
         } else {
             AuxiliaryConfigState::ReloadRequired
@@ -2794,27 +2787,22 @@ providers:
       - "*": chat_completions
     models:
       - {{ id: m }}
-presets:
+routers:
   coding:
-    model: {model}
-    policy: coding
+    selection:
+      kind: policy
+      base_model: {model}
+      policy: coding
 "#
         )
     }
 
     fn coordinated_policy_lock_yaml(model: &str) -> String {
         format!(
-            r#"lockfileVersion: 4
-artifact:
-  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  source_snapshot_time_unix_ms: 0
-  compiler:
-    id: fixture
-    version: 1
-    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            r#"spec_version: policy/1.0.0-beta.1
 policies:
   coding:
-    tiers: {{ strong: {{ model: "{model}", context: evidence }} }}
+    tiers: {{strong: {{model: "{model}"}}}}
     default_tier: strong
     tool_use_tier: strong
     tool_safe_tiers: [strong]
@@ -2832,7 +2820,7 @@ policies:
     ) -> anyhow::Result<FaultFixture> {
         let home = tempfile::tempdir()?;
         let config_path = home.path().join("bitrouter.yaml");
-        let lock_path = home.path().join("policy-lock.yaml");
+        let lock_path = home.path().join("policy.yaml");
         let access_policy_dir = home.path().join("access-policies");
         std::fs::create_dir(&access_policy_dir)?;
         std::fs::write(&config_path, coordinated_config_yaml("alpha:m", 30))?;
@@ -2865,7 +2853,7 @@ policies:
         .await?;
         let initial_policy_digest = policy_runtime
             .administration_snapshot()
-            .digest
+            .source_digest
             .ok_or_else(|| anyhow::anyhow!("initial active policy has no digest"))?;
         let policy_store = Arc::new(PolicyStore::load_dir(&access_policy_dir).await?);
 
@@ -2982,87 +2970,28 @@ policies:
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.
     #[tokio::test]
-    async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
-        use crate::config::PolicyRuntimeMode;
-        use crate::policy_lock::PolicyRuntime;
-
-        let (path, dir) = temp_config_path();
-        let config_yaml = |model: &str| {
-            format!(
-                r#"inherit_defaults: false
-presets:
-  coding:
-    model: {model}
-    policy: coding
-"#
-            )
-        };
-        std::fs::write(&path, config_yaml("vendor:old")).expect("write initial config");
-        std::fs::write(
-            dir.join("policy-lock.yaml"),
-            r#"lockfileVersion: 4
-artifact:
-  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  source_snapshot_time_unix_ms: 0
-  compiler:
-    id: bitrouter-policy-compiler
-    version: 1
-    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-policies:
-  coding:
-    key_strategy: agent_trace
-    tiers: { strong: { model: vendor:old, context: evidence } }
-    routes: {}
-    default_tier: strong
-    tool_use_tier: strong
-    tool_safe_tiers: [strong]
-"#,
-        )
-        .expect("write initial policy");
-        let initial = config::load(&path).await.expect("load initial config");
-        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial.clone()));
-        let db = crate::db::connect("sqlite::memory:")
-            .await
-            .expect("connect db");
-        crate::db::run_migrations(&db).await.expect("migrate db");
-        let runtime = PolicyRuntime::new(
-            &initial,
-            Some(&path),
-            None,
-            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await
-        .expect("build policy runtime");
-        let initial_digest = runtime
-            .status(PolicyRuntimeMode::Frozen)
-            .digest
-            .expect("initial digest");
-        let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default()).expect("executor"));
-        let reloader = AppReloader::new(
-            Arc::new(PolicyStore::new()),
-            routing_table.clone(),
-            executor,
-            ReloadSource::File(path.clone()),
-        )
-        .with_policy_runtime(runtime.clone());
-
-        std::fs::write(&path, config_yaml("vendor:new")).expect("write candidate config");
-        std::fs::write(dir.join("policy-lock.yaml"), "lockfileVersion: broken\n")
-            .expect("break candidate policy");
-
-        assert!(reloader.reload().await.is_err());
+    async fn invalid_policy_candidate_does_not_swap_routing_or_policy() -> anyhow::Result<()> {
+        let fixture = coordinated_fixture(None, None).await?;
+        std::fs::write(&fixture.config_path, coordinated_config_yaml("beta:m", 7))?;
+        std::fs::write(&fixture.lock_path, "lockfileVersion: 4\n")?;
+        assert!(fixture.reloader.reload().await.is_err());
         assert_eq!(
-            routing_table.snapshot_config().presets["coding"]
-                .model
+            fixture
+                .routing_table
+                .snapshot_config()
+                .resolve_router("bitrouter/coding")?
+                .clean_model,
+            "alpha:m"
+        );
+        assert_eq!(
+            fixture
+                .policy_runtime
+                .administration_snapshot()
+                .source_digest
                 .as_deref(),
-            Some("vendor:old")
+            Some(fixture.initial_policy_digest.as_str())
         );
-        assert_eq!(
-            runtime.status(PolicyRuntimeMode::Frozen).digest.as_deref(),
-            Some(initial_digest.as_str())
-        );
-        std::fs::remove_dir_all(dir).ok();
+        Ok(())
     }
 
     #[tokio::test]
@@ -3136,10 +3065,8 @@ policies:
             };
             let active_config = fixture.routing_table.snapshot_config();
             let routed_model = active_config
-                .presets
-                .get("coding")
-                .and_then(|preset| preset.model.as_deref())
-                .ok_or_else(|| anyhow::anyhow!("coding preset is absent after reload"))?;
+                .resolve_router("bitrouter/coding")?
+                .clean_model;
             assert_eq!(routed_model, expected_routing_model);
 
             let expected_access_model =
@@ -3166,7 +3093,7 @@ policies:
                 fixture
                     .policy_runtime
                     .administration_snapshot()
-                    .digest
+                    .source_digest
                     .as_deref(),
                 Some(expected_policy_digest),
                 "the active policy report must describe the policy snapshot that actually committed"
@@ -3247,10 +3174,8 @@ policies:
         );
         let active_config = fixture.routing_table.snapshot_config();
         let routed_model = active_config
-            .presets
-            .get("coding")
-            .and_then(|preset| preset.model.as_deref())
-            .ok_or_else(|| anyhow::anyhow!("coding preset is absent after reload"))?;
+            .resolve_router("bitrouter/coding")?
+            .clean_model;
         assert_eq!(routed_model, "beta:m");
         let access_model = fixture.policy_store.with_policy("operator", |policy| {
             policy
@@ -3263,7 +3188,7 @@ policies:
             fixture
                 .policy_runtime
                 .administration_snapshot()
-                .digest
+                .source_digest
                 .as_deref(),
             Some(fixture.candidate_policy_digest.as_str())
         );
@@ -3349,16 +3274,20 @@ policies:
         let initial_yaml = r#"inherit_defaults: false
 server:
   listen: 127.0.0.1:4356
-presets:
+routers:
   coding:
-    model: alpha:m
+    selection:
+      kind: model
+      model: alpha:m
 "#;
         let candidate_yaml = r#"inherit_defaults: false
 server:
   listen: 127.0.0.1:9999
-presets:
+routers:
   coding:
-    model: beta:m
+    selection:
+      kind: model
+      model: beta:m
 "#;
         std::fs::write(&path, initial_yaml)?;
         let mut initial = config::load(&path).await?;
@@ -3420,8 +3349,9 @@ presets:
 
     #[tokio::test]
     async fn preparation_timeout_finishes_without_live_mutation() -> anyhow::Result<()> {
-        let initial =
-            config::parse("inherit_defaults: false\npresets:\n  coding:\n    model: alpha:m\n")?;
+        let initial = config::parse(
+            "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: model\n      model: alpha:m\n",
+        )?;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
         let pause = Arc::new(TestPreparationPause::new());
         let reloader = Arc::new(
@@ -3469,10 +3399,10 @@ presets:
         let active_config = routing_table.snapshot_config();
         assert_eq!(
             active_config
-                .presets
-                .get("coding")
-                .and_then(|preset| preset.model.as_deref()),
-            Some("alpha:m")
+                .resolve_router("bitrouter/coding")
+                .ok()
+                .map(|resolved| resolved.clean_model),
+            Some("alpha:m".to_owned())
         );
         Ok(())
     }
@@ -4026,15 +3956,8 @@ providers:
     }
 
     #[test]
-    fn remote_restart_classifier_accepts_legacy_policy_writeback_alias() -> anyhow::Result<()> {
-        let current = config::parse("inherit_defaults: false\npolicy:\n  mode: frozen\n")?;
-        let raw = "inherit_defaults: false\npolicy:\n  writeback: locked\n";
-        let candidate = config::parse(raw)?;
-        let raw_candidate = serde_saphyr::from_str::<serde_json::Value>(raw)?;
-        let unclassified = unclassified_config_paths(&raw_candidate);
-        assert!(!unclassified.contains("policy.writeback"));
-        assert!(restart_required_fields(&current, &candidate, Some(&unclassified)).is_empty());
-        Ok(())
+    fn removed_policy_writeback_alias_is_rejected_before_classification() {
+        assert!(config::parse("inherit_defaults: false\npolicy: {writeback: locked}\n").is_err());
     }
 
     #[test]

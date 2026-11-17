@@ -1,18 +1,9 @@
-//! Two exact legacy definitions plus the exact archive extension, never a union
-//! of individually optional columns or permissive SQLite affinity checks.
+//! Exact current receipt/archive catalog, including format metadata.
 use super::*;
 use sea_orm::{Statement, Value};
 
 fn sql(statement: impl Into<String>, values: impl IntoIterator<Item = Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, statement, values)
-}
-
-/// Presence selects the complete upgraded profile; any malformed or partial
-/// profile is an error, not a reason to retry the legacy validator.
-pub(in crate::db::migration) async fn present(db: &impl ConnectionTrait) -> Result<bool, DbErr> {
-    Ok(db.query_one(sql(
-        "SELECT 1 FROM main.sqlite_schema WHERE lower(name)='tenancy_receipt_archive' OR lower(tbl_name)='tenancy_receipt_archive' UNION ALL SELECT 1 FROM temp.sqlite_schema WHERE lower(name)='tenancy_receipt_archive' OR lower(tbl_name)='tenancy_receipt_archive' LIMIT 1", []
-    )).await?.is_some())
 }
 
 pub(super) async fn no_shadows(db: &impl ConnectionTrait) -> Result<(), DbErr> {
@@ -112,26 +103,10 @@ async fn receipt_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) async fn validate_capacity_receipt_shape(
-    db: &impl ConnectionTrait,
-) -> Result<(), DbErr> {
-    table(db, RECEIPTS, receipt_definition()).await
-}
-
 pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     no_shadows(db).await?;
     let mut receipts = receipt_definition();
-    if db
-        .query_one(sql(
-            "SELECT 1 FROM sqlite_schema WHERE name='tenancy_dispatch_intents' LIMIT 1",
-            [],
-        ))
-        .await?
-        .is_some()
-    {
-        receipts.col(super::super::m20240101_000045_ordered_receipts::format_column());
-    }
+    receipts.col(super::super::m20240101_000045_ordered_receipts::format_column());
     table(db, RECEIPTS, receipts).await?;
     table(db, USAGE, usage_definition()).await?;
     table(db, TABLE, definition()).await?;

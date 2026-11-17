@@ -17,34 +17,46 @@ The [configuration validator](../../apps/bitrouter/src/config/tenancy.rs) and
 [file owner](../../apps/bitrouter/src/tenancy/ownership.rs) enforce eligibility.
 This profile does not establish distributed tenant authority or hosted capacity.
 
-## Model-only policy boundary and upgrades
+## Model-only policy boundary and cutover
 
-Public policy source uses [`policy/1.0.0-beta.1`](../specs/policy/README.md).
-`bitrouter-ai::policy` owns lightweight source types; application `model_policy`
-performs semantic validation and deterministic lowering into the current private
-`PolicyLock` IR. The inverse requires complete equality after recompilation,
-including the adapter identity and metadata. Preserved tier context alone is
-insufficient qualification. The service's classifier-contract digest and an
-assessment cohort digest have different meanings and are never substituted.
+The accepted M0 ownership and cutover rules in this section are pending
+implementation and qualification. The
+[Policy contract](../specs/policy/README.md) and
+[current-store contract](../specs/service-api/README.md#resource-and-evidence-migration-and-rollback)
+are authoritative; this guide does not claim the cutover has passed.
 
-Executable qualification covers all policy artifacts in the resolved closure,
-including hidden or otherwise unselected dependencies. Configuration creation,
-activation/startup and execution reopening enforce the same result. Historical
-integrity inspection and paid-work recovery retain their authenticated decoder.
-The non-tenant local harness can still use its experimental runtime; the tenant
-service no longer qualifies its context/trajectory/optimization Policy artifacts.
-Shared gateway publication applies the same qualifier before changing the
-immutable configuration or authority head. Retaining trajectory records and
-terminal recovery does not authorize new guarded service execution.
+AI owns the lightweight public source. Application model_policy validates it
+and builds a private model-selection execution view; storage retains the typed
+source and separate management metadata. There is no PolicyLock bridge, compiler
+marker authorization, certificate lowering or reverse compilation. Targets select
+only model/effort while preserving complete admitted context. Source digest,
+compiled cache identity, immutable resource revision, configuration revision and
+classifier digest have distinct purposes.
 
-Before upgrading an installation with active old Policy artifacts, use the
-previous binary and existing management API to deactivate them by activating an
-explicit policy-free configuration. After upgrade, submit newly authored Policy
-source, bind its exact revision in a route, and explicitly activate a replacement
-configuration. Old active artifacts fail startup qualification rather than being
-rewritten, relabeled or silently activated. Back up the installation and retain
-old immutable configurations and receipts for inspection/recovery. Upgrading
-does not reset tenant authority, credentials or historical evidence.
+Qualification checks the complete reachable closure at import, configuration
+creation, activation, restart and execution reopening, including hidden and
+unselected dependencies. Bind the exact ResourceRef and literal name; request
+variants cannot choose another name or fall back to a base. Tenant/shared entry
+points reject core_choice, paid assessment and ACP block, including Policy-free
+routes with all features enabled. Retained experiments have an explicit BRO
+harness owner and do not gain tenant-service authority. Mature Policy and tenant
+Eval exchange belong to the minimum gateway build, independent of core/harness.
+
+Eval is client-driven: infer/evaluate against an exact revision, submit/freeze
+facts under its verified identity, author a replacement source, then separately
+create and authorize/CAS activation. The service adds no Eval job runner or
+implicit learning. Generic tenant and gateway Eval profiles keep independent
+scope; neither can impersonate model-policy evidence.
+
+A Policy-free active head does not make an old dataset eligible. Stop old ingress
+and complete resolvable work with the old binary. Keep its binary/data outside
+the new dataset; the new binary neither resumes old paid work nor converts rows.
+Provision new resources explicitly in a new location with new installation
+identity. Refuse old/unmarked/nonempty/partial/foreign/future datasets and forged
+markers before listeners or authority/recovery writes, without deleting or
+rewriting files. Current-format restart/recovery, immutable references, unknown
+usage, CAS, revocation and idempotency remain required. Deployment rollback uses
+the old binary and its own consistent database/configuration/key copy.
 
 | Component | Responsibility |
 | --- | --- |
@@ -60,25 +72,26 @@ binding; the [SDK example](../../crates/bitrouter-sdk/examples/axum_gateway.rs)
 shows that composition. A framework adapter's protocol end does not itself prove
 that the service committed an execution receipt.
 
-## Historical recovery tests
+## Current-format recovery checks
 
-Native paid recovery uses a pinned pre-contract runtime to produce genuine
-accepted work, then the current runtime to reopen the original database. Build
-the producer before running the all-feature suite:
+Use current writers and real retained execution/configuration/source objects to
+verify restart, streaming cancellation, no-send/observed/unknown dispatch,
+receipt/evidence publication and original-operation replay. Reduced builds must
+refuse readiness when they cannot service current obligations. Only proved
+exclusion/cleanup/stop-set permits missing-terminal recovery to Unknown; usage
+stays unknown. Do not replay providers or select an assessment head. Custody and
+capacity remain held through settlement/cleanup acknowledgement, including
+transaction faults and lost acknowledgements. Per-revision cumulative accepted-job
+counts never refund/reset on any terminal outcome or repeated restart.
 
-```sh
-bash .github/scripts/build-pre-m0-producer.sh
-cargo build -p bitrouter --all-features --examples
-BITROUTER_TEST_EXAMPLES_DIR="$PWD/target/debug/examples" cargo nextest run --all-features
-```
-
-The historical dependency graph has its own target directory; sharing the
-current target can overwrite equal-version workspace artifacts. The checked-in
-adapter changes only an old test: it exports terminal history and activates a
-policy-free configuration through the old management API. It does not change
-the predecessor runtime. The producer revision sidecar and explicit export
-acknowledgement prevent an absent or unrelated fixture from passing. Reduced
-profile campaigns still use separately built current consumers.
+Old-format tests are small raw rejection fixtures. The old executable producer,
+patch, revision sidecar, checkout/cache and cross-version campaigns are retired
+with their consumers. Preserve general invariants by rebuilding fixtures with
+current producers; do not disable failing tests or remove readers while leaving
+an unsupported current writer active. Compare logical records, authority, user
+file bytes and provider calls on refusal; incidental lock-file changes are not
+data migration. Historical BRO-session fixtures are a separate boundary and
+cannot be retired solely because their names contain old version numbers.
 
 ## Runtime budgets and indexed authority
 
@@ -94,9 +107,9 @@ ordinary, safety and completion queues rotate service so each can make progress.
 Startup validates the entire directory and retained authority through bounded
 keyset pages, including all retained operation IDs. Page size and working bytes
 bound temporary memory; no successful prefix substitutes for the complete scan.
-Format-2 validation does not apply the former directory or lifetime operation
-count ceilings. Historical format-1 counter rules remain format checks until
-the store is explicitly upgraded. Runtime reads load only the caller and exact
+Current authority validation does not apply former directory or lifetime
+operation count ceilings. Unsupported historical stores are refused rather than
+upgraded during startup. Runtime reads load only the caller and exact
 dependency closure under read custody. The authority registry retains a small
 publication header and bounded leased views. Committed deltas update those views
 under a common publication gate; unrelated mutations do not invalidate a native caller solely
@@ -343,22 +356,16 @@ Indexed, resumable maintenance escalates unresolved work after 15 minutes
 without pruning or reclassifying it. The 30-second cleanup window is not
 permission to forget an uncertain transaction or an unjoined producer.
 
-The internal authority store uses format 6 so predecessor writers refuse it.
-Healthy format-1 stores upgrade during complete validated startup. A legacy
-count-saturated store instead requires the explicit local
-`bro tenancy offline upgrade-capacity` workflow under exclusive stopped custody.
-The command checks the expected installation/revision, the actual legacy count
-latch, all retained authority/evidence and an explicit acknowledgment before
-atomically recording the transition and its replay result. It preserves
-identities and evidence and does not clear other storage or cleanup fences.
-That saved result continues to describe format 2. After complete validation,
-normal startup promotes it to the installed format-6 writer fence with an exact
-header CAS; counters, authority revision, later stop latches and saved replay
-bytes remain unchanged. Startup refuses this promotion without the registered
-indexed-admission migration.
-See the [operator procedure](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence).
-Public strict-v1 request, attempt and evidence limits remain independent of host
-capacity, as do the bounded offline bundle and declared provisioning profiles.
+The current dataset baseline and authority schema are validated before service
+startup or offline restore. Historical authority formats and capacity-latch
+upgrade operations are retired; startup never clears an old latch, rewrites its
+authority, or records an upgrade replay result. Provision a fresh installation
+through current APIs and preserve old data separately. Current authority,
+retained-history and cleanup validation remain mandatory. See the
+[offline evidence and restore commands](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence)
+for current-format backup procedures. Public strict-v1 request, attempt and
+evidence limits remain independent of host capacity, as do supported offline
+artifact limits and declared provisioning profiles.
 
 ## Receipt archive and physical storage
 
@@ -462,8 +469,9 @@ defines the wire interpretation and compatibility cases.
 
 The terminal receipt and its evidence sidecar share one durable publication
 gate and are bound by integrity digests. The existing strict receipt shape is
-unchanged. Versioned recovery seeds distinguish capture lost during recovery
-from historical executions that predate capture; neither state means zero usage.
+unchanged. Current recovery seeds preserve capture ownership; missing provider
+observations produce Unavailable where proved, never zero usage. Missing required
+seeds cannot become historical no-capture records.
 No read or recovery path repeats inference to repair missing evidence.
 
 The [evidence reader](../../apps/bitrouter/src/tenancy/receipts/usage_evidence/storage.rs)
@@ -472,11 +480,12 @@ It retains a shared operation budget across records, absolute cell limits,
 measured-length guards against intervening growth and receipt/evidence integrity
 checks. Stored byte-count metadata is not trusted to authorize allocation.
 
-SQLite resource/evidence schema changes and the migration ledger commit
-atomically. Startup rejects incompatible catalogs; populated down-migrations are
-refused rather than discarding immutable revisions or evidence. Back up the
-complete stopped service database and wrapping key before a binary/schema
-rollback; changing executables alone is not a supported data downgrade.
+The current SQLite schema and baseline ledger initialize atomically only in
+an empty location. Startup validates the entire current dataset before ready,
+including non-head history and affected encrypted source/envelopes. An old-store
+conversion, backfill, populated downgrade or marker-only adoption is refused.
+Restore validates current content rather than trusting a copied marker. Rollback
+uses the old binary with its own consistent database/configuration/key copy.
 
 ## Routing and diagnostics
 

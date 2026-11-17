@@ -130,7 +130,7 @@ impl Host {
             if let Some(bandit) = &options.bandit {
                 definition.bandit = bandit.clone();
             }
-            let resources = Resources::with_key(fixture.installation.clone(), [29;32])?;
+            let resources = Resources::with_key(fixture.installation.clone(), [29;32])?.for_bro_capture();
             let mut imported = Vec::new();
             for subject in std::iter::once(&fixture).chain(sibling.iter()) {
                 let route = resource(subject, ResourceKind::Route, "literal:subject")?;

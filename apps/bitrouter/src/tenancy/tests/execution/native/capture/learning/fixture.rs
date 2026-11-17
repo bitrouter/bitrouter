@@ -192,7 +192,8 @@ impl Ready {
     ) -> Result<Self> {
         let (subject_url, judge_url) = endpoints;
         fixture.service.shutdown().await?;
-        let resources = Resources::with_key(fixture.installation.clone(), [29; 32])?;
+        let resources =
+            Resources::with_key(fixture.installation.clone(), [29; 32])?.for_bro_capture();
         let reference = |kind, name: &str| -> Result<ResourceRef> {
             Ok(ResourceRef {
                 owner_kind: OwnerKind::Tenant,
@@ -331,7 +332,8 @@ impl Ready {
     }
     pub async fn restart(&mut self) -> Result<()> {
         self.fixture.service.shutdown().await?;
-        let resources = Resources::with_key(self.fixture.installation.clone(), [29; 32])?;
+        let resources =
+            Resources::with_key(self.fixture.installation.clone(), [29; 32])?.for_bro_capture();
         let snapshot = store::load(&self.fixture.db, Utc::now()).await?;
         self.fixture.service =
             Service::start_prepared(self.fixture.db.clone(), None, snapshot, Arc::new(resources))

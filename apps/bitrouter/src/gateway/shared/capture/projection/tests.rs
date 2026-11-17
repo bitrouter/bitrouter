@@ -1,16 +1,9 @@
 use super::*;
 use crate::metering::shared::tests::{fixture, no_dispatch, resolve};
 
-pub(in crate::gateway::shared) fn selected(
-    record: &Record,
-    decision: EvalDecisionRef,
-    guarded: bool,
-) -> Result<Inputs> {
+fn selected(record: &Record, decision: EvalDecisionRef) -> Result<Inputs> {
     let mut requirements = Requirements::fixture();
-    requirements.policy_lock_digest = Some(decision.policy_digest.clone());
-    if guarded {
-        requirements.trajectory = TrajectoryRequirement::GuardedPolicies;
-    }
+    requirements.source_digest = Some(decision.policy_digest.clone());
     let inputs = Inputs {
         requirements,
         execution_id: record.event.execution.execution_id.clone(),
@@ -20,7 +13,6 @@ pub(in crate::gateway::shared) fn selected(
         policy: Policy::Evaluated {
             policy: decision.policy.clone(),
             digest: decision.policy_digest.clone(),
-            guarded,
             treatment: Some(Box::new(Treatment {
                 decision,
                 preset: None,
@@ -52,7 +44,6 @@ pub(in crate::gateway::shared) fn untracked(record: &Record) -> Result<Inputs> {
             experiment: None,
             route_measurement: None,
         },
-        false,
     )
 }
 

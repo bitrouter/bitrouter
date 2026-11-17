@@ -24,7 +24,7 @@ mod judge;
 mod trajectory;
 
 fn selector(named: bool) -> &'static str {
-    if named { "@coding" } else { "coding" }
+    if named { "bitrouter/coding" } else { "coding" }
 }
 
 fn database_url(fixture: &Fixture) -> String {

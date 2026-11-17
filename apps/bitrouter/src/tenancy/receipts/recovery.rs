@@ -26,10 +26,8 @@ pub(crate) struct Seed {
     correlation: CorrelationId,
     revision: RevisionId,
     pub(in crate::tenancy) origin: Stamp,
-    // Missing only in historical seeds. Preserve their serialized bytes and
-    // digests; new admissions durably distinguish loss from never-installed capture.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    usage_evidence_version: Option<u8>,
+    // Required on every current admission, including recovery with lost capture.
+    usage_evidence_version: u8,
 }
 impl Seed {
     pub(crate) fn execution_id(&self) -> &ExecutionId {
@@ -45,7 +43,7 @@ impl Seed {
             correlation: identity.correlation.clone(),
             revision: identity.revision.clone(),
             origin,
-            usage_evidence_version: Some(1),
+            usage_evidence_version: 1,
         }
     }
     pub(crate) fn matches(&self, descriptor: &Descriptor, execution: &ExecutionId) -> bool {
@@ -107,15 +105,11 @@ impl Seed {
                 auxiliary_digest: None,
             },
         )?;
-        if self.usage_evidence_version.is_some() {
-            candidate.with_unavailable_usage_evidence()
-        } else {
-            Ok(candidate)
-        }
+        candidate.with_unavailable_usage_evidence()
     }
     fn validate_usage_version(&self) -> Result<()> {
         ensure!(
-            matches!(self.usage_evidence_version, None | Some(1)),
+            self.usage_evidence_version == 1,
             "unsupported receipt seed usage evidence version"
         );
         Ok(())

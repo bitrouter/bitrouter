@@ -80,17 +80,6 @@ impl Service {
         })
         .ok_or_else(|| Failure::from(ErrorCode::CapabilityMismatch))?;
         route.require_capabilities().map_err(Failure::from)?;
-        if route.policy().is_some_and(|policy| {
-            policy
-                .document()
-                .policies
-                .get(policy.name())
-                .and_then(|definition| definition.optimization.as_ref())
-                .and_then(|optimization| optimization.active.as_ref())
-                .is_some()
-        }) {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        }
         let block = route.block_profile().map(|_| route.clone());
         if route
             .block_profile()

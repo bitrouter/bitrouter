@@ -254,7 +254,6 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             authenticate,
         ))
         .with_state(service.clone());
-    #[cfg(feature = "core")]
     let router = router.merge(super::eval::http::router(service));
     router.merge(observations)
 }

@@ -50,6 +50,12 @@ pub struct ControlClient {
     capabilities: tokio::sync::Mutex<Option<(std::time::Instant, CapabilitiesReport)>>,
 }
 
+#[derive(serde::Deserialize)]
+struct CapabilityProtocol {
+    protocol: String,
+    protocol_version: u32,
+}
+
 impl ControlClient {
     pub fn new(endpoint: &str, token: &str) -> Result<Self> {
         Self::with_options(endpoint, token, ControlOptions::default())
@@ -99,19 +105,44 @@ impl ControlClient {
                 return Ok(report.clone());
             }
         }
-        let report = self.get::<CapabilitiesReport>("capabilities", None).await?;
+        let raw = self
+            .get::<Box<serde_json::value::RawValue>>("capabilities", None)
+            .await?;
+        let header: CapabilityProtocol = serde_json::from_str(raw.get())
+            .map_err(|_| Error::Response("invalid remote control protocol envelope"))?;
+        if header.protocol != "bitrouter-control" {
+            return Err(Error::Response(
+                "remote endpoint speaks an unsupported control protocol",
+            ));
+        }
+        if header.protocol_version != PROTOCOL_VERSION {
+            return Err(Error::ControlProtocolVersion {
+                server: header.protocol_version,
+                client: PROTOCOL_VERSION,
+            });
+        }
+        let report: CapabilitiesReport = serde_json::from_str(raw.get())
+            .map_err(|_| Error::Response("invalid remote control capabilities"))?;
         *self.capabilities.lock().await = Some((std::time::Instant::now(), report.clone()));
         Ok(report)
     }
 
     async fn require_resource(&self, resource: &'static str) -> Result<()> {
         let capabilities = self.capabilities().await?;
-        if capabilities.protocol != "bitrouter-control"
-            || capabilities.protocol_version != PROTOCOL_VERSION
-            || !capabilities.resources.get(resource).is_some_and(|row| {
-                row.version == 1 && capabilities.scopes.contains(&row.required_scope)
-            })
-        {
+        let scope = match resource {
+            "state" => bitrouter_ai::control::ControlScope::Read,
+            "operation" => bitrouter_ai::control::ControlScope::Reload,
+            _ => return Err(Error::ControlResourceUnavailable { resource }),
+        };
+        if !capabilities.resources.get(resource).is_some_and(|row| {
+            row.version == 1
+                && row.required_scope == scope
+                && capabilities.scopes.contains(&scope)
+                && (scope != bitrouter_ai::control::ControlScope::Reload
+                    || capabilities
+                        .scopes
+                        .contains(&bitrouter_ai::control::ControlScope::Read))
+        }) {
             return Err(Error::ControlResourceUnavailable { resource });
         }
         Ok(())
@@ -252,21 +283,6 @@ impl ControlClient {
         filters: &bitrouter_ai::control::requests::RequestFilters,
     ) -> Result<RequestsReport> {
         self.require_action(Action::Requests).await?;
-        let has_filters = filters.since.is_some()
-            || filters.until.is_some()
-            || filters.model.is_some()
-            || filters.provider.is_some();
-        if has_filters
-            && !self
-                .capabilities()
-                .await?
-                .action_descriptors
-                .contains_key("requests")
-        {
-            return Err(Error::Request(
-                "remote server does not advertise filtered request inspection",
-            ));
-        }
         let url = self.action_url("requests")?;
         self.send(self.http.get(url).bearer_auth(&self.token).query(filters))
             .await
@@ -274,33 +290,18 @@ impl ControlClient {
 
     pub async fn can_action(&self, action: Action) -> Result<bool> {
         let capabilities = self.capabilities().await?;
-        if capabilities.protocol != "bitrouter-control" {
-            return Err(Error::Response(
-                "remote endpoint speaks an unsupported control protocol",
-            ));
-        }
-        if capabilities.protocol_version != PROTOCOL_VERSION {
-            return Err(Error::ControlProtocolVersion {
-                server: capabilities.protocol_version,
-                client: PROTOCOL_VERSION,
-            });
-        }
-        Ok(if capabilities.action_descriptors.is_empty() {
-            action.supports_legacy_discovery()
-                && capabilities
-                    .actions
-                    .iter()
-                    .any(|name| name == action.legacy_name())
-        } else {
-            capabilities
-                .action_descriptors
-                .get(action.id())
-                .is_some_and(|descriptor| {
-                    descriptor.version == action.version()
-                        && descriptor.required_scope == action.required_scope()
-                        && capabilities.scopes.contains(&action.required_scope())
-                })
-        })
+        Ok(capabilities
+            .action_descriptors
+            .get(action.id())
+            .is_some_and(|descriptor| {
+                descriptor.version == action.version()
+                    && descriptor.required_scope == action.required_scope()
+                    && capabilities.scopes.contains(&action.required_scope())
+                    && (action != Action::Reload
+                        || capabilities
+                            .scopes
+                            .contains(&bitrouter_ai::control::ControlScope::Read))
+            }))
     }
 
     async fn require_action(&self, action: Action) -> Result<()> {

@@ -135,10 +135,10 @@ impl Fixture {
                     .publish(
                         0,
                         &Configuration {
-                            format: 1,
+                            format: 2,
                             routing: json!({}),
                             policies: Vec::new(),
-                            policy_lock: None,
+                            model_policy: None,
                             credentials: Vec::new(),
                             require_known_pricing: false,
                         },

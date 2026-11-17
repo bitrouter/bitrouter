@@ -15,7 +15,8 @@ use super::super::{
 use super::{Candidate, Chain, target};
 use crate::{
     config::{
-        AccountStrategy, Config, presets::PresetResolution, router::RouterSelection, routing_table,
+        AccountStrategy, Config, resolution::RouterResolution, router::RouterSelection,
+        routing_table,
     },
     gateway::pipeline::routing::RoutingPrefs,
 };
@@ -350,7 +351,7 @@ fn derive_inner(
 }
 
 // Borrow the exact named definition Stage 0 can copy, without resolving it or
-// materializing defaults. Keep this preflight aligned with config/presets.rs;
+// materializing defaults. Keep this preflight aligned with config/resolution.rs;
 // it only reserves work, while the existing v1 resolver owns all semantics.
 #[derive(Serialize)]
 struct Stage0Source<'a> {
@@ -391,34 +392,14 @@ fn named_source<'a>(config: &'a Config, name: &str) -> Result<Option<Stage0Sourc
             routing,
         }))
     } else {
-        Ok(config.presets.get(name).map(
-            |crate::config::PresetConfig {
-                 model,
-                 policy,
-                 system_prompt,
-                 params,
-                 routing,
-             }| Stage0Source {
-                model: model.as_deref(),
-                policy: policy.as_deref(),
-                system_prompt: system_prompt.as_deref(),
-                params,
-                routing,
-            },
-        ))
+        Ok(None)
     }
 }
 
-fn resolve_stage0(config: &Config, raw: &str, budget: &mut Budget<'_>) -> Result<PresetResolution> {
-    let (head, variant) = match raw.rsplit_once(':') {
-        Some((head, name)) if config.variants.contains_key(name) => (head, Some(name)),
-        _ => (raw, None),
-    };
-    // Literal clean model, original selector and variant identity copies.
-    budget.value(&(head, raw, variant))?;
-    if let Some(name) = head
-        .strip_prefix('@')
-        .or_else(|| head.strip_prefix(crate::config::presets::RESERVED_NAMESPACE))
+fn resolve_stage0(config: &Config, raw: &str, budget: &mut Budget<'_>) -> Result<RouterResolution> {
+    // Literal selectors and router names have one meaning, without variants.
+    budget.value(&(raw, raw))?;
+    if let Some(name) = raw.strip_prefix(crate::config::resolution::RESERVED_NAMESPACE)
         && let Some(source) = named_source(config, name)?
     {
         // Returned model/policy/defaults and router prefs are each copied once.
@@ -437,9 +418,6 @@ fn resolve_stage0(config: &Config, raw: &str, budget: &mut Budget<'_>) -> Result
             budget.bytes(std::mem::size_of::<&str>() + 1)?;
             budget.value(key)?;
         }
-    }
-    if let Some(variant) = variant.and_then(|name| config.variants.get(name)) {
-        budget.value(&variant.routing)?;
     }
     config
         .resolve_router(raw)

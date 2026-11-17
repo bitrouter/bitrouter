@@ -32,14 +32,20 @@ pub async fn connect_or_start(
 ) -> Result<PathBuf> {
     if crate::daemon::probe_status(control_socket).await?.is_none() {
         let log = source.home().join("bitrouter.log");
-        match crate::daemon::start_and_wait(
-            source,
-            &log,
-            Some(control_socket),
-            std::time::Duration::from_secs(15),
-        )
-        .await?
-        {
+        let outcome = {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let start = crate::daemon::start_harness_and_wait;
+            #[cfg(not(all(feature = "core", feature = "harness")))]
+            let start = crate::daemon::start_and_wait;
+            start(
+                source,
+                &log,
+                Some(control_socket),
+                std::time::Duration::from_secs(15),
+            )
+            .await?
+        };
+        match outcome {
             crate::daemon::DaemonStartOutcome::Ready(_) => {}
             crate::daemon::DaemonStartOutcome::Exited { status, log_tail } => {
                 anyhow::bail!("BRO server exited ({status}): {log_tail}")

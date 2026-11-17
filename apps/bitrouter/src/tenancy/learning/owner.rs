@@ -23,7 +23,6 @@ struct State {
     output: Option<JudgeOutput>,
     observation_acknowledged: bool,
     lease: Option<LearningLease>,
-    native_source: Option<crate::tenancy::execution::session::PaidSourcePin>,
 }
 
 /// Only a checked checkpoint plus an admitted execution can construct this.
@@ -84,34 +83,9 @@ impl Owner {
                 output: None,
                 observation_acknowledged: false,
                 lease: Some(lease),
-                native_source: None,
             }),
             changed: tokio::sync::Notify::new(),
         }))
-    }
-    pub(super) fn retain_native_source(
-        &self,
-        pin: crate::tenancy::execution::session::PaidSourcePin,
-    ) -> Result<(), ErrorCode> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        if !matches!(state.phase, Phase::New) || state.native_source.is_some() {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        state.native_source = Some(pin);
-        Ok(())
-    }
-    pub(super) fn acceptance_status(&self) -> bitrouter_ai::core::protocol::CommitStatus {
-        use bitrouter_ai::core::protocol::CommitStatus;
-        match self.state.lock().map(|state| state.phase) {
-            Ok(Phase::Unused) => CommitStatus::NotCommitted,
-            Ok(Phase::Accepted | Phase::Observing | Phase::Finalizing | Phase::Finished) => {
-                CommitStatus::Committed
-            }
-            _ => CommitStatus::Unknown,
-        }
     }
     pub(super) fn runtime(self: &Arc<Self>) -> Runtime {
         Runtime {
@@ -349,14 +323,14 @@ impl Owner {
                 }
             }
         }
-        let (lease, source) = {
+        let lease = {
             let mut state = self
                 .state
                 .lock()
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-            (state.lease.take(), state.native_source.take())
+            state.lease.take()
         };
-        drop((lease, source));
+        drop(lease);
         Ok(())
     }
 

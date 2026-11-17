@@ -2,7 +2,6 @@
 //! admitted capabilities and policy determine the available actions.
 
 pub mod assessment;
-pub(crate) mod experiment_identity;
 pub mod exploration;
 pub mod input;
 pub mod plan;

@@ -29,8 +29,6 @@ pub(in crate::tenancy) struct Seed {
     pub(super) descriptor: Option<Descriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) connection: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) native: Option<super::native::Seed>,
     pub(super) session: String,
     pub(super) job: String,
     pub(super) evaluator: ResourceRef,
@@ -53,19 +51,9 @@ impl Seed {
                 && identity.revision == prepared.revision,
             "paid receipt identity differs from checked binding"
         );
-        let (descriptor, connection, native) = match (binding, &prepared.source) {
-            (Binding::Capture(binding), super::store::PreparedSource::Capture(_)) => (
-                Some(binding.association().descriptor().clone()),
-                Some(binding.association().connection().to_owned()),
-                None,
-            ),
-            (Binding::Native(binding), super::store::PreparedSource::Native(source)) => (
-                None,
-                None,
-                Some(super::native::Seed::checked(binding, source)?),
-            ),
-            _ => anyhow::bail!("paid source and owner profile mismatch"),
-        };
+        let Binding::Capture(binding) = binding;
+        let descriptor = Some(binding.association().descriptor().clone());
+        let connection = Some(binding.association().connection().to_owned());
         let value = Self {
             origin,
             installation: identity.installation.clone(),
@@ -76,7 +64,6 @@ impl Seed {
             configuration: identity.revision.clone(),
             descriptor,
             connection,
-            native,
             session: prepared.session.clone(),
             job: prepared.id.clone(),
             evaluator: prepared.route.clone(),
@@ -89,8 +76,8 @@ impl Seed {
     }
     pub(super) fn validate(&self) -> Result<()> {
         self.origin.validate()?;
-        match (&self.descriptor, &self.connection, &self.native) {
-            (Some(descriptor), Some(connection), None) => {
+        match (&self.descriptor, &self.connection) {
+            (Some(descriptor), Some(connection)) => {
                 ensure!(
                     descriptor.version == 1
                         && descriptor.installation == self.installation.as_str()
@@ -103,7 +90,6 @@ impl Seed {
                     "paid capture seed mismatch"
                 );
             }
-            (None, None, Some(native)) => native.validate(self)?,
             _ => anyhow::bail!("paid source kind is ambiguous"),
         }
         for value in [&self.session, &self.job, &self.checkpoint] {
@@ -112,13 +98,7 @@ impl Seed {
                 "paid seed identifier bound"
             );
         }
-        let prefix = if self.native.is_some() {
-            self.prefix_digest
-                .strip_prefix("sha256:")
-                .ok_or_else(|| anyhow::anyhow!("native paid prefix domain"))?
-        } else {
-            self.prefix_digest.as_str()
-        };
+        let prefix = self.prefix_digest.as_str();
         for digest in [prefix, self.input_digest.as_str()] {
             ensure!(
                 digest.len() == 64
@@ -169,8 +149,6 @@ pub(super) struct Retained {
     pub observed: Option<Observed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<Stopped>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_cleanup: Option<super::native::Cleanup>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,14 +226,12 @@ fn lower_digest(value: &str) -> bool {
 /// Data namespace for a bounded bootstrap participant, never execution scope.
 /// Construction requires the same actually claimed pool/H owner before ready.
 pub(crate) struct RecoveryIdentity {
-    database: sea_orm::DatabaseConnection,
     installation: InstallationId,
     tenant: TenantId,
     principal: PrincipalId,
 }
 impl RecoveryIdentity {
     pub(super) fn checked(
-        database: &sea_orm::DatabaseConnection,
         owner: &crate::tenancy::origin::StartupOwner,
         proof: &std::sync::Arc<crate::tenancy::transaction::Proof>,
         installation: &InstallationId,
@@ -264,14 +240,10 @@ impl RecoveryIdentity {
     ) -> Result<Self> {
         owner.bootstrap_stamp(proof)?;
         Ok(Self {
-            database: database.clone(),
             installation: installation.clone(),
             tenant: tenant.clone(),
             principal: principal.clone(),
         })
-    }
-    pub(crate) fn database(&self) -> &sea_orm::DatabaseConnection {
-        &self.database
     }
     pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
         (&self.installation, &self.tenant, &self.principal)
