@@ -24,3 +24,6 @@ They do not create independently versioned format specifications. Follow the
 
 Formats shared with clients and retained files are maintained once in
 [specifications](../specs/README.md). Commands remain in the [CLI guide](../CLI.md).
+
+The requested [M0 Policy cutover acceptance plan](m0-policy-cutover-acceptance.md)
+describes pending work and release gates, not current supported behavior.
