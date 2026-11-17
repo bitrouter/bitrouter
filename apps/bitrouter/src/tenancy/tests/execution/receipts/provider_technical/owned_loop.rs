@@ -123,6 +123,7 @@ async fn real_two_turn_json_and_merged_sse_keep_context_operation_and_first_last
             &base,
             "chat_completions",
             &mut |_| {},
+            None,
             (
                 crate::telemetry::receipt_latency::Sink::default(),
                 Some(owner),

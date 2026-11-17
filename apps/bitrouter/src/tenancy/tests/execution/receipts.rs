@@ -297,6 +297,7 @@ impl Harness {
                 &base,
                 protocol,
                 &mut |_| {},
+                None,
                 (
                     if additional_resources {
                         crate::telemetry::receipt_latency::Sink::default()

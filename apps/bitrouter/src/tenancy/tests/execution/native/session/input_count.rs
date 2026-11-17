@@ -10,7 +10,8 @@ async fn persistent_owned_harness_counts_before_generation_with_separate_evidenc
         let directory = tempfile::tempdir()?;
         let workspace = directory.path().join("workspace");
         std::fs::create_dir(&workspace)?;
-        let (fixture, route) = file_fixture_profile(&provider, directory.path(), true).await?;
+        let (fixture, route) =
+            file_fixture_profile(&provider, directory.path(), true, None).await?;
         let checked = async {
             counting::client(&fixture, h2)?;
             let (headers, _) = ready(&fixture, &route).await?;
