@@ -492,22 +492,31 @@ async fn current_source_continuation_pins_hidden_or_uncommitted_history_and_deta
             let second_id = second["id"].as_str().context("followup ID missing")?;
             assert!(second_id.starts_with("brc_"));
             assert_ne!(first_id, second_id);
-            // Unified responses allocate per-response item identities. Compare
-            // the complete output with only that generated field normalized.
-            let mut first_output = first["output"].clone();
-            let mut second_output = second["output"].clone();
-            for output in [&mut first_output, &mut second_output] {
-                let items = output.as_array_mut().context("missing response output")?;
-                assert_eq!(items.len(), 1);
-                assert!(
-                    items[0]
-                        .as_object_mut()
-                        .context("response item is not an object")?
-                        .remove("id")
-                        .is_some_and(|id| id.as_str().is_some_and(|id| !id.is_empty()))
-                );
+            let mut expected_item = json!({
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            });
+            if stream {
+                // SSE assigns an identity to each message item for its lifecycle events.
+                let first_item_id = first["output"][0]["id"]
+                    .as_str()
+                    .context("first streamed item ID missing")?;
+                let second_item_id = second["output"][0]["id"]
+                    .as_str()
+                    .context("second streamed item ID missing")?;
+                for id in [first_item_id, second_item_id] {
+                    assert!(id.strip_prefix("msg_").is_some_and(|id| !id.is_empty()));
+                }
+                assert_ne!(first_item_id, second_item_id);
+                expected_item["status"] = json!("completed");
+                expected_item["id"] = json!(first_item_id);
+                assert_eq!(first["output"], json!([expected_item]));
+                expected_item["id"] = json!(second_item_id);
+                assert_eq!(second["output"], json!([expected_item]));
+            } else {
+                assert_eq!(first["output"], json!([expected_item]));
+                assert_eq!(second["output"], json!([expected_item]));
             }
-            assert_eq!(second_output, first_output);
             assert_eq!(second["usage"], first["usage"]);
             assert_eq!(second["status"], "completed");
             let (models, parents, bodies) = {
