@@ -154,6 +154,7 @@ pub(super) async fn fresh(
                 | "tenancy_credentials"
                 | "tenancy_operations"
                 | "tenancy_resource_revisions"
+                | "tenancy_resource_lifecycle"
                 | "tenancy_configurations"
                 | "tenancy_active_configurations"
         );
@@ -198,6 +199,16 @@ pub(super) async fn fresh(
         ),
         (
             "tenancy_resource_revisions",
+            &[
+                "owner_kind",
+                "owner_id",
+                "resource_kind",
+                "resource_id",
+                "revision_id",
+            ][..],
+        ),
+        (
+            "tenancy_resource_lifecycle",
             &[
                 "owner_kind",
                 "owner_id",

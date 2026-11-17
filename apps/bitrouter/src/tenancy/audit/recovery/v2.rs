@@ -81,6 +81,7 @@ pub(crate) async fn inspect_target_in<'a>(
             observed.header.active_count,
         ),
         ("tenancy_resource_revisions", observed.header.resource_count),
+        ("tenancy_resource_lifecycle", observed.header.resource_count),
     ] {
         ensure!(
             catalog::count(inventory, table)? == count,
@@ -171,6 +172,13 @@ pub(crate) async fn inspect_target_in<'a>(
                     supplied.value.reference == reference,
                     "approval/readback resource mismatch"
                 );
+                crate::tenancy::resources::lifecycle::inspect_fresh_in(
+                    &reader,
+                    &header.installation,
+                    header.revision,
+                    &reference,
+                )
+                .await?;
                 let bytes = workspace.available();
                 let _phase = workspace.reserve(bytes)?;
                 resources

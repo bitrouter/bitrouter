@@ -40,6 +40,7 @@ pub(crate) async fn recovery(
                     "bro_runtime_ownership",
                     "tenancy_continuation_epoch",
                     "tenancy_resource_revisions",
+                    "tenancy_resource_lifecycle",
                     "tenancy_configurations",
                     "tenancy_active_configurations"
                 ]
@@ -108,6 +109,16 @@ async fn common(
         ),
         (
             "tenancy_resource_revisions",
+            &[
+                "owner_kind",
+                "owner_id",
+                "resource_kind",
+                "resource_id",
+                "revision_id",
+            ][..],
+        ),
+        (
+            "tenancy_resource_lifecycle",
             &[
                 "owner_kind",
                 "owner_id",
