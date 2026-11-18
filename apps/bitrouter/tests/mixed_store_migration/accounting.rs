@@ -2,8 +2,9 @@
 //! service reservations. Only a newly admitted turn may call the gateway.
 use super::*;
 use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
-use bitrouter::metering::store::MeteringStore;
-use bitrouter::storage::evolution::{EvolutionStore, digest};
+use bitrouter::metering::{entities::requests, store::MeteringStore};
+use bitrouter::storage::evolution::{EvolutionStore, digest, records};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::json;
 
 const UNKNOWN: &str = "ordinary-terminal-unknown";
@@ -64,30 +65,25 @@ async fn combined(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
     Ok((path, db))
 }
 
-async fn evidence(db: &DatabaseConnection) -> Result<Value> {
-    let rows=db.query_all(Statement::from_string(DatabaseBackend::Sqlite,"SELECT request_id,charge_status,reconciliation_status,estimated_charge_micro_usd,authoritative_receipt_json,charge_evidence_json FROM requests WHERE provider_id='mock' ORDER BY request_id")).await?;
-    let mut bills = vec![];
-    for row in rows {
-        bills.push(json!([
-            row.try_get_by_index::<String>(0)?,
-            row.try_get_by_index::<String>(1)?,
-            row.try_get_by_index::<String>(2)?,
-            row.try_get_by_index::<i64>(3)?,
-            row.try_get_by_index::<Option<String>>(4)?,
-            row.try_get_by_index::<String>(5)?
-        ]));
-    }
-    let rows=db.query_all(Statement::from_string(DatabaseBackend::Sqlite,"SELECT record_id,scope_id,revision,body FROM checkpoint_evolution WHERE kind='gateway_request' AND json_extract(body,'$.controller_instance_id')='old-controller' ORDER BY record_id")).await?;
-    let mut reservations = vec![];
-    for row in rows {
-        reservations.push(json!([
-            row.try_get_by_index::<String>(0)?,
-            row.try_get_by_index::<String>(1)?,
-            row.try_get_by_index::<i64>(2)?,
-            row.try_get_by_index::<String>(3)?
-        ]));
-    }
-    Ok(json!([bills, reservations]))
+async fn evidence(db: &DatabaseConnection) -> Result<(Vec<requests::Model>, Vec<records::Model>)> {
+    let bills = requests::Entity::find()
+        .filter(requests::Column::ProviderId.eq("mock"))
+        .order_by_asc(requests::Column::RequestId)
+        .all(db)
+        .await?;
+    let owner = digest(&("gateway-request-inventory-v1", "local", CONTROLLER))?;
+    let store = EvolutionStore::new(db.clone(), &format!("gateway:{owner}"))?;
+    let reservations = records::Entity::find()
+        .filter(records::Column::Kind.eq("gateway_request"))
+        .filter(records::Column::ScopeId.eq(store.scope_id))
+        .order_by_asc(records::Column::RecordId)
+        .all(db)
+        .await?;
+    ensure!(
+        bills.len() == 4 && reservations.len() == 2,
+        "incomplete historical ledger"
+    );
+    Ok((bills, reservations))
 }
 
 #[tokio::test]
@@ -128,6 +124,56 @@ async fn paid_native_and_terminal_unknown_survive_ordinary_restart() -> Result<(
 }
 
 #[tokio::test]
+async fn local_price_and_exhausted_receipt_retain_their_distinct_bases() -> Result<()> {
+    use bitrouter::metering::pricing::{ModelPricing, PricingSource, calculate_charge_evidence};
+    use bitrouter_ai::types::{Usage, UsageOrigin};
+    for exhausted in [false, true] {
+        let dir = tempfile::tempdir()?;
+        let (source, db) = combined(dir.path()).await?;
+        let request_id = "ordinary-local-unknown";
+        if exhausted {
+            db.execute_unprepared("UPDATE requests SET reconciliation_status='pending' WHERE request_id='ordinary-local-unknown'").await?;
+            let store = MeteringStore::new(db.clone());
+            ensure!(store.start_reconciliation_attempt(request_id).await? == 1);
+            store
+                .exhaust_reconciliation(request_id, "receipt_fetch_attempts_exhausted")
+                .await?;
+        } else {
+            let row = requests::Entity::find_by_id(request_id)
+                .one(&db)
+                .await?
+                .context("local usage")?;
+            let usage = Usage {
+                prompt_tokens: row.prompt_tokens.try_into()?,
+                completion_tokens: row.completion_tokens.try_into()?,
+                cache_read_tokens: row.cache_read_tokens.try_into()?,
+                cache_write_tokens: row.cache_write_tokens.try_into()?,
+                reasoning_tokens: row.reasoning_tokens.try_into()?,
+                origin: UsageOrigin::ProviderReported,
+                ..Default::default()
+            };
+            let price = ModelPricing::cache_aware(Some(2.0), Some(1.0), Some(3.0), Some(4.0));
+            let computed = calculate_charge_evidence(&usage, &price, PricingSource::Configured);
+            let amount = computed.charge_micro_usd.context("computed price")?;
+            ensure!(amount > 0);
+            db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+                "UPDATE requests SET charge_status='computed',charge_evidence_json=?,estimated_charge_micro_usd=? WHERE request_id=?",
+                [serde_json::to_string(&computed)?.into(), amount.into(), request_id.into()])).await?;
+        }
+        let before = evidence(&db).await?;
+        db.close().await?;
+        let outcome = mixed_store::activate(&source, &dir.path().join("active")).await?;
+        let projected = outcome
+            .stores
+            .with_context(|| format!("{:?}", outcome.blockers))?;
+        let service = db::connect(&format!("sqlite://{}", projected.bitrouter.display())).await?;
+        ensure!(evidence(&service).await? == before);
+        service.close().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn refuses_in_transit_unbacked_and_conflicting_gateway_facts() -> Result<()> {
     for damage in [
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement',NULL) WHERE kind='gateway_request'",
@@ -135,6 +181,9 @@ async fn refuses_in_transit_unbacked_and_conflicting_gateway_facts() -> Result<(
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.total_cost_micro_usd',999) WHERE kind='gateway_request'",
         "DELETE FROM requests WHERE request_id='ordinary-terminal-unknown'",
         "UPDATE requests SET reconciliation_status='pending' WHERE request_id='ordinary-terminal-unknown'",
+        "UPDATE requests SET authoritative_receipt_json=NULL WHERE request_id='ordinary-terminal-unknown'",
+        "UPDATE requests SET authoritative_receipt_json=NULL,usage_origin='provider_reported',reconciliation_last_error='receipt_fetch_attempts_exhausted' WHERE request_id='ordinary-terminal-unknown'",
+        "UPDATE requests SET charge_evidence_json=json_set(charge_evidence_json,'$.pricing_source','override') WHERE charge_status='computed'",
         "UPDATE requests SET charge_evidence_json=json_set(charge_evidence_json,'$.normalized_usage.output_tokens',777) WHERE charge_status='computed'",
     ] {
         let dir = tempfile::tempdir()?;

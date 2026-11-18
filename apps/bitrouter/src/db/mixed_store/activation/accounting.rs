@@ -109,9 +109,24 @@ fn meter(row: &requests::Model) -> Result<()> {
             },
         "charge status or amount mismatch"
     );
+    if evidence.status == ChargeStatus::Computed {
+        verify_price(row, &evidence)?;
+    }
+    ensure!(
+        row.reconciliation_attempts >= 0
+            && (row.reconciliation_attempts > 0) == row.reconciliation_last_attempt_at.is_some(),
+        "inconsistent settlement attempt history"
+    );
+    let last_attempt = row
+        .reconciliation_last_attempt_at
+        .as_deref()
+        .map(stamp)
+        .transpose()?;
     if row.reconciliation_status == "not_applicable" {
         ensure!(
-            row.authoritative_settled_at.is_none()
+            last_attempt.is_none()
+                && row.reconciliation_last_error.is_none()
+                && row.authoritative_settled_at.is_none()
                 && evidence.pricing_source != PricingSource::AuthoritativeReceipt
                 && row.authoritative_receipt_json.is_none()
                 && matches!(
@@ -122,19 +137,28 @@ fn meter(row: &requests::Model) -> Result<()> {
         );
         return Ok(());
     }
-    stamp(
+    let settled_at = stamp(
         row.authoritative_settled_at
             .as_deref()
             .context("no terminal settlement")?,
     )?;
+    ensure!(
+        last_attempt.is_none_or(|t| t <= settled_at),
+        "attempt after terminal settlement"
+    );
     let Some(raw) = &row.authoritative_receipt_json else {
         ensure!(
             row.reconciliation_status == "unknown"
                 && evidence.status == ChargeStatus::Unknown
-                && row
-                    .reconciliation_last_error
-                    .as_ref()
-                    .is_some_and(|s| !s.is_empty())
+                && last_attempt.is_some()
+                && matches!(
+                    row.reconciliation_last_error.as_deref(),
+                    Some(
+                        "attempt_budget_exhausted"
+                            | "authoritative_receipt_still_pending"
+                            | "receipt_fetch_attempts_exhausted"
+                    )
+                )
                 && matches!(
                     row.usage_origin.as_str(),
                     "provider_reported" | "estimated" | "unknown"
@@ -210,6 +234,56 @@ fn meter(row: &requests::Model) -> Result<()> {
             "conflicting Unknown receipt"
         ),
         SettlementState::Pending => bail!("receipt is in transit"),
+    }
+    Ok(())
+}
+
+fn verify_price(row: &requests::Model, evidence: &ChargeEvidence) -> Result<()> {
+    use bitrouter_ai::types::{Usage, UsageOrigin};
+
+    if evidence.pricing_source == PricingSource::AuthoritativeReceipt {
+        ensure!(
+            evidence.exact_registry_charge.is_none()
+                && evidence.effective_rates == Default::default(),
+            "authoritative bill contains conflicting price evidence"
+        );
+        return Ok(());
+    }
+    if evidence.pricing_source == PricingSource::Configured
+        && let Some(tariff) = &evidence.tariff_snapshot
+    {
+        let origin = serde_json::from_value::<UsageOrigin>(serde_json::Value::String(
+            row.usage_origin.clone(),
+        ))?;
+        let usage = Usage {
+            prompt_tokens: row.prompt_tokens.try_into()?,
+            completion_tokens: row.completion_tokens.try_into()?,
+            reasoning_tokens: row.reasoning_tokens.try_into()?,
+            cache_read_tokens: row.cache_read_tokens.try_into()?,
+            cache_write_tokens: row.cache_write_tokens.try_into()?,
+            origin,
+            ..Default::default()
+        };
+        let mut checked = tariff.charge_evidence(&usage, PricingSource::Configured);
+        if let Some(exact) = &mut checked.exact_registry_charge {
+            // M0 settlement publishes successful single-attempt registry charges at request scope.
+            exact.scope = "logical_request".into();
+        }
+        ensure!(
+            checked == *evidence,
+            "charge differs from the admitted tariff"
+        );
+    } else {
+        ensure!(
+            evidence.exact_registry_charge.is_none()
+                && crate::metering::pricing::calculate_normalized_charge_micro_usd(
+                    &evidence.normalized_usage,
+                    &evidence.effective_rates
+                )
+                .ok()
+                    == evidence.charge_micro_usd,
+            "charge differs from the stored per-token rates"
+        );
     }
     Ok(())
 }
