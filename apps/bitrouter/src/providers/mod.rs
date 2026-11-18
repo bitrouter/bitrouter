@@ -6,6 +6,7 @@
 
 pub mod apply;
 pub mod builtin;
+pub mod check;
 pub mod claude_code;
 pub mod cli_install;
 pub mod entry;

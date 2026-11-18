@@ -34,12 +34,3 @@ machine-readable observation declarations remain their single field catalog;
 adding a second prose spec would duplicate it. Third-party protocols retain
 their upstream standards. Neither a file named `SPEC` nor a list of current
 runtime behaviors is sufficient reason to create a new specification.
-
-## Proposals
-
-[Named provider connections](provider-connection-proposal.md) is an
-unimplemented review draft. It is not a canonical specification and not a
-supported format. The current slice is discovery and checks for an existing
-custom provider; publish and relay are deferred and unspecified. If accepted,
-any new check result moves into the service API specification, and the draft
-is removed.

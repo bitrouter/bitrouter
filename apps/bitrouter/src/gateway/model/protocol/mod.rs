@@ -556,6 +556,18 @@ pub trait Transport: Send + Sync {
     /// (Google encodes it in the path verb).
     fn endpoint_url(&self, target: &ModelTarget, stream: bool) -> String;
 
+    /// GET URL for this protocol's model catalog. `None` means the protocol
+    /// does not publish a list; callers must not substitute a generation.
+    fn model_catalog_url(&self, _target: &ModelTarget) -> Option<String> {
+        None
+    }
+
+    /// Model ids from a successful catalog body, in response order. `None`
+    /// means the body is not this protocol's list document.
+    fn parse_model_catalog(&self, _body: &serde_json::Value) -> Option<Vec<String>> {
+        None
+    }
+
     /// Apply authentication to a fully-built request. The body is already
     /// serialized so signers that hash the body (SigV4, HMAC) can read it.
     /// Receives ownership of the request and returns it ready to send.
@@ -564,6 +576,21 @@ pub trait Transport: Send + Sync {
         request: reqwest::Request,
         target: &ModelTarget,
     ) -> Result<reqwest::Request>;
+}
+
+/// OpenAI- and Anthropic-shaped catalog: `{ "data": [{ "id": "…" }] }`.
+/// An empty `data` array is a list. Any other shape is not.
+pub(crate) fn catalog_ids(body: &serde_json::Value) -> Option<Vec<String>> {
+    let data = body.get("data")?.as_array()?;
+    let mut ids = Vec::with_capacity(data.len());
+    for entry in data {
+        let id = entry.get("id").and_then(serde_json::Value::as_str)?;
+        if id.is_empty() {
+            return None;
+        }
+        ids.push(id.to_string());
+    }
+    Some(ids)
 }
 
 /// Stateful decoder: upstream SSE events → canonical stream parts. Streaming

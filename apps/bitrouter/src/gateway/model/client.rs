@@ -281,10 +281,74 @@ impl ModelClient {
         DecisionsCodec::parse_response(body, request)
     }
 
+    /// GET this protocol's model catalog with the client's timeouts and the
+    /// same authentication the gateway uses for the provider. This is not a
+    /// generation: it does not render a prompt or call [`Self::generate`].
+    pub async fn list_models(
+        &self,
+        target: &ModelTarget,
+        headers: &http::HeaderMap,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<String>> {
+        let Some((_, transport)) = self.dispatch.lookup(&target.api_protocol) else {
+            return Err(ModelError::configuration(format!(
+                "no outbound dispatch registered for protocol '{}'",
+                target.api_protocol
+            )));
+        };
+        let Some(url) = transport.model_catalog_url(target) else {
+            return Err(ModelError::configuration(format!(
+                "protocol '{}' does not publish a model list",
+                target.api_protocol
+            )));
+        };
+        let mut request = self.build_get(&url)?;
+        let applier = self.auth_appliers.lookup(&target.provider_name);
+        request = if let Some(applier) = applier {
+            applier.apply(request, target).await.map_err(|error| {
+                normalize_auth_extension_error(error, AuthOperation::RequestAuthentication)
+            })?
+        } else {
+            transport.authorise(request, target).await?
+        };
+        for (name, value) in headers.iter() {
+            request.headers_mut().insert(name, value.clone());
+        }
+        let response = self.send(request, cancellation).await?;
+        let status = response.status();
+        let text = Self::read_body(response, cancellation).await?;
+        if !status.is_success() {
+            return Err(ModelError::HttpResponse {
+                status: status.as_u16(),
+                body: text,
+                retry_after: None,
+            });
+        }
+        let json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|_| ModelError::Decode {
+                message: "endpoint did not answer with a model list".into(),
+            })?;
+        transport
+            .parse_model_catalog(&json)
+            .ok_or_else(|| ModelError::Decode {
+                message: "endpoint did not answer with a model list".into(),
+            })
+    }
+
     /// Build one JSON POST with the selected overall request deadline.
     /// Authentication/header policy can be applied to the final request by the caller.
     pub fn build_request(&self, url: &str, body: &serde_json::Value) -> Result<reqwest::Request> {
         let mut builder = self.client.post(url).json(body);
+        if let Some(total) = self.timeouts.total {
+            builder = builder.timeout(total);
+        }
+        builder.build().map_err(|error| ModelError::Configuration {
+            message: format!("building request: {error}"),
+        })
+    }
+
+    fn build_get(&self, url: &str) -> Result<reqwest::Request> {
+        let mut builder = self.client.get(url);
         if let Some(total) = self.timeouts.total {
             builder = builder.timeout(total);
         }
