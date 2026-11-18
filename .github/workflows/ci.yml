@@ -263,7 +263,12 @@ jobs:
     - uses: ./.github/actions/test-archive
       with:
         product: bro
-    - run: bash .github/scripts/ci-test.sh bro --test-threads 2
+    - name: Provision the Linux workspace sandbox
+      run: bash .github/scripts/ci-bro-sandbox.sh
+    - name: Run the BRO archive with workspace shell coverage
+      env:
+        BRO_TEST_REQUIRE_WORKSPACE_SANDBOX: "1"
+      run: bash .github/scripts/ci-test.sh bro --test-threads 2
     - uses: actions/upload-artifact@v4
       if: always()
       with:

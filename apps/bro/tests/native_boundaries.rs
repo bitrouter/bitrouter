@@ -132,6 +132,12 @@ fn approved_shell_can_work_only_in_its_grant_without_bro_credentials() -> Result
     assert!(!work.join("result").exists());
     let id = first["thread_id"].as_str().context("thread")?;
     let available = first["status"] == "waiting_for_input";
+    if std::env::var_os("BRO_TEST_REQUIRE_WORKSPACE_SANDBOX").is_some() {
+        assert!(
+            available,
+            "provisioned sandbox did not offer the shell tool: {first}"
+        );
+    }
     #[cfg(target_os = "macos")]
     if Path::new("/usr/bin/sandbox-exec").is_file()
         && Path::new("/System/Library/Sandbox/Profiles/dyld-support.sb").is_file()
