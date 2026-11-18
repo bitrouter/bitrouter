@@ -1,4 +1,4 @@
-//! `bro cloud …` — typed wrappers around the user-facing management
+//! `bitrouter cloud …` — typed wrappers around the user-facing management
 //! endpoints on the application-owned management client.
 //!
 //! The subcommand tree is grouped by resource (`keys`, `usage`,
@@ -14,7 +14,7 @@
 //! All errors flow through one place ([`run`]); 403 responses whose
 //! description matches the server's `missing required scope: <s>` shape
 //! get a tailored re-login hint pointing the user at
-//! `bro cloud login --scope "<existing scopes> <missing>"`.
+//! `bitrouter cloud login --scope "<existing scopes> <missing>"`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use super::management::{
     ManagementClient, billing, budgets, byok, keys, namespaces, policies, presets, usage,
 };
 
-/// `bro cloud …`. All variants land in [`run`].
+/// `bitrouter cloud …`. All variants land in [`run`].
 #[derive(Subcommand)]
 pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
@@ -130,7 +130,7 @@ pub enum CloudAction {
 pub enum NamespaceAction {
     /// List the namespaces you own. The one this CLI is signed in to is
     /// marked `(active)`. Switching namespaces is a re-login:
-    /// `bro cloud login` and pick a different namespace in the
+    /// `bitrouter cloud login` and pick a different namespace in the
     /// browser.
     List(JsonFlag),
     /// Print the namespace this CLI's credential is bound to. Offline —
@@ -1382,7 +1382,7 @@ fn opt_json_input(
 
 /// `--scope` accepts both repeated flags and a single space-delimited
 /// list per flag — mirroring how the same value is handled by
-/// `bro cloud login --scope`. Empty tokens are dropped.
+/// `bitrouter cloud login --scope`. Empty tokens are dropped.
 fn split_scope_args(scopes: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for raw in scopes {
@@ -1509,7 +1509,7 @@ mod tests {
 
         assert!(hint.contains("API key"));
         assert!(hint.contains("keys:write"));
-        assert!(hint.contains("bro cloud login --api-key"));
+        assert!(hint.contains("bitrouter cloud login --api-key"));
         assert!(!hint.contains("--scope"));
         assert!(!hint.contains("brk_test.fixture"));
     }

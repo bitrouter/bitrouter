@@ -1894,7 +1894,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bro cloud login` with a
+/// hosted gateway; OAuth from `bitrouter cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
@@ -2269,7 +2269,7 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bro cloud login` session (or an explicit
+    /// Account-attributed when a `bitrouter cloud login` session (or an explicit
     /// `bearer_token`) is available; anonymous otherwise. The default — signing
     /// in upgrades attribution automatically, with no config change.
     #[default]

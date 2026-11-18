@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
-/// Result of `bro key sign`. The plaintext `secret` is shown once — only
+/// Result of `bitrouter key sign`. The plaintext `secret` is shown once — only
 /// its SHA-256 hash is stored.
 #[derive(Serialize)]
 pub struct KeySignReport {
@@ -31,7 +31,7 @@ impl CliReport for KeySignReport {
     }
 }
 
-/// Result of `bro policy create <id>`.
+/// Result of `bitrouter policy create <id>`.
 #[derive(Serialize)]
 pub struct PolicyCreateReport {
     pub id: String,

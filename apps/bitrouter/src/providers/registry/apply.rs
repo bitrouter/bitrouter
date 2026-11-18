@@ -476,7 +476,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         // personal subscription). Implanting it into a provider the operator
         // *fully hand-declared* (its own models AND its own credential) silently
         // demotes it from routable to explicit-route-only, so the daemon 404s a
-        // canonical id that the local `bro models` resolver — which does
+        // canonical id that the local `bitrouter models` resolver — which does
         // not run this merge — reports as routable. A full manual declaration is
         // the operator's opt-in, so leave its class unset: it ranks last and
         // joins the cascade like any user-declared provider. Stub declarations
@@ -875,7 +875,7 @@ mod tests {
         // own credential) must keep `class: None`, so it joins the canonical
         // auto-cascade instead of being demoted to explicit-route-only. Without
         // this, the daemon (which runs the merge) 404s a canonical id that the
-        // local `bro models` resolver (which does not) reports routable.
+        // local `bitrouter models` resolver (which does not) reports routable.
         let mut sub = provider("mysub");
         sub.billing = Billing::Subscription;
         let hand_models = build_models(&sub);

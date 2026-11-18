@@ -7,11 +7,11 @@ use {bitrouter_ai::control::models::ModelsReport, bitrouter_ai::control::models:
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
-/// The human view of `bro models`.
+/// The human view of `bitrouter models`.
 ///
 /// The report type itself is
 /// [`bitrouter_ai::control::models::ModelsReport`]: the
-/// `list_models` tool returns the same type, so `bro models --json` and
+/// `list_models` tool returns the same type, so `bitrouter models --json` and
 /// the tool's structured content are the same bytes. Rendering stays here — a
 /// local trait on a foreign type is legal, and it keeps [`Human`] out of the
 /// crate.

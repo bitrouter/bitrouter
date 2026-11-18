@@ -1,7 +1,7 @@
 //! The `route` action: *how would BitRouter route this, and what would it
 //! cost?*
 //!
-//! One report type is shared by `bro route`, Code sessions, and typed remote
+//! One report type is shared by `bitrouter route`, Code sessions, and typed remote
 //! control so all retained surfaces preserve the same JSON shape. Read-only by
 //! construction: it replays routing without sending
 //! anything upstream, and the resolved targets' secrets (api keys) never enter
@@ -202,7 +202,7 @@ impl RouteAction {
 
     /// Resolve from this machine's config, policy table included.
     ///
-    /// The policy table is the half `bro route` used to skip, which is
+    /// The policy table is the half `bitrouter route` used to skip, which is
     /// how it could name a model the daemon would never pick. It runs here for
     /// both surfaces: the effective model is what the table selects, and the
     /// chain is resolved for *that*, not for what was asked.

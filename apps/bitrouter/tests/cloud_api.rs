@@ -1,5 +1,5 @@
-//! Binary-level coverage for `bro cloud login --api-key` and
-//! `bro cloud api` protocol endpoints.
+//! Binary-level coverage for `bitrouter cloud login --api-key` and
+//! `bitrouter cloud api` protocol endpoints.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

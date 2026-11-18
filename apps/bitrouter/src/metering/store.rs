@@ -357,7 +357,7 @@ pub struct RequestRow {
     ///
     /// `None` when capture is off (it defaults to off and is restart-only),
     /// when the request predates it, or when the ledger is unreadable. This
-    /// is the thread from a settled request to `bro trajectory
+    /// is the thread from a settled request to `bitrouter trajectory
     /// inspect`, which is otherwise reachable only by an episode id nothing
     /// hands out.
     pub episode_id: Option<String>,

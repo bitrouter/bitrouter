@@ -265,7 +265,7 @@ pub async fn execute(command: Command, output: &Output) -> Result<()> {
             activation: None,
             running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
             restart_required: None,
-            hint: "Configured entries only. Use bro mcp check to connect and discover tools.",
+            hint: "Configured entries only. Use bitrouter mcp check to connect and discover tools.",
         })?;
         return Ok(());
     }

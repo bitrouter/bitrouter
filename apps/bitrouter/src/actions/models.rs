@@ -1,6 +1,6 @@
 //! The `list_models` action: *what can BitRouter route, and who can serve it?*
 //!
-//! One report type is shared by `bro models`, Code sessions, and typed remote
+//! One report type is shared by `bitrouter models`, Code sessions, and typed remote
 //! control so all retained surfaces preserve the same JSON shape.
 //!
 //! The element type is the shared [`ModelInfo`](bitrouter_ai::routing::ModelInfo)

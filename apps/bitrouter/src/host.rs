@@ -840,7 +840,7 @@ fn announce_zero_config(source: &crate::paths::ConfigSource, cfg: &crate::config
 /// Multi-line guidance shown when zero-config detects no credential of any
 /// kind. The recommendation chain is intentional:
 ///
-///   1. `bro cloud login` — one OAuth account, every supported model.
+///   1. `bitrouter cloud login` — one OAuth account, every supported model.
 ///   2. `BITROUTER_API_KEY` — long-lived `brk_…` key, same coverage.
 ///   3. Any upstream provider the user already pays for, locally.
 ///

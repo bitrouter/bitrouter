@@ -1,4 +1,4 @@
-//! On-disk credentials for `bro cloud` authentication.
+//! On-disk credentials for `bitrouter cloud` authentication.
 //!
 //! Single JSON file at `<data-dir>/account-credentials.json`. The file
 //! is owner-only (mode `0o600` on Unix) — these tokens grant access to

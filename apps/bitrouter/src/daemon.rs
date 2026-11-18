@@ -164,7 +164,7 @@ pub enum DaemonCommand {
     ///
     /// Distinct from [`Self::Status`], which reports only the *count* and the
     /// distinct provider set: this is the catalog itself, and it is what lets
-    /// `bro models` and the MCP `list_models` tool answer with the
+    /// `bitrouter models` and the MCP `list_models` tool answer with the
     /// daemon's real view — subscription-backed providers and post-`reload`
     /// state included — instead of a static config projection.
     Models,

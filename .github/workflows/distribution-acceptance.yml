@@ -335,6 +335,52 @@ jobs:
         name: registry-provider-closed-loop
         path: ${{ runner.temp }}/registry-closed-loop
         if-no-files-found: warn
+  cargo-install:
+    name: standalone Cargo install (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {package: bitrouter, binary: bitrouter, peer: bitrouter-bro}
+        - {package: bitrouter-bro, binary: bro, peer: bitrouter}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - name: package and install from independent source archives
+      shell: bash
+      env:
+        PRODUCT: ${{ matrix.package }}
+        BINARY: ${{ matrix.binary }}
+        PEER: ${{ matrix.peer }}
+      run: |
+        set -euo pipefail
+        scratch="$(mktemp -d "$RUNNER_TEMP/source-install.XXXXXXXX")"
+        cargo package --locked --no-verify --target-dir "$scratch/pkg" --workspace --exclude "$PEER" --exclude dist-helper
+        version="$(cargo metadata --locked --no-deps --format-version 1 | jq -er --arg p "$PRODUCT" '.packages[] | select(.name == $p).version')"
+        test -f "$scratch/pkg/package/$PRODUCT-$version.crate"
+        test ! -e "$scratch/pkg/package/$PEER-$version.crate"
+        cd "$scratch"
+        mkdir -p crates .cargo
+        printf '[patch.crates-io]\n' > .cargo/config.toml
+        for archive in pkg/package/*.crate; do
+          tar -xzf "$archive" -C crates
+          dir="$(basename "$archive" .crate)"
+          name="${dir%-$version}"
+          if [[ "$name" != "$PRODUCT" ]]; then
+            printf '%s = { path = "%s" }\n' "$name" "$scratch/crates/$dir" >> .cargo/config.toml
+          fi
+        done
+        unset BITROUTER_BUILD_REVISION
+        cargo install --path "crates/$PRODUCT-$version" --debug --root "$scratch/install" --target-dir "$scratch/target"
+        test "$(ls "$scratch/install/bin")" = "$BINARY"
+        if [[ "$PRODUCT" == bitrouter ]]; then
+          "$scratch/install/bin/bitrouter" --json build-info > identity.json
+        else
+          "$scratch/install/bin/bro" build-info > identity.json
+        fi
+        jq -e --arg sha "$GITHUB_SHA" --arg version "$version" '.source_revision == $sha and .version == $version' identity.json
   public-library-boundaries:
     name: public-library-boundaries
     runs-on: ubuntu-latest

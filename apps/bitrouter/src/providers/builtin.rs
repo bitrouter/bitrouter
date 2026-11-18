@@ -21,7 +21,7 @@ use bitrouter_ai::catalog::types::{
     Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
 };
 
-/// The hosted bro cloud gateway — the sole compiled-in built-in. Public
+/// The hosted bitrouter cloud gateway — the sole compiled-in built-in. Public
 /// provider metadata comes from the registry; this hand-authored entry carries
 /// auth defaults and local OAuth/API-key integration.
 const BITROUTER_TOML: &str = include_str!("../../providers/bitrouter.toml");

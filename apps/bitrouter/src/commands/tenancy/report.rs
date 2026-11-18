@@ -46,7 +46,7 @@ impl Recovery {
 
     pub(super) fn hint(&self) -> String {
         format!(
-            "query `bro tenancy operation --installation-id {} --operation-id {}` with the same --context or --endpoint/--token-env target and current read authority; keep the original request and do not retry with a new operation ID",
+            "query `bitrouter tenancy operation --installation-id {} --operation-id {}` with the same --context or --endpoint/--token-env target and current read authority; keep the original request and do not retry with a new operation ID",
             self.installation, self.operation
         )
     }

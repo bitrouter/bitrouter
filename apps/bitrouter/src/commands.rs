@@ -30,10 +30,10 @@ server:
   # exposing `0.0.0.0` would let any host on the network use bitrouter
   # without a credential check. Flip to `0.0.0.0:4356` only when you've
   # also set `skip_auth: false` and minted virtual keys with
-  # `bro key sign`.
+  # `bitrouter key sign`.
   listen: "127.0.0.1:4356"
   # skip_auth=true admits credential-less local requests (cc-switch /
-  # litellm style). Set to false and create keys with `bro key
+  # litellm style). Set to false and create keys with `bitrouter key
   # sign` for a multi-tenant deployment.
   skip_auth: true
 
@@ -50,10 +50,10 @@ database:
   url: "sqlite://./bitrouter.db"
 
 # `bitrouter/auto` uses the bundled model-only policy. To customize routing,
-# `bro policy init <name> --router <id> --strong <model> --economy <model>`
+# `bitrouter policy init <name> --router <id> --strong <model> --economy <model>`
 # creates policy.yaml and an explicit named router binding.
-# `bro policy show --disk` exports source; publish changes with an explicit
-# --expected-digest. Access-control files use `bro access-policy create`.
+# `bitrouter policy show --disk` exports source; publish changes with an explicit
+# --expected-digest. Access-control files use `bitrouter access-policy create`.
 
 # Built-in providers auto-enable when their env var is set. An entry
 # with `inherit_defaults: true` (the workspace default) plus an empty
@@ -73,11 +73,11 @@ providers:
   # or `balance` (spread load evenly across accounts):
   # opencode-go: { account_strategy: failover, accounts: [{ api_key: "${OPENCODE_GO_KEY_A}", label: primary }, { api_key: "${OPENCODE_GO_KEY_B}", label: backup }] }
 
-# Upstream MCP (Model Context Protocol) servers — `bro tools
+# Upstream MCP (Model Context Protocol) servers — `bitrouter tools
 # list/status` reads this, and `POST /mcp/<name>` proxies JSON-RPC
 # against the entry. Discover servers from the official MCP registry
-# with `bro mcp search <query>` and print a paste-ready stub with
-# `bro mcp add <name>`. Spec:
+# with `bitrouter mcp search <query>` and print a paste-ready stub with
+# `bitrouter mcp add <name>`. Spec:
 # https://modelcontextprotocol.io/specification/2025-06-18
 # mcp_servers:
 #   ctx7:
@@ -139,7 +139,7 @@ pub async fn write_starter_config(path: &std::path::Path, force: bool) -> Result
     Ok(ScaffoldOutcome::Wrote)
 }
 
-/// The outcome of `bro key generate` — the plaintext secret is shown to
+/// The outcome of `bitrouter key generate` — the plaintext secret is shown to
 /// the user **once** and never persisted (only its SHA-256 hash is stored).
 pub struct GeneratedKey {
     /// The api key id.
@@ -148,7 +148,7 @@ pub struct GeneratedKey {
     pub secret: String,
 }
 
-/// `bro key sign` — mint a `brvk_` virtual key for `user_id`, persist only
+/// `bitrouter key sign` — mint a `brvk_` virtual key for `user_id`, persist only
 /// its hash, and return the plaintext once. v1 does **not** sign a JWT (004
 /// §3.0); the command keeps the `sign` name but creates a DB-backed virtual key.
 pub async fn key_sign(
@@ -191,7 +191,7 @@ pub async fn key_sign(
 /// The routable catalog a config alone can describe — the fallback the
 /// `list_models` action uses when no daemon answers.
 ///
-/// Unfiltered by design: `bro models --provider` and the MCP tool's
+/// Unfiltered by design: `bitrouter models --provider` and the MCP tool's
 /// `provider` argument are one filter applied to the shared report
 /// (`ModelsReport::filtered`), so neither surface can narrow it its own way.
 ///
@@ -224,7 +224,7 @@ pub(crate) async fn resolve_discovered(config: Config) -> Config {
 /// subscription / "use your Claude Code session" login stores its credential in
 /// the store, not the config, so the defaults pass marks that provider inactive
 /// for want of an api key and the routing table drops it — and a standalone
-/// answer (`bro models` / `route` with no daemon, `spawn`'s preflight)
+/// answer (`bitrouter models` / `route` with no daemon, `spawn`'s preflight)
 /// would then be missing exactly the providers the daemon routes to. Mirrors
 /// `assemble.rs`; best-effort, an unreadable store is a no-op.
 pub fn resolve_static(mut config: Config) -> Config {
@@ -238,7 +238,7 @@ pub fn resolve_static(mut config: Config) -> Config {
     config
 }
 
-/// `bro route <model>` — resolve a model name through the routing table,
+/// `bitrouter route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
     let table = ConfigRoutingTable::from_config(resolve_discovered(config.clone()).await);
@@ -312,7 +312,7 @@ fn validate_policy_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// `bro access-policy create` — write a starter ACL file into `policy_dir`.
+/// `bitrouter access-policy create` — write a starter ACL file into `policy_dir`.
 /// Refuses to overwrite an existing policy of the same id. The `id` must be a
 /// plain filename (no path separators, no `..`, no leading dot) so the joined
 /// path cannot escape `policy_dir`.
@@ -327,7 +327,7 @@ pub async fn create_policy(policy_dir: &std::path::Path, id: &str) -> Result<std
     }
     let body = format!(
         "# policy '{id}' — edit to taste, then bind it to a key:\n\
-         #   bro key sign --user <id> --policy {id}\n\
+         #   bitrouter key sign --user <id> --policy {id}\n\
          id: {id}\n\
          # allowed_models: [gpt-5, claude-sonnet-4-6]\n\
          # denied_models: []\n\
@@ -1416,7 +1416,7 @@ providers:
     /// The config projection is unfiltered and keeps every provider of every
     /// model — `shared` is declared by both, and both must survive. Filtering
     /// is the shared report's job (`ModelsReport::filtered`), so that one
-    /// filter serves `bro models --provider` and the MCP tool alike.
+    /// filter serves `bitrouter models --provider` and the MCP tool alike.
     #[tokio::test]
     async fn list_models_keeps_every_provider_of_a_model() {
         let cfg = sample_config();

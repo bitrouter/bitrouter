@@ -158,10 +158,8 @@ process starts anyway. Two places report it:
 - `bitrouter config validate` lists them under `ignored_config`. It does not
   fail validation — an ignored block is a misconfiguration, not a malformed
   config, and this command is CI-gating.
-- Every runtime surface logs one WARN per unread id on start: the daemon, and
-  `bro acp serve` and `bro run`, none of which build the
-  daemon's `App` but all of which read the same config. This is the path that
-  matters: validation is opt-in, the runtime always runs.
+- The gateway logs a warning for each unread plugin ID during startup. BRO
+  reads its own workspace and adapter settings independently.
 
 The supported ids the binary reads are `bitrouter-policy` and
 `bitrouter-telemetry`. The removed `plugins.bitrouter-guardrails` key instead
@@ -501,45 +499,16 @@ allows common inspection but prevents automatic replacement by a different
 feature set or target; use a matching executable for execution or request an
 explicit profile transition. Control HTTP capabilities also report the server's
 artifact separately from the caller's authorized actions.
-These counts are a passive snapshot; the daemon checks them again behind its
-drain gate before stopping. A new `bro` probes the local daemon before supervised
-session commands. When the daemon has the handoff protocol, is idle, and its
-SQLite migration preflight succeeds, `bro` starts the installed binary through
-a graceful daemon handoff. Active agent runs, ACP recordings or route leases,
-and in-flight HTTP responses defer the handoff. A legacy daemon cannot prove
-it is idle; finish its work and run `bitrouter restart` explicitly.
-Foreground `bitrouter serve` remains under its external supervisor; the CLI does not
-take it over automatically.
+The daemon checks for active operations again under its drain gate before
+stopping. In-flight inference, including an open streaming response, defers
+replacement. An explicit `bitrouter restart` can change distribution once the
+CLI-owned service is idle and the destination configuration passes preflight.
+Start and stop a foreground service through its supervisor.
 
-Every `core` build holds daemon admission for its managed runtime's lifetime,
-including core-only sessions executed by an external harness. Channel work,
-pending checkpoint acknowledgements, native requests and queue runners do not
-yet participate in an atomic handoff, so even an apparently idle core resident
-defers automatic replacement. Gateway and harness-only builds retain tracked
-idle handoff. Finish managed work and use the explicit `bitrouter restart` when
-changing binaries.
-That exception applies to the same compiled distribution. A cross-profile
-restart still requires atomic idle evidence and is refused by the managed
-lifetime guard; plan an explicit stop after finishing work before starting the
-other profile. No command silently removes that guard to change profiles.
-
-`bro update` attempts the same safe handoff after a self-managed installation.
-Package-manager installs still delegate the binary update; the next
-daemon-dependent invocation checks compatibility. `bro update --check` and
-`bitrouter status` do not restart the daemon. `bro run AGENT PROMPT --no-start` will diagnose a
-version mismatch without performing the handoff. The former `--restart` flag
-is accepted for compatibility; safe handoff is now the default.
-
-A native `checkpoint capacity exhausted` outcome is a storage-capacity boundary.
-Its cleanup settles outstanding work before termination. After a stopped owner
-and complete terminal journal are confirmed, fresh workspace work is allowed;
-a prepared request rejected before dispatch does not count as a model attempt.
-Unconfirmed tool effects and incomplete records still require recovery.
-
-Native execution journals compress checkpoint content without discarding
-history. Startup upgrades older compressed rows in the ownership transaction,
-preserving each original record's bytes, hash and cursor. The updated binary
-reads old journals, but older binaries cannot read the new row encoding.
+After a self-managed installation, `bitrouter update` can request a safe
+handoff of the local gateway. `bitrouter update --check` only reports the
+available version. `bro update` uses the local harness's own install receipt.
+See [installation and recovery](DISTRIBUTION.md).
 
 ### `bitrouter reload`
 
@@ -832,18 +801,9 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 ## MCP configuration and gateway inspection
 
-Native skill metadata is independently opt-in through
-`skills.mcp_sources.<mcp_servers-key>`, with exact absolute `workspaces` and
-either `local: true` or authenticated `api_key_ids`/`user_ids`. Empty source
-policy is the default. This policy grants neither workspace nor tool execution
-rights. Read-only native Turns may connect to granted skill sources while
-exposing no MCP tools. Saved source policy without a configured server grants
-no usable access; ordinary MCP removal remains available. Restart applies these
-startup-owned changes. Configuration, metadata admission and verified reads do
-not prove skill consent, selection or activation. The current wiring and YAML
-example are in the [distributed skill reference](../skills/bitrouter/references/cli.md#native-project-instructions-mcp-and-skills-wiring).
-`bitrouter status` reports these saved changes under the fixed `skills` restart field;
-routing reload rejects additions and revocations without replacing the live policy.
+The service owns its configured MCP upstreams and the metadata it exposes to
+authorized callers. BRO owns workspace skill selection and pins the selected
+content in the local thread checkpoint. See [local skills](#local-skills).
 
 `bitrouter mcp list` lists **configured upstreams**; `show NAME` shows one. Both
 read the source without expanding environment references, connecting to MCP,
@@ -1020,7 +980,7 @@ Evaluation and snapshot freezing leave active routing unchanged. Clients author
 new source from exact-revision evidence, then explicitly publish or create a new
 service revision and independently activate it. Experimental BRO algorithms use
 separate objects and entry points. ACL creation is independent and uses
-[`access-policy create`](#bro-access-policy-create-id).
+[`access-policy create`](#bitrouter-access-policy-create-id).
 
 ### `bitrouter trajectory`
 
@@ -1184,7 +1144,7 @@ For a provider that accepts a pasted key, `--api-key <KEY>` (or `--key-stdin`, w
 
 For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
-For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bro-cloud-login--logout--whoami) below.
+For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami) below.
 
 ### `bitrouter providers logout <provider>`
 
@@ -1239,7 +1199,7 @@ bitrouter key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bro-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
+`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
