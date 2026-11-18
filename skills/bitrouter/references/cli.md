@@ -12,6 +12,7 @@ Use `bitrouter build-info` or `bro build-info` to identify the installed build.
 | Verify a native task after model completion | `bro task run PROMPT --workspace PATH --check COMMAND` |
 | Run a native local task | `bro task run PROMPT --workspace PATH` |
 | Inspect and operate a local thread | `bro thread list`, `bro thread history ID`, `bro thread pending ID`, `bro thread resume ID --turn TURN` |
+| Connect an ACP manager over stdio | `bro acp serve AGENT` runs a catalog adapter with the gateway binding. `bro acp serve --agent NAME --direct --config agents.yaml` runs a configured local adapter. |
 | Serve the native worker over ACP stdio | `bro acp serve` opens durable local sessions. Use `bro acp --workspace PATH serve --read-only` to restrict the workspace and tools. `--model MODEL` selects the gateway model. |
 | Run an external ACP prompt | `bro acp list`, `bro acp --workspace PATH prompt --agent AGENT PROMPT` |
 | Inspect a stopped M0 installation | `bitrouter tenancy offline split-store --database SOURCE --destination NEW_DIRECTORY` |

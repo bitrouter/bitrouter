@@ -52,11 +52,14 @@ For model-directed delegation, create a thread with `bro thread create --managed
 
 ```sh
 bro acp list
+bro acp serve codex
 bro acp --workspace . prompt --agent codex 'Summarize the project'
 ```
 
-The catalog identifies adapters that can bind to the selected gateway. The prompt command emits NDJSON and denies external permission requests. Native BRO tool approvals use the thread commands above.
+The catalog identifies adapters that can bind to the selected gateway. The prompt command emits NDJSON and denies external permission requests. For an ACP manager, `serve` forwards session updates and permission requests over stdio and supervises the adapter until disconnect. Use `bro acp serve --agent NAME --direct --config agents.yaml` to launch an explicitly configured local stdio command. Native BRO tool approvals use the thread commands above.
 
 ## Migrate a stopped SQLite installation
 
 Preserve the original configuration, external keys and stopped database. `bitrouter tenancy offline split-store --database SOURCE --destination NEW_DIR` produces a rollback snapshot and separate service and BRO projections. `--activate` checks eligibility and reports blockers before publishing a runnable pair. Use the emitted paths and restore the original keys before opening traffic. See [command reference](references/cli.md).
+
+An activated pair can include verified terminal M0 history. Use `bro --data-dir BRO_DIR thread list`, then `bro --data-dir BRO_DIR --endpoint GATEWAY managed restore THREAD_ID --workspace PATH` to grant the local workspace and gateway for new turns. `thread start` preserves accepted request IDs and sends the original paired tool results as history. Inspection-only stage output retains the original grant and cannot dispatch.

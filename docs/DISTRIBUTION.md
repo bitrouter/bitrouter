@@ -86,6 +86,44 @@ requirements. Never replace a running service merely because two binaries have
 the same version. See [CLI identity](CLI.md#executable-identity) and
 [updating](../skills/bitrouter/references/updating.md).
 
+### Recovering an interrupted product install
+
+Retry the same product's guarded installer at the original prefix. When its
+executable still runs, its native `update` command can also finish an interrupted
+transaction. `--check` leaves the receipt and locks intact. New writers hold OS
+leases while changing the binary and receipt. They can reuse a marked lock
+after the OS releases the lease. The persistent `.lease` files can remain in
+place between installs. Git Bash uses directory locks and requires a quiescent
+manual recovery after a hard stop.
+
+The product receipt is `<config>/<package>/<package>-receipt.json`. Its staged
+successor is `<config>/<package>/.install-lock/receipt`. The guards compare both
+receipts' product and prefix bindings with the destination and select the one
+whose SHA-256 matches the executable. On Windows, if the running image was
+relocated before the replacement arrived, rerun the guarded PowerShell installer.
+It restores `.install-lock/previous.exe` when its digest matches the previous
+published receipt.
+
+For an unmarked lock or conflicting evidence:
+
+1. Stop the product's updaters and installers. For a service rollback, also stop
+   the service and follow the data rollback procedure above. Copy the executable,
+   product receipt, `<bin>/.<package>-install-lock` and
+   `<config>/<package>/.install-lock` to a fresh backup directory.
+2. Hash the executable and inspect the published receipt, staged `receipt` and
+   any older `previous-receipt.json` in the receipt lock. A usable receipt must
+   name the same product, official source, exact destination layout and prefix,
+   single expected executable, empty aliases and matching `binary_sha256`.
+   Verify the version and product using the executable's `--json build-info`.
+3. If exactly one distinct receipt matches, copy it to a temporary file beside
+   the published receipt and rename it into place. Otherwise restore the last
+   independently verified binary **and** receipt together from a backup for this
+   product and prefix. If that pair is unavailable, keep the evidence and use a
+   separate fresh installation for further diagnosis.
+4. Once the pair verifies, move the two quiescent lock directories to the backup
+   and rerun the same product's guarded installer. Keep the peer product's files
+   and receipts in place.
+
 ## Reproducing candidate archives
 
 `dist-helper` builds the selected application profile, obtains its executable and
