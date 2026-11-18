@@ -1364,10 +1364,9 @@ enum ProviderAction {
     },
     /// Check one configured provider's endpoint and model list.
     ///
-    /// Resolves the endpoint and credential already written for that provider,
-    /// then requests its model list with the gateway's protocol, authentication,
-    /// and timeouts. Does not send a generation, change routing, or write
-    /// config. Discovered model ids are reported only.
+    /// Requests the provider's model list with its protocol, configured API key
+    /// or static headers, and timeouts. The check reads configuration and
+    /// reports the model IDs it sees.
     Check {
         /// Provider id from `providers:` in `bitrouter.yaml`.
         provider: String,
