@@ -189,7 +189,7 @@ pub struct Snippet {
     pub anthropic: String,
     /// `OPENAI_BASE_URL` + `OPENAI_API_KEY` export lines.
     pub openai: String,
-    /// The native Codex launcher command.
+    /// The BRO command for a gateway-routed Codex ACP adapter.
     pub codex: String,
 }
 
@@ -282,7 +282,7 @@ impl CliReport for OnboardingReport {
             for l in snippet.openai.lines() {
                 h.line(&format!("    {l}"))?;
             }
-            h.line("  Codex:")?;
+            h.line("  Codex ACP adapter (stdio):")?;
             for l in snippet.codex.lines() {
                 h.line(&format!("    {l}"))?;
             }
@@ -837,7 +837,7 @@ async fn interactive_credentials(
         }
     }
     let mut help = if providers.is_empty() {
-        "Registry unavailable or disabled. Continue to optional agent setup.".to_string()
+        "Registry unavailable or disabled. Continue to optional resources.".to_string()
     } else {
         "Choose a provider to sign in, or Continue to skip.".to_string()
     };
@@ -865,7 +865,7 @@ async fn interactive_credentials(
             })
             .collect();
         items.push(Item::new(
-            "Continue to agent setup",
+            "Continue to optional resources",
             if configured.is_empty() {
                 "skip provider login for now".to_string()
             } else {
@@ -1005,7 +1005,7 @@ async fn finish_serve(
 }
 
 /// Shell templates reference the caller's key without copying it into reports.
-/// The local skip-auth fallback is a placeholder; Codex uses its native launcher.
+/// The local skip-auth fallback is a placeholder for the gateway credential.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::client::local_gateway::derive_base_url(listen);
     let token = "${BITROUTER_API_KEY:-bitrouter-local}";
@@ -1020,7 +1020,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("{} launch codex --base-url {base_url}", invocation::name());
+    let codex = format!("BITROUTER_API_KEY={token} bro --endpoint {base_url} acp serve codex");
     Snippet {
         base_url,
         anthropic,
@@ -1385,7 +1385,7 @@ mod tests {
         );
         assert_eq!(
             snippet.codex,
-            "bro launch codex --base-url http://127.0.0.1:4356"
+            "BITROUTER_API_KEY=${BITROUTER_API_KEY:-bitrouter-local} bro --endpoint http://127.0.0.1:4356 acp serve codex"
         );
     }
 

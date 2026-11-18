@@ -100,7 +100,7 @@ impl Terminal {
         command.env("XDG_DATA_HOME", home.path().join("data"));
         command.env("XDG_CACHE_HOME", home.path().join("cache"));
         command.env_remove("BITROUTER_HOME");
-        if args.contains(&"--yes") && args.contains(&"launch") {
+        if args.contains(&"--yes") {
             command.env("PATH", home.path());
         }
         command.env_remove("ONBOARDING_REDIRECT_STDERR");
@@ -176,9 +176,7 @@ fn provider_retry_repeated_addition_search_skip_and_json_are_canonical_lines() -
     terminal.wait("Add another provider")?;
     assert!(!terminal.transcript.contains("fixture-secret-two"));
     terminal.checkpoint();
-    terminal.send(b"Continue to agent setup\n")?;
-    terminal.wait("Agents and resources")?;
-    terminal.send(b"\n")?;
+    terminal.send(b"Continue to optional resources\n")?;
     terminal.wait("Optional resources")?;
     terminal.send(b"Continue\n")?;
     let report = terminal.finish(true)?;
@@ -222,13 +220,11 @@ fn eof_and_ctrl_c_restore_secret_echo_and_do_not_save_configuration() -> Result<
 fn first_bare_onboarding_saves_then_starts_background_daemon_and_returns() -> Result<()> {
     let mut terminal = Terminal::new(&[], false)?;
     terminal.wait("Number/name")?;
-    terminal.send(b"Continue to agent setup\n")?;
-    terminal.wait("Agents and resources")?;
-    // A concurrent config creation before save is preserved, including its
-    // ephemeral listen port. This keeps the real startup test isolated.
+    // Publish a config while the provider prompt is still open, before the
+    // gateway saves it. Its ephemeral port keeps the real startup isolated.
     let runtime = terminal.home.path().join(".bitrouter");
     write_config(&runtime)?;
-    terminal.send(b"Skip\n")?;
+    terminal.send(b"Continue to optional resources\n")?;
     terminal.wait("Optional resources")?;
     terminal.send(b"Continue\n")?;
     let report = terminal.finish(true)?;
@@ -268,9 +264,7 @@ fn reset_uses_yes_no_confirmation_and_default_no_keeps_credentials() -> Result<(
         terminal.wait("Enter yes or no")?;
         terminal.send(answer)?;
         terminal.wait("Number/name")?;
-        terminal.send(b"Continue to agent setup\n")?;
-        terminal.wait("Agents and resources")?;
-        terminal.send(b"Skip\n")?;
+        terminal.send(b"Continue to optional resources\n")?;
         terminal.wait("Optional resources")?;
         terminal.send(b"Continue\n")?;
         terminal.finish(true)?;
@@ -317,26 +311,42 @@ fn unconfigured_bare_cancels_or_rejects_redirected_stderr_without_saving() -> Re
 }
 
 #[test]
-fn yes_launch_with_missing_native_tool_does_not_prompt_even_on_a_terminal() -> Result<()> {
-    let mut terminal = Terminal::new(
+fn headless_gateway_setup_needs_no_native_tool_and_refuses_agent_launch_flags() -> Result<()> {
+    // Both children have an empty executable search path but a real terminal.
+    let mut setup = Terminal::new(&["init", "--yes", "--after", "exit"], false)?;
+    let report = setup.finish(true)?;
+    assert_eq!(report["after"], "exit");
+    assert!(
+        setup
+            .home
+            .path()
+            .join(".bitrouter/bitrouter.yaml")
+            .is_file()
+    );
+    assert!(!setup.transcript.contains("Install it now"));
+
+    let mut obsolete = Terminal::new(
         &["init", "--yes", "--harness", "codex", "--after", "launch"],
         true,
     )?;
-    let report = terminal.finish(false)?;
-    assert!(report["error"].is_object());
+    let config = obsolete.home.path().join("bitrouter.yaml");
+    let before = std::fs::read(&config)?;
+    assert!(obsolete.finish_stdout(false)?.is_empty());
     assert!(
-        terminal.home.path().join("bitrouter.yaml").is_file(),
-        "optional native launch failure must keep Router setup"
+        obsolete
+            .transcript
+            .contains("unexpected argument '--harness'"),
+        "{}",
+        obsolete.transcript
     );
-    assert!(!terminal.transcript.contains("Install it now"));
+    assert!(!obsolete.transcript.contains("Install it now"));
+    assert_eq!(std::fs::read(config)?, before);
     Ok(())
 }
 
 fn enter_resources(terminal: &mut Terminal) -> Result<()> {
     terminal.wait("Number/name")?;
-    terminal.send(b"Continue to agent setup\n")?;
-    terminal.wait("Agents and resources")?;
-    terminal.send(b"Skip\n")?;
+    terminal.send(b"Continue to optional resources\n")?;
     terminal.wait("Optional resources")?;
     terminal.checkpoint();
     Ok(())
@@ -346,7 +356,8 @@ fn enter_resources(terminal: &mut Terminal) -> Result<()> {
 fn optional_resources_retry_real_transactions_and_keep_router_progress() -> Result<()> {
     let mut terminal = Terminal::new(&["init", "--after", "exit"], true)?;
     enter_resources(&mut terminal)?;
-    assert!(terminal.home.path().join("bitrouter.yaml").is_file());
+    let path = terminal.home.path().join("bitrouter.yaml");
+    let saved = std::fs::read(&path)?;
     terminal.send(b"Add MCP server\n")?;
     terminal.wait("MCP server name")?;
     terminal.send(b"pty-peer\n")?;
@@ -376,15 +387,23 @@ fn optional_resources_retry_real_transactions_and_keep_router_progress() -> Resu
         .iter()
         .map(|row| row["status"].clone())
         .collect();
-    assert_eq!(statuses, vec![json!("failed"), json!("saved")]);
     assert_eq!(report["config_activation"], "saved_only");
-    let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(
-        terminal.home.path().join("bitrouter.yaml"),
-    )?)?;
-    assert_eq!(
-        config["mcp_servers"]["pty-peer"]["transport"]["url"],
-        "http://127.0.0.1:9/mcp"
-    );
+    if cfg!(feature = "mcp") {
+        assert_eq!(statuses, vec![json!("failed"), json!("saved")]);
+        let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(path)?)?;
+        assert_eq!(
+            config["mcp_servers"]["pty-peer"]["transport"]["url"],
+            "http://127.0.0.1:9/mcp"
+        );
+    } else {
+        assert_eq!(statuses, vec![json!("failed"), json!("failed")]);
+        assert!(
+            report["resources"][1]["failure"]
+                .as_str()
+                .is_some_and(|error| error.contains("host configuration"))
+        );
+        assert_eq!(std::fs::read(path)?, saved);
+    }
     Ok(())
 }
 
