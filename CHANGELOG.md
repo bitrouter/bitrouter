@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-beta.1]
+
 ### Changed
 
 - **Breaking:** use `policy/1.0.0-beta.1` source documents for model-only routing,
@@ -27,11 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy; opening new data with an old binary is unsupported. Current-format
   immutable revisions, receipts and restart recovery remain supported.
 
-- Publish the HTTP service SDK on the independently versioned
-  `2.0.0-alpha.1` API line, distinguishing it from the incompatible embedded
-  pipeline SDK. AI contracts and the application keep their existing version
-  line. Transport implementation and protocol payload semantics are unchanged;
-  the default User-Agent now identifies `bitrouter-sdk/2.0.0-alpha.1`.
+- Start the shared `1.0.0-beta.1` software release line for the workspace
+  crates and agent plugins. Update the HTTP service SDK and `bitrouter-ai`
+  together when adopting the beta. Applications staying on the earlier HTTP
+  SDK can pin `bitrouter-ai = "=1.0.0-alpha.36"` for its control API.
 
 ## [1.0.0-alpha.36]
 

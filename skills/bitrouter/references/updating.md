@@ -2,6 +2,11 @@
 
 Official macOS release and update assets support Apple Silicon (`arm64`) only.
 
+For the alpha-to-beta cutover, follow the release notes for a fresh
+installation with a new database and data directory. For a full-profile
+Cargo install, use `cargo install bitrouter --version 1.0.0-beta.1` to select
+the published beta explicitly.
+
 `bro update` preserves the installed distribution profile. Full-profile
 installations can update in place using cargo-dist's self-update path when
 the install receipt belongs to the running executable. A missing, unreadable,
@@ -12,8 +17,8 @@ The canonical executable must also be named `bro` (`bro.exe` on Windows).
 Symlink aliases resolving to that binary work; renamed copies delegate to a
 manual path even when they share its installation directory.
 
-- Default follows **prereleases** (the project ships `1.0.0-alpha.*`); pass
-  `--stable` for stable-only once 1.0 exists.
+- The default update channel includes **prereleases** such as
+  `1.0.0-beta.1`. Pass `--stable` to select stable releases.
 - `--check` reports whether a newer version exists on a supported self-update
   channel, or delegates to the appropriate manual path, without changing anything.
 - `--tag <VERSION>` pins to a specific release (also downgrades/rolls back),

@@ -231,14 +231,14 @@ fn source_install_command(
 enum VersionSpec {
     /// Newest stable (non-prerelease) release.
     Latest,
-    /// Newest release including prereleases — the default while pre-1.0.
+    /// Newest release including prereleases.
     LatestPrerelease,
     /// A specific pinned tag (enables downgrade/rollback).
     Tag(String),
 }
 
 /// `--tag` always wins; otherwise `--stable` selects stable-only, and the
-/// default follows prereleases (the project currently ships only `alpha.*`).
+/// default follows prereleases.
 fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     match tag {
         Some(t) => VersionSpec::Tag(t.to_string()),
