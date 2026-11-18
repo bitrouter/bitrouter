@@ -1,0 +1,190 @@
+name: Split qualification
+
+on:
+  # Bootstrap on the stacked branch before this workflow exists on main.
+  push:
+    branches: [codex/bitrouter-bro-m3-m5]
+    paths:
+      - .github/workflows/split-qualification.yml
+      - helpers/dist-helper/qualification/**
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Measurements to run
+        type: choice
+        options: [baseline, final]
+        required: true
+      expected_sha:
+        description: Full M0 SHA for baseline, or full selected branch SHA for final
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  M0_SHA: b0d7e2fbeabe39b96692c48787a066e89c04aed0
+  RUSTUP_TOOLCHAIN: 1.99.1
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  select:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'codex/bitrouter-bro-m3-m5' &&
+       (github.event.label.name == 'm5-baseline' || github.event.label.name == 'm5-final'))
+    runs-on: ubuntu-24.04
+    outputs:
+      phase: ${{ steps.select.outputs.phase }}
+      source: ${{ steps.select.outputs.source }}
+      harness: ${{ steps.select.outputs.harness }}
+      role: ${{ steps.select.outputs.role }}
+    steps:
+      - id: select
+        shell: bash
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          LABEL: ${{ github.event.label.name }}
+          PHASE_INPUT: ${{ inputs.phase }}
+          SHA_INPUT: ${{ inputs.expected_sha }}
+        run: |
+          set -eu
+          head=${PR_HEAD:-$GITHUB_SHA}
+          phase=${PHASE_INPUT:-baseline}
+          if [[ "$LABEL" == m5-final ]]; then phase=final; fi
+          if [[ "$phase" == final ]]; then source=$head; role=service; else source=$M0_SHA; role=m0; fi
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then [[ "$source" == "$SHA_INPUT" ]]; fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ && "$head" =~ ^[0-9a-f]{40}$ ]]
+          printf 'phase=%s\nsource=%s\nharness=%s\nrole=%s\n' "$phase" "$source" "$head" "$role" >> "$GITHUB_OUTPUT"
+
+  runtime-binary:
+    name: runtime binary (${{ matrix.variant }})
+    needs: select
+    runs-on: macos-15
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [minimum, http2]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.harness }}
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          path: product
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Collect native release binary and build receipt
+        working-directory: product
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source }}
+          ROLE: ${{ needs.select.outputs.role }}
+          VARIANT: ${{ matrix.variant }}
+        run: node ../proof/helpers/dist-helper/qualification/build.mjs runtime
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: runtime-${{ needs.select.outputs.source }}-${{ matrix.variant }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/m5-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-pair:
+    name: clean builds (${{ matrix.variant }}, repetition ${{ matrix.repeat }})
+    needs: select
+    if: needs.select.outputs.phase == 'final'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        variant: [minimum, default, shared, http2, bro]
+        repeat: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.harness }}
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.M0_SHA }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          path: candidate
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Measure isolated release and test targets on the same runner
+        env:
+          FINAL_SHA: ${{ needs.select.outputs.source }}
+          VARIANT: ${{ matrix.variant }}
+          REPEAT: ${{ matrix.repeat }}
+        shell: bash
+        run: |
+          set -eu
+          tool="$GITHUB_WORKSPACE/proof/helpers/dist-helper/qualification/build.mjs"
+          baseline() { (cd baseline && SOURCE_SHA="$M0_SHA" ROLE=m0 node "$tool" timing); }
+          candidate() { (cd candidate && SOURCE_SHA="$FINAL_SHA" ROLE=service node "$tool" timing); }
+          if [[ "$VARIANT" == bro ]]; then
+            (cd candidate && SOURCE_SHA="$FINAL_SHA" ROLE=bro VARIANT=default node "$tool" timing)
+          elif [[ "$REPEAT" == 2 ]]; then
+            candidate
+            baseline
+          else
+            baseline
+            candidate
+          fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: build-${{ needs.select.outputs.source }}-${{ matrix.variant }}-${{ matrix.repeat }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/m5-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  distribution:
+    needs: select
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.harness }}
+          path: proof
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          path: product
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Install the release workflow's pinned cargo-dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh
+      - name: Build production archives and measure isolated installs
+        working-directory: product
+        env:
+          SOURCE_SHA: ${{ needs.select.outputs.source }}
+          ROLE: ${{ needs.select.outputs.role }}
+        run: bash ../proof/helpers/dist-helper/qualification/distribution.sh
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: distribution-${{ needs.select.outputs.source }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/m5-evidence/
+          if-no-files-found: error
+          retention-days: 14
