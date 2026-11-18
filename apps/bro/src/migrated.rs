@@ -47,7 +47,26 @@ fn regular(path: &Path) -> Result<bool> {
     }
 }
 
+pub(crate) fn reject_gateway_home(root: &Path) -> Result<()> {
+    for name in [
+        "bitrouter.db",
+        "bitrouter.db-wal",
+        "bitrouter.db-journal",
+        "bitrouter.db-shm",
+        "bitrouter.yaml",
+        "bitrouter.start.lock",
+    ] {
+        match root.join(name).symlink_metadata() {
+            Ok(_) => bail!("gateway home cannot be used as BRO home ({name})"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn present(root: &Path) -> Result<bool> {
+    reject_gateway_home(root)?;
     let store = regular(&root.join("store.sqlite"))?;
     ensure!(
         store || !regular(&root.join("ACTIVATED"))?,
