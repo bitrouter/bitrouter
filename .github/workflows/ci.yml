@@ -1060,6 +1060,15 @@ jobs:
             | test(=policy_lock::files_tests::current_source_history_cas_and_exact_rollback)
             | test(=db::tests::relative_sqlite_urls_anchor_to_config_home_and_preserve_queries)
             | (binary(=invocation) & test(=gateway_help_and_status_use_the_service_identity))
+        - os: macos-latest
+          package: bitrouter-bro
+          timeout-minutes: 45
+          expected-tests: 4
+          targets: ''
+          filter: (binary(=native_boundaries) & (test(=approved_shell_can_work_only_in_its_grant_without_bro_credentials)
+            | test(=operator_check_reports_durable_evidence_and_requires_fresh_approval)
+            | test(=operator_check_exit_failure_preserves_bounded_stderr_and_answer)))
+            | (kind(bin) & test(queued_approved_write_rechecks_the_workspace_after_the_tool_permit))
         - os: windows-latest
           package: bitrouter-bro
           timeout-minutes: 45
@@ -1087,7 +1096,7 @@ jobs:
       with:
         tool: nextest@0.9.114
     - name: Build platform fixtures
-      if: runner.os == 'macOS'
+      if: runner.os == 'macOS' && matrix.package == 'bitrouter'
       run: cargo build --locked -p bitrouter --all-features --example onboarding_fixture --jobs 2
     - name: Build BRO ACP adapter
       if: matrix.package == 'bitrouter-bro'

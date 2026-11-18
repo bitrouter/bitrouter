@@ -250,8 +250,10 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         &messages,
         "cheap",
     )?;
-    execute_sql(fixture, "DROP TRIGGER fixture_reject_eval")?;
+    // Shutdown drains pending publications. Keep the consumer unavailable through
+    // that drain, then restore the exact catalog before opening the next profile.
     fixture.stop_resident(pid)?;
+    execute_sql(fixture, "DROP TRIGGER fixture_reject_eval")?;
     let original = trajectory_facts(fixture)?;
     ensure!(original.records["trajectory_episodes"].len() == 1);
     ensure!(
@@ -261,7 +263,9 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
     ensure!(
         original.outbox.len() == 1
             && original.outbox[0].attempts > 0
-            && original.outbox[0].delivered_at.is_none()
+            && original.outbox[0].delivered_at.is_none(),
+        "expected one pending delivery after shutdown: {:?}",
+        original.outbox
     );
     ensure!(original.evaluation.values().all(Vec::is_empty));
     let key = fs::read(fixture.directory.path().join("correlation.key"))?;
