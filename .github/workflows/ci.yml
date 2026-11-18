@@ -319,11 +319,7 @@ jobs:
         companion: 'true'
     - name: Install the BRO process-test sandbox
       if: matrix.product == 'service-process'
-      run: |
-        if [[ ! -x /usr/bin/bwrap ]]; then
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-        fi
+      run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run gateway routing and paid history across the two products
       if: matrix.product == 'service-process'
       run: |
