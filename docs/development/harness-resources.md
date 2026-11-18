@@ -1,5 +1,11 @@
 # Native BRO project instructions, MCP and skills
 
+> This document records combined-runtime behavior and validation at M0.
+> Current product ownership is documented in [agent runtime ownership](agent-runtime.md).
+> The [BRO CLI](../CLI.md#local-bro-threads-and-agents) covers the local workspace and
+> [gateway MCP configuration](../CLI.md#mcp-configuration-and-gateway-inspection) covers the service.
+
+
 > Historical first-party UI interfaces described here have been removed.
 > Current commands and execution entry points are documented in the
 > [CLI reference](../CLI.md).

@@ -22,7 +22,7 @@ credential for local and hosted gateways.
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter::gateway::extensions::registry::ExtensionApi` inside `assemble::build_app_with_extensions`; the application also retains legacy `Plugin`/hook interfaces for trusted host assembly. See [the extension directory guide](../../extensions/README.md) and [guardrails](../../extensions/regex-checker/README.md).
 
 For the native runtime module map, execution reading order and test layout, see
-the [core and harness source guide](../../apps/bitrouter/HARNESS.md).
+the [BRO source guide](../../apps/bro/HARNESS.md).
 
 ### Accepted M0 product boundary
 
