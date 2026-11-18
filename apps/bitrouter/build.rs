@@ -58,17 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?,
     };
     let mut handoff_hash = Sha256::new();
-    for file in [
-        "src/daemon.rs",
-        "src/daemon_handoff.rs",
-        "src/client/sessions/mod.rs",
-        "src/client/sessions/wire.rs",
-        "src/harness/supervisor.rs",
-        "src/core/evolution/scheduler.rs",
-        "src/main.rs",
-        "src/upgrade.rs",
-        "src/upgrade_preflight.rs",
-    ] {
+    for file in metadata.selection.handoff_sources() {
         let path = manifest.join(file);
         println!("cargo::rerun-if-changed={}", path.display());
         handoff_hash.update(std::fs::read(path)?);

@@ -21,6 +21,34 @@ fn selection(manifest: &str, names: &[&str]) -> Result<FeatureSelection, Box<dyn
 }
 
 #[test]
+fn handoff_tracks_only_compiled_session_and_scheduler_sources() -> Result<(), Box<dyn Error>> {
+    for (roots, sessions, scheduler) in [
+        (vec![], false, false),
+        (vec!["multi-instance"], false, false),
+        (vec!["harness"], true, false),
+        (vec!["core"], false, true),
+        (vec!["default"], true, true),
+    ] {
+        let selected = selection(MANIFEST, &roots)?;
+        let sources: Vec<_> = selected.handoff_sources().collect();
+        assert!(sources.contains(&"src/daemon_handoff.rs"));
+        assert!(sources.contains(&"src/upgrade_preflight.rs"));
+        for path in [
+            "src/client/sessions/mod.rs",
+            "src/client/sessions/wire.rs",
+            "src/harness/supervisor.rs",
+        ] {
+            assert_eq!(sources.contains(&path), sessions);
+        }
+        assert_eq!(
+            sources.contains(&"src/core/evolution/scheduler.rs"),
+            scheduler
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
 -> Result<(), Box<dyn Error>> {
     for (roots, expected) in [
