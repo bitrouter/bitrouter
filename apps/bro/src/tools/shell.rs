@@ -1,6 +1,10 @@
 //! Declared shell interpreter, streaming output and owned process cleanup.
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 use crate::workspace::Directory;
+use std::fs::File;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -21,7 +25,7 @@ pub(super) struct Interpreter {
 }
 
 impl Interpreter {
-    pub(super) fn discover(root: &Directory) -> Option<Self> {
+    pub(super) fn discover(_root: &Directory) -> Option<Self> {
         let launcher = if cfg!(target_os = "macos") {
             "/usr/bin/sandbox-exec"
         } else if cfg!(target_os = "linux") {
@@ -32,8 +36,18 @@ impl Interpreter {
         let sandbox = Self { launcher };
         // A package on PATH, or an installed bwrap without usable namespaces,
         // cannot establish the grant. Probe exactly the execution configuration.
+        #[cfg(target_os = "macos")]
+        let probe = macos::WorkingCopy::empty().ok()?;
+        #[cfg(target_os = "macos")]
+        let (directory, grant, script) = (
+            &probe.directory,
+            &probe.path,
+            "echo ok > probe && read -r value < probe && [ \"$value\" = ok ]",
+        );
+        #[cfg(not(target_os = "macos"))]
+        let (directory, grant, script) = (&_root.file, &_root.path, ": < .");
         sandbox
-            .command(root, ": < .")
+            .command(directory, grant, script)
             .ok()?
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -44,27 +58,38 @@ impl Interpreter {
             .then_some(sandbox)
     }
 
-    fn command(&self, root: &Directory, script: &str) -> std::io::Result<std::process::Command> {
+    fn command(
+        &self,
+        _directory: &File,
+        grant: &Path,
+        script: &str,
+    ) -> std::io::Result<std::process::Command> {
         let mut cmd = std::process::Command::new(self.launcher);
         cmd.env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("LC_ALL", "C");
         if cfg!(target_os = "macos") {
-            // The original path can be occupied by a different directory while
-            // the shell runs. Never grant it to Seatbelt. Some releases cannot
-            // open the directory under a volume/file-ID rule; discovery must
-            // exercise an actual workspace open and refuse on those hosts.
+            // Only the private copy receives a pathname grant. The host
+            // workspace is accessed exclusively by the BRO publisher.
             let mut parameter = std::ffi::OsString::from("BRO_WORKSPACE=");
-            parameter.push(&root.path);
-            cmd.arg("-D").arg(parameter).args([
-                "-p",
-                include_str!("shell.sb"),
-                "/bin/bash",
-                "--noprofile",
-                "--norc",
-                "-c",
-                script,
-            ]);
+            parameter.push(grant);
+            // Older systems may supply the loader policy implicitly. In both
+            // cases discovery runs the actual interpreter under the full policy.
+            let policy = include_str!("shell.sb");
+            let dyld = "/System/Library/Sandbox/Profiles/dyld-support.sb";
+            let policy = if Path::new(dyld).is_file() {
+                std::borrow::Cow::Borrowed(policy)
+            } else {
+                std::borrow::Cow::Owned(policy.replace(
+                    r#"(import "/System/Library/Sandbox/Profiles/dyld-support.sb")"#,
+                    "",
+                ))
+            };
+            cmd.arg("-D")
+                .arg(parameter)
+                .arg("-p")
+                .arg(policy.as_ref())
+                .args(["/bin/bash", "--noprofile", "--norc", "-c", script]);
         } else {
             cmd.args([
                 "--unshare-all",
@@ -105,13 +130,13 @@ impl Interpreter {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
-                let meta = root.file.metadata()?;
+                let meta = _directory.metadata()?;
                 cmd.arg(format!("{}:{}", meta.dev(), meta.ino()));
             }
             cmd.arg(script);
         }
         #[cfg(unix)]
-        seal_inherited_descriptors(&mut cmd, root.file.try_clone()?)?;
+        seal_inherited_descriptors(&mut cmd, _directory.try_clone()?)?;
         Ok(cmd)
     }
 
@@ -149,6 +174,20 @@ fn seal_inherited_descriptors(
     // Rust's own child-error pipe usable until exec. A closed fd needs no action.
     unsafe {
         cmd.pre_exec(move || {
+            #[cfg(target_os = "macos")]
+            {
+                libc::umask(0o077);
+                let mut limit = std::mem::MaybeUninit::uninit();
+                if libc::getrlimit(libc::RLIMIT_FSIZE, limit.as_mut_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut limit = limit.assume_init();
+                limit.rlim_max = limit.rlim_max.min(macos::MAX_FILE);
+                limit.rlim_cur = limit.rlim_cur.min(limit.rlim_max);
+                if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
             if libc::fchdir(directory.as_raw_fd()) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -185,9 +224,25 @@ impl WorkspaceTools {
         let interpreter = self
             .interpreter()
             .ok_or("shell disabled: workspace sandbox unavailable")?;
+        #[cfg(target_os = "macos")]
+        let copy = {
+            let source = self.directory.file.try_clone().map_err(|e| e.to_string())?;
+            tokio::task::spawn_blocking(move || macos::WorkingCopy::prepare(&source))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("preparing shell working copy: {e:#}"))?
+        };
+        #[cfg(target_os = "macos")]
+        let (directory, grant) = (&copy.directory, &copy.path);
+        #[cfg(not(target_os = "macos"))]
+        let (directory, grant) = (&self.directory.file, &self.directory.path);
+        #[cfg(target_os = "macos")]
+        if cancel.is_cancelled() {
+            return Err("command cancelled before launch".into());
+        }
         let mut command = Command::from(
             interpreter
-                .command(&self.directory, &args.command)
+                .command(directory, grant, &args.command)
                 .map_err(|e| format!("preparing shell sandbox: {e}"))?,
         );
         command
@@ -236,6 +291,8 @@ impl WorkspaceTools {
                 cleanup.map_err(|error| format!("command cleanup failed: {error}"))?;
                 #[cfg(unix)]
                 { process_group.0 = None; }
+                #[cfg(target_os = "macos")]
+                copy.publish(&self.directory.file).map_err(|e| format!("command cancelled; shell publication incomplete: {e:#}"))?;
                 return Err("command cancelled; effects may have occurred".into());
             }
             _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
@@ -260,19 +317,25 @@ impl WorkspaceTools {
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
+        let result = serde_json::json!({
+            "interpreter": interpreter.identity(),
+            "exit_status": status.code(), "stdout": stdout, "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated, "timed_out": timed_out
+        });
+        #[cfg(target_os = "macos")]
+        if let Err(error) = copy.publish(&self.directory.file) {
+            let mut result = result;
+            result["error"] =
+                format!("shell publication incomplete; effects unknown: {error:#}").into();
+            return Ok(ToolResultOutput::Json { value: result });
+        }
         // A sandbox supervisor may encode a fatal signal as 128 + signal.
         // Interrupted commands can leave partial writes even after cleanup.
         if !timed_out && status.code().is_some_and(|code| (0..128).contains(&code)) {
             *effect = EffectStatus::Completed;
         }
-        Ok(ToolResultOutput::Json {
-            value: serde_json::json!({
-                "interpreter": interpreter.identity(),
-                "exit_status": status.code(), "stdout": stdout, "stderr": stderr,
-                "stdout_truncated": stdout_truncated,
-                "stderr_truncated": stderr_truncated, "timed_out": timed_out
-            }),
-        })
+        Ok(ToolResultOutput::Json { value: result })
     }
 }
 

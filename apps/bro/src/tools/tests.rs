@@ -495,7 +495,7 @@ async fn assert_unix_descendant_cleanup(action: &str) -> Result<(), Box<dyn std:
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let (sender, mut receiver) = mpsc::channel(64);
-    let args = serde_json::json!({"command": "while true; do echo tick >>ticks.txt; sleep 0.05; done & while [ ! -s ticks.txt ]; do sleep 0.01; done; printf ready; wait", "timeout": if action == "timeout" { 1 } else { 30 }}).to_string();
+    let args = serde_json::json!({"command": "while true; do echo tick >>ticks.txt; sleep 0.05; done & while [ ! -s ticks.txt ]; do sleep 0.01; done; printf 'ready:%s' $!; wait", "timeout": if action == "timeout" { 1 } else { 30 }}).to_string();
     let task = tokio::spawn(async move {
         tools
             .execute("shell", &args, &task_cancel, "cleanup", Some(&sender))
@@ -503,18 +503,20 @@ async fn assert_unix_descendant_cleanup(action: &str) -> Result<(), Box<dyn std:
     });
     let ready = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(event) = receiver.recv().await {
-            if matches!(event, RunEvent::ToolOutputDelta { text, .. } if text.contains("ready")) {
-                return Ok::<(), String>(());
+            if let RunEvent::ToolOutputDelta { text, .. } = event
+                && let Some(pid) = text.strip_prefix("ready:")
+            {
+                return pid.parse::<i32>().map_err(|e| e.to_string());
             }
         }
         Err("no readiness output".into())
     })
     .await;
-    if !matches!(ready, Ok(Ok(()))) {
+    let Ok(Ok(_descendant)) = ready else {
         cancel.cancel();
         task.await?;
         return Err("descendant failed to start".into());
-    }
+    };
     match action {
         "cancel" => cancel.cancel(),
         "drop" => task.abort(),
@@ -530,6 +532,20 @@ async fn assert_unix_descendant_cleanup(action: &str) -> Result<(), Box<dyn std:
         _ => return Err("unknown action".into()),
     }
     tokio::time::sleep(Duration::from_millis(50)).await;
+    #[cfg(target_os = "macos")]
+    if action == "drop" {
+        // A dropped future cannot publish its private copy. Check the actual
+        // descendant rather than treating the absent file as proof of cleanup.
+        let pid = rustix::process::Pid::from_raw(_descendant).ok_or("invalid descendant pid")?;
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while rustix::process::test_kill_process(pid).is_ok() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await?;
+        assert!(!workspace.path().join("ticks.txt").exists());
+        return Ok(());
+    }
     let ticks = fs::read(workspace.path().join("ticks.txt"))?;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(ticks, fs::read(workspace.path().join("ticks.txt"))?);
@@ -950,23 +966,42 @@ async fn shell_grant_does_not_follow_a_running_commands_replaced_root() -> anyho
     // receives the signal to continue after its name has been replaced.
     let name = work.canonicalize()?.join("replacement-marker");
     let quoted = name.to_str().unwrap().replace('\'', "'\\''");
+    #[cfg(target_os = "macos")]
+    let handshake =
+        "trap 'go=yes' USR1; printf 'ready:%s' $$; while [ \"$go\" != yes ]; do sleep 0.05; done";
+    #[cfg(not(target_os = "macos"))]
+    let handshake = "printf ready; while [ ! -e proceed ]; do sleep 0.05; done";
     let script = format!(
-        "printf ready; while [ ! -e proceed ]; do sleep 0.05; done; printf original > marker; if (printf wrong > '{quoted}') 2>/dev/null; then exit 11; fi"
+        "{handshake}; printf original > marker; if (printf wrong > '{quoted}') 2>/dev/null; then exit 11; fi"
     );
     let arguments = serde_json::json!({"command":script,"timeout":8}).to_string();
     let (live, mut rx) = mpsc::channel(4);
     let cancel = CancellationToken::new();
     let command = tools.execute_with_effect("shell", &arguments, &cancel, "running", Some(&live));
     tokio::pin!(command);
-    tokio::select! {
+    let ready = tokio::select! {
         result = &mut command => anyhow::bail!("shell exited before fixture was ready: {result:?}"),
         event = tokio::time::timeout(Duration::from_secs(5), rx.recv()) => {
-            assert!(matches!(event?, Some(RunEvent::ToolOutputDelta {text, ..}) if text == "ready"));
+            let Some(RunEvent::ToolOutputDelta {text, ..}) = event? else { anyhow::bail!("missing readiness output") };
+            text
         }
-    }
+    };
     fs::rename(&work, &moved)?;
     fs::create_dir(&work)?;
-    fs::write(moved.join("proceed"), "")?;
+    #[cfg(target_os = "macos")]
+    {
+        use anyhow::Context;
+        let pid = ready.strip_prefix("ready:").context("shell pid")?.parse()?;
+        rustix::process::kill_process(
+            rustix::process::Pid::from_raw(pid).context("invalid pid")?,
+            rustix::process::Signal::USR1,
+        )?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_eq!(ready, "ready");
+        fs::write(moved.join("proceed"), "")?;
+    }
     let (result, effect) = command.await;
     assert!(matches!(result, ToolResultOutput::Json {value} if value["exit_status"] == 0));
     assert_eq!(effect, EffectStatus::Completed);

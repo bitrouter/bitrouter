@@ -119,6 +119,24 @@ effects requires recovery. Resume reuses a saved result. Starting a later turn
 on the same thread requests fresh approval for its check. Verification requires
 a coding workspace and a supported shell sandbox.
 
+On macOS, the native shell and `--check` run under Seatbelt in a private working
+copy. Use workspace-relative paths. BRO copies single-link regular files and
+directories on the workspace volume. Symlinks, hard links, special files and
+set-ID files are excluded. The copy supports 16 MiB per file, 64 MiB of file
+contents, 16,384 entries and 64 directory levels. An oversized input refuses
+the command before launch.
+
+Workspace changes become visible after the command stops. BRO rechecks the
+input inventory and file contents before accepting the result. It publishes file
+contents, ordinary permission bits and regular-file modification times through
+the original directory handle. Existing files retain their ownership and extended
+attributes when edited. BRO refuses removal or replacement of entries with
+extended ACLs or custom extended attributes, including resource forks.
+A publication conflict records the command's exit
+status and output and requires recovery. Earlier writes may already be durable.
+If publication started, the error also gives the path to the private recovery
+copy. Inspect it before removing it. Resuming the turn shows that evidence without running the shell again.
+
 Use the IDs emitted by BRO. Native task output is NDJSON. An exact approval
 authorizes a single recorded call. When an operation may have reached a model
 or changed the workspace before its result was committed, recovery reports an

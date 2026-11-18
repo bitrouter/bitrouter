@@ -251,7 +251,12 @@ impl ToolKind {
             Self::Edit => "Edit one existing workspace file. Each nonempty oldText must match exactly one non-overlapping region of the original file; all edits apply together.".into(),
             Self::Shell => {
                 let selected = interpreter.map_or("unavailable", |shell| shell.launcher);
-                format!("Run a noninteractive POSIX shell command in the granted workspace using {selected}. Workspace files can be changed. The shell has a clean environment, isolated filesystem access and no external network. Returns exit status and bounded stdout/stderr. Timeout defaults to 30 seconds, maximum 120.")
+                let access = if cfg!(target_os = "macos") {
+                    "Use relative paths in the private working copy. Links and special files are excluded. Changes publish after exit if the original inputs still match."
+                } else {
+                    "Workspace files can be changed."
+                };
+                format!("Run a noninteractive POSIX shell command in the granted workspace using {selected}. {access} The shell has a clean environment, isolated filesystem access and no external network. Returns exit status and bounded stdout/stderr. Timeout defaults to 30 seconds, maximum 120.")
             }
         }
     }

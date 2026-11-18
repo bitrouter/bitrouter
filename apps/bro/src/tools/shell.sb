@@ -11,4 +11,8 @@
 (allow file-read-data file-read-metadata (literal "/dev/zero") (literal "/dev/urandom"))
 (allow file-read* file-write-data (literal "/dev/null"))
 (allow file-write* (subpath (param "BRO_WORKSPACE")))
+;; The shell may publish regular data, file mtimes and ordinary mode bits.
+(deny file-write-owner file-write-flags file-write-xattr)
+(deny file-write-times (vnode-type DIRECTORY))
+(deny file-write-unlink file-write-mode (literal (param "BRO_WORKSPACE")))
 (deny syscall-unix (syscall-number SYS_setsid SYS_setpgid))

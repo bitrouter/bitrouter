@@ -638,3 +638,7 @@ fn incomplete_model_answer_does_not_launch_operator_check() -> Result<()> {
     assert_eq!(mock.join()?.len(), 1);
     Ok(())
 }
+
+#[cfg(target_os = "macos")]
+#[path = "support/macos_shell_copy.rs"]
+mod macos_shell_copy;
