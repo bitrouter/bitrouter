@@ -4,11 +4,13 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, ensure};
+#[cfg(feature = "mcp")]
 use bitrouter::config::mcp::{McpServerConfig, McpTransport};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+#[cfg(feature = "mcp")]
 #[path = "harness_resources/mcp_fixture.rs"]
 mod mcp_fixture;
 
@@ -100,6 +102,7 @@ async fn explicit_blocking_input_keeps_sigint_cancellation_and_source_bytes() ->
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn full_entries_crud_redaction_defaults_and_source_preservation() -> Result<()> {
     let home = tempfile::tempdir()?;
@@ -251,6 +254,7 @@ async fn failures_are_noninteractive_secret_safe_and_do_not_replace_source() -> 
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn shortcut_creation_path_and_explicit_connect_only_on_check() -> Result<()> {
     let upstream = mcp_fixture::server(false).await;
@@ -343,6 +347,7 @@ async fn unsupported_yaml_and_prefix_conflicts_fail_without_rewriting() -> Resul
     Ok(())
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts() -> Result<()> {
     let home = tempfile::tempdir()?;
@@ -469,5 +474,27 @@ async fn local_mcp_commands_preserve_shared_process_source_before_input() -> Res
         ensure!(std::fs::read_to_string(&path)? == original);
         ensure!(std::fs::read_dir(home.path())?.count() == 1);
     }
+    Ok(())
+}
+
+#[cfg(not(feature = "mcp"))]
+#[tokio::test]
+async fn minimum_gateway_refuses_to_save_unavailable_mcp_servers() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("bitrouter.yaml");
+    let original = "# operator config\nserver: { skip_auth: true }\n";
+    std::fs::write(&path, original)?;
+    let rejected = result(
+        cli(
+            home.path(),
+            &path,
+            &["add", "local", "--command", "fixture"],
+        ),
+        None,
+        false,
+    )
+    .await?;
+    ensure!(rejected["error"]["kind"] == "bad_request", "{rejected}");
+    ensure!(std::fs::read_to_string(&path)? == original);
     Ok(())
 }
