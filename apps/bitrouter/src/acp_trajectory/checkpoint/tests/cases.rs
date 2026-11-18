@@ -452,9 +452,7 @@ pub(super) async fn concurrent_creation_and_revision_selection_are_durable(
         "sqlite://{}?mode=rwc",
         dir.path().join("capture.db").display()
     );
-    let db = crate::db::connect(&url).await?;
-    crate::db::run_migrations(&db).await?;
-    let store = CanonicalStore::new(db);
+    let store = crate::acp_trajectory::tests::historical_store(&url).await?;
     let recorder = history(backend, &store, scope()).await?;
     new_session(&recorder, "s").await?;
     let identity = identity("s");
@@ -498,7 +496,7 @@ pub(super) async fn concurrent_creation_and_revision_selection_are_durable(
     assert!(store.freeze_checkpoint(&identity, 1).await.is_err());
     drop(recorder);
     drop(store);
-    let reopened = CanonicalStore::new(crate::db::connect(&url).await?);
+    let reopened = CanonicalStore::new(sea_orm::Database::connect(&url).await?);
     let view = reopened.effective_assessment(&identity).await?;
     assert_eq!(view.current_revision, selected);
     assert!(view.stale);

@@ -504,10 +504,7 @@ async fn serve_with_options(
             listen,
             reloader.clone(),
             observe_provider,
-            daemon::AcpControlPlane {
-                metering: crate::metering::MeteringStore::new(assembled.db.clone()),
-                inventory: Some(assembled.gateway_requests.inventory()),
-            },
+            crate::metering::MeteringStore::new(assembled.db.clone()),
             daemon::LocalControlOptions {
                 administration: Some(administration),
                 gate: handoff_gate.clone(),

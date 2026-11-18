@@ -4,7 +4,6 @@ pub mod format;
 pub mod library;
 pub mod mcp;
 pub mod protocol;
-pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +21,7 @@ pub enum Error {
 /// Result alias for this module.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Validate with the same rules used by the production harness.
+/// Validate a skill name using the shared format.
 pub fn validate_skill_name(name: &str) -> Result<()> {
     format::validate_skill_name(name).map_err(|_| Error::InvalidSkillName(name.to_string()))
 }

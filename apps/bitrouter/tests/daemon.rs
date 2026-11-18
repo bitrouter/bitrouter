@@ -35,28 +35,23 @@ impl daemon::DaemonReloader for RoutingTableReloader {
 use bitrouter::config;
 
 #[tokio::test]
-async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
-{
+async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> anyhow::Result<()> {
     let dir = tempdir("coverage");
     let cfg_path = write_config(&dir, "sqlite::memory:").await;
     let cfg = config::load(&cfg_path).await?;
     let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
-    use bitrouter::storage::capture::connections;
-    use sea_orm::{ActiveModelTrait, Set};
+    use sea_orm::{ConnectionTrait, EntityTrait, PaginatorTrait, Statement};
+    let capture_table = || {
+        Statement::from_string(
+            assembled.db.get_database_backend(),
+            "SELECT name FROM sqlite_schema WHERE name = 'acp_capture_connections'",
+        )
+    };
+    assert!(assembled.db.query_one(capture_table()).await?.is_none());
+    let before = bitrouter::storage::evolution::records::Entity::find()
+        .count(&assembled.db)
+        .await?;
     let connection_id = uuid::Uuid::new_v4().to_string();
-    connections::ActiveModel {
-        connection_id: Set(connection_id.clone()),
-        owner: Set("local".into()),
-        source: Set("fixture".into()),
-        controller_instance_id: Set(Some("controller".into())),
-        route_scope_id: Set(Some("principal".into())),
-        state: Set("recording".into()),
-        head: Set(0),
-        started_at: Set(chrono::Utc::now().to_rfc3339()),
-        metadata_json: Set("{}".into()),
-    }
-    .insert(&assembled.db)
-    .await?;
     let socket = dir.join("bitrouter.sock");
     let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
         socket.clone(),
@@ -75,44 +70,31 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
         api_principal: principal.into(),
         controller_instance_id: "controller".into(),
     };
-    assert!(matches!(
-        daemon::send_command(&socket, &command("other")).await?,
-        DaemonResponse::Error { .. }
-    ));
-    let response = daemon::send_command(&socket, &command("principal")).await?;
-    let DaemonResponse::AcpRecordingRegistered { registration } = response else {
-        anyhow::bail!("coverage acknowledgement missing");
-    };
-    assert_eq!(registration.connection_id, connection_id.as_str());
-    assert_eq!(
-        registration.version,
-        bitrouter::gateway::observability::inventory::INVENTORY_VERSION
-    );
-    assert!(registration.invalid_reason.is_none());
-    {
-        use sea_orm::{EntityTrait, PaginatorTrait};
-        let before = bitrouter::storage::evolution::records::Entity::find()
-            .count(&assembled.db)
-            .await?;
-        for operation in [
-            serde_json::json!({"operation": "status"}),
-            serde_json::json!({"operation": "mode", "mode": "automatic", "judge_model": "fixture"}),
-        ] {
-            let command = serde_json::from_value(serde_json::json!({
-                "cmd": "evolution", "operation": operation
-            }))?;
-            let response = daemon::send_command(&socket, &command).await?;
-            assert!(
-                matches!(response, DaemonResponse::Error { message } if message.contains("core feature"))
-            );
-        }
-        assert_eq!(
-            before,
-            bitrouter::storage::evolution::records::Entity::find()
-                .count(&assembled.db)
-                .await?
+    for principal in ["other", "principal"] {
+        let response = daemon::send_command(&socket, &command(principal)).await?;
+        assert!(
+            matches!(response, DaemonResponse::Error { message } if message == "gateway does not own ACP recordings")
         );
     }
+    for operation in [
+        serde_json::json!({"operation": "status"}),
+        serde_json::json!({"operation": "mode", "mode": "automatic", "judge_model": "fixture"}),
+    ] {
+        let command = serde_json::from_value(serde_json::json!({
+            "cmd": "evolution", "operation": operation
+        }))?;
+        let response = daemon::send_command(&socket, &command).await?;
+        assert!(
+            matches!(response, DaemonResponse::Error { message } if message == "the gateway does not run checkpoint evolution")
+        );
+    }
+    assert_eq!(
+        before,
+        bitrouter::storage::evolution::records::Entity::find()
+            .count(&assembled.db)
+            .await?
+    );
+    assert!(assembled.db.query_one(capture_table()).await?.is_none());
     daemon::send_command(&socket, &DaemonCommand::Stop).await?;
     server.await??;
     tokio::fs::remove_dir_all(dir).await?;

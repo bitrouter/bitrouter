@@ -15,6 +15,7 @@ const MAX_BYTES: usize = 1024 * 1024;
 /// Validated source and its execution indexes. This is never a serialized format.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledPolicy {
+    #[cfg(any(feature = "multi-instance", test))]
     source: Document,
     source_digest: String,
     selections: BTreeMap<String, CompiledSelection>,
@@ -31,6 +32,7 @@ pub(crate) struct CompiledSelection {
 }
 
 impl CompiledPolicy {
+    #[cfg(any(feature = "multi-instance", test))]
     pub(crate) fn source(&self) -> &Document {
         &self.source
     }
@@ -176,6 +178,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
         );
     }
     Ok(CompiledPolicy {
+        #[cfg(any(feature = "multi-instance", test))]
         source: source.clone(),
         source_digest: source_digest(source)?,
         selections,

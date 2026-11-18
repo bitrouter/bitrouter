@@ -698,19 +698,13 @@ pub async fn run_control_socket(
     .await
 }
 
-/// Run the control listener with the same ACP route runtime used by the model
-/// request pipeline.
-/// Authenticated ACP control state the control socket shares with the model
-/// request pipeline.
-///
-/// One value rather than two parameters: `dispatch` already carries seven, and
-/// an eighth trips `clippy::too_many_arguments`, which the house rules forbid
-/// silencing.
+/// Compatibility input for existing local control socket callers. Historical
+/// session spend is read from settled metering rows.
 #[derive(Clone)]
 pub struct AcpControlPlane {
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
-    /// The inventory installed in this daemon's model request pipeline.
+    /// Retained for existing callers. Recording registration is retired.
     pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
 }
 
@@ -755,7 +749,7 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
         listen,
         reloader,
         observe,
-        acp,
+        acp.metering,
         LocalControlOptions {
             administration,
             gate: crate::daemon_handoff::HandoffGate::default(),
@@ -789,7 +783,7 @@ pub(crate) async fn run_bound_control_socket(
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
-    acp: AcpControlPlane,
+    metering: MeteringStore,
     options: LocalControlOptions,
 ) -> Result<()> {
     let services = LocalControlServices {
@@ -808,7 +802,7 @@ pub(crate) async fn run_bound_control_socket(
         &listen,
         &reloader,
         &observe,
-        &acp,
+        &metering,
         &services,
     )
     .await;
@@ -830,7 +824,7 @@ async fn accept_loop(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> Result<()> {
     let (stop_tx, mut stop_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -842,7 +836,7 @@ async fn accept_loop(
                 let listen = listen.to_string();
                 let reloader = reloader.clone();
                 let observe = observe.clone();
-                let acp = acp.clone();
+                let metering = metering.clone();
                 let services = services.clone();
                 let stop_tx = stop_tx.clone();
                 tokio::spawn(async move {
@@ -852,7 +846,7 @@ async fn accept_loop(
                         &listen,
                         &reloader,
                         &observe,
-                        &acp,
+                        &metering,
                         &services,
                     )
                     .await
@@ -886,7 +880,7 @@ async fn handle_connection<S>(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> Result<bool>
 where
@@ -958,7 +952,7 @@ where
             }
         }
     };
-    let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
+    let response = dispatch(command, app, listen, reloader, observe, metering, services).await;
     // The private control socket authenticates the local owner. Handoff tokens
     // are checked by dispatch before this gate; no SQL completion is implied.
     let response = if is_stop && matches!(response, DaemonResponse::Ok) {
@@ -982,7 +976,7 @@ async fn dispatch(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    acp: &AcpControlPlane,
+    metering: &MeteringStore,
     services: &LocalControlServices,
 ) -> DaemonResponse {
     if let DaemonCommand::EvolutionFenced {
@@ -1008,14 +1002,14 @@ async fn dispatch(
             server_instance_id: services.handoff_instance_id.clone(),
         },
         DaemonCommand::ConnectedAgents { .. } => DaemonResponse::Error {
-            message: "connected agent inspection requires the harness feature".into(),
+            message: "local agent inspection belongs to BRO".into(),
         },
         DaemonCommand::AcpControllerCleanup { .. }
         | DaemonCommand::AcpRouteList { .. }
         | DaemonCommand::AcpRouteSet { .. }
         | DaemonCommand::AcpRouteReset { .. }
         | DaemonCommand::Sessions { .. } => DaemonResponse::Error {
-            message: "ACP route leases and supervised sessions require the harness feature"
+            message: "The gateway harness feature was retired. Manage ACP route leases and supervised sessions with BRO."
                 .to_string(),
         },
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -1063,7 +1057,7 @@ async fn dispatch(
         }
         DaemonCommand::Evolution { .. } | DaemonCommand::EvolutionFenced { .. } => {
             DaemonResponse::Error {
-                message: "checkpoint evolution requires the core feature".into(),
+                message: "the gateway does not run checkpoint evolution".into(),
             }
         }
         DaemonCommand::AcpRecordingRegister { .. } => DaemonResponse::Error {
@@ -1165,8 +1159,7 @@ async fn dispatch(
                 start: DateTime::<Utc>::UNIX_EPOCH,
                 end: Utc::now(),
             };
-            match acp
-                .metering
+            match metering
                 .spend_summary_for_acp_session(
                     &api_principal,
                     &controller_instance_id,

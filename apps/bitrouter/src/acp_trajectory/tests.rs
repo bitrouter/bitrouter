@@ -1,5 +1,5 @@
 use sea_orm::sea_query::Expr;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde_json::json;
 
 use super::fixtures::{FixtureScope, PersistedHistory};
@@ -24,8 +24,15 @@ pub(super) fn scope() -> FixtureScope {
 }
 
 pub(super) async fn store() -> anyhow::Result<CanonicalStore> {
-    let db = crate::db::connect("sqlite::memory:").await?;
-    crate::db::run_migrations(&db).await?;
+    historical_store("sqlite::memory:").await
+}
+
+pub(super) async fn historical_store(url: &str) -> anyhow::Result<CanonicalStore> {
+    let mut options = sea_orm::ConnectOptions::new(url);
+    options.max_connections(1);
+    let db = sea_orm::Database::connect(options).await?;
+    db.execute_unprepared(include_str!("fixtures/historical.sql"))
+        .await?;
     Ok(CanonicalStore::new(db))
 }
 

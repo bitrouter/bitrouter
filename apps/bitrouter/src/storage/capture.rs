@@ -46,6 +46,15 @@ pub struct CaptureEvent {
     pub payload: Value,
 }
 
+impl CaptureEvent {
+    /// Classify a stored setup notification without opening an ACP connection.
+    pub fn is_administrative_update(&self) -> bool {
+        self.kind == CaptureKind::Notification
+            && self.method == "session/update"
+            && super::acp_history::is_administrative_update(&self.payload)
+    }
+}
+
 pub mod connections {
     use sea_orm::entity::prelude::*;
 

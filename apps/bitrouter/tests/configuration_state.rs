@@ -294,6 +294,7 @@ async fn invalid_or_missing_saved_config_does_not_erase_the_live_daemon() -> Res
 #[tokio::test]
 async fn mcp_cli_save_requires_restart_and_never_reloads_the_running_target() -> Result<()> {
     let fixture = RunningFixture::start().await?;
+    let original = tokio::fs::read(&fixture.source).await?;
     let before = configuration(&fixture.status(&fixture.source).await?)?;
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .current_dir(fixture.directory.path())
@@ -312,6 +313,14 @@ async fn mcp_cli_save_requires_restart_and_never_reloads_the_running_target() ->
         .kill_on_drop(true)
         .output()
         .await?;
+    if !cfg!(feature = "mcp") {
+        let response: Value = serde_json::from_slice(&output.stdout)?;
+        ensure!(!output.status.success() && response["error"]["kind"] == "bad_request");
+        ensure!(tokio::fs::read(&fixture.source).await? == original);
+        let report = fixture.status(&fixture.source).await?;
+        ensure!(report.running && configuration(&report)? == before);
+        return Ok(());
+    }
     ensure!(
         output.status.success(),
         "{}",

@@ -2,10 +2,6 @@
 
 use serde::Serialize;
 
-#[cfg(feature = "harness")]
-use crate::client::sessions::wire::{
-    AttentionState, ProcessState, ReviewState, RunSnapshot, RunSummary, TurnState,
-};
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
@@ -122,31 +118,6 @@ impl CliReport for AgentsCheckReport {
     }
 }
 
-/// Scriptable inventory returned by `agents sessions`.
-#[cfg(feature = "harness")]
-#[derive(Serialize)]
-pub struct AgentSessionsReport {
-    pub runs: Vec<RunSummary>,
-}
-
-#[cfg(feature = "harness")]
-impl CliReport for AgentSessionsReport {
-    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
-        let mut table = Table::new(["RUN", "LABEL", "AGENT", "STATE", "DIRECTORY", "ACTIVITY"]);
-        for run in &self.runs {
-            table.push([
-                run.run_id.clone(),
-                run.label.clone(),
-                run.agent_id.clone(),
-                summary_group(run).to_string(),
-                run.cwd.display().to_string(),
-                run.activity.clone(),
-            ]);
-        }
-        h.table(&table)
-    }
-}
-
 /// Acceptance report for `run --background`.
 #[derive(Serialize)]
 pub struct BackgroundRunReport {
@@ -154,17 +125,6 @@ pub struct BackgroundRunReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_session_id: Option<String>,
     pub state: String,
-}
-
-#[cfg(feature = "harness")]
-impl BackgroundRunReport {
-    pub fn from_snapshot(snapshot: &RunSnapshot) -> Self {
-        Self {
-            agent_run_id: snapshot.run_id.clone(),
-            native_session_id: snapshot.native_session_id.clone(),
-            state: run_group(snapshot).to_string(),
-        }
-    }
 }
 
 impl CliReport for BackgroundRunReport {
@@ -192,44 +152,6 @@ impl CliReport for AgentSessionMutationReport {
             "{} {} · {}",
             self.action, self.agent_run_id, self.state
         ))
-    }
-}
-
-#[cfg(feature = "harness")]
-fn run_group(run: &RunSnapshot) -> &'static str {
-    match (run.attention, run.review, run.turn, run.process) {
-        (
-            AttentionState::Question | AttentionState::Permission | AttentionState::Error,
-            _,
-            _,
-            _,
-        ) => "needs_input",
-        (AttentionState::Result, ReviewState::Unread, _, _) => "ready_for_review",
-        (_, _, TurnState::Submitting | TurnState::Working | TurnState::Cancelling, _)
-        | (_, _, _, ProcessState::Starting | ProcessState::Stopping) => "working",
-        (_, _, _, ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted) => {
-            "stopped"
-        }
-        _ => "idle",
-    }
-}
-
-#[cfg(feature = "harness")]
-fn summary_group(run: &RunSummary) -> &'static str {
-    match (run.attention, run.review, run.turn, run.process) {
-        (
-            AttentionState::Question | AttentionState::Permission | AttentionState::Error,
-            _,
-            _,
-            _,
-        ) => "needs_input",
-        (AttentionState::Result, ReviewState::Unread, _, _) => "ready_for_review",
-        (_, _, TurnState::Submitting | TurnState::Working | TurnState::Cancelling, _)
-        | (_, _, _, ProcessState::Starting | ProcessState::Stopping) => "working",
-        (_, _, _, ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted) => {
-            "stopped"
-        }
-        _ => "idle",
     }
 }
 

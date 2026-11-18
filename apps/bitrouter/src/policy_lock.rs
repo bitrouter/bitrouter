@@ -18,6 +18,7 @@ use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::routing::ModelSelector;
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+#[cfg(feature = "multi-instance")]
 use crate::model_policy::CompiledPolicy;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
 use crate::trajectory::correlation::TrajectoryRuntime;
@@ -1359,6 +1360,7 @@ struct PolicySnapshot {
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
     administration: Option<bitrouter_ai::control::administration::PolicyReport>,
+    #[cfg(feature = "multi-instance")]
     compiled: Option<CompiledPolicy>,
 }
 
@@ -1369,6 +1371,7 @@ impl PolicyRoutingSnapshot {
     pub(crate) fn digest(&self) -> Option<&str> {
         self.0.digest.as_deref()
     }
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn document(&self) -> Option<&Document> {
         self.0.compiled.as_ref().map(CompiledPolicy::source)
     }
@@ -1553,6 +1556,7 @@ impl PolicyRuntime {
                 .as_ref()
                 .map(|compiled| compiled.digest().to_owned()),
             routers,
+            #[cfg(feature = "multi-instance")]
             compiled,
             administration: Some(
                 bitrouter_ai::control::administration::PolicyReport::from_loaded(

@@ -505,7 +505,7 @@ fn acp_id(agent: SpawnAgent) -> &'static str {
     }
 }
 
-/// `bro init [flags]`. Runs the wizard interactively, or headlessly when
+/// `bitrouter init [flags]`. Runs the wizard interactively, or headlessly when
 /// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
     crate::prompt::interruptible(run_inner(flags, output)).await
@@ -514,7 +514,7 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
 async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
     anyhow::ensure!(
         flags.harnesses.is_empty() && flags.after != Some(AfterAction::Launch),
-        "agent configuration and native launch require the harness feature"
+        "configure and launch local agents with BRO"
     );
     flags
         .resources
@@ -1165,7 +1165,7 @@ fn print_hint() {
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     anyhow::ensure!(
         flags.harnesses.is_empty(),
-        "agent configuration requires the harness feature"
+        "configure local agents with BRO"
     );
     Ok(Vec::new())
 }
@@ -1176,7 +1176,7 @@ async fn finish_launch(
     _output: &Output,
     _no_install: bool,
 ) -> Result<()> {
-    anyhow::bail!("native harness launch requires the harness feature")
+    anyhow::bail!("launch the native harness with BRO")
 }
 
 #[cfg(test)]
