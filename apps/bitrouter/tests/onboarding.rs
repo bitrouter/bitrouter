@@ -564,16 +564,18 @@ fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Resul
 }
 
 #[test]
-fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
+fn public_help_exposes_gateway_operator_commands() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
     let out = run_cli(home.path(), data.path(), &["--help"], &[]);
     assert!(out.status.success());
     let help = String::from_utf8_lossy(&out.stdout);
-    for command in ["launch", "claude", "codex", "run", "code", "acp"] {
+    for command in ["serve", "key", "route", "policy", "eval", "tenancy"] {
         assert!(help.contains(&format!("  {command}")), "{command}: {help}");
     }
-    for hidden in ["spawn", "chat", "tui"] {
+    for hidden in [
+        "spawn", "chat", "tui", "launch", "claude", "codex", "run", "code", "acp", "task", "thread",
+    ] {
         assert!(
             !help.contains(&format!("  {hidden}")),
             "hidden command {hidden}: {help}"
