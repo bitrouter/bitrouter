@@ -301,7 +301,13 @@ jobs:
           threads: 2
           filter: kind(test)
   test-product-process:
-    name: test (BRO through BitRouter)
+    name: test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {product: service-process, name: BRO through BitRouter}
+        - {product: bro, name: BRO gateway home ownership}
     needs: [build-service-process, build-bro]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -309,20 +315,27 @@ jobs:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
       with:
-        product: service-process
+        product: ${{ matrix.product }}
         companion: 'true'
     - name: Install the BRO process-test sandbox
+      if: matrix.product == 'service-process'
       run: |
         if [[ ! -x /usr/bin/bwrap ]]; then
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends bubblewrap
         fi
-    - name: Run the two executable approval regression
-      run: bash .github/scripts/ci-test.sh gateway-bro --exact-tests 'binary(=product_process)' ignored gateway_routes_the_approved_bro_tool_continuation
+    - name: Run gateway routing and paid history across the two products
+      if: matrix.product == 'service-process'
+      run: |
+        bash .github/scripts/ci-test.sh gateway-bro --exact-tests 'binary(=product_process)' ignored gateway_routes_the_approved_bro_tool_continuation
+        bash .github/scripts/ci-test.sh transferred-history --exact-tests 'binary(=mixed_store_migration)' ignored sealed::accounting::restarted_products_preserve_paid_history_and_refuse_historical_request_replay
+    - name: Open staged and activated gateway directories with BRO
+      if: matrix.product == 'bro'
+      run: bash .github/scripts/ci-test.sh gateway-home --exact-tests 'binary(=home_owner)' ignored real_staged_and_activated_gateway_halves_reject_bro
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: product-process-${{ github.run_attempt }}-evidence
+        name: product-process-${{ matrix.product }}-${{ github.run_attempt }}-evidence
         path: ci-evidence/
   test-service-profile:
     name: test (gateway ${{ matrix.profile }})

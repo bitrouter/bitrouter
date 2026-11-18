@@ -5,7 +5,7 @@ inputs:
     description: Product owning the nextest metadata (service, service-process or bro)
     default: service
   companion:
-    description: Restore the BRO executable and ACP adapter alongside the service suite
+    description: Restore the other product's executables alongside the selected test suite
     default: 'false'
 runs:
   using: composite
@@ -34,8 +34,8 @@ runs:
     - uses: actions/download-artifact@v4
       if: inputs.companion == 'true'
       with:
-        name: linux-tests-bro-${{ github.sha }}
-        path: .ci-bro
+        name: linux-tests-${{ inputs.product == 'bro' && 'service-process' || 'bro' }}-${{ github.sha }}
+        path: .ci-companion
     - name: Verify and extract the test build
       env:
         PRODUCT: ${{ inputs.product }}
@@ -51,20 +51,20 @@ runs:
         verify .ci-archive
         mkdir -p ci-evidence
         /usr/bin/time -v -o ci-evidence/extract.txt tar --zstd -xf .ci-archive/tests.tar.zst
-        case "$PRODUCT" in
-          service|service-process)
-            target/debug/bitrouter build-info | jq -e --arg sha "$GITHUB_SHA" '
-              .product == "bitrouter" and .source_revision == $sha'
-            echo "BITROUTER_TEST_GATEWAY_BINARY=$PWD/target/debug/bitrouter" >> "$GITHUB_ENV"
-            ;;
-          bro) ;;
-          *) exit 1 ;;
-        esac
+        case "$PRODUCT" in service|service-process|bro) ;; *) exit 1 ;; esac
         if [[ "$COMPANION" == true ]]; then
-          [[ "$PRODUCT" == service || "$PRODUCT" == service-process ]]
-          verify .ci-bro
-          # Retain the service nextest metadata when joining independent builds.
-          tar --zstd -xf .ci-bro/tests.tar.zst target/debug/bro target/debug/examples/bro_acp_fixture
+          verify .ci-companion
+          # Keep nextest metadata from the suite that owns the tests.
+          if [[ "$PRODUCT" == bro ]]; then
+            tar --zstd -xf .ci-companion/tests.tar.zst target/debug/bitrouter
+          else
+            tar --zstd -xf .ci-companion/tests.tar.zst target/debug/bro target/debug/examples/bro_acp_fixture
+          fi
+        fi
+        if [[ "$PRODUCT" != bro || "$COMPANION" == true ]]; then
+          target/debug/bitrouter build-info | jq -e --arg sha "$GITHUB_SHA" '
+            .product == "bitrouter" and .source_revision == $sha'
+          echo "BITROUTER_TEST_GATEWAY_BINARY=$PWD/target/debug/bitrouter" >> "$GITHUB_ENV"
         fi
         if [[ "$PRODUCT" == bro || "$COMPANION" == true ]]; then
           target/debug/bro build-info | jq -e --arg sha "$GITHUB_SHA" '
