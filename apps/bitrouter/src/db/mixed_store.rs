@@ -366,13 +366,14 @@ pub(super) fn gateway_table(name: &str) -> Result<bool> {
 }
 
 fn private_dir(path: &Path) -> Result<()> {
-    let mut options = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        options.mode(0o700);
+        fs::DirBuilder::new().mode(0o700).create(path)?;
     }
-    Ok(options.create(path)?)
+    #[cfg(not(unix))]
+    fs::create_dir(path)?;
+    Ok(())
 }
 
 fn private_file(path: &Path) -> Result<File> {
