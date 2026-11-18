@@ -177,6 +177,20 @@ fn role_str(role: Role) -> &'static str {
     }
 }
 
+// OpenAI-compatible upstreams use these aliases for reasoning on both complete
+// messages and streamed deltas. Prefer the first nonempty string without
+// trimming it: whitespace can be a meaningful streamed fragment.
+fn reasoning_text(value: &serde_json::Value) -> Option<&str> {
+    ["reasoning_content", "reasoning", "thinking"]
+        .into_iter()
+        .find_map(|key| {
+            value
+                .get(key)
+                .and_then(|r| r.as_str())
+                .filter(|s| !s.is_empty())
+        })
+}
+
 /// Extract plain text from an OpenAI `content` value (string, or an array of
 /// `{type:"text", text:"..."}` parts). Non-text parts are ignored for now.
 fn content_text(value: &serde_json::Value) -> String {
@@ -1000,21 +1014,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         }
 
         let mut content = Vec::new();
-        // `reasoning_content` is the DeepSeek-/Moonshot-/Qwen-style field name
-        // for the reasoning trace on the Chat envelope. Other OpenAI-compatible
-        // upstreams expose the same data under `reasoning` (some OpenRouter
-        // passthroughs) or `thinking` (Aliyun). Accept whichever is present.
-        // None of these are documented on Chat Completions itself; the canonical
-        // Chat Completions object does not carry a reasoning trace.
-        if let Some(reasoning) = ["reasoning_content", "reasoning", "thinking"]
-            .iter()
-            .find_map(|key| {
-                message
-                    .get(*key)
-                    .and_then(|r| r.as_str())
-                    .filter(|s| !s.is_empty())
-            })
-        {
+        if let Some(reasoning) = reasoning_text(message) {
             content.push(Content::Reasoning {
                 text: reasoning.to_string(),
                 provider_metadata: ProviderMetadata::new(),
@@ -1733,9 +1733,7 @@ impl StreamDecoder for ChatStreamDecoder {
                         text: text.to_string(),
                     });
                 }
-                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str())
-                    && !reasoning.is_empty()
-                {
+                if let Some(reasoning) = reasoning_text(delta) {
                     parts.push(StreamPart::ReasoningDelta {
                         text: reasoning.to_string(),
                         source_kind: None,
@@ -2146,6 +2144,210 @@ impl StreamEncoder for ChatStreamEncoder {
             event: None,
             data: "[DONE]".to_string(),
         }])
+    }
+}
+
+#[cfg(test)]
+mod reasoning_alias_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn encode_parts(
+        encoder: &mut dyn StreamEncoder,
+        parts: &[StreamPart],
+    ) -> std::result::Result<Vec<Value>, Box<dyn std::error::Error>> {
+        let mut chunks = Vec::new();
+        for part in parts {
+            for frame in encoder.encode(part)? {
+                let SseFrame::Event { event: None, data } = frame else {
+                    return Err("expected an unnamed Chat data event".into());
+                };
+                chunks.push(serde_json::from_str(&data)?);
+            }
+        }
+        Ok(chunks)
+    }
+
+    #[test]
+    fn response_and_stream_reasoning_alias_precedence_match()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let cases = [
+            (json!({"reasoning_content": "first"}), Some("first")),
+            (json!({"reasoning": "second"}), Some("second")),
+            (json!({"thinking": "third"}), Some("third")),
+            (
+                json!({"reasoning_content": "first", "reasoning": "second", "thinking": "third"}),
+                Some("first"),
+            ),
+            (
+                json!({"reasoning_content": "", "reasoning": "second", "thinking": "third"}),
+                Some("second"),
+            ),
+            (
+                json!({"reasoning_content": null, "reasoning": "second", "thinking": "third"}),
+                Some("second"),
+            ),
+            (
+                json!({"reasoning_content": "", "reasoning": null, "thinking": "third"}),
+                Some("third"),
+            ),
+            (
+                json!({"reasoning_content": null, "reasoning": "", "thinking": "third"}),
+                Some("third"),
+            ),
+            (
+                json!({"reasoning_content": 7, "reasoning": false, "thinking": "third"}),
+                Some("third"),
+            ),
+            (
+                json!({"reasoning_content": " \n", "reasoning": "second"}),
+                Some(" \n"),
+            ),
+            (
+                json!({"reasoning_content": "", "reasoning": null, "thinking": ""}),
+                None,
+            ),
+            (
+                json!({"reasoning_content": [], "reasoning": {}, "thinking": 7}),
+                None,
+            ),
+            (json!({}), None),
+        ];
+        for (message, expected) in cases {
+            let result = ChatCompletionsAdapter.parse_response(json!({
+                "choices": [{"message": message, "finish_reason": "stop"}]
+            }))?;
+            let reasoning: Vec<_> = result
+                .content
+                .iter()
+                .filter_map(|content| match content {
+                    Content::Reasoning { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reasoning, expected.into_iter().collect::<Vec<_>>());
+            assert_eq!(result.content.len(), usize::from(expected.is_some()));
+
+            let mut decoder = ChatCompletionsAdapter.stream_decoder();
+            let parts = decoder.decode(&SseEvent {
+                event: None,
+                data: json!({"choices": [{"delta": message}]}).to_string(),
+            })?;
+            let reasoning: Vec<_> = parts
+                .iter()
+                .filter_map(|part| match part {
+                    StreamPart::ReasoningDelta {
+                        text,
+                        source_kind: None,
+                    } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reasoning, expected.into_iter().collect::<Vec<_>>());
+            assert_eq!(parts.len(), usize::from(expected.is_some()));
+            let mut encoder = ChatCompletionsAdapter.stream_encoder("alias-case", "fixture/model");
+            let chunks = encode_parts(encoder.as_mut(), &parts)?;
+            assert_eq!(chunks.len(), usize::from(expected.is_some()));
+            for chunk in chunks {
+                assert_eq!(
+                    chunk["choices"][0]["delta"],
+                    json!({
+                        "role": "assistant", "reasoning_content": expected
+                    })
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stream_reasoning_alias_fragments_preserve_usage_and_finish()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for alias in ["reasoning_content", "reasoning", "thinking"] {
+            for sentinel in [true, false] {
+                let mut decoder = ChatCompletionsAdapter.stream_decoder();
+                let mut encoder =
+                    ChatCompletionsAdapter.stream_encoder("alias-turn", "fixture/model");
+                let mut chunks = Vec::new();
+                for text in ["思考", "🧠", "e", "\u{301}"] {
+                    let parts = decoder.decode(&SseEvent {
+                        event: None,
+                        data: json!({"choices": [{"delta": {(alias): text}}]}).to_string(),
+                    })?;
+                    assert!(matches!(parts.as_slice(), [StreamPart::ReasoningDelta {
+                        text: actual, source_kind: None
+                    }] if actual == text));
+                    chunks.extend(encode_parts(encoder.as_mut(), &parts)?);
+                }
+                let parts = decoder.decode(&SseEvent {
+                    event: None,
+                    data: json!({"choices": [{
+                        "delta": {(alias): "。", "content": "答案"}, "finish_reason": "stop"
+                    }]})
+                    .to_string(),
+                })?;
+                assert!(matches!(parts.as_slice(), [
+                    StreamPart::TextDelta { text }, StreamPart::ReasoningDelta { text: reasoning, source_kind: None }
+                ] if text == "答案" && reasoning == "。"));
+                chunks.extend(encode_parts(encoder.as_mut(), &parts)?);
+                let raw_usage = json!({
+                    "prompt_tokens": 12, "completion_tokens": 9, "total_tokens": 21,
+                    "completion_tokens_details": {"reasoning_tokens": 7}
+                });
+                let parts = decoder.decode(&SseEvent {
+                    event: None,
+                    data: json!({"choices": [], "usage": raw_usage}).to_string(),
+                })?;
+                assert!(matches!(parts.as_slice(), [StreamPart::Usage { usage }]
+                    if usage.prompt_tokens == 12 && usage.completion_tokens == 9
+                        && usage.reasoning_tokens == 7 && usage.origin == UsageOrigin::ProviderReported
+                        && usage.raw.as_deref() == Some(&raw_usage)));
+                assert!(encode_parts(encoder.as_mut(), &parts)?.is_empty());
+                let terminal = if sentinel {
+                    decoder.decode(&SseEvent {
+                        event: None,
+                        data: "[DONE]".into(),
+                    })?
+                } else {
+                    decoder.finish()?
+                };
+                assert!(matches!(
+                    terminal.as_slice(),
+                    [StreamPart::Finish {
+                        reason: FinishReason::Stop
+                    }]
+                ));
+                chunks.extend(encode_parts(encoder.as_mut(), &terminal)?);
+                assert!(decoder.finish()?.is_empty());
+                let fragments: Vec<_> = chunks
+                    .iter()
+                    .filter_map(|chunk| chunk["choices"][0]["delta"]["reasoning_content"].as_str())
+                    .collect();
+                assert_eq!(fragments, ["思考", "🧠", "e", "\u{301}", "。"]);
+                assert_eq!(fragments.concat(), "思考🧠e\u{301}。");
+                let answers: Vec<_> = chunks
+                    .iter()
+                    .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+                    .collect();
+                assert_eq!(answers, ["答案"]);
+                assert_eq!(chunks.len(), 8);
+                assert_eq!(chunks[6]["choices"][0]["finish_reason"], "stop");
+                assert_eq!(chunks[7]["choices"], json!([]));
+                assert_eq!(chunks[7]["usage"], raw_usage);
+                assert!(chunks.iter().all(|chunk| {
+                    chunk["choices"][0]["delta"].get("reasoning").is_none()
+                        && chunk["choices"][0]["delta"].get("thinking").is_none()
+                }));
+                assert_eq!(
+                    encoder.finish()?,
+                    vec![SseFrame::Event {
+                        event: None,
+                        data: "[DONE]".into()
+                    }]
+                );
+            }
+        }
+        Ok(())
     }
 }
 
