@@ -619,6 +619,19 @@ async fn imported_controller_fact_and_global_charge_prevent_new_admission() -> R
         .pipeline
         .drain_required_pending_settlements()
         .await?;
+    // Model the M0 ledger row whose original writer had no service inventory.
+    let inventory_store = crate::storage::evolution::EvolutionStore::new(
+        fixture.db.clone(),
+        "gateway-request-admission-v2",
+    )?;
+    let key = crate::storage::evolution::digest(&"paid-before-inventory")?;
+    ensure!(
+        records::Entity::delete_by_id(inventory_store.id("gateway_request", &key)?)
+            .exec(&fixture.db)
+            .await?
+            .rows_affected
+            == 1
+    );
     let charges = crate::metering::entities::requests::Entity::find_by_id("paid-before-inventory");
     let original = charges
         .clone()

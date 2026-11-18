@@ -386,10 +386,10 @@ async fn repeated_transport_requests_each_run_native_checks() -> Result<()> {
     mount_upstream(&upstream).await;
     let assembled = assemble(&configuration(&upstream.uri(), 5_000)?, &checker).await?;
     let server = gateway(&assembled)?;
-    for _ in 0..2 {
+    for id in ["transport-first", "transport-second"] {
         let response = server
             .post("/v1/chat/completions")
-            .add_header("x-bitrouter-request-id", "transport-retry")
+            .add_header("x-bitrouter-request-id", id)
             .json(&request("coding"))
             .await;
         ensure!(response.status_code().is_success(), "{}", response.text());

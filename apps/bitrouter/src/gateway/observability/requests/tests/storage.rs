@@ -152,6 +152,11 @@ async fn ordinary_requests_do_not_need_the_inventory_or_its_budget() -> Result<(
         .execute_unprepared("DROP TABLE checkpoint_evolution")
         .await?;
     let mut ordinary = request("ordinary", true)?;
+    let id = crate::gateway::pipeline::types::new_request_id();
+    ordinary.request_id = id.clone();
+    ordinary.extensions.insert(Arc::new(
+        crate::gateway::pipeline::types::AllocatedRequestId(id.clone()),
+    ));
     ordinary.headers.remove("x-bitrouter-controller-id");
     fixture.pipeline.execute(ordinary).await?;
     fixture
@@ -168,7 +173,7 @@ async fn ordinary_requests_do_not_need_the_inventory_or_its_budget() -> Result<(
         1
     );
     ensure!(
-        crate::metering::entities::requests::Entity::find_by_id("ordinary")
+        crate::metering::entities::requests::Entity::find_by_id(&id)
             .one(&fixture.db)
             .await?
             .is_some()

@@ -64,7 +64,7 @@ upstream. The billing ledger uses one ID across principals and controllers.
 A repeated or already billed ID is rejected, including while its original call
 is in flight. Only the owning principal can read its admission. An early
 authentication rejection cannot settle against that admission. Treat request
-IDs as opaque. The prefix `brg_` is reserved for gateway-generated IDs.
+IDs as opaque. Client IDs contain 1–128 visible ASCII bytes. The prefix `brg_` is reserved for gateway-generated IDs.
 
 ## Control API
 

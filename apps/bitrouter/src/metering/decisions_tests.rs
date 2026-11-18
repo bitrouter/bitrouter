@@ -149,6 +149,10 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
             .routing_table(routes)
             .executor(Arc::new(HttpExecutor::with_defaults()?))
             .served_operations(OperationScope::Both)
+            .router_preparation_hook_for(
+                crate::gateway::observability::requests::GatewayRequestTracker::new(db),
+                OperationScope::Both,
+            )
             // Register capture first: even a later mutator must finish before capture.
             .route_hook_for(recorder.tariff_capture(false), OperationScope::Both)
             .route_hook_for(OverrideEndpoint(base), OperationScope::Both)
@@ -698,7 +702,7 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
     });
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
-    let store = MeteringStore::new(db);
+    let store = MeteringStore::new(db.clone());
     let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
     let capture = recorder.tariff_capture(false);
     let mut native = target();
@@ -712,6 +716,10 @@ async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() ->
             lm.routing_table(routes)
                 .executor(executor)
                 .served_operations(OperationScope::Both)
+                .router_preparation_hook_for(
+                    crate::gateway::observability::requests::GatewayRequestTracker::new(db),
+                    OperationScope::Both,
+                )
                 .route_hook_for(capture, OperationScope::Both)
                 .settlement_recorder_for(recorder, OperationScope::Both);
         })

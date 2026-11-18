@@ -36,6 +36,37 @@ impl PipelineEvent for GatewayRequestObserved {
     }
 }
 
+fn allocation(
+    ctx: &PipelineContext,
+) -> Option<Arc<crate::gateway::pipeline::types::AllocatedRequestId>> {
+    ctx.extension::<crate::gateway::pipeline::types::AllocatedRequestId>()
+        .filter(|origin| origin.id == ctx.request_id())
+}
+
+/// Protect the ordinary ledger even when a native client or embedding host
+/// supplies an ID and authentication fails before route preparation.
+pub(crate) struct RequestIdOrigin;
+#[async_trait]
+impl PreRequestHook for RequestIdOrigin {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
+        if let Some(origin) = allocation(ctx) {
+            if !origin.claim(ctx.delivery_attempt_id()) {
+                ctx.emit(CanonicalRequestReplayRejected);
+                return Err(BitrouterError::bad_request(
+                    "gateway request ID already dispatched",
+                ));
+            }
+        } else {
+            ctx.emit(crate::gateway::metering::replay::ClientRequestIdClaim);
+            crate::gateway::pipeline::types::validate_client_request_id(ctx.request_id())?;
+        }
+        Ok(HookDecision::Allow)
+    }
+}
+
 /// Request evidence independent of optional policy learning and capture workers.
 #[derive(Clone)]
 pub struct GatewayRequestTracker {
@@ -65,10 +96,13 @@ impl GatewayRequestTracker {
 
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
         let controller_tagged = ctx.headers().contains_key("x-bitrouter-controller-id");
-        if !controller_tagged
-            && !ctx.has_event::<crate::gateway::metering::replay::ClientRequestIdClaim>()
-        {
+        let allocated = allocation(ctx).is_some();
+        if !controller_tagged && allocated {
             return Ok(());
+        }
+        if !allocated {
+            ctx.emit(crate::gateway::metering::replay::ClientRequestIdClaim);
+            crate::gateway::pipeline::types::validate_client_request_id(ctx.request_id())?;
         }
         let session = ctx.extension::<RequestSessionContext>();
         let controller = if controller_tagged {

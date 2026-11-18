@@ -1419,14 +1419,38 @@ impl MeteringStore {
                 let user = update.user_id.take().expect("prepared user ID");
                 let key = update.api_key_id.take().expect("prepared API key ID");
                 let scope = update.route_scope_id.take().expect("prepared route scope");
+                let byte_eq =
+                    |column: requests::Column, mysql_comparison: &'static str, value: String| {
+                        if self.db.get_database_backend() == DbBackend::MySql {
+                            sea_orm::sea_query::Expr::cust_with_values(mysql_comparison, [value])
+                        } else {
+                            column.eq(value)
+                        }
+                    };
                 let scope = match scope {
-                    Some(scope) => requests::Column::RouteScopeId.eq(scope),
+                    Some(scope) => byte_eq(
+                        requests::Column::RouteScopeId,
+                        "BINARY route_scope_id = BINARY ?",
+                        scope,
+                    ),
                     None => requests::Column::RouteScopeId.is_null(),
                 };
                 let owner = Condition::all()
-                    .add(requests::Column::RequestId.eq(id))
-                    .add(requests::Column::UserId.eq(user))
-                    .add(requests::Column::ApiKeyId.eq(key))
+                    .add(byte_eq(
+                        requests::Column::RequestId,
+                        "BINARY request_id = BINARY ?",
+                        id,
+                    ))
+                    .add(byte_eq(
+                        requests::Column::UserId,
+                        "BINARY user_id = BINARY ?",
+                        user,
+                    ))
+                    .add(byte_eq(
+                        requests::Column::ApiKeyId,
+                        "BINARY api_key_id = BINARY ?",
+                        key,
+                    ))
                     .add(scope);
                 update.created_at = sea_orm::NotSet;
                 update.reconciliation_status = sea_orm::NotSet;

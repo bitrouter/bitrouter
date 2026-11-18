@@ -1393,7 +1393,13 @@ async fn assemble_app(
             if let Some(runtime) = continuation_for_finalization {
                 lm.required_finalizer(runtime);
             }
-            // Server-tool declaration capture runs first and is pure
+            if !is_shared {
+                lm.pre_resolution_hook_for(
+                    crate::gateway::observability::requests::RequestIdOrigin,
+                    OperationScope::Both,
+                );
+            }
+            // Server-tool declaration capture is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
             // and stashes it, before auth, so the toolsets can read it

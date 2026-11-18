@@ -357,6 +357,91 @@ fn chat_prompt() -> Prompt {
 }
 
 #[tokio::test]
+async fn native_stream_and_http_cannot_share_a_billing_identity() -> anyhow::Result<()> {
+    use futures::StreamExt;
+    let upstream = mock_streaming_chat_completions_upstream("test-model").await;
+    let assembled = bitrouter::assemble::build_app(&config_for(&upstream.uri())).await?;
+    let (id, mut stream) = assembled
+        .app
+        .execute_native_stream(chat_prompt(), CallerContext::local())
+        .await?;
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+
+    for claim in [id.clone(), "x".repeat(129), "two words".into()] {
+        let response = server
+            .post("/v1/chat/completions")
+            .add_header("x-bitrouter-request-id", claim)
+            .json(&json!({"model":"test-model", "messages":[{"role":"user","content":"second"}]}))
+            .await;
+        response.assert_status(axum::http::StatusCode::BAD_REQUEST);
+    }
+    while let Some(part) = stream.next().await {
+        part?;
+    }
+    assembled
+        .app
+        .language_model()
+        .expect("language model")
+        .drain_required_pending_settlements()
+        .await?;
+    anyhow::ensure!(
+        upstream
+            .received_requests()
+            .await
+            .expect("provider calls")
+            .len()
+            == 1
+    );
+    let row = requests::Entity::find_by_id(&id)
+        .one(&assembled.db)
+        .await?
+        .expect("native charge");
+    anyhow::ensure!(row.model_id == "test-model");
+    Ok(())
+}
+
+#[tokio::test]
+async fn cloned_native_request_owns_one_delivery_and_charge() -> anyhow::Result<()> {
+    let upstream = mock_chat_completions_upstream().await;
+    let app = bitrouter::build_app(&config_for(&upstream.uri())).await?;
+    let pipeline = app.app.language_model().expect("assembled pipeline");
+    let request = PipelineRequest::new("test-model", CallerContext::local(), chat_prompt());
+    let id = request.request_id.clone();
+    let (first, second) =
+        tokio::join!(pipeline.execute(request.clone()), pipeline.execute(request));
+    let rejected = match (first, second) {
+        (Ok(_), Err(error)) | (Err(error), Ok(_)) => error,
+        _ => anyhow::bail!("expected one successful native dispatch and one rejection"),
+    };
+    anyhow::ensure!(
+        rejected.to_string().contains("already dispatched"),
+        "{rejected}"
+    );
+    pipeline.drain_required_pending_settlements().await?;
+    anyhow::ensure!(
+        upstream
+            .received_requests()
+            .await
+            .expect("provider calls")
+            .len()
+            == 1
+    );
+    let row = requests::Entity::find_by_id(id)
+        .one(&app.db)
+        .await?
+        .expect("original charge");
+    anyhow::ensure!(row.estimated_charge_micro_usd == 92 && row.error.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> {
     let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
@@ -427,6 +512,16 @@ async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
             },
         ),
     );
+    if !cfg!(feature = "mcp") {
+        let Err(error) = bitrouter::build_app(&cfg).await else {
+            panic!("minimal gateway accepted an MCP server");
+        };
+        assert!(
+            error.to_string().contains("require the mcp feature"),
+            "{error}"
+        );
+        return;
+    }
     let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),

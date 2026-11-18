@@ -42,9 +42,6 @@ use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::gateway::pipeline::types::{PipelineInput, PipelineRequest};
 use bitrouter_ai::types::ApiProtocol;
 
-// Client-chosen billing identifiers are durably reserved. Locally allocated
-// identifiers use a disjoint namespace and never require a reservation write.
-pub(crate) const GENERATED_REQUEST_PREFIX: &str = "brg_";
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 const REQUIRED_SHUTDOWN_RETRY_DELAY: Duration = Duration::from_millis(250);
 
@@ -1479,6 +1476,10 @@ async fn execute_input(
     if client_request_id {
         req.extensions
             .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+    } else {
+        req.extensions.insert(Arc::new(
+            crate::gateway::pipeline::types::AllocatedRequestId::new(request_id.clone()),
+        ));
     }
     req.request_id = request_id.clone();
     req.original_model = original_model;
@@ -1897,20 +1898,11 @@ fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
             .to_str()
             .map_err(|_| BitrouterError::bad_request("request id header is not valid text"))?
             .trim();
-        if request_id.starts_with(GENERATED_REQUEST_PREFIX) {
-            return Err(BitrouterError::bad_request(
-                "request ID uses the gateway-generated namespace",
-            ));
-        }
-        if request_id.is_empty() {
-            return Err(BitrouterError::bad_request(
-                "request id header must not be empty",
-            ));
-        }
+        crate::gateway::pipeline::types::validate_client_request_id(request_id)?;
         return Ok(request_id.to_string());
     }
 
-    let request_id = format!("{GENERATED_REQUEST_PREFIX}{}", uuid::Uuid::new_v4());
+    let request_id = crate::gateway::pipeline::types::new_request_id();
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
@@ -3170,7 +3162,7 @@ mod tests {
 
         let request_id = add_request_id_hint(&mut headers).unwrap();
 
-        assert!(request_id.starts_with(GENERATED_REQUEST_PREFIX));
+        assert!(request_id.starts_with(crate::gateway::pipeline::types::GENERATED_REQUEST_PREFIX));
         assert!(
             add_request_id_hint(&mut headers).is_err(),
             "a client cannot claim the server namespace"
