@@ -1,6 +1,6 @@
 # Managed core harness integration
 
-The `bro serve` inference listener also exposes the negotiated managed-core
+The `bitrouter serve` inference listener also exposes the negotiated managed-core
 profile. The explicit `bro task managed` command uses the selected daemon's
 native managed endpoint and CoreSession; `task run` and ACP retain their
 respective protocols. Product CLI execution is described below under native
@@ -428,7 +428,7 @@ providers:
 ```
 
 Keep registry inheritance enabled for provider defaults. Credentials use the
-existing provider store, including `bro providers login openai-codex --import-existing`.
+existing provider store, including `bitrouter providers login openai-codex --import-existing`.
 
 AGENTS.md is required startup context. Skills and MCP instructions are frozen
 material references; native permissions and inventory are delivered as core

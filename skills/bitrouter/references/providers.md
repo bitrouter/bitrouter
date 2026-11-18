@@ -26,17 +26,17 @@ refreshes it at startup/reload; fetched metadata takes precedence. The hosted
 | `aws-bedrock` | `AWS_BEARER_TOKEN_BEDROCK` | Bearer | Bedrock `bedrock-mantle` OpenAI-compatible endpoints; region via `AWS_REGION` (default `us-east-1`). Native Converse features (cross-region profiles, Guardrails) not served |
 | `azure` | `AZURE_OPENAI_API_KEY` | Bearer | Azure OpenAI `/openai/v1` surface; set `AZURE_OPENAI_RESOURCE` to your resource name (unset ⇒ provider inactive). Entra ID tokens also work as the bearer |
 | `openrouter` | `OPENROUTER_API_KEY` | Bearer | Forwards every OpenRouter model |
-| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bro providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
-| `github-copilot` | — (local OAuth) | Device flow | `bro providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
-| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bro providers login openai-codex` |
-| `supergrok` | — (local OAuth) | SuperGrok subscription | `bro providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
+| `claude-code` | `CLAUDE_CODE_OAUTH_TOKEN` or local OAuth | Claude Code subscription | `bitrouter providers login claude-code`, or a long-lived `claude setup-token` value for headless use; distinct from `anthropic` API-key billing |
+| `github-copilot` | — (local OAuth) | Device flow | `bitrouter providers login github-copilot`; per-model protocol map (Claude → Anthropic, gpt-5.x-codex → Responses, rest → Chat) |
+| `openai-codex` | — (local PKCE) | ChatGPT subscription | `bitrouter providers login openai-codex` |
+| `supergrok` | — (local OAuth) | SuperGrok subscription | `bitrouter providers login supergrok`; imports the Grok CLI session (`~/.grok/auth.json`), distinct from `xai` API-key billing |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 
 Zero-config mode auto-enables every API-key provider whose env var is present;
 an API-key provider without its credential gets `active: false` and falls out of
 the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
-`openai-codex`, `supergrok`) are enabled by `bro providers login`, not an env var. **First run with no network
+`openai-codex`, `supergrok`) are enabled by `bitrouter providers login`, not an env var. **First run with no network
 and no cache**: the default public registry uses its bundled baseline, so
 known-provider shorthand, login metadata and credential-variable hints remain
 available. Custom or disabled registries do not receive that baseline. Credentials
@@ -91,7 +91,7 @@ Rules:
   No key means not enabled. Declare the provider
   explicitly with `api_key: ${MY_VAR}` to override the env-var name. A
   `local_oauth` / `local_pkce` provider is not env-gated — it activates after
-  `bro providers login <provider>`.
+  `bitrouter providers login <provider>`.
 - **Editorial sync stays in build tooling.** Registry sync feeds update the
   published catalog through `dist-helper`; model calls do not interpret an
   `auto_sync` field or implicitly refresh the provider registry.
@@ -303,7 +303,7 @@ mcp_servers:
       args: ["mcp-server-git"]
 ```
 
-Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect one server or all of them with `bro mcp check [name]`; it reports transport, reachability, latency, capability negotiation, and advertised tool names.
+Once configured, `POST /mcp/<name>` proxies JSON-RPC through. Inspect one server or all of them with `bitrouter mcp check [name]`; it reports transport, reachability, latency, capability negotiation, and advertised tool names.
 
 ## Server tools (router-executed)
 
@@ -433,12 +433,12 @@ ACP client disconnects. For a one-shot turn on the same controller,
 ## Apply changes
 
 ```bash
-bro reload                      # hot-reload running daemon
+bitrouter reload                      # hot-reload running daemon
 # SIGHUP also reloads daemon-side config, but does not forward new shell env vars
-# or `bro restart` for a clean cycle
+# or `bitrouter restart` for a clean cycle
 ```
 
-`reload` also re-pushes the current shell's provider env vars into the daemon, so an `export OPENAI_API_KEY=new...; bro reload` sequence rotates the key live.
+`reload` also re-pushes the current shell's provider env vars into the daemon, so an `export OPENAI_API_KEY=new...; bitrouter reload` sequence rotates the key live.
 
 ## What's not supported (don't suggest these)
 
@@ -448,8 +448,8 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `strategy: conditional` with `prompt_tokens` rules — not parsed.
 - `strategy: least_cost` — not parsed.
 - `safety_settings`, `features.computer_use`, `features.json_mode` provider blocks — not parsed.
-- `bro providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers check`, `providers login`, and `providers logout`. `providers check` only reads a configured endpoint's model list.
-- `bro config reload/show` — `config validate` exists for CI-safe validation; use `bro reload` for the daemon.
+- `bitrouter providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers check`, `providers login`, and `providers logout`. `providers check` only reads a configured endpoint's model list.
+- `bitrouter config reload/show` — `config validate` exists for CI-safe validation; use `bitrouter reload` for the daemon.
 
 
 Native Gemini Generate Content, `google-ai` subscription inference, and Vertex Express are retired. Active configs must explicitly select a supported protocol and endpoint; saved credentials and history remain preserved. `gemini-cli` is no longer a bundled routed client. Antigravity SDK clients may use `LocalOpenAIAgentConfig` against `/v1/chat/completions`; see the retirement progress for validation status.

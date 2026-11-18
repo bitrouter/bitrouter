@@ -10,7 +10,7 @@ bro policy init coding \
   --config bitrouter.yaml
 bro policy check --config bitrouter.yaml
 bro policy show coding --disk --config bitrouter.yaml
-bro serve --config bitrouter.yaml
+bitrouter serve --config bitrouter.yaml
 ```
 
 Omitting `--router` selects `coding`. Initialization creates model-only

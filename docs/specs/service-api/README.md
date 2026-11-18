@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **accepted, `service-api/1.0.0-beta.5`**. This is the single
+Status: **`service-api/1.0.0-beta.6`**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -36,6 +36,17 @@ migration and rollback rules below, even when an older client uses only receipts
 Revision beta.3 adds operator directory readback and explicitly negotiated
 ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
 formats retain their existing meanings and eight-attempt bound. The store boundary prevents an older binary from opening current authority data.
+
+### Gateway and local BRO split
+
+Revision beta.6 assigns workspace execution to the local BRO client. The
+gateway accepts ordinary inference, model Policy, tenant configuration,
+Eval exchange and the shared operator API. A gateway MUST reject managed
+Responses opt-in before ordinary inference or upstream dispatch. Removing a
+beta header or replaying the same paid request automatically is unsafe. Existing
+receipts, tenant scope, CAS semantics and the wire versions of retained
+operations continue to use the contracts below. Client-side local thread
+identifiers and approvals never grant service privileges.
 
 ### M0 cutover
 
@@ -2118,163 +2129,36 @@ not enable production dispatch, strict receipts, or distributed writers.
 
 ## Thread API
 
-The optional host listener binds to loopback and uses a dedicated execution
-bearer, not an inference or control token. `GET /agent/v2/capabilities`
-authenticates and returns the server instance, runtime capabilities, operations
-and version. Other operations carry `X-Bro-Server-Instance` identifying the
-discovered instance. A client MUST reconnect and rediscover after an instance
-change and MUST NOT silently replay a mutation against the new instance. A
-workspace must be explicitly authorized by the host. Authentication or
-possession of a Thread ID does not grant a different workspace.
-
-| Method/path relative to `/agent/v2` | Operation |
-| --- | --- |
-| GET `/capabilities` | Discover available operations |
-| POST `/threads` | Create thread |
-| GET `/threads/{id}` | Read thread |
-| POST `/threads/{id}/turns` | Start or enqueue a turn |
-| GET `/threads/{id}/turns/{turn_id}` | Read turn |
-| POST `/threads/{id}/turns/{turn_id}/cancel` | Cancel selected work |
-| POST `/threads/{id}/steer`, `/threads/{id}/inputs`, `/threads/{id}/resume` | Steer, answer input, or resume queue |
-| GET `/threads/{id}/history`, `/threads/{id}/observe` | Paginated committed history or SSE observations |
-
-Mutation requests carry a caller-owned ASCII `Idempotency-Key` of 1–128 bytes.
-A matching authorized replay and conflicting reuse are distinguished by the
-server; a client MUST NOT generate a new key solely because a response was
-lost. Mutation JSON is limited to 64 KiB. `mode` on a turn distinguishes
-`start` and `enqueue`; a receipt is admission, not successful completion.
-Disconnecting an observer does not cancel accepted work. History query defaults
-`after` to 0 and `limit` to 128; the server remains authoritative on limits.
-
-JSON responses are versioned where described by the [public API types](../../../crates/bitrouter-ai/src/harness/api.rs).
-Errors use `{ "error": "...", "code": "..." }`; SSE can carry an `error`
-event with `{ "code": "...", "message": "..." }`. A client MUST handle
-unknown error codes as failures and resynchronize when required. The API's
-request types are not uniformly closed to unknown fields; no blanket unknown
-field rejection or forward-preservation guarantee is implied. Feature-disabled
-operations MUST NOT be inferred from their path alone.
-
-### Thread API compatibility cases
-
-1. The dedicated bearer is required; capabilities identify the serving instance
-   and do not advertise disabled native execution operations.
-2. A request targeting an unauthorized workspace or a stale server instance is
-   rejected. A client rediscovers after restart before a new mutation.
-3. Matching mutation/key replay does not execute twice; changed content using
-   the same key conflicts. Missing, non-ASCII or oversized keys fail.
-4. Enqueued turn admission is not completion. Disconnecting observation does
-   not cancel accepted execution; history remains accessible with authority.
-5. An SSE error and a truncated stream do not become a successful terminal.
+The official gateway has no workspace or Thread listener. A caller that
+previously used the loopback `/agent/v2` API must select a local BRO installation
+and an authorized workspace. BRO's `thread` and `task` commands own approval,
+history, cancellation and resume. The earlier HTTP DTOs remain identifiable for
+existing SDK clients and offline decoding. A missing listener grants no right
+to retry against a different host or workspace.
 
 ## Managed Core API
 
-An active virtual service key authenticates `GET /v1/orchestrator/capabilities`
-even if ordinary inference is configured to skip authentication. Availability
-depends on the host's `core` feature and enabled service. The response identifies
-the core instance, supported operations/transports and limits. A client MUST
-honor the advertised capabilities rather than assume the endpoint's presence
-implies every operation is enabled.
-
-`GET /v1/orchestrator/channel` upgrades to WebSocket only with
-`Bitrouter-Beta: orchestrator_core=v1`. Managed `POST /v1/responses` uses the
-same beta header; the ordinary Responses profile remains separate. The caller
-must first bind or restore a session over the core channel within the host's
-initial-message deadline. The harness owns durable checkpoint persistence and
-must explicitly acknowledge the checkpoint only after persistence; HTTP/SSE
-observation does not acknowledge it. DTOs and message variants are defined by
-[core protocol](../../../crates/bitrouter-ai/src/core/protocol.rs),
-[checkpoint](../../../crates/bitrouter-ai/src/core/checkpoint.rs) and
-[managed Responses](../../../crates/bitrouter-ai/src/core/responses.rs).
-
-A channel disconnect or dropped HTTP stream does not itself complete or cancel
-a run. No automatic replay or exactly-once result after uncertain delivery is
-promised. A client MUST use the existing operation inspection/recovery semantics
-before deciding on a new operation. `CoreError` carries `code`, `message` and
-`commit_status` (`not_committed`, `committed`, `unknown`); `unknown` MUST NOT be
-interpreted as rollback. Strict input structures reject unknown fields where
-specified by the DTO. Unknown required capabilities or future message variants
-MUST NOT be guessed.
-
-### Managed Core API compatibility cases
-
-1. Require a valid service key for capabilities even when ordinary inference
-   skips auth. Reject an unsupported beta value before channel upgrade.
-2. Require bind/restore within the initial deadline; unsupported operations
-   fail rather than being inferred from a successful handshake.
-3. Persist a checkpoint before sending its explicit ACK; observing HTTP/SSE
-   output alone does not acknowledge a checkpoint.
-4. Dropping the channel or observation does not establish cancellation or
-   rollback. Treat `commit_status: unknown` as an unresolved outcome.
-5. Reject malformed strict message input and unsupported required semantics.
+The official gateway does not host the beta.5 managed orchestrator WebSocket.
+Clients of an older host discover its capabilities before binding or restoring
+a session. A new deployment uses BRO's local checkpoint owner and the gateway
+inference API. The service MUST refuse managed opt-ins to `POST /v1/responses`,
+including the managed body profile on a headerless request. Tests must observe
+zero provider calls on refusal and one ordinary call on a valid ordinary
+request. A client MUST retain the original request, execution and receipt
+identities after an uncertain result.
 
 ## Native ACP extensions
 
-### Connection and capability discovery
+BRO acts as a local ACP client for supported external adapters. It selects a
+workspace and binds the adapter to the configured inference gateway. ACP
+negotiation follows the adapter protocol. The service does not bind a local
+ACP endpoint as part of startup.
 
-`bro acp serve` starts the native stdio bridge; `bro acp serve <agent>` is the
-separate external-agent proxy. A native bridge connects to a local daemon; its
-stdio carries ACP protocol messages. Native mode needs an explicit model or
-`chat.model`. Initialization negotiates supported ACP v1 or v2 for the
-connection; unsupported versions and unsupported methods fail visibly.
-Consumers MUST use the advertised capability set instead of assuming that
-optional methods exist. The native adapter's `_meta.bitrouter.version` is `1`;
-its `schemaVersion` is `1.10.2`. `nativeExecution` reflects the `core` build
-feature. Queue resume and close are advertised only when supported.
-
-### Session and execution
-
-An ACP session identifies a native thread. Supported lifecycle operations
-include initialization, new, list, prompt, cancel, and version-appropriate
-load/resume; close and queue resume depend on advertised native execution.
-The v1 prompt returns its result when the turn settles. The v2 prompt returns
-acceptance with the admitted user message identity and completion is projected
-through updates. Consumers MUST NOT treat acceptance as successful completion.
-
-A client disconnect detaches transport; it does not cancel accepted work.
-Cancellation cancels active work and leaves accepted unstarted work in a
-paused queue. Explicit close cancels active and queued work while retaining
-history for authorized reopening. Pending approval is native state and may be
-reattached on reconnect to the same live daemon; transport request IDs do not
-confer approval authority. The advertised `_bitrouter/session/resume_queue`
-extension resumes a paused queue subject to current authorization. Client info,
-requested working directory and possession of a session ID do not grant access.
-
-### Operation identity
-
-Retry-capable clients may supply `_meta.bitrouter.idempotencyKey` for durable
-operations. The key is scoped to the caller, Thread and operation; JSON-RPC
-request IDs are transport identities, not idempotency keys. A matching retry
-returns the original receipt and changed content conflicts. A client that lost
-an acknowledgement without a reusable key SHOULD inspect authoritative history
-rather than automatically submit a new prompt. Load or resume reattaches; it
-does not itself resume a paused queue. A busy or queued prompt is rejected
-rather than silently reordered.
-
-### Validation and evolution
-
-Invalid members in `mcpServers`, `prompt` or `additionalDirectories` are rejected
-rather than dropped. Non-null `_meta` must be an object. A peer MUST NOT assume
-that enabling draft v2 enables every draft extension, or that a response from a
-future schema revision has the same meaning. Unknown optional metadata MAY be
-ignored; unsupported required capabilities MUST fail visibly. See the [native adapter](../../../apps/bitrouter/src/harness/acp/native).
-
-### Native ACP extensions compatibility cases
-
-1. Initialize v1 and v2 separately and verify version-specific capability
-   advertisement. Unsupported versions and methods fail rather than downgrade.
-2. For each enabled version, create a session and prompt. In v2, acceptance is
-   not reported as completion before the terminal update.
-3. Disconnect after admission; reconnect with current authority and observe the
-   same session without canceling the accepted turn.
-4. Cancel active work and verify accepted queued work stays paused. Close an
-   enabled session and verify active and queued work are canceled but history
-   remains available to an authorized client.
-5. Reject an invalid array member instead of silently dropping it. A session ID
-   or client-provided working directory does not bypass authorization.
-6. With core disabled, do not advertise native execution/queue controls that
-   depend on core. Approval reattachment must not create a second approval.
-7. Retry the same durable operation with its namespaced key and verify the
-   original receipt; a different payload with the same key conflicts.
+For the original Thread HTTP, managed checkpoint/WebSocket and native ACP wire
+messages, see the [beta.5 service contract](https://github.com/bitrouter/bitrouter/blob/b0d7e2fbeabe39b96692c48787a066e89c04aed0/docs/specs/service-api/README.md#thread-api).
+The [CLI reference](../../CLI.md#local-bro-threads-and-agents) describes local
+BRO and [SQLite cutover](../../CLI.md#split-a-stopped-m0-sqlite-store) describes
+how an operator transfers retained sessions and service evidence.
 
 ## Shared request identity
 

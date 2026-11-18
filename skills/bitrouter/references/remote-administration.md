@@ -186,7 +186,7 @@ new qualified resource revision. Importing resources does not grant tenant acces
 or activate a configuration. Never put resource-import definitions or secret key
 values into a tenant draft; drafts contain resource references only.
 
-Use the HTTP `TenancyClient` for tenant management or the `bro tenancy`
+Use the HTTP `TenancyClient` for tenant management or the `bitrouter tenancy`
 configuration adapter below. The tenant-operation namespace
 is `/control/v1/tenancy/operations/{operation_id}`, separate from host reload
 operations. Retain operation IDs after a lost response; credential secrets are
@@ -224,14 +224,14 @@ explicit `--endpoint URL --token-env NAME` pair. Targets cannot be mixed, and
 there is no `--context local` or implicit local discovery.
 
 ```console
-bro context add resource-admin --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
-bro --context resource-admin tenancy capabilities
-bro tenancy configuration validate --input draft.json
-bro --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
-bro --context resource-admin tenancy configuration read --installation-id install-a --tenant tenant-a --revision config-r1
-bro --context resource-admin tenancy configuration active --installation-id install-a --tenant tenant-a
-bro --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
-bro --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
+bitrouter context add resource-admin --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
+bitrouter --context resource-admin tenancy capabilities
+bitrouter tenancy configuration validate --input draft.json
+bitrouter --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
+bitrouter --context resource-admin tenancy configuration read --installation-id install-a --tenant tenant-a --revision config-r1
+bitrouter --context resource-admin tenancy configuration active --installation-id install-a --tenant tenant-a
+bitrouter --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
+bitrouter --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
 ```
 
 `draft.json` must be the complete `ConfigurationPut` request: a caller-chosen
@@ -267,12 +267,12 @@ dispatch flags before strict inference; these client commands do not turn them o
 Set the selected token in the client's environment, then save its variable name:
 
 ```console
-bro context add workstation \
+bitrouter context add workstation \
   --endpoint https://router.example/control/v1 \
   --token-env WORKSTATION_CONTROL_TOKEN
-bro --context workstation status
-bro --context workstation models
-bro --context workstation code
+bitrouter --context workstation status
+bitrouter --context workstation models
+bitrouter --context workstation code
 ```
 
 Plain HTTP is accepted only for a loopback URL, such as an SSH port-forward.
@@ -289,13 +289,13 @@ start/stop/restart continue to require host-local execution.
 ## Inspect the host
 
 ```console
-bro --context workstation providers list
-bro --context workstation observe status
-bro --context workstation agents list
-bro --context workstation policy status
-bro --context workstation policy show production --view active
-bro --context workstation policy status --view disk
-bro --context workstation requests --limit 50 --provider openai \
+bitrouter --context workstation providers list
+bitrouter --context workstation observe status
+bitrouter --context workstation agents list
+bitrouter --context workstation policy status
+bitrouter --context workstation policy show production --view active
+bitrouter --context workstation policy status --view disk
+bitrouter --context workstation requests --limit 50 --provider openai \
   --since 2026-09-07T00:00:00Z --until 2026-09-08T00:00:00Z
 ```
 
@@ -317,8 +317,8 @@ Prepare configuration using the host's existing deployment workflow, inspect
 its disk policy, then use a credential with `control:reload`:
 
 ```console
-bro --context workstation reload
-bro --context workstation operations show REQUEST_UUID --instance BOOT_UUID
+bitrouter --context workstation reload
+bitrouter --context workstation operations show REQUEST_UUID --instance BOOT_UUID
 ```
 
 Reload reads only server-owned files and does not forward client environment

@@ -20,10 +20,10 @@ Results inherit the validated subject's identity; result schema remains 1.
 The local gateway exchange supports:
 
 ```bash
-bro eval subject seal subject-draft.json --output subject.json
-bro eval subject put subject.json --config bitrouter.yaml
-bro eval result submit result.json --config bitrouter.yaml
-bro eval snapshot freeze --config bitrouter.yaml
+bitrouter eval subject seal subject-draft.json --output subject.json
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
+bitrouter eval snapshot freeze --config bitrouter.yaml
 ```
 
 Use the tenant HTTP/SDK exchange for tenant resources and exact revision-bound
@@ -42,9 +42,9 @@ transformations, certificates, and optimization state do not belong in it.
 For a local file-backed router:
 
 ```bash
-bro policy show --disk --config bitrouter.yaml
-bro policy diff policy.yaml candidate.yaml
-bro policy publish candidate.yaml --expected-digest <current-source-digest> --config bitrouter.yaml
+bitrouter policy show --disk --config bitrouter.yaml
+bitrouter policy diff policy.yaml candidate.yaml
+bitrouter policy publish candidate.yaml --expected-digest <current-source-digest> --config bitrouter.yaml
 ```
 
 `source` from `show` is directly resubmittable. Pass the reported

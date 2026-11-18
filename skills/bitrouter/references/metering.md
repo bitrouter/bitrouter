@@ -63,7 +63,7 @@ Historical rows created before this evidence schema are marked
 
 Hosted BitRouter Cloud rows can be reconciled without exporting a static API
 key into the environment. Point the command at the owner-only credential file
-used by `bro cloud login`, provided that file contains a static API key:
+used by `bitrouter cloud login`, provided that file contains a static API key:
 
 ```bash
 bro workflow-state reconcile-metering \

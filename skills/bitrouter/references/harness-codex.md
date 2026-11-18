@@ -21,8 +21,8 @@ For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
 required. A ChatGPT Codex subscription can be imported with:
 
 ```bash
-bro providers login openai-codex --import-existing
-bro init --yes --harness codex --after exit
+bitrouter providers login openai-codex --import-existing
+bitrouter init --yes --harness codex --after exit
 ```
 
 ## ACP session
@@ -91,7 +91,7 @@ if its own catalog does not recognize the selected model; that warning does not
 indicate a failed BitRouter route.
 
 Existing Codex processes must be restarted before changed provider routing
-takes effect. Inspect routed traffic with `bro requests`; ACP session
+takes effect. Inspect routed traffic with `bitrouter requests`; ACP session
 diagnostics live under the BitRouter home in `logs/session-*.log`.
 
 ## BRO native tools with a Codex subscription
@@ -107,7 +107,7 @@ must explicitly negotiate `portable_responses_reasoning_v1` to permit it.
 After importing an existing subscription login, the shortest startup is:
 
 ```bash
-bro providers login openai-codex --import-existing
+bitrouter providers login openai-codex --import-existing
 bro task run "Inspect this workspace" --read-only
 ```
 

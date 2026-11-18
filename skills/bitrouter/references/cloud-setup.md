@@ -60,14 +60,14 @@ client.messages.create(
 - **Billing:** usage is settled against the account's prepaid credit balance. Top up through Stripe checkout in the console.
 - **Capacity:** top up before running large batches so available credit does not block a request.
 
-## C. Headless CLI (`bro cloud login`) — recommended for terminal-first users
+## C. Headless CLI (`bitrouter cloud login`) — recommended for terminal-first users
 
-This is the seam between Local and Cloud, closed by `bro cloud login` (see also `references/cli.md`).
+This is the seam between Local and Cloud, closed by `bitrouter cloud login` (see also `references/cli.md`).
 
 ### Sign in
 
 ```bash
-bro cloud login
+bitrouter cloud login
 # Open this URL in your browser:
 #   https://cloud.bitrouter.ai/oauth/device?user_code=ABCD-EFGH
 # Waiting for authorization (the code expires in 600s)…
@@ -76,21 +76,21 @@ bro cloud login
 For CI or another non-interactive environment, store an existing BitRouter key without discovery or browser approval:
 
 ```bash
-bro cloud login --api-key "$BITROUTER_API_KEY"
-bro cloud whoami
+bitrouter cloud login --api-key "$BITROUTER_API_KEY"
+bitrouter cloud whoami
 ```
 
 `--api-key` conflicts with `--client-id` and `--scope`. It accepts `--oauth-as` for a self-hosted origin. Both OAuth and API-key credentials use the same mode-0600 file; API keys are never printed. API-key logout removes only the local file.
 
 Mechanism: RFC 8628 device-authorization grant against the AS advertised at `https://api.bitrouter.ai/.well-known/oauth-authorization-server`. The CLI polls the token endpoint, exchanges the device code for an access + refresh token pair, and persists both to `$XDG_DATA_HOME/bitrouter/account-credentials.json` (mode 0600 on Unix). Every subsequent call auto-refreshes within 60 s of access-token expiry — sign in once per machine.
 
-Override the AS for a self-hosted deployment: `bro cloud login --oauth-as https://my-self-hosted.example.com`.
+Override the AS for a self-hosted deployment: `bitrouter cloud login --oauth-as https://my-self-hosted.example.com`.
 
 Sensitive scopes are off the default grant set — opt in at login time:
 
 ```bash
-# To use `bro cloud billing checkout`:
-bro cloud login --scope "inference:invoke usage:read keys:read keys:write \
+# To use `bitrouter cloud billing checkout`:
+bitrouter cloud login --scope "inference:invoke usage:read keys:read keys:write \
                               billing:read billing:write \
                               policy:read policy:write byok:read byok:write \
                               namespace:read"
@@ -100,7 +100,7 @@ bro cloud login --scope "inference:invoke usage:read keys:read keys:write \
 
 When the credentials file is present, the local `bitrouter` daemon auto-adds the `bitrouter` provider to the in-memory zero-config providers map (see `apps/bitrouter/src/cloud/mod.rs::enable_in_zero_config`). Every model the account is entitled to becomes routable as `bitrouter:<model-id>` against `http://localhost:4356` — no `bitrouter.yaml` changes, no `BITROUTER_API_KEY` env var.
 
-Inference credential precedence is explicit: when a target carries a key populated from `BITROUTER_API_KEY` (or an explicit config/override), that key is authoritative and the daemon does not read, refresh, or send requests for the stored OAuth credential. The stored login is the inference fallback only when the target has no key. Management commands under `bro cloud …` continue to use the stored account login independently; their identity does not override provider inference auth.
+Inference credential precedence is explicit: when a target carries a key populated from `BITROUTER_API_KEY` (or an explicit config/override), that key is authoritative and the daemon does not read, refresh, or send requests for the stored OAuth credential. The stored login is the inference fallback only when the target has no key. Management commands under `bitrouter cloud …` continue to use the stored account login independently; their identity does not override provider inference auth.
 
 ```python
 client = OpenAI(base_url="http://localhost:4356/v1", api_key="unused")
@@ -118,28 +118,28 @@ Cloud and BYOK coexist — providers with `${PROVIDER_API_KEY}` in the environme
 
 ### Manage the account from the terminal
 
-After sign-in, typed `bro cloud …` subcommands cover common management operations:
+After sign-in, typed `bitrouter cloud …` subcommands cover common management operations:
 
 ```bash
-bro cloud whoami                 # cloud base URL + local subject/scope
-bro cloud usage                  # last 30 days of spend (micro-USD)
-bro cloud keys list              # provisioned brk_… API keys
-bro cloud keys mint --name laptop --scope "policy:read"
-bro cloud billing balance        # credit balance
-bro cloud policy list            # account-bound policies
-bro cloud byok list              # BYOK provider keys
+bitrouter cloud whoami                 # cloud base URL + local subject/scope
+bitrouter cloud usage                  # last 30 days of spend (micro-USD)
+bitrouter cloud keys list              # provisioned brk_… API keys
+bitrouter cloud keys mint --name laptop --scope "policy:read"
+bitrouter cloud billing balance        # credit balance
+bitrouter cloud policy list            # account-bound policies
+bitrouter cloud byok list              # BYOK provider keys
 ```
 
-Every typed leaf accepts `--json` for raw response output. Use `bro cloud api <relative-endpoint>` for the rest of the Cloud `/v1/*` API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, namespace lifecycle, and other account endpoints. See `references/cli.md` for the full subcommand index.
+Every typed leaf accepts `--json` for raw response output. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud `/v1/*` API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, namespace lifecycle, and other account endpoints. See `references/cli.md` for the full subcommand index.
 
 ### Call Cloud APIs directly
 
 The same stored credential drives a `gh api`-style raw client; the local daemon is not involved:
 
 ```bash
-bro cloud api /v1/models
-bro cloud api /v1/chat/completions --input request.json
-bro cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+bitrouter cloud api /v1/models
+bitrouter cloud api /v1/chat/completions --input request.json
+bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
 ```
 
 Use `-X` for the method, repeated `-H` headers, `-f` string fields, `-F` typed/nested fields, and `--input FILE|-` for exact body bytes. `--include`, `--silent`, and `--verbose` control output. Non-TTY/SSE bytes stream unchanged. Endpoints must be relative to the login origin and redirects are never followed.
@@ -147,7 +147,7 @@ Use `-X` for the method, repeated `-H` headers, `-f` string fields, `-F` typed/n
 ### Sign out
 
 ```bash
-bro cloud logout
+bitrouter cloud logout
 ```
 
 Runs an RFC 7009 best-effort revoke at the AS, then deletes the local credentials file. Idempotent — re-running with no credentials present is a no-op.
@@ -157,7 +157,7 @@ Runs an RFC 7009 best-effort revoke at the AS, then deletes the local credential
 - **No provider keys to manage.** One `brk_*` instead of `OPENAI_API_KEY` + `ANTHROPIC_API_KEY` + `GEMINI_API_KEY` + …
 - **One bill.** A prepaid account balance with centralized billing instead of reconciling upstream invoices.
 - **Curated registry.** Cloud uses a pinned public registry baked into the deploy image, so model availability and protocol routing match what the playground previews.
-- **No daemon to keep alive.** No `bro status`, no `~/.bitrouter/`, no log rotation.
+- **No daemon to keep alive.** No `bitrouter status`, no `~/.bitrouter/`, no log rotation.
 
 ## What Local does for the user that Cloud doesn't
 

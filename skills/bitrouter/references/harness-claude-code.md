@@ -11,8 +11,8 @@ For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
 required. A Claude Code subscription can be adopted with:
 
 ```bash
-bro providers login claude-code
-bro init --yes --harness claude --after exit
+bitrouter providers login claude-code
+bitrouter init --yes --harness claude --after exit
 ```
 
 ## ACP session
@@ -65,7 +65,7 @@ authentication. Token precedence is an exported `ANTHROPIC_AUTH_TOKEN`, then
 `skip_auth: true` local default.
 
 Claude sends bare Anthropic model ids such as `claude-sonnet-4-6`; verify their
-effective route with `bro route claude-sonnet-4-6`. Existing Claude Code
+effective route with `bitrouter route claude-sonnet-4-6`. Existing Claude Code
 processes must be restarted before changed environment routing takes effect.
-Inspect routed traffic with `bro requests`; ACP session diagnostics live
+Inspect routed traffic with `bitrouter requests`; ACP session diagnostics live
 under the BitRouter home in `logs/session-*.log`.

@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "1.0.0-beta.1",
-  "description": "Configure BitRouter through its CLI: provider setup, background daemon readiness, agent inspection, MCP configuration, local skill directories and native/ACP orchestration. Read the bundled skill for commands, permissions and delivery limits.",
+  "description": "Configure the BitRouter gateway and operate the separate BRO local harness, including tenant routing policies, provider setup, native workspace tasks and ACP prompts.",
   "author": {
     "name": "BitRouterAI"
   },

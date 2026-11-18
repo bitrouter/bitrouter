@@ -14,7 +14,7 @@ The foreground host calls `bitrouter::host::serve_with_extensions`; see the runn
 No separate extension API or checker-protocol crate is required.
 The shared entry runs inference, the local management socket and optional remote
 control with the same configuration baseline, reload and shutdown as
-`bro serve`. Use `assemble::build_app_with_extensions` only when owning a separate
+`bitrouter serve`. Use `assemble::build_app_with_extensions` only when owning a separate
 embedding lifecycle.
 On Unix, the host keeps a small `.sock.lock` file beside its control socket to
 serialize endpoint ownership. The OS lock releases when the host exits; the file
@@ -42,11 +42,11 @@ checks:
 ```
 
 Restart the same custom executable after editing bindings. The example is a
-foreground process, not a complete `bro` CLI: official `bro restart` would launch
+foreground process, not a complete `bro` CLI: official `bitrouter restart` would launch
 the official binary without your registrations. Use your custom invocation or
 service manager to restart, and explicitly target its config/socket for `bro`
 management status and `stop`. Clients select `model: bitrouter/<id>`; direct
-model requests do not inherit checks. Use `bro config validate` before starting;
+model requests do not inherit checks. Use `bitrouter config validate` before starting;
 activation additionally checks compiled registrations.
 Default bro rejects Native declarations without corresponding registrations.
 Missing or mismatched configured registrations fail activation even when unbound.

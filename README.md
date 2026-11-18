@@ -10,7 +10,7 @@
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/bitrouterai/?viewAsMember=true)
 [![Book a call](https://img.shields.io/badge/Book_a_call-founders-000000?logo=cal.com&logoColor=white)](https://cal.com/kelsenliu)
 
-**The minimal interpretable model router that learns & adapts to your agent workflows.**
+**A deployable model gateway with inspectable routing policies.**
 
 Point an OpenAI-compatible agent at your local BitRouter instance and choose
 `bitrouter/auto` after configuring an `auto` router and policy. See the
@@ -52,17 +52,15 @@ diffable, and a live policy changes only when you explicitly publish it.
 
 ### A customizable router. Adapt it to your workflow.
 
-Start with `bitrouter/auto`, then shape the models, rules, guardrails, and
-evaluation objective around your own loop. BitRouter learns from the outcomes
-you admit and proposes a new policy you can review, publish, or revert.
+Start with `bitrouter/auto` and evaluate the selected model against your own outcomes.
+An evaluator can submit evidence through the SDK. An authorized operator publishes
+and activates a policy revision explicitly.
 
 ## Integrates with your agent stack
 
-Keep the clients and workflows you already use:
-
-- **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google’s OpenAI-compatible Chat endpoint.
-- **Coding agents** — built-in Codex and Claude support through native launchers, headless commands, and ACP adapters.
-- **Tools & skills** — manage upstream MCP configuration with `bro mcp` and existing local skill directories with `bro skills`. Install skills with `npx skills`; native tasks and supported ACP runs use explicitly selected skills. MCP content retains independent source permission and per-skill consent. See the [CLI reference](docs/CLI.md) for supported hosts, commands and delivery limits.
+- **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google's OpenAI-compatible Chat endpoint.
+- **Tools** — configure upstream MCP servers through `bitrouter mcp`. Server tools run only on routes configured to expose them.
+- **Local agents** — install BRO to run a headless native task or prompt a supported external ACP adapter. BRO uses a gateway endpoint and a client credential. It owns workspace tool approvals and local thread history.
 
 ## Benchmarks
 
@@ -84,67 +82,43 @@ See the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-route
 
 ## Install
 
-Official macOS distributions support Apple Silicon (`arm64`) only.
+The service package installs `bitrouter`. The optional local harness package
+`bitrouter-bro` installs `bro`. From a checkout of this revision:
 
-Use the commands below once the `1.0.0-beta.1` packages and
-[release installers](https://github.com/bitrouter/bitrouter/releases) are
-available. For an alpha installation, review the fresh-install cutover in the
-[changelog](CHANGELOG.md) before starting a beta service.
-
-```bash
-# macOS (Apple Silicon) / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-beta.1/bitrouter-installer.sh | sh
-
-# Homebrew
-brew install bitrouter/tap/bitrouter
-
-# Windows
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-beta.1/bitrouter-installer.ps1 | iex"
-
-# npm
-npm install -g bitrouter@1.0.0-beta.1
-
-# From source (Cargo)
-cargo install bitrouter --version 1.0.0-beta.1
+```sh
+cargo install --locked --path apps/bitrouter
+cargo install --locked --path apps/bro
 ```
 
-These installers select the full product. Gateway-only release archives keep
-the same `bro` executable and run as an independent model service. See
-[distribution profiles](docs/DISTRIBUTION.md) for archive verification,
-configuration and profile-preserving updates.
+Each release has separate installers and archives for the two packages. Official
+macOS builds target Apple Silicon. The gateway and gateway-shared archives provide
+additional service feature selections. For an installation where `bitrouter` is
+a symlink to `bro`, preserve the old program and its data before switching. See
+[distribution profiles](docs/DISTRIBUTION.md) for artifact and installer ownership.
 
 ## Quick start
 
-Run `bro` for line-based first-run setup. It ensures the background daemon is
-ready and returns to the shell; subsequent calls reuse that daemon. Native
-harness interfaces remain available through `bro claude`, `bro codex` and
-`bro launch <agent>`.
+On the machine that holds the provider credentials:
 
-`bro threads` manages native history, FIFO inputs, approvals and explicit
-recovery. `bro agents` lists current connections; its single-operation commands
-manage supervised ACP runs, settings, routes and native sessions. The existing
-ThreadService, Core and controller retain execution and permission ownership.
-
-`bro code`, `bro tui`, `bro chat` and `bro agents attach` have been removed.
-They return migration guidance and never open an interface or start work.
-
-```bash
-bro                                  # setup, then background daemon readiness
-bro agents                           # live instances; catalog: agents list
-bro run claude "summarize this repo"  # one headless ACP turn
-bro run codex "inspect tests" --background
-bro agents pending <run-id>          # inspect exact pending approvals
-bro threads list                     # authorized durable native Threads
-bro requests                         # settled requests and spend
-bro route <model>                    # explain model resolution
+```sh
+bitrouter init --yes --use-detected --after exit
+bitrouter serve
 ```
 
-The maintained Codex and Claude ACP adapters require Node.js 22+ and `npx`;
-native launchers use each harness's own interface and per-process overrides.
+The gateway listens on `127.0.0.1:4356` by default. A client on another machine
+needs a reachable gateway endpoint and an authorized client credential.
 
-See [`docs/CLI.md`](docs/CLI.md) for the complete command reference, session
-controls, flags, and config resolution.
+```sh
+export BITROUTER_ENDPOINT=http://127.0.0.1:4356
+bro task run 'Summarize this project' --workspace . --read-only
+bro thread list
+bro acp list
+```
 
+Set `BITROUTER_API_KEY` in the BRO environment when the gateway requires a
+bearer token. Provider keys and gateway databases belong on the service host.
+Use `bitrouter policy --help` and `bitrouter tenancy --help` to inspect the
+service administration commands. See the [command reference](docs/CLI.md).
 
 ## Workflow recipes
 

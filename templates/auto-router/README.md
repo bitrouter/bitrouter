@@ -12,7 +12,7 @@ then validate and start from that directory:
 ```bash
 bro policy check --config bitrouter.yaml
 bro policy show auto --disk --config bitrouter.yaml
-bro serve --config bitrouter.yaml
+bitrouter serve --config bitrouter.yaml
 ```
 
 Request `bitrouter/auto`. `policy show` defaults to the selected running

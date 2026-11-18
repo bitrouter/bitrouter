@@ -1,6 +1,6 @@
 # Shared gateway distribution and process validation
 
-`dist-helper package --profile gateway-shared` builds the official `bro` with
+`dist-helper package --profile gateway-shared` builds the service executable `bitrouter` with
 `--no-default-features --features multi-instance`. Its effective application
 features are exactly `["db-postgres", "multi-instance"]`. No Cargo feature,
 dependency, or default changes are required to select this distribution.
@@ -12,7 +12,7 @@ the embedded identity, compilation profile, and binary digest. The profile
 spelling is `gateway-shared` in JSON, human output and archive names.
 
 The existing `gateway` profile still disables all optional application features;
-`full` still uses the manifest defaults. Additional capabilities combined with
+the default service uses the service manifest defaults. Additional capabilities combined with
 `multi-instance` are `custom`. Shared capability alone does not change startup
 mode: configuration must explicitly select shared authority. Local SQLite and
 the dependencies of existing local selections remain unchanged.
@@ -24,17 +24,16 @@ the dependencies of existing local selections remain unchanged.
 `dist-workspace.toml` registers that same workflow as a cargo-dist local-artifacts
 job. The generated `release.yml` already calls it, waits for completion, and
 collects its `artifacts-*` outputs for the release path. The reusable workflow
-builds both gateway distributions on all six existing target/runners, verifies
+builds both gateway distributions on all five supported targets, verifies
 the archive checksum and the executable's `build-info` against the manifest,
-and keeps their archive and CI artifact names distinct. Full installers and
-their existing jobs are unchanged.
+and keeps their archive and CI artifact names distinct. Cargo-dist owns the separate default service and BRO installers.
 
 The reusable workflow also owns a Linux PostgreSQL 17 service job. It downloads
 the already packaged x86_64 GNU shared archive and runs the ignored
 `gateway::shared::runtime::process_tests::` campaigns with that exact executable.
 This includes the existing multi-process bootstrap, authority/authentication,
 operator, admission/duplicate and drain campaigns selected by that module.
-New tests in the same module join this selection. No workspace debug `bro` is
+New tests in the same module join this selection. No workspace debug executable is
 substituted. The PostgreSQL user belongs to the disposable CI service and has
 CREATEDB for UUID-owned blank-database fixtures. Two test threads retain each
 campaign's real concurrent replicas; this is not a mock SQL or CLI-help gate.
@@ -71,7 +70,7 @@ cargo run --locked -p dist-helper -- package --profile gateway-shared \
 mkdir target/shared-package/unpacked
 tar -xzf target/shared-package/bitrouter-gateway-shared-x86_64-unknown-linux-gnu.tar.gz \
   -C target/shared-package/unpacked
-export BITROUTER_TEST_GATEWAY_BINARY="$PWD/target/shared-package/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/bro"
+export BITROUTER_TEST_GATEWAY_BINARY="$PWD/target/shared-package/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/bitrouter"
 "$BITROUTER_TEST_GATEWAY_BINARY" --json build-info > target/shared-package/build-info.json
 jq -e --slurpfile actual target/shared-package/build-info.json \
   --arg revision "$BITROUTER_BUILD_REVISION" \
@@ -97,10 +96,10 @@ when reproducing release evidence and retain any dirty-source hashes separately.
 ## Update boundary and remaining evidence
 
 Shared archives are manually installed and rolled by the owning service manager.
-`bro update` delegates to a source command preserving the exact normalized
+`bitrouter update` delegates to a source command preserving the exact normalized
 feature set; it does not acquire the full distribution's installer receipt or
 reuse its update-cache nudge. Status/build-info contracts preserve the distinct
-profile. This does not turn `bro status` or local daemon restart into shared
+profile. This does not turn `bitrouter status` or local daemon restart into shared
 operator APIs.
 
 Archive production and the CI selection are required distribution evidence, not

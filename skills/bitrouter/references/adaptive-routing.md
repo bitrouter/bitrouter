@@ -8,10 +8,10 @@ The reserved namespace is resolved locally; unknown names fail.
 Use `templates/auto-router` for explicit source or initialize a custom router:
 
 ```bash
-bro policy init coding --router coding --strong provider:strong-model --economy provider:economy-model
-bro policy check --config bitrouter.yaml
-bro policy show coding --disk --config bitrouter.yaml
-bro serve --config bitrouter.yaml
+bitrouter policy init coding --router coding --strong provider:strong-model --economy provider:economy-model
+bitrouter policy check --config bitrouter.yaml
+bitrouter policy show coding --disk --config bitrouter.yaml
+bitrouter serve --config bitrouter.yaml
 ```
 
 Initialization saves `policy.yaml` and a router binding. It preserves unrelated
@@ -48,10 +48,10 @@ inspection. An unavailable instance never silently becomes a disk read.
 availability, source digest and router bindings in the surrounding report.
 
 ```bash
-bro policy diff policy.yaml candidate.yaml
-bro policy publish candidate.yaml --expected-digest <current-source-digest> --config bitrouter.yaml
-bro policy rollback <previous-source-digest> --expected-digest <current-source-digest> --config bitrouter.yaml
-bro policy reload --config bitrouter.yaml
+bitrouter policy diff policy.yaml candidate.yaml
+bitrouter policy publish candidate.yaml --expected-digest <current-source-digest> --config bitrouter.yaml
+bitrouter policy rollback <previous-source-digest> --expected-digest <current-source-digest> --config bitrouter.yaml
+bitrouter policy reload --config bitrouter.yaml
 ```
 
 CAS is an explicit argument, never inferred from document contents. Updates
@@ -63,4 +63,4 @@ service activation separately requires authentication, scopes, and CAS.
 [Evaluation and explicit updates](workflow-optimization.md) describes the
 client-driven evaluation workflow. Evaluation facts and drafts never activate
 source changes automatically. ACL files are separate and use
-`bro access-policy create`, then `bro key sign --policy`.
+`bitrouter access-policy create`, then `bitrouter key sign --policy`.
