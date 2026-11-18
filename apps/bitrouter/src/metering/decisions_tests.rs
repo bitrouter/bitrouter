@@ -150,7 +150,7 @@ async fn native_gateway_freezes_final_route_and_persists_completed_usage() -> an
             .executor(Arc::new(HttpExecutor::with_defaults()?))
             .served_operations(OperationScope::Both)
             .router_preparation_hook_for(
-                crate::gateway::observability::requests::GatewayRequestTracker::new(db),
+                crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone()),
                 OperationScope::Both,
             )
             // Register capture first: even a later mutator must finish before capture.
