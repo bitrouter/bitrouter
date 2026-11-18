@@ -22,7 +22,17 @@ fn check_publishes_regular_file_changes_without_importing_linked_peer_data() -> 
     symlink(&peer, work.join("symlink"))?;
     fs::hard_link(&peer, work.join("hardlink"))?;
     let mock = Mock::start(vec![reply()])?;
-    let command = r#"set -e
+    let quoted = |p: &Path| -> Result<String> {
+        Ok(format!(
+            "'{}'",
+            p.to_str().context("fixture path")?.replace('\'', "'\\''")
+        ))
+    };
+    let command = format!(
+        r#"set -e
+if cat {peer} >/dev/null 2>&1; then exit 12; fi
+if (printf wrong > {peer}) 2>/dev/null; then exit 13; fi
+if cat {original} >/dev/null 2>&1; then exit 14; fi
 test ! -e symlink && test ! -e hardlink || exit 10
 test -z "$BITROUTER_API_KEY" && test -z "$OPENAI_API_KEY" || exit 11
 cat script > copy
@@ -31,12 +41,15 @@ chmod 750 script
 mkdir -p new/child
 mv old/note new/child/moved
 rmdir old
-printf evidence"#;
+printf evidence"#,
+        peer = quoted(&peer)?,
+        original = quoted(&work.join("script"))?
+    );
     let output = bro(
         &home,
         &work,
         &mock.endpoint,
-        &["task", "run", "verify", "--check", command],
+        &["task", "run", "verify", "--check", &command],
     )?;
     let result = event(&output)?;
     ensure!(output.status.success(), "{result}");
@@ -188,6 +201,48 @@ fn partial_publication_keeps_private_recovery_copy_and_refuses_replay() -> Resul
     );
     assert!(!work.join("a-first").exists());
     assert_eq!(fs::read(&locked)?, b"original");
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn moving_a_file_with_unrepresented_metadata_preserves_the_original() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("project");
+    fs::create_dir(&work)?;
+    let old = work.join("original");
+    fs::write(&old, "data")?;
+    ensure!(
+        Command::new("/usr/bin/xattr")
+            .args(["-w", "user.bro-fixture", "annotation"])
+            .arg(&old)
+            .status()?
+            .success(),
+        "could not install fixture xattr"
+    );
+    let mock = Mock::start(vec![reply()])?;
+    let result = event(&bro(
+        &fixture.path().join("home"),
+        &work,
+        &mock.endpoint,
+        &["task", "run", "verify", "--check", "mv original moved"],
+    )?)?;
+    assert_eq!(result["status"], "recovery_required");
+    assert_eq!(result["verification_evidence"]["exit_status"], 0);
+    assert!(
+        result["verification_evidence"]["error"]
+            .as_str()
+            .context("metadata refusal")?
+            .contains("extended attributes")
+    );
+    assert_eq!(fs::read(&old)?, b"data");
+    let attr = Command::new("/usr/bin/xattr")
+        .args(["-p", "user.bro-fixture"])
+        .arg(&old)
+        .output()?;
+    assert!(attr.status.success());
+    assert_eq!(attr.stdout, b"annotation\n");
+    assert!(!work.join("moved").exists());
     assert_eq!(mock.join()?.len(), 1);
     Ok(())
 }
