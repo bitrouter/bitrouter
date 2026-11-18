@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::operator::*;
-use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseBackend, IsolationLevel, Statement};
 use serde_json::json;
 
 use super::{Actor, Failure, Operator};
@@ -228,7 +228,11 @@ async fn policy_receipts(a: &Operator, b: &Operator, actor: &Actor) -> Result<()
 
 async fn read_across_head_update(a: &Operator, b: &Operator, actor: &Actor) -> Result<()> {
     let store = a.authority.store();
-    let tx = store.begin().await?;
+    // The exclusive head lock controls the writer. Serializable isolation is
+    // needed on the reader, where it causes the stale snapshot to retry.
+    let tx = store
+        .begin_with_isolation(IsolationLevel::ReadCommitted)
+        .await?;
     let mut head = a.authority.fence_exclusive(&tx).await?;
     let status = head.status().to_owned();
     store
