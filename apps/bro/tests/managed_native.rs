@@ -48,6 +48,11 @@ impl Consumer {
             .env("BRO_HOME", &self.home)
             .args(["--endpoint", &self.endpoint])
             .args(args);
+        // Winsock needs the system directory even for a loopback request.
+        #[cfg(windows)]
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", root);
+        }
         if let Some(key) = &self.key {
             command.env("BITROUTER_API_KEY", key);
         }

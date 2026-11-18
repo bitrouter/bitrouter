@@ -900,6 +900,7 @@ jobs:
               'bitrouter_sdk::tenancy::TenancyClient::observe_admission_profiles'
               'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
+              'bitrouter_sdk::gateway::GatewayClient::chat_reply_with_correlation'
               'bitrouter_sdk::gateway::GatewayClient::stream_responses'
               'pub struct bitrouter_sdk::harness::HarnessClient'
               'bitrouter_sdk::harness::HarnessClient::connect'
@@ -1047,9 +1048,14 @@ jobs:
         - os: windows-latest
           package: bitrouter-bro
           timeout-minutes: 45
-          expected-tests: 16
+          expected-tests: 21
           targets: ''
           filter: (kind(bin) & test(=tools::tests::missing_sandbox_omits_and_refuses_shell)) | binary(=invocation) | binary(=acp_serve)
+            | (binary(=managed_native) & (test(=approved_write_reads_and_continues_then_cancels_the_next_approval)
+            | test(=full_tree_runs_four_models_and_delivers_each_conclusion_once)
+            | test(=large_cold_checkpoint_keeps_multiturn_context_and_sixteen_step_tool_loop)
+            | test(=the_tree_shares_one_model_attempt_budget_across_all_workers)
+            | test(=active_child_cancellation_fences_paid_dispatch_and_overlap_on_restart)))
             | (binary(=native_acp) & (test(=native_stdio_streams_and_reopens_persisted_history_without_resending)
             | test(=cold_load_reissues_the_exact_permission_and_cancel_prevents_an_effect)
             | test(=cancelling_a_paid_stream_keeps_its_receipt_and_blocks_cold_redispatch)
