@@ -161,6 +161,7 @@ async fn verify_tenant(reader: &mut sea_orm::sqlx::SqliteConnection) -> Result<(
         let id = id.try_into()?;
         crate::tenancy::audit::recovery::inspect_source(
             reader,
+            super::Owner::BitRouter.marker(),
             &id,
             &|| Ok(()),
             crate::offline::ValidationBudget::default(),

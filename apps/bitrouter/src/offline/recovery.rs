@@ -389,6 +389,7 @@ async fn work(
         catalog::no_copied_credentials(db, &hashes).await?;
         crate::tenancy::audit::recovery::inspect_source(
             db,
+            verified.evidence.inventory.archive_marker()?,
             &inputs.plan.source.installation_id,
             check,
             validation_budget,

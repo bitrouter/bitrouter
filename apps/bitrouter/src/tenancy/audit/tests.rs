@@ -147,13 +147,25 @@ pub(in crate::tenancy) async fn assert_file_database(
 }
 
 async fn bundle(directory: &Path) -> Result<(PathBuf, String)> {
+    bundle_with_role(directory, false, "").await
+}
+
+async fn bundle_with_role(
+    directory: &Path,
+    mixed: bool,
+    change: &str,
+) -> Result<(PathBuf, String)> {
     use std::os::unix::fs::PermissionsExt;
     let live_source = directory.join("authority.sqlite");
     let owner = crate::tenancy::ownership::acquire_path(&live_source, true)?;
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
     let source = directory.join("retired.sqlite");
-    crate::db::run_migrations(&db).await?;
+    if mixed {
+        crate::db::migration::m0_fixture::install(&db).await?;
+    } else {
+        crate::db::run_migrations(&db).await?;
+    }
     let initialized = super::super::store::load(&db, chrono::Utc::now()).await?;
     // Preserve a real stored latch without claiming a production-capacity test.
     db.execute_unprepared("UPDATE tenancy_installation SET saturated=1")
@@ -162,6 +174,9 @@ async fn bundle(directory: &Path) -> Result<(PathBuf, String)> {
     let persisted = super::super::store::load_existing(&db, chrono::Utc::now()).await?;
     ensure!(persisted.installation == initialized.installation && persisted.saturated);
     ensure!(crate::tenancy::ownership::acquire_path(&live_source, false).is_err());
+    if !change.is_empty() {
+        db.execute_unprepared(change).await?;
+    }
     std::fs::File::create(&source)?;
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
     db.execute(Statement::from_sql_and_values(
@@ -299,7 +314,7 @@ async fn current_store_preflight_fits_fixed_audit_pages_and_refuses_old_markers(
     ensure!(
         error
             .to_string()
-            .contains("historical or future store format")
+            .contains("unsupported database role or format")
     );
     drop(reader);
     db.close().await?;
@@ -769,5 +784,58 @@ pub(in crate::tenancy) async fn held_receipt_read(
         false,
     )?);
     ensure!(inventory(bundle)? == before);
+    Ok(())
+}
+
+/// The read-only archive supports both original and projected layouts. Its
+/// marker, catalog and application ID must agree on the same frozen copy.
+#[tokio::test]
+async fn archive_roles_authenticate_the_exact_original_and_gateway_catalogs() -> Result<()> {
+    use crate::db::{mixed_store::Owner, store_format};
+    let replace = |version: &str| format!("UPDATE seaql_migrations SET version='{version}'");
+    for (mixed, change, accepted) in [
+        (true, String::new(), true),
+        (true, replace(Owner::BitRouter.marker()), false),
+        (false, replace(store_format::BASELINE), false),
+        (false, replace(Owner::Bro.marker()), false),
+        (false, replace("m20991231_999999_foreign"), false),
+        (true, "PRAGMA application_id=1112691540".into(), false),
+        (false, "PRAGMA application_id=1112691540".into(), false),
+        (
+            false,
+            "CREATE TABLE tenancy_provider_technical_facts(unrelated TEXT)".into(),
+            false,
+        ),
+    ] {
+        let directory = tempfile::tempdir()?;
+        let (bundle, digest) = bundle_with_role(directory.path(), mixed, &change).await?;
+        let original = inventory(&bundle)?;
+        let result = crate::offline::audit::open(
+            &bundle,
+            &directory.path().join("projection"),
+            &digest,
+            CancellationToken::new(),
+        )
+        .await;
+        ensure!(
+            result.is_ok() == accepted,
+            "mixed={mixed}, change={change}, expected archival read={accepted}"
+        );
+        if let Ok(archive) = result {
+            archive.shutdown().await?;
+        }
+        ensure!(inventory(&bundle)? == original);
+    }
+    let directory = tempfile::tempdir()?;
+    let error = bundle_with_role(
+        directory.path(),
+        false,
+        &replace("bitrouter_split_pending_gateway"),
+    )
+    .await
+    .err()
+    .context("pending marker entered a snapshot")?;
+    ensure!(error.to_string().contains("offline snapshot failed"));
+    ensure!(!directory.path().join("bundle/READY").exists());
     Ok(())
 }

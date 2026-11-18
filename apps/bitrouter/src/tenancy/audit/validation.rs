@@ -12,11 +12,9 @@ use sea_orm::ConnectionTrait;
 pub(super) async fn load(
     db: &impl ConnectionTrait,
     budget: ValidationBudget,
+    marker: &str,
 ) -> Result<startup::LoadedHeader> {
-    anyhow::ensure!(
-        crate::db::store_format::inspect(db).await? == crate::db::store_format::State::Current,
-        "offline inspection requires a current store"
-    );
+    crate::db::store_format::inspect_archive(db, marker).await?;
     load_contents(db, budget).await
 }
 

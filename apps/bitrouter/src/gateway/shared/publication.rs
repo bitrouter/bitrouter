@@ -294,10 +294,7 @@ impl Authority {
         self.store()
             .bounded(async {
                 let tx = self.store().begin().await?;
-                ensure!(
-                    super::schema::current(&tx).await?,
-                    "shared schema is not initialized"
-                );
+                super::schema::validate_replica(&tx).await?;
                 let head: Stored<Head> = self
                     .store()
                     .read(&tx, Kind::Authority, "head")

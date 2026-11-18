@@ -13,8 +13,23 @@ async fn retained_capture_reopens_exact_checkpoints_without_adopting_a_peer() ->
         matches!(url.scheme(), "mysql" | "postgres" | "postgresql")
             && !url.path().trim_matches('/').is_empty()
     );
-    let db = crate::db::connect(&source).await?;
-    crate::db::run_migrations(&db).await?;
+    let backend = if url.scheme() == "mysql" {
+        sea_orm::DbBackend::MySql
+    } else {
+        sea_orm::DbBackend::Postgres
+    };
+    let fixture = crate::db::migration::server_fixture::OwnedServer::new(
+        backend,
+        "BITROUTER_TEST_DATABASE_URL",
+    )
+    .await?;
+    let checked = readback(&fixture).await;
+    fixture.finish(checked).await
+}
+
+async fn readback(fixture: &crate::db::migration::server_fixture::OwnedServer) -> Result<()> {
+    let db = fixture.database.clone();
+    crate::db::migration::m0_fixture::install(&db).await?;
     let store = CanonicalStore::new(db.clone());
     let session = uuid::Uuid::new_v4().to_string();
     let mut snapshots = Vec::new();
@@ -42,7 +57,7 @@ async fn retained_capture_reopens_exact_checkpoints_without_adopting_a_peer() ->
     }
     ensure!(snapshots[0].1 != snapshots[1].1);
     db.close().await?;
-    let db = crate::db::connect(&source).await?;
+    let db = sea_orm::Database::connect(&fixture.url).await?;
     let reopened = CanonicalStore::new(db.clone());
     for (identity, expected, transcript) in snapshots {
         let checkpoints = reopened.checkpoints(&identity).await?;

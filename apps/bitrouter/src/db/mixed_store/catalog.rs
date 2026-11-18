@@ -88,7 +88,7 @@ pub(super) fn evolution(owner: Owner) -> &'static str {
 }
 
 pub(super) async fn source(db: &DatabaseConnection) -> Result<Vec<Object>> {
-    let objects = validate_catalog(db, None).await?;
+    let objects = validate_catalog(db, None, false).await?;
     ensure!(
         store_format::inspect_m0(db).await? == store_format::State::Current,
         "expected current M0"
@@ -108,8 +108,12 @@ pub(super) async fn source(db: &DatabaseConnection) -> Result<Vec<Object>> {
     Ok(objects)
 }
 
-pub(super) async fn validate_role(db: &impl ConnectionTrait, owner: Owner) -> Result<()> {
-    validate_catalog(db, Some(owner)).await?;
+pub(super) async fn validate_role(
+    db: &impl ConnectionTrait,
+    owner: Owner,
+    serving: bool,
+) -> Result<()> {
+    validate_catalog(db, Some(owner), serving).await?;
     let rows = db
         .query_all(sql(
             "SELECT version, typeof(applied_at) AS clock_type FROM seaql_migrations LIMIT 2",
@@ -131,7 +135,7 @@ pub(super) async fn validate_role(db: &impl ConnectionTrait, owner: Owner) -> Re
 }
 
 pub(super) async fn owned(db: &impl ConnectionTrait, owner: Owner) -> Result<()> {
-    validate_role(db, owner).await?;
+    validate_role(db, owner, false).await?;
     ensure!(
         db.query_one(sql(format!(
             "SELECT 1 FROM checkpoint_evolution WHERE NOT ({}) LIMIT 1",
@@ -150,7 +154,11 @@ pub(super) fn frozen() -> Result<Vec<Object>> {
     ))?)
 }
 
-async fn validate_catalog(db: &impl ConnectionTrait, role: Option<Owner>) -> Result<Vec<Object>> {
+pub(super) async fn validate_catalog(
+    db: &impl ConnectionTrait,
+    role: Option<Owner>,
+    serving: bool,
+) -> Result<Vec<Object>> {
     ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "SQLite required"
@@ -165,73 +173,114 @@ async fn validate_catalog(db: &impl ConnectionTrait, role: Option<Owner>) -> Res
         }
         expected.insert(object.name.clone(), object);
     }
-    let technical = provider_technical::available(db).await?;
+    let technical = !serving && provider_technical::available(db).await?;
     ensure!(
         !technical || role != Some(Owner::Bro),
         "provider facts in BRO store"
     );
-    let rows = db.query_all(sql("SELECT type,name,tbl_name,CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql END AS sql FROM main.sqlite_schema WHERE NOT (type='index' AND name GLOB 'sqlite_autoindex_*' AND sql IS NULL) ORDER BY name LIMIT 128")).await?;
-    ensure!(rows.len() < 128, "unrecognized M0 catalog");
     // Preserve quoted literals, identifiers and token boundaries across SQLite
     // pretty-print differences. Executable DDL comes from the frozen schema.
     let tokens = regex::Regex::new(r#""(?:[^"]|"")*"|'(?:[^']|'')*'|[a-zA-Z0-9_]+|[^\x09-\x0d ]"#)?;
     let mut objects = Vec::new();
-    for row in rows {
-        let name: String = row.try_get("", "name")?;
-        let kind: String = row.try_get("", "type")?;
-        let table: String = row.try_get("", "tbl_name")?;
-        let actual: String = row.try_get("", "sql")?;
-        if name == "sqlite_sequence" {
+    // Each borrowed read fits the smallest audit page. Validate and release the
+    // page before reading another, retaining only recognized catalog objects.
+    const PAGE: usize = 8;
+    for offset in (0..128).step_by(PAGE) {
+        let rows = db.query_all(sql(format!("SELECT type,name,tbl_name,CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql END AS sql FROM main.sqlite_schema WHERE NOT (type='index' AND name GLOB 'sqlite_autoindex_*' AND sql IS NULL) ORDER BY name,type LIMIT {PAGE} OFFSET {offset}"))).await?;
+        ensure!(offset + rows.len() < 128, "unrecognized SQLite catalog");
+        let last = rows.len() < PAGE;
+        for row in rows {
+            let name: String = row.try_get("", "name")?;
+            let kind: String = row.try_get("", "type")?;
+            let table: String = row.try_get("", "tbl_name")?;
+            let actual: String = row.try_get("", "sql")?;
+            if name == "sqlite_sequence" {
+                ensure!(
+                    kind == "table"
+                        && table == name
+                        && actual == "CREATE TABLE sqlite_sequence(name,seq)",
+                    "invalid sequence catalog"
+                );
+                continue;
+            }
+            if matches!(name.as_str(), "sqlite_stat1" | "sqlite_stat4") {
+                let columns = if name == "sqlite_stat1" {
+                    "tbl,idx,stat"
+                } else {
+                    "tbl,idx,neq,nlt,ndlt,sample"
+                };
+                ensure!(
+                    kind == "table"
+                        && name == table
+                        && actual == format!("CREATE TABLE {name}({columns})"),
+                    "invalid SQLite statistics catalog"
+                );
+                continue;
+            }
+            // A passive table occupying an optional name cannot confer capability.
+            // The technical reader/installer checks its exact DDL and stamp before
+            // use. Import and archive validation still require the exact catalog.
+            if serving
+                && matches!(
+                    name.as_str(),
+                    provider_technical::TABLE | "tenancy_provider_technical_schema"
+                )
+            {
+                ensure!(
+                    kind == "table" && name == table && actual.starts_with("CREATE TABLE "),
+                    "conflicting optional schema object"
+                );
+                if db
+                    .query_one(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "SELECT 1 FROM pragma_foreign_key_list(?, 'main') LIMIT 1",
+                        [name.as_str().into()],
+                    ))
+                    .await?
+                    .is_some()
+                {
+                    ensure!(
+                        name == provider_technical::TABLE
+                            && actual
+                                == provider_technical::definition(DatabaseBackend::Sqlite)
+                                    .to_string(sea_orm::sea_query::SqliteQueryBuilder),
+                        "optional table changes gateway foreign keys"
+                    );
+                }
+                continue;
+            }
+            if technical
+                && matches!(
+                    name.as_str(),
+                    provider_technical::TABLE | "tenancy_provider_technical_schema"
+                )
+            {
+                // available() checked both exact compiled DDL strings and their stamp.
+                objects.push(Object {
+                    kind,
+                    name,
+                    tbl_name: table,
+                    sql: actual,
+                });
+                continue;
+            }
+            let object = expected
+                .remove(&name)
+                .context("unexpected object in migration catalog")?;
             ensure!(
-                kind == "table"
-                    && table == name
-                    && actual == "CREATE TABLE sqlite_sequence(name,seq)",
-                "invalid sequence catalog"
+                kind == object.kind
+                    && table == object.tbl_name
+                    && tokens
+                        .find_iter(&actual)
+                        .map(|t| t.as_str())
+                        .eq(tokens.find_iter(&object.sql).map(|t| t.as_str())),
+                "incompatible schema for {name}"
             );
-            continue;
+            objects.push(object);
         }
-        if matches!(name.as_str(), "sqlite_stat1" | "sqlite_stat4") {
-            let columns = if name == "sqlite_stat1" {
-                "tbl,idx,stat"
-            } else {
-                "tbl,idx,neq,nlt,ndlt,sample"
-            };
-            ensure!(
-                kind == "table"
-                    && name == table
-                    && actual == format!("CREATE TABLE {name}({columns})"),
-                "invalid SQLite statistics catalog"
-            );
-            continue;
+        if last {
+            break;
         }
-        if technical
-            && matches!(
-                name.as_str(),
-                provider_technical::TABLE | "tenancy_provider_technical_schema"
-            )
-        {
-            // available() checked both exact compiled DDL strings and their stamp.
-            objects.push(Object {
-                kind,
-                name,
-                tbl_name: table,
-                sql: actual,
-            });
-            continue;
-        }
-        let object = expected
-            .remove(&name)
-            .context("unexpected object in migration catalog")?;
-        ensure!(
-            kind == object.kind
-                && table == object.tbl_name
-                && tokens
-                    .find_iter(&actual)
-                    .map(|t| t.as_str())
-                    .eq(tokens.find_iter(&object.sql).map(|t| t.as_str())),
-            "incompatible schema for {name}"
-        );
-        objects.push(object);
     }
     ensure!(expected.is_empty(), "incomplete migration catalog");
     Ok(objects)

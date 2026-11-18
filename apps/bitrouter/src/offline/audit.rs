@@ -309,8 +309,12 @@ async fn open_inner(
                 gate.release.cancelled().await;
             }
             connections.check()?;
-            let loaded =
-                crate::tenancy::audit::load_with_budget(&mut connections, validation).await?;
+            let loaded = crate::tenancy::audit::load_with_budget(
+                &mut connections,
+                validation,
+                report.evidence.inventory.archive_marker()?,
+            )
+            .await?;
             connections.check()?;
             Ok::<_, anyhow::Error>((loaded, report))
         })
@@ -427,25 +431,7 @@ fn qualify_projection(
         report.evidence.inventory.installation_id.is_some(),
         "archive has no installation"
     );
-    use sea_orm_migration::MigratorTrait;
-    let expected = crate::db::migration::Migrator::migrations()
-        .into_iter()
-        .map(|m| m.name().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    let ledger = report
-        .evidence
-        .inventory
-        .ledger
-        .as_ref()
-        .context("archive ledger missing")?;
-    let actual = ledger
-        .iter()
-        .map(|entry| entry.version.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    ensure!(
-        actual.len() == ledger.len() && actual == expected,
-        "unsupported archive schema ledger"
-    );
+    report.evidence.inventory.archive_marker()?;
     let archive = archive.canonicalize()?;
     let parent = projection
         .parent()

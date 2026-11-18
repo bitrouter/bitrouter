@@ -1383,6 +1383,15 @@ image is `rollback/source.sqlite`. Use the returned gateway database with its or
 and the returned BRO directory as `BRO_HOME`. Check pending usage and tool effects
 at both owners before reopening admission or reverting an active installation.
 
+### Existing PostgreSQL and MySQL installations
+
+For an M0 PostgreSQL or MySQL database, stop the original service and preserve
+the database, its original binary, configuration and keys for recovery. Configure
+the new gateway with a fresh empty database and initialize it there. The gateway
+refuses to serve an existing mixed server database. The offline split command
+accepts stopped SQLite files. PostgreSQL shared deployments retain their separate
+shared migration ledger alongside the ordinary gateway schema.
+
 ## Offline DB evidence (Unix SQLite only)
 
 `bitrouter tenancy offline` operates on explicitly supplied local paths. It does not

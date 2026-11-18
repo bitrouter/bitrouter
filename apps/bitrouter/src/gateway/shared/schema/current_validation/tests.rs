@@ -340,3 +340,38 @@ async fn ut_postgres_shared_schema_composition_refuses_mutated_shared_layout() -
     }).await.context("mutated shared composition refusal deadline exceeded").and_then(|result| result);
     database.finish(result).await
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn ut_postgres_shared_refuses_mixed_ordinary_role_before_registration() -> Result<()> {
+    use sea_orm_migration::MigratorTrait;
+    let mut database = EmptyDatabase::create().await?;
+    let result = async {
+        let timeout = Duration::from_secs(5);
+        let db = database.connect(2, timeout).await?;
+        // Reproduce both independent ledgers installed by the historical binary.
+        crate::db::migration::m0_fixture::install(&db).await?;
+        schema::SharedMigrator::up(&db, None).await?;
+        let authority = Authority::new(
+            Store::new(db, "mixed", timeout)?,
+            DeploymentKey::from_bytes(rand::random())?,
+        );
+        authority.initialize().await?;
+        let fixture = Fixture { authority };
+        let before = fixture.composed_snapshot().await?;
+        let err = Engine::join(fixture.authority.clone(), 30_000)
+            .await
+            .err()
+            .context("mixed store joined")?;
+        ensure!(format!("{err:#}").contains("new empty database"), "{err:#}");
+        let err = schema::initialize_all(fixture.authority.store())
+            .await
+            .err()
+            .context("mixed store bootstrapped")?;
+        ensure!(format!("{err:#}").contains("new empty database"), "{err:#}");
+        ensure!(fixture.composed_snapshot().await? == before);
+        Ok(())
+    }
+    .await;
+    database.finish(result).await
+}

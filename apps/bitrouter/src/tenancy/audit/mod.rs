@@ -64,6 +64,7 @@ pub(crate) struct Loaded(Snapshot);
 pub(crate) async fn load_with_budget(
     connections: &mut Connections,
     budget: crate::offline::ValidationBudget,
+    marker: &str,
 ) -> anyhow::Result<Loaded> {
     connections.validation_budget().await?;
     let db = connections
@@ -79,7 +80,7 @@ pub(crate) async fn load_with_budget(
         let reader = ReadConnection::new(db).with_row_limit(budget.rows.max(64));
         // A valid ledger/digest does not imply BINARY key comparisons. Validate
         // the exact receipt schema before creating any serving Archive.
-        let loaded = validation::load(&reader, budget).await?;
+        let loaded = validation::load(&reader, budget, marker).await?;
         Ok::<_, anyhow::Error>(Snapshot::from_header(&loaded.header))
     }
     .await;

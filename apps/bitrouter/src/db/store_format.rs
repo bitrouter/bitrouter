@@ -3,8 +3,10 @@
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-/// The migration ledger is the ordinary store's sole format discriminator.
+/// Frozen mixed M0 marker. Only stopped historical readers may select it.
 pub(crate) const BASELINE: &str = "m20261118_000001_model_policy_store";
+
+pub(crate) const GATEWAY_SERVER: &str = "m20261118_000005_gateway_server";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
@@ -17,7 +19,7 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
     let marker = if db.get_database_backend() == DatabaseBackend::Sqlite {
         super::mixed_store::Owner::BitRouter.marker()
     } else {
-        BASELINE
+        GATEWAY_SERVER
     };
     let state = inspect_marker(db, marker).await?;
     if state == State::Current && db.get_database_backend() == DatabaseBackend::Sqlite {
@@ -26,13 +28,27 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
     Ok(state)
 }
 
-/// The offline importer is the only reader that accepts the mixed SQLite ledger.
+/// Select a historical SQLite source for the offline split.
 pub(crate) async fn inspect_m0(db: &impl ConnectionTrait) -> Result<State> {
     ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "expected a SQLite snapshot"
     );
     inspect_marker(db, BASELINE).await
+}
+
+/// Recheck the archive's exact inventory marker inside the original read transaction.
+pub(crate) async fn inspect_archive(db: &impl ConnectionTrait, marker: &str) -> Result<()> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite
+            && (marker == BASELINE || marker == super::mixed_store::Owner::BitRouter.marker()),
+        "unsupported archive database role"
+    );
+    ensure!(
+        inspect_marker(db, marker).await? == State::Current,
+        "archive is empty"
+    );
+    super::mixed_store::validate_archive_catalog(db, marker).await
 }
 
 async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State> {
@@ -105,10 +121,17 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
         rows.len() == 1,
         "incomplete or unsupported store format ledger"
     );
-    ensure!(
-        rows[0].try_get::<String>("", "version")? == marker,
-        "unsupported database role or format; stage a supported mixed SQLite database with `bitrouter tenancy offline split-store` or use a fresh database"
-    );
+    let version: String = rows[0].try_get("", "version")?;
+    if version != marker {
+        if backend == DatabaseBackend::Sqlite {
+            anyhow::bail!(
+                "unsupported database role or format; stage a supported mixed SQLite database with `bitrouter tenancy offline split-store` or use a fresh database"
+            );
+        }
+        anyhow::bail!(
+            "unsupported server database role or format; retain the stopped database and its original binary for recovery, and initialize this gateway in a new empty database"
+        );
+    }
     let _: i64 = rows[0].try_get("", "applied_at")?;
     // Format selection is not content authentication. This cheap catalog pass
     // catches retired compiler domains even when somebody has forged a marker.

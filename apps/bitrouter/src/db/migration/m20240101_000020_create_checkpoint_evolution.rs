@@ -59,3 +59,33 @@ pub(super) async fn initialize_current(manager: &SchemaManager<'_>) -> Result<()
         .await?;
     Ok(())
 }
+
+/// Original tenant scope columns and index on the gateway's retained records.
+pub(super) async fn scope(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    for name in ["installation_id", "tenant_id", "creator_principal_id"] {
+        let column = super::m20240101_000028_resource_tenancy::identity(
+            manager.get_database_backend(),
+            name,
+            128,
+            true,
+        );
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Alias::new("checkpoint_evolution"))
+                    .add_column(column)
+                    .to_owned(),
+            )
+            .await?;
+    }
+    manager
+        .create_index(
+            Index::create()
+                .name("idx_legacy33_3_scope")
+                .table(Alias::new("checkpoint_evolution"))
+                .col(Alias::new("installation_id"))
+                .col(Alias::new("tenant_id"))
+                .to_owned(),
+        )
+        .await
+}

@@ -7,7 +7,7 @@ use crate::db::store_format::{self, State};
 pub(super) struct Migration;
 impl MigrationName for Migration {
     fn name(&self) -> &str {
-        store_format::BASELINE
+        store_format::GATEWAY_SERVER
     }
 }
 
@@ -51,7 +51,7 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
                 _ => "INSERT INTO seaql_migrations(version,applied_at) VALUES (?,?)",
             },
             [
-                store_format::BASELINE.into(),
+                store_format::GATEWAY_SERVER.into(),
                 chrono::Utc::now().timestamp().into(),
             ],
         ))
@@ -81,46 +81,8 @@ impl MigrationTrait for Migration {
                 "baseline initialization requires a genuinely empty database".into(),
             ));
         }
-        super::m20240101_000001_create_auth_tables::initialize_current(manager).await?;
-        super::m20240101_000002_create_metering_tables::initialize_current(manager).await?;
-        super::m20240101_000004_create_adequacy_table::initialize_current(manager).await?;
-        super::m20240101_000005_create_adequacy_exploration_table::initialize_current(manager)
-            .await?;
-        super::m20240101_000006_create_adequacy_semantic_success_table::initialize_current(manager)
-            .await?;
-        super::m20240101_000007_add_metering_evidence::initialize_current(manager).await?;
-        super::m20240101_000008_add_metering_reconciliation::initialize_current(manager).await?;
-        super::m20240101_000009_create_adequacy_reliability_events::initialize_current(manager)
-            .await?;
-        super::m20240101_000010_create_eval_exchange::initialize_current(manager).await?;
-        super::m20240101_000011_scope_eval_exchange::initialize_current(manager).await?;
-        super::m20240101_000012_create_trajectory_ledger::initialize_current(manager).await?;
-        super::m20240101_000013_create_continuation_registry::initialize_current(manager).await?;
-        super::m20240101_000015_add_metering_launch_id::initialize_current(manager).await?;
-        super::m20240101_000016_add_acp_metering_identity::initialize_current(manager).await?;
-        super::m20240101_000017_add_metering_route_scope::initialize_current(manager).await?;
-        super::m20240101_000018_create_acp_capture::initialize_current(manager).await?;
-        super::m20240101_000019_create_acp_checkpoints::initialize_current(manager).await?;
-        super::m20240101_000020_create_checkpoint_evolution::initialize_current(manager).await?;
-        super::m20240101_000021_add_router_request_identity::initialize_current(manager).await?;
-        super::m20240101_000022_create_bro_execution_records::initialize_current(manager).await?;
-        super::m20240101_000023_create_bro_acceptance_keys::initialize_current(manager).await?;
-        super::m20240101_000024_create_bro_runtime_ownership::initialize_current(manager).await?;
-        super::m20240101_000025_create_bro_execution_index::initialize_current(manager).await?;
-        super::m20240101_000026_bro_runtime_format::initialize_current(manager).await?;
-        super::m20240101_000027_bro_managed_sessions::initialize_current(manager).await?;
-        super::m20240101_000028_resource_tenancy::initialize_current(manager).await?;
-        super::m20240101_000029_tenancy_configurations::initialize_current(manager).await?;
-        super::m20240101_000030_eval_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000031_native_continuation_epoch::initialize_current(manager).await?;
-        super::m20240101_000032_trajectory_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000033_capture_legacy_scope::initialize_current(manager).await?;
-        super::m20240101_000034_continuation_storage_scope::initialize_current(manager).await?;
-        super::m20240101_000036_native_harness_scope::initialize_current(manager).await?;
-        super::m20240101_000037_owned_oauth::initialize_current(manager).await?;
-        super::m20240101_000038_eval_import_provenance::initialize_current(manager).await?;
-        super::m20240101_000039_resource_lifecycle::initialize_current(manager).await?;
-        receipts(manager).await?;
+        service_tables(manager).await?;
+        super::m20240101_000020_create_checkpoint_evolution::scope(manager).await?;
         validate_tables(manager.get_connection()).await
     }
 
@@ -129,6 +91,33 @@ impl MigrationTrait for Migration {
             "current store rollback requires its original binary and backup".into(),
         ))
     }
+}
+
+pub(super) async fn service_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    super::m20240101_000001_create_auth_tables::initialize_current(manager).await?;
+    super::m20240101_000002_create_metering_tables::initialize_current(manager).await?;
+    super::m20240101_000007_add_metering_evidence::initialize_current(manager).await?;
+    super::m20240101_000008_add_metering_reconciliation::initialize_current(manager).await?;
+    super::m20240101_000010_create_eval_exchange::initialize_current(manager).await?;
+    super::m20240101_000011_scope_eval_exchange::initialize_current(manager).await?;
+    super::m20240101_000012_create_trajectory_ledger::initialize_current(manager).await?;
+    super::m20240101_000013_create_continuation_registry::initialize_current(manager).await?;
+    super::m20240101_000015_add_metering_launch_id::initialize_current(manager).await?;
+    super::m20240101_000016_add_acp_metering_identity::initialize_current(manager).await?;
+    super::m20240101_000017_add_metering_route_scope::initialize_current(manager).await?;
+    super::m20240101_000020_create_checkpoint_evolution::initialize_current(manager).await?;
+    super::m20240101_000021_add_router_request_identity::initialize_current(manager).await?;
+    super::m20240101_000028_resource_tenancy::initialize_current(manager).await?;
+    super::m20240101_000029_tenancy_configurations::initialize_current(manager).await?;
+    super::m20240101_000030_eval_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000031_native_continuation_epoch::initialize_current(manager).await?;
+    super::m20240101_000032_trajectory_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000034_continuation_storage_scope::initialize_current(manager).await?;
+    super::m20240101_000037_owned_oauth::initialize_current(manager).await?;
+    super::m20240101_000038_eval_import_provenance::initialize_current(manager).await?;
+    super::m20240101_000039_resource_lifecycle::initialize_current(manager).await?;
+    receipts(manager).await?;
+    Ok(())
 }
 
 async fn receipts(manager: &SchemaManager<'_>) -> Result<(), DbErr> {

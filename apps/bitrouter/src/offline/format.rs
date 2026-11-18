@@ -216,3 +216,17 @@ impl crate::output::CliReport for Report {
         human.line("External OAuth/workspace state is not included or fenced. Not a full backup.")
     }
 }
+
+impl Inventory {
+    pub(crate) fn archive_marker(&self) -> anyhow::Result<&str> {
+        let Some([entry]) = self.ledger.as_deref() else {
+            anyhow::bail!("unsupported archive schema ledger");
+        };
+        anyhow::ensure!(
+            entry.version == crate::db::store_format::BASELINE
+                || entry.version == crate::db::mixed_store::Owner::BitRouter.marker(),
+            "unsupported archive schema ledger"
+        );
+        Ok(&entry.version)
+    }
+}

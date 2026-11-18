@@ -62,11 +62,23 @@ async fn large_projection_keeps_inventory_and_rejects_input_scratch_alias() -> R
 }
 
 async fn bundle(home: &Path) -> Result<(PathBuf, String)> {
+    source(home, false).await?;
+    let bundle = home.join("bundle");
+    super::super::snapshot(&home.join("source.sqlite"), &bundle).await?;
+    let evidence = std::fs::read(bundle.join("evidence.json"))?;
+    Ok((bundle, files::sha(&evidence)))
+}
+
+async fn source(home: &Path, mixed: bool) -> Result<PathBuf> {
     let source = home.join("source.sqlite");
     let owner = crate::tenancy::ownership::acquire_path(&source, true)?;
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
-    crate::db::run_migrations(&db).await?;
+    if mixed {
+        crate::db::migration::m0_fixture::install(&db).await?;
+    } else {
+        crate::db::run_migrations(&db).await?;
+    }
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "INSERT INTO tenancy_installation(singleton,schema_version,installation_id,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,?,'audit-budget',0,0,0,0,'2026-01-01T00:00:00Z')",
@@ -75,10 +87,42 @@ async fn bundle(home: &Path) -> Result<(PathBuf, String)> {
     db.close().await?;
     drop(owner);
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
-    let bundle = home.join("bundle");
-    super::super::snapshot(&source, &bundle).await?;
-    let evidence = std::fs::read(bundle.join("evidence.json"))?;
-    Ok((bundle, files::sha(&evidence)))
+    Ok(source)
+}
+
+#[tokio::test]
+async fn streamed_evidence_reopens_original_mixed_and_projected_authority() -> Result<()> {
+    for mixed in [true, false] {
+        let home = tempfile::tempdir()?;
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700))?;
+        let database = source(home.path(), mixed).await?;
+        let options = super::super::large::Options {
+            working_bytes: 64 * 1024 * 1024,
+            scratch_directory: home.path().canonicalize()?,
+            min_free_bytes: 1,
+        };
+        let bundle = home.path().join("streamed");
+        super::super::snapshot_with_options(&database, &bundle, options.clone()).await?;
+        let digest = files::sha(&std::fs::read(bundle.join("evidence.json"))?);
+        let projection = home.path().join("projection");
+        let archive = open_inner(
+            &bundle,
+            &projection,
+            &digest,
+            CancellationToken::new(),
+            super::super::ValidationBudget::default(),
+            Some(options),
+            None,
+        )
+        .await?;
+        ensure!(archive.installation().as_str() == "audit-budget");
+        archive.shutdown().await?;
+        ensure!(
+            std::fs::read(bundle.join("snapshot.sqlite"))?
+                == std::fs::read(projection.join("audit.sqlite"))?
+        );
+    }
+    Ok(())
 }
 
 /// The real projection owner survives the former observer timeout and finishes.

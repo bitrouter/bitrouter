@@ -396,6 +396,7 @@ async fn work(
     tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_source_audit_begin");
     let source_result = crate::tenancy::audit::recovery::v2::no_copied_credentials_in(
         c.copy.as_mut().context("source connection")?,
+        verified.evidence.inventory.archive_marker()?,
         &plan.source.installation_id,
         &mut proof.credentials,
         validation,

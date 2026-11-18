@@ -606,6 +606,7 @@ async fn restore(
     sea_orm::sqlx::query("BEGIN").execute(&mut *db).await?;
     let proof = crate::tenancy::audit::recovery::v2::inspect_restore_in(
         db,
+        pending.report.evidence.inventory.archive_marker()?,
         installation,
         wrapping_key_env,
         super::ValidationBudget {

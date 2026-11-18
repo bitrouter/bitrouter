@@ -548,6 +548,7 @@ async fn proof_fits(
 ) -> Result<bool> {
     let error = crate::tenancy::audit::recovery::v2::inspect_restore_in(
         db,
+        crate::db::mixed_store::Owner::BitRouter.marker(),
         installation,
         missing_key,
         crate::offline::ValidationBudget { rows: 32, bytes },

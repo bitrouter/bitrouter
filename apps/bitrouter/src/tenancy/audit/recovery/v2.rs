@@ -57,7 +57,14 @@ pub(crate) async fn inspect_target_in<'a>(
     let reader = ReadConnection::new(db)
         .with_row_limit(validation.rows.max(128))
         .with_workspace(workspace);
-    let header = validated_header(&reader, &target.installation_id, validation, workspace).await?;
+    let header = validated_header(
+        &reader,
+        inventory.archive_marker()?,
+        &target.installation_id,
+        validation,
+        workspace,
+    )
+    .await?;
     catalog::recovery(&reader, inventory, &target.installation_id).await?;
     let (mut qualifiers, credentials, mut earliest) = fresh_directory(&reader, workspace).await?;
     let check = || workspace.check();
@@ -233,6 +240,7 @@ fn sort_bytes(workspace: &Workspace) -> usize {
 
 async fn validated_header(
     db: &impl ConnectionTrait,
+    marker: &str,
     expected: &InstallationId,
     validation: ValidationBudget,
     workspace: &Workspace,
@@ -246,6 +254,7 @@ async fn validated_header(
             rows: validation.rows,
             bytes,
         },
+        marker,
     )
     .await?
     .header;
@@ -524,6 +533,7 @@ async fn check_creator(
 /// Target SQL must be closed before the caller establishes this source phase.
 pub(crate) async fn no_copied_credentials_in(
     db: &mut SqliteConnection,
+    marker: &str,
     source: &InstallationId,
     credentials: &mut Sorted<'_, 32>,
     validation: ValidationBudget,
@@ -532,7 +542,7 @@ pub(crate) async fn no_copied_credentials_in(
     let reader = ReadConnection::new(db)
         .with_row_limit(validation.rows.max(128))
         .with_workspace(workspace);
-    let header = validated_header(&reader, source, validation, workspace).await?;
+    let header = validated_header(&reader, marker, source, validation, workspace).await?;
     let bytes = workspace.available() / 4;
     let _phase = workspace.reserve(bytes)?;
     while let Some(hash) = credentials.next()? {
@@ -551,6 +561,7 @@ pub(crate) async fn no_copied_credentials_in(
 /// run feature recovery, clear a fence, initialize storage or admit dispatch.
 pub(crate) async fn inspect_restore_in(
     db: &mut SqliteConnection,
+    marker: &str,
     expected: &InstallationId,
     wrapping_key_env: &str,
     validation: ValidationBudget,
@@ -568,6 +579,7 @@ pub(crate) async fn inspect_restore_in(
             rows: validation.rows,
             bytes,
         },
+        marker,
     )
     .await?
     .header;

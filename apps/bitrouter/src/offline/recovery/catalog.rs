@@ -126,26 +126,15 @@ pub(super) async fn fresh(
             && inventory.value_bytes <= plan::TARGET_BYTES,
         "target identity/profile mismatch"
     );
-    use sea_orm_migration::MigratorTrait;
-    let actual = inventory
-        .ledger
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("target ledger missing"))?;
-    let expected = crate::db::migration::Migrator::migrations();
     ensure!(
-        actual.len() == expected.len()
-            && actual
-                .iter()
-                .zip(&expected)
-                .all(|(a, e)| a.version == e.name()),
-        "target schema ledger differs from this verifier"
+        inventory.archive_marker()? == crate::db::mixed_store::Owner::BitRouter.marker(),
+        "fresh target requires a gateway ledger"
     );
     for table in &inventory.tables {
         let permitted = matches!(
             table.name.as_str(),
             "seaql_migrations"
                 | "sqlite_sequence"
-                | "bro_runtime_ownership"
                 | "tenancy_continuation_epoch"
                 | "tenancy_installation"
                 | "tenancy_tenants"
@@ -163,21 +152,6 @@ pub(super) async fn fresh(
             "target contains operational or imported history"
         );
     }
-    let row = sea_orm::sqlx::query(
-        "SELECT id,generation,server_instance_id,stopped_at_ms FROM bro_runtime_ownership LIMIT 2",
-    )
-    .fetch_all(&mut *db)
-    .await?;
-    ensure!(
-        row.len() == 1
-            && row[0].try_get::<i64, _>("id")? == 1
-            && row[0].try_get::<i64, _>("generation")? == 0
-            && row[0]
-                .try_get::<Option<String>, _>("server_instance_id")?
-                .is_none()
-            && row[0].try_get::<Option<i64>, _>("stopped_at_ms")?.is_none(),
-        "target runtime history is not fresh"
-    );
     if inventory.tables.iter().any(|t| t.name == "sqlite_sequence") {
         let used: i64 =
             sea_orm::sqlx::query_scalar("SELECT count(*) FROM sqlite_sequence WHERE seq<>0")

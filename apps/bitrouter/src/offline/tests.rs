@@ -344,12 +344,9 @@ async fn actual_migrated_bitrouter_schema_with_historical_checks_can_snapshot() 
         .ledger
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("actual ledger absent"))?;
-    use sea_orm_migration::MigratorTrait;
-    let expected: Vec<_> = crate::db::migration::Migrator::migrations()
-        .into_iter()
-        .map(|m| m.name().to_owned())
-        .collect();
-    ensure!(ledger.iter().map(|m| &m.version).eq(expected.iter()));
+    ensure!(
+        ledger.len() == 1 && ledger[0].version == crate::db::mixed_store::Owner::BitRouter.marker()
+    );
     ensure!(
         report
             .evidence

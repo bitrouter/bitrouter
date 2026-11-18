@@ -467,6 +467,7 @@ async fn rejected_source(
         phase("negative_source_audit_begin", started);
         let outcome = no_copied_credentials_in(
             db,
+            crate::db::mixed_store::Owner::BitRouter.marker(),
             installation,
             &mut proof.credentials,
             ValidationBudget::default(),

@@ -126,18 +126,13 @@ async fn exercise(database_url: &str) -> Result<()> {
         let previous_ledger = existing_ledger(&connection).await?;
         db::run_migrations(&connection).await?;
         let ledger = Migrator::get_migration_models(&connection).await?;
-        let expected: Vec<String> = Migrator::migrations()
-            .iter()
-            .map(|migration| migration.name().to_owned())
-            .collect();
-        let actual: Vec<String> = ledger.iter().map(|row| row.version.clone()).collect();
+        let expected = match connection.get_database_backend() {
+            DatabaseBackend::Sqlite => "m20261118_000003_gateway_sqlite",
+            DatabaseBackend::Postgres | DatabaseBackend::MySql => "m20261118_000005_gateway_server",
+        };
         ensure!(
-            expected.len() == 1,
-            "the store must have one current baseline"
-        );
-        ensure!(
-            actual == expected,
-            "migration ledger does not match the complete migrator order"
+            ledger.len() == 1 && ledger[0].version == expected,
+            "unexpected gateway format ledger"
         );
         if let Some(previous) = previous_ledger {
             let current = ledger
@@ -149,12 +144,6 @@ async fn exercise(database_url: &str) -> Result<()> {
                 "current baseline validation changed an existing ledger entry"
             );
         }
-        ensure!(
-            Migrator::get_pending_migrations(&connection)
-                .await?
-                .is_empty()
-        );
-
         write_auth(&connection, &fixture).await?;
         write_evolution(&connection, &fixture).await?;
         write_metering(&connection, &fixture).await?;

@@ -7,11 +7,15 @@
 mod m20240101_000001_create_auth_tables;
 mod m20240101_000002_create_metering_tables;
 
+#[cfg(test)]
 mod m20240101_000004_create_adequacy_table;
+#[cfg(test)]
 mod m20240101_000005_create_adequacy_exploration_table;
+#[cfg(test)]
 mod m20240101_000006_create_adequacy_semantic_success_table;
 mod m20240101_000007_add_metering_evidence;
 mod m20240101_000008_add_metering_reconciliation;
+#[cfg(test)]
 mod m20240101_000009_create_adequacy_reliability_events;
 mod m20240101_000010_create_eval_exchange;
 mod m20240101_000011_scope_eval_exchange;
@@ -21,24 +25,34 @@ mod m20240101_000015_add_metering_launch_id;
 mod m20240101_000016_add_acp_metering_identity;
 mod m20240101_000017_add_metering_route_scope;
 
+#[cfg(test)]
 mod m20240101_000018_create_acp_capture;
+#[cfg(test)]
 mod m20240101_000019_create_acp_checkpoints;
 mod m20240101_000020_create_checkpoint_evolution;
 mod m20240101_000021_add_router_request_identity;
+#[cfg(test)]
 mod m20240101_000022_create_bro_execution_records;
+#[cfg(test)]
 mod m20240101_000023_create_bro_acceptance_keys;
+#[cfg(test)]
 mod m20240101_000024_create_bro_runtime_ownership;
+#[cfg(test)]
 mod m20240101_000025_create_bro_execution_index;
+#[cfg(test)]
 mod m20240101_000026_bro_runtime_format;
+#[cfg(test)]
 mod m20240101_000027_bro_managed_sessions;
 mod m20240101_000028_resource_tenancy;
 mod m20240101_000029_tenancy_configurations;
 mod m20240101_000030_eval_storage_scope;
 mod m20240101_000031_native_continuation_epoch;
 mod m20240101_000032_trajectory_storage_scope;
+#[cfg(test)]
 mod m20240101_000033_capture_legacy_scope;
 mod m20240101_000034_continuation_storage_scope;
 mod m20240101_000035_execution_receipts;
+#[cfg(test)]
 mod m20240101_000036_native_harness_scope;
 mod m20240101_000037_owned_oauth;
 mod m20240101_000038_eval_import_provenance;
@@ -54,6 +68,10 @@ mod m20240101_000045_ordered_receipts;
 pub(crate) mod provider_technical;
 
 mod baseline;
+#[cfg(test)]
+pub(crate) mod m0_fixture;
+#[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
+pub(crate) mod server_fixture;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -330,7 +348,10 @@ mod tests {
     {
         let migrations = Migrator::migrations();
         assert_eq!(migrations.len(), 1);
-        assert_eq!(migrations[0].name(), crate::db::store_format::BASELINE);
+        assert_eq!(
+            migrations[0].name(),
+            crate::db::store_format::GATEWAY_SERVER
+        );
 
         let db = crate::db::connect("sqlite::memory:").await?;
         Migrator::up(&db, None).await?;

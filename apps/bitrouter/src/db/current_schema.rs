@@ -95,7 +95,13 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
         backend != DatabaseBackend::Sqlite,
         "server catalog required"
     );
-    let expected = expected()?;
+    let mut expected_gateway = Vec::new();
+    for table in expected()? {
+        if super::mixed_store::gateway_table(&table.name)? {
+            expected_gateway.push(table);
+        }
+    }
+    let expected = expected_gateway;
     let tables = rows(db, catalog::tables(backend)).await?;
     let mut names = BTreeSet::new();
     for row in tables {

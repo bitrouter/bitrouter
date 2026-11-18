@@ -37,7 +37,6 @@ pub(crate) async fn recovery(
                 || [
                     "seaql_migrations",
                     "sqlite_sequence",
-                    "bro_runtime_ownership",
                     "tenancy_continuation_epoch",
                     "tenancy_resource_revisions",
                     "tenancy_resource_lifecycle",
@@ -57,26 +56,14 @@ async fn common(
     inventory: &Inventory,
     installation: &InstallationId,
 ) -> Result<()> {
-    use sea_orm_migration::MigratorTrait;
     ensure!(
         inventory.encoding == "UTF-8"
             && inventory.installation_id.as_deref() == Some(installation.as_str()),
         "fresh target identity mismatch"
     );
-    let ledger = inventory.ledger.as_ref().context("target ledger missing")?;
-    let expected = crate::db::migration::Migrator::migrations();
     ensure!(
-        ledger.len() == expected.len()
-            && ledger
-                .iter()
-                .zip(expected)
-                .all(|(actual, expected)| actual.version == expected.name()),
-        "target ledger differs from verifier"
-    );
-    let rows = db.query_all(Statement::from_string(db.get_database_backend(), "SELECT CASE WHEN typeof(id)='integer' AND id=1 AND typeof(generation)='integer' AND generation=0 AND server_instance_id IS NULL AND stopped_at_ms IS NULL THEN 1 ELSE 0 END AS fresh FROM bro_runtime_ownership LIMIT 2")).await?;
-    ensure!(
-        rows.len() == 1 && rows[0].try_get::<i64>("", "fresh")? == 1,
-        "target runtime history is not fresh"
+        inventory.archive_marker()? == crate::db::mixed_store::Owner::BitRouter.marker(),
+        "fresh target requires a gateway ledger"
     );
     if inventory
         .tables

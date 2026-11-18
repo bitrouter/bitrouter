@@ -286,7 +286,29 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
 /// # Errors
 /// Rejects a mixed, BRO, partial, shadowed or altered SQLite catalog.
 pub(crate) async fn validate_gateway_schema(db: &impl ConnectionTrait) -> Result<()> {
-    catalog::validate_role(db, Owner::BitRouter).await?;
+    catalog::validate_role(db, Owner::BitRouter, true).await?;
+    require_active_format(db).await
+}
+
+/// Authenticate the whole frozen M0 or gateway schema before reading an archive.
+pub(crate) async fn validate_archive_catalog(
+    db: &impl ConnectionTrait,
+    marker: &str,
+) -> Result<()> {
+    let role = if marker == super::store_format::BASELINE {
+        None
+    } else {
+        ensure!(
+            marker == Owner::BitRouter.marker(),
+            "unsupported archive role"
+        );
+        Some(Owner::BitRouter)
+    };
+    catalog::validate_catalog(db, role, false).await?;
+    require_active_format(db).await
+}
+
+async fn require_active_format(db: &impl ConnectionTrait) -> Result<()> {
     let id = db
         .query_one(sql("PRAGMA main.application_id"))
         .await?
@@ -337,6 +359,10 @@ pub async fn verify_owner(database: &Path, owner: Owner) -> Result<()> {
     let result = catalog::owned(&db, owner).await;
     db.close().await?;
     result
+}
+
+pub(super) fn gateway_table(name: &str) -> Result<bool> {
+    catalog::belongs(name, Owner::BitRouter)
 }
 
 fn private_dir(path: &Path) -> Result<()> {

@@ -147,6 +147,16 @@ async fn connect_inner(
             false,
         )
     };
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        let state = store_format::inspect(&db).await.map_err(|error| {
+            BitrouterError::bad_request(format!("selecting gateway server database: {error}"))
+        })?;
+        if state == store_format::State::Current {
+            current_schema::validate(&db).await.map_err(|error| {
+                BitrouterError::bad_request(format!("validating gateway server database: {error}"))
+            })?;
+        }
+    }
     if owner.is_none()
         && !readonly
         && crate::tenancy::ownership::has_installation(&db)

@@ -31,6 +31,7 @@ fn facts(state: &AuthorityHeader) -> AuthorityFacts {
 }
 pub(crate) async fn inspect_source(
     db: &mut SqliteConnection,
+    marker: &str,
     expected: &InstallationId,
     check: &(dyn Fn() -> Result<()> + Sync),
     validation_budget: crate::offline::ValidationBudget,
@@ -39,7 +40,7 @@ pub(crate) async fn inspect_source(
     let reader = ReadConnection::new(db).with_row_limit(validation_budget.rows.max(128));
     crate::db::migration::validate_receipt_archive(&reader).await?;
     check()?;
-    let state = super::validation::load(&reader, validation_budget)
+    let state = super::validation::load(&reader, validation_budget, marker)
         .await?
         .header;
     ensure!(
@@ -60,9 +61,13 @@ async fn fresh_operations(
     // Complete single-body allocation preflight precedes fresh readback. The
     // caller's SAME fixed transaction binds those checked bytes to the exact
     // reads below; only keys may accumulate in a page alongside one body.
-    let state = super::validation::load(reader, validation_budget)
-        .await?
-        .header;
+    let state = super::validation::load(
+        reader,
+        validation_budget,
+        crate::db::mixed_store::Owner::BitRouter.marker(),
+    )
+    .await?
+    .header;
     let mut count = 0_usize;
     let mut after: Option<(String, String, String)> = None;
     loop {
