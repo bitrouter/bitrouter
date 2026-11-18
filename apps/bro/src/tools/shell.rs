@@ -1,5 +1,6 @@
 //! Declared shell interpreter, streaming output and owned process cleanup.
 
+use crate::workspace::Directory;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -20,7 +21,7 @@ pub(super) struct Interpreter {
 }
 
 impl Interpreter {
-    pub(super) fn discover(root: &Path) -> Option<Self> {
+    pub(super) fn discover(root: &Directory) -> Option<Self> {
         let launcher = if cfg!(target_os = "macos") {
             "/usr/bin/sandbox-exec"
         } else if cfg!(target_os = "linux") {
@@ -32,7 +33,7 @@ impl Interpreter {
         // A package on PATH, or an installed bwrap without usable namespaces,
         // cannot establish the grant. Probe exactly the execution configuration.
         sandbox
-            .command(root, ":")
+            .command(root, ": < .")
             .ok()?
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -43,15 +44,18 @@ impl Interpreter {
             .then_some(sandbox)
     }
 
-    fn command(&self, root: &Path, script: &str) -> std::io::Result<std::process::Command> {
+    fn command(&self, root: &Directory, script: &str) -> std::io::Result<std::process::Command> {
         let mut cmd = std::process::Command::new(self.launcher);
         cmd.env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("LC_ALL", "C")
-            .current_dir(root);
+            .env("LC_ALL", "C");
         if cfg!(target_os = "macos") {
+            // The original path can be occupied by a different directory while
+            // the shell runs. Never grant it to Seatbelt. Some releases cannot
+            // open the directory under a volume/file-ID rule; discovery must
+            // exercise an actual workspace open and refuse on those hosts.
             let mut parameter = std::ffi::OsString::from("BRO_WORKSPACE=");
-            parameter.push(root);
+            parameter.push(&root.path);
             cmd.arg("-D").arg(parameter).args([
                 "-p",
                 include_str!("shell.sb"),
@@ -82,7 +86,7 @@ impl Interpreter {
                 }
             }
             cmd.args(["--dev", "/dev", "--tmpfs", "/tmp", "--bind"])
-                .arg(root)
+                .arg(".")
                 .args([
                     "/workspace",
                     "--remount-ro",
@@ -92,11 +96,22 @@ impl Interpreter {
                     "--",
                     "/bin/sh",
                     "-c",
-                    script,
+                    // The bind mount now pins the source. Older bwrap resolves
+                    // its source by name; verify the mounted object before it
+                    // can run any operator or model code.
+                    r#"[ "$(/usr/bin/stat -Lc '%d:%i' .)" = "$1" ] || exit 125; exec /bin/sh -c "$2""#,
+                    "bro-workspace",
                 ]);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let meta = root.file.metadata()?;
+                cmd.arg(format!("{}:{}", meta.dev(), meta.ino()));
+            }
+            cmd.arg(script);
         }
         #[cfg(unix)]
-        seal_inherited_descriptors(&mut cmd)?;
+        seal_inherited_descriptors(&mut cmd, root.file.try_clone()?)?;
         Ok(cmd)
     }
 
@@ -113,7 +128,11 @@ impl Interpreter {
 // BRO opens its own files close-on-exec. Also seal descriptors supplied by
 // the invoking process, which could otherwise carry authority across the sandbox.
 #[cfg(unix)]
-fn seal_inherited_descriptors(cmd: &mut std::process::Command) -> std::io::Result<()> {
+fn seal_inherited_descriptors(
+    cmd: &mut std::process::Command,
+    directory: std::fs::File,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     let mut inherited = Vec::new();
     for entry in std::fs::read_dir("/dev/fd")? {
@@ -126,10 +145,13 @@ fn seal_inherited_descriptors(cmd: &mut std::process::Command) -> std::io::Resul
             inherited.push(fd);
         }
     }
-    // SAFETY: only async-signal-safe fcntl runs in the child. CLOEXEC keeps
+    // SAFETY: fchdir and fcntl are async-signal-safe. CLOEXEC keeps
     // Rust's own child-error pipe usable until exec. A closed fd needs no action.
     unsafe {
         cmd.pre_exec(move || {
+            if libc::fchdir(directory.as_raw_fd()) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             for &fd in &inherited {
                 if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
                     let error = std::io::Error::last_os_error();
@@ -165,7 +187,7 @@ impl WorkspaceTools {
             .ok_or("shell disabled: workspace sandbox unavailable")?;
         let mut command = Command::from(
             interpreter
-                .command(&self.root, &args.command)
+                .command(&self.directory, &args.command)
                 .map_err(|e| format!("preparing shell sandbox: {e}"))?,
         );
         command

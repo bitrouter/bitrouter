@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use bitrouter_ai::types::{Tool, ToolResultOutput};
 use globset::Glob;
@@ -37,6 +37,7 @@ const MAX_GREP_LINE_CHARS: usize = 500;
 #[derive(Clone)]
 pub(crate) struct WorkspaceTools {
     root: PathBuf,
+    directory: Arc<crate::workspace::Directory>,
     mode: ToolMode,
     interpreter: OnceLock<Option<Interpreter>>,
 }
@@ -257,23 +258,46 @@ impl ToolKind {
 }
 
 impl WorkspaceTools {
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
+    pub(crate) fn new(root: &Path, mode: ToolMode) -> anyhow::Result<Self> {
+        Self::open(&root.canonicalize()?, mode)
     }
 
-    pub(crate) fn new(root: &Path, mode: ToolMode) -> std::io::Result<Self> {
-        let root = root.canonicalize()?;
-        if !root.is_dir() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotADirectory,
-                "workspace is not a directory",
-            ));
-        }
+    fn open(canonical: &Path, mode: ToolMode) -> anyhow::Result<Self> {
+        let directory = Arc::new(crate::workspace::Directory::open(canonical)?);
         Ok(Self {
-            root,
+            root: directory.path.clone(),
+            directory,
             mode,
             interpreter: OnceLock::new(),
         })
+    }
+
+    pub(crate) fn for_thread(thread: &crate::checkpoint::Thread) -> anyhow::Result<Self> {
+        use anyhow::Context;
+        anyhow::ensure!(
+            thread.workspace.canonicalize()? == thread.workspace,
+            "workspace directory changed since admission"
+        );
+        let tools = Self::open(&thread.workspace, thread.tool_mode)?;
+        tools.directory.verify(
+            thread
+                .workspace_id
+                .as_ref()
+                .context("saved workspace grant has no filesystem identity")?,
+        )?;
+        Ok(tools)
+    }
+
+    // Canonicalization is used to resolve existing in-workspace symlinks. Only
+    // the relative suffix is retained; all subsequent I/O uses the pinned root.
+    fn resolved(&self, path: &Path) -> Result<PathBuf, String> {
+        let canonical_root =
+            crate::workspace::physical_path(&self.root).map_err(|e| e.to_string())?;
+        let target = crate::workspace::physical_path(path).map_err(|e| e.to_string())?;
+        let suffix = target
+            .strip_prefix(&canonical_root)
+            .map_err(|_| "path escapes the workspace")?;
+        Ok(self.root.join(suffix))
     }
 
     fn interpreter(&self) -> Option<&Interpreter> {
@@ -281,7 +305,7 @@ impl WorkspaceTools {
             return None;
         }
         self.interpreter
-            .get_or_init(|| Interpreter::discover(&self.root))
+            .get_or_init(|| Interpreter::discover(&self.directory))
             .as_ref()
     }
 
@@ -406,15 +430,7 @@ impl WorkspaceTools {
 
     fn existing_path(&self, path: &str) -> Result<PathBuf, String> {
         let relative = validate_relative(path)?;
-        let path = self
-            .root
-            .join(relative)
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
-        if !path.starts_with(&self.root) {
-            return Err("path escapes the workspace".into());
-        }
-        Ok(path)
+        self.resolved(&self.root.join(relative))
     }
 
     fn writable_path(
@@ -436,22 +452,15 @@ impl WorkspaceTools {
             while !existing.exists() {
                 existing = existing.parent().ok_or("path has no existing ancestor")?;
             }
-            if !existing
-                .canonicalize()
-                .map_err(|error| error.to_string())?
-                .starts_with(&self.root)
-            {
-                return Err("path escapes the workspace".into());
-            }
-            if !parent.exists() {
+            let pinned = self.resolved(existing)?;
+            if existing != parent {
+                let missing = parent.strip_prefix(existing).map_err(|e| e.to_string())?;
                 *effect = EffectStatus::Unknown;
-                crate::durable::create_dirs(parent, false).map_err(|error| error.to_string())?;
+                crate::durable::create_dirs(&pinned.join(missing), false)
+                    .map_err(|error| error.to_string())?;
             }
         }
-        let parent = parent.canonicalize().map_err(|error| error.to_string())?;
-        if !parent.starts_with(&self.root) {
-            return Err("path escapes the workspace".into());
-        }
+        let parent = self.resolved(parent)?;
         let name = candidate.file_name().ok_or("path has no filename")?;
         let path = parent.join(name);
         if !create_parents && !path.is_file() {

@@ -201,11 +201,6 @@ pub(crate) async fn drive(
     scheduler: Option<&crate::tree::Scheduler>,
     depth: u32,
 ) -> Result<()> {
-    let tools = WorkspaceTools::new(&thread.workspace, thread.tool_mode)?;
-    ensure!(
-        tools.root() == thread.workspace,
-        "workspace moved since admission"
-    );
     loop {
         if cancel.is_cancelled() {
             return cancel_turn(home, thread);
@@ -225,10 +220,7 @@ pub(crate) async fn drive(
                 return Ok(());
             }
         }
-        if matches!(
-            next,
-            Next::Verify | Next::Model | Next::Tool(_) | Next::Complete
-        ) {
+        if next == Next::Complete {
             thread.verify_workspace()?;
         }
         match next {
@@ -281,6 +273,7 @@ pub(crate) async fn drive(
                     None => None,
                 };
                 if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                    let tools = WorkspaceTools::for_thread(thread)?;
                     crate::verification::run(home, thread, &tools, cancel).await?;
                 }
             }
@@ -288,6 +281,7 @@ pub(crate) async fn drive(
                 if let Some(tree) = scheduler
                     && crate::tree::is_spawn(thread, index)?
                 {
+                    thread.verify_workspace()?;
                     tree.children(home, thread, client, cancel, depth, index)
                         .await?;
                 } else {
@@ -296,6 +290,7 @@ pub(crate) async fn drive(
                         None => None,
                     };
                     if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                        let tools = WorkspaceTools::for_thread(thread)?;
                         run_tool(home, thread, &tools, index, cancel).await?;
                     }
                 }
@@ -306,6 +301,7 @@ pub(crate) async fn drive(
                     None => None,
                 };
                 if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                    let tools = WorkspaceTools::for_thread(thread)?;
                     run_model(home, thread, client, &tools, cancel, scheduler).await?;
                 }
             }

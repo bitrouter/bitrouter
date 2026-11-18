@@ -544,3 +544,150 @@ async fn verification_result_publication_never_repeats_the_shell() -> Result<()>
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn queued_approved_write_rechecks_the_workspace_after_the_tool_permit() -> Result<()> {
+    use std::task::Poll;
+    let mock = Mock::start(vec![call_stream(true)])?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    thread.enable_managed();
+    runner::run(&home, &mut thread, &client).await?;
+    let pending = thread
+        .current()?
+        .pending()
+        .context("expected write approval")?
+        .request_id
+        .clone();
+    runner::answer(&home, &mut thread, &pending, true)?;
+    let tree = crate::tree::Scheduler::restore(&thread)?;
+    let permits = tree
+        .tools
+        .acquire_many(tree.tools.available_permits().try_into()?)
+        .await?;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let workspace = thread.workspace.clone();
+    let moved = workspace.with_file_name("original");
+    let mut drive = Box::pin(runner::drive(
+        &home,
+        &mut thread,
+        &client,
+        &cancel,
+        Some(&tree),
+        0,
+    ));
+    assert!(matches!(futures::poll!(&mut drive), Poll::Pending));
+    fs::rename(&workspace, &moved)?;
+    fs::create_dir(&workspace)?;
+    drop(permits);
+    let error = drive.await.err().context("replacement was dispatched")?;
+    assert!(error.to_string().contains("workspace directory changed"));
+    assert!(!workspace.join("answer").exists() && !moved.join("answer").exists());
+    assert!(matches!(
+        home.load(thread.thread_id)?
+            .current()?
+            .response()
+            .context("response")?
+            .calls[1]
+            .state,
+        ToolState::Proposed
+    ));
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn published_tool_intent_keeps_the_open_directory_until_dispatch_finishes() -> Result<()> {
+    struct AtIntent<'a> {
+        home: &'a Home,
+        moved: std::path::PathBuf,
+        observed: std::cell::Cell<bool>,
+    }
+    impl runner::Journal for AtIntent<'_> {
+        fn save(&self, thread: &Thread) -> Result<()> {
+            self.home.save(thread)?;
+            if thread.current()?.response().is_some_and(|response| {
+                response
+                    .calls
+                    .get(1)
+                    .is_some_and(|call| matches!(call.state, ToolState::ToolIntent))
+            }) && !self.observed.replace(true)
+            {
+                let result = fs::rename(&thread.workspace, &self.moved);
+                #[cfg(unix)]
+                {
+                    result?;
+                    fs::create_dir(&thread.workspace)?;
+                }
+                #[cfg(windows)]
+                assert!(matches!(
+                    result
+                        .expect_err("open grant allowed rename")
+                        .raw_os_error(),
+                    Some(5 | 32)
+                ));
+            }
+            Ok(())
+        }
+    }
+    #[cfg(unix)]
+    let replies = vec![call_stream(true)];
+    #[cfg(windows)]
+    let replies = vec![
+        call_stream(true),
+        stream(chunk(json!({"content":"Finished."}), Some("stop")) + "data: [DONE]\n\n"),
+    ];
+    let mock = Mock::start(replies)?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    runner::run(&home, &mut thread, &client).await?;
+    let pending = thread
+        .current()?
+        .pending()
+        .context("expected approval")?
+        .request_id
+        .clone();
+    runner::answer(&home, &mut thread, &pending, true)?;
+    let journal = AtIntent {
+        home: &home,
+        moved: thread.workspace.with_file_name("moved"),
+        observed: false.into(),
+    };
+    let result = runner::drive(
+        &journal,
+        &mut thread,
+        &client,
+        &tokio_util::sync::CancellationToken::new(),
+        None,
+        0,
+    )
+    .await;
+    assert!(journal.observed.get());
+    #[cfg(unix)]
+    {
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("workspace directory changed")
+        );
+        assert!(!thread.workspace.join("answer").exists());
+        assert_eq!(fs::read(journal.moved.join("answer"))?, b"done");
+    }
+    #[cfg(windows)]
+    {
+        result?;
+        fs::rename(&thread.workspace, &journal.moved)?;
+        assert_eq!(fs::read(journal.moved.join("answer"))?, b"done");
+    }
+    mock.join()?;
+    Ok(())
+}

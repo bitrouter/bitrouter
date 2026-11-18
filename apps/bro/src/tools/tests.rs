@@ -414,9 +414,8 @@ async fn glob_paths_directories_limits_and_cancellation_keep_search_semantics()
 async fn missing_sandbox_omits_and_refuses_shell() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let tools = WorkspaceTools {
-        root: workspace.path().canonicalize()?,
-        mode: ToolMode::Coding,
         interpreter: OnceLock::from(None),
+        ..WorkspaceTools::new(workspace.path(), ToolMode::Coding)?
     };
     assert!(
         tools
@@ -921,5 +920,57 @@ async fn interrupted_shell_keeps_partial_effect_unknown() -> Result<(), Box<dyn 
         fs::read_to_string(workspace.path().join("note"))?,
         "partial"
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_grant_does_not_follow_a_running_commands_replaced_root() -> anyhow::Result<()> {
+    let fixture = TempDir::new()?;
+    let work = fixture.path().join("work");
+    let moved = fixture.path().join("moved");
+    fs::create_dir(&work)?;
+    let tools = WorkspaceTools::new(&work, ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        let (result, effect) = tools
+            .execute_with_effect(
+                "shell",
+                r#"{"command":"printf unexpected > marker"}"#,
+                &CancellationToken::new(),
+                "refused",
+                None,
+            )
+            .await;
+        assert!(result.is_error());
+        assert_eq!(effect, EffectStatus::NotExecuted);
+        assert!(!work.join("marker").exists());
+        return Ok(());
+    }
+    // Publish readiness from inside confinement. Only the original directory
+    // receives the signal to continue after its name has been replaced.
+    let name = work.canonicalize()?.join("replacement-marker");
+    let quoted = name.to_str().unwrap().replace('\'', "'\\''");
+    let script = format!(
+        "printf ready; while [ ! -e proceed ]; do sleep 0.05; done; printf original > marker; if (printf wrong > '{quoted}') 2>/dev/null; then exit 11; fi"
+    );
+    let arguments = serde_json::json!({"command":script,"timeout":8}).to_string();
+    let (live, mut rx) = mpsc::channel(4);
+    let cancel = CancellationToken::new();
+    let command = tools.execute_with_effect("shell", &arguments, &cancel, "running", Some(&live));
+    tokio::pin!(command);
+    tokio::select! {
+        result = &mut command => anyhow::bail!("shell exited before fixture was ready: {result:?}"),
+        event = tokio::time::timeout(Duration::from_secs(5), rx.recv()) => {
+            assert!(matches!(event?, Some(RunEvent::ToolOutputDelta {text, ..}) if text == "ready"));
+        }
+    }
+    fs::rename(&work, &moved)?;
+    fs::create_dir(&work)?;
+    fs::write(moved.join("proceed"), "")?;
+    let (result, effect) = command.await;
+    assert!(matches!(result, ToolResultOutput::Json {value} if value["exit_status"] == 0));
+    assert_eq!(effect, EffectStatus::Completed);
+    assert_eq!(fs::read(moved.join("marker"))?, b"original");
+    assert!(fs::read_dir(&work)?.next().is_none());
     Ok(())
 }

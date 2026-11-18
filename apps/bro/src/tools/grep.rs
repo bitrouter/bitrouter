@@ -66,13 +66,7 @@ impl WorkspaceTools {
                     continue;
                 }
             }
-            let canonical = entry
-                .path()
-                .canonicalize()
-                .map_err(|error| error.to_string())?;
-            if !canonical.starts_with(&self.root) {
-                return Err("path escapes the workspace".into());
-            }
+            let canonical = self.resolved(entry.path())?;
             if fs::metadata(&canonical)
                 .map_err(|error| error.to_string())?
                 .len()
