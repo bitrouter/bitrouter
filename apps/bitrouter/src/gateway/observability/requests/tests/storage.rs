@@ -175,3 +175,67 @@ async fn ordinary_requests_do_not_need_the_inventory_or_its_budget() -> Result<(
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_controller_claim_without_authenticated_scope_cannot_reserve_a_paid_id() -> Result<()> {
+    let fixture = fixture(Failure::None).await?;
+    let mut unsigned = PipelineContext::new(request("spoofed", true)?);
+    let mut normalized = PipelineContext::new(request("other", true)?);
+    NormalizedScope.check(&mut normalized).await?;
+    unsigned.insert_extension(
+        normalized
+            .extension::<RequestSessionContext>()
+            .context("fixture session")?,
+    );
+    ensure!(fixture.tracker.check(&mut unsigned).await.is_err());
+    ensure!(
+        unsigned
+            .get_event::<CanonicalRequestReplayRejected>()
+            .is_some()
+    );
+    ensure!(
+        fixture
+            .tracker
+            .inventory()
+            .request("scope", "spoofed")
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_invalid_controller_header_cannot_fall_through_to_untracked_dispatch() -> Result<()> {
+    let fixture = fixture(Failure::None).await?;
+    let inventory = fixture.tracker.inventory();
+    for (id, header) in [("blank", &b" "[..]), ("invalid", &[0xff][..])] {
+        let mut tagged = request(id, true)?;
+        tagged.headers.insert(
+            "x-bitrouter-controller-id",
+            http::HeaderValue::from_bytes(header)?,
+        );
+        let error = fixture
+            .pipeline
+            .execute(tagged)
+            .await
+            .err()
+            .context("invalid claim admitted")?;
+        ensure!(error.status() == 400);
+        ensure!(inventory.request("scope", id).await?.is_none());
+        ensure!(
+            crate::metering::entities::requests::Entity::find_by_id(id)
+                .one(&fixture.db)
+                .await?
+                .is_none()
+        );
+    }
+    ensure!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("mock")?
+            .is_empty()
+    );
+    Ok(())
+}

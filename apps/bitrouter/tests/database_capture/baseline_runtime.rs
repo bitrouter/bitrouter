@@ -26,13 +26,13 @@ async fn baseline_v7_history_is_read_only_and_never_adopts_an_old_store() -> Res
 }
 
 async fn exercise() -> Result<()> {
-    let database = zstd::bulk::decompress(DATABASE, 64 * 1024 * 1024)?;
+    let database = zstd::bulk::decompress(DATABASE, 1_388_544)?;
     ensure!(
         hex::encode(Sha256::digest(&database))
             == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9",
         "baseline database identity changed"
     );
-    let journal = zstd::bulk::decompress(JOURNAL, 16 * 1024 * 1024)?;
+    let journal = zstd::bulk::decompress(JOURNAL, 6_452_521)?;
     ensure!(
         hex::encode(Sha256::digest(&journal))
             == "c460809ed7218760ba88faf4a7fb56a1da03422555a66faecd4315bce99b450f",

@@ -64,18 +64,24 @@ impl GatewayRequestTracker {
     }
 
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
-        let Some(session) = ctx.extension::<RequestSessionContext>() else {
+        if !ctx.headers().contains_key("x-bitrouter-controller-id") {
             return Ok(());
-        };
-        let Some(controller) = session.claimed_controller_instance_id.as_deref() else {
-            return Ok(());
+        }
+        let session = ctx.extension::<RequestSessionContext>();
+        let Some(controller) = session
+            .as_ref()
+            .and_then(|session| session.claimed_controller_instance_id.as_deref())
+        else {
+            ctx.emit(CanonicalRequestReplayRejected);
+            return Err(BitrouterError::bad_request("invalid gateway controller ID").into());
         };
         let principal = if ctx.caller().is_local() {
             "local".to_owned()
         } else if let Some(auth) = ctx.get_event::<ApiPrincipalEstablished>() {
             auth.route_scope_id.clone()
         } else {
-            return Ok(());
+            ctx.emit(CanonicalRequestReplayRejected);
+            anyhow::bail!("controller-tagged request lacks an authenticated gateway principal");
         };
         let observed = match self
             .inventory
@@ -93,8 +99,8 @@ impl GatewayRequestTracker {
                 anyhow::bail!("gateway request ID already has an execution record");
             }
         };
-        // Insert before routing/evolution work: even a failed admission or an
-        // unresolved session must remain visible to the accounting boundary.
+        // Publish the admitted attempt before routing so failures can retain
+        // the same durable identity through settlement.
         ctx.emit(GatewayRequestObserved {
             request: observed,
             hops: Arc::new(Mutex::new(Vec::new())),

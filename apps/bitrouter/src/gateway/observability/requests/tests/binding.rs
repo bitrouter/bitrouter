@@ -99,6 +99,11 @@ async fn context_revalidation_rejects_stale_fences_without_rewriting_execution()
         let fixture = fixture(Failure::None).await?;
         let mut ctx = PipelineContext::new(request("stale", true)?);
         let retained = ctx.require_generation_prompt()?.messages.clone();
+        let mut initial = ctx.require_generation_prompt()?.clone();
+        initial
+            .messages
+            .insert(0, Message::text(Role::User, "old history"));
+        ctx.apply_routing_prompt(initial)?;
         NormalizedScope.check(&mut ctx).await?;
         fixture.tracker.check(&mut ctx).await?;
         fixture.binding.check(&mut ctx).await?;

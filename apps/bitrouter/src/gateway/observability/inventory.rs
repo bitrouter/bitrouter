@@ -51,7 +51,7 @@ pub struct GatewayRequest {
     pub controller_instance_id: String,
     pub runtime_epoch: String,
     pub admitted_at: String,
-    /// All recordings under the authenticated controller at admission.
+    /// Historical capture watermarks. Service-only reservations leave this empty.
     pub anchors: BTreeMap<String, i64>,
     pub binding: Option<InventoryBinding>,
     pub coverage_ready: bool,
@@ -156,24 +156,53 @@ impl GatewayInventory {
             .into_tuple::<(String, String)>();
         let mut pages = scopes.paginate(tx, 128);
         while let Some(scopes) = pages.fetch_and_next().await? {
-            let ids = scopes
-                .iter()
-                .map(|(scope, kind)| digest(&(scope, kind, id)))
-                .collect::<Result<Vec<_>>>()?;
-            let matches = records::Entity::find()
+            let mut execution_ids = Vec::new();
+            let mut request_ids = Vec::new();
+            for (scope, kind) in scopes {
+                let key = digest(&(&scope, &kind, id))?;
+                if kind == EXECUTION_KIND {
+                    execution_ids.push(key);
+                } else {
+                    request_ids.push(key);
+                }
+            }
+            // M0 executions have no authenticated route scope. If one owns
+            // this ID, refuse it without reading its private session payload.
+            if !execution_ids.is_empty()
+                && records::Entity::find()
+                    .select_only()
+                    .column(records::Column::RecordId)
+                    .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+                    .filter(records::Column::Kind.eq(EXECUTION_KIND))
+                    .filter(records::Column::RecordId.is_in(execution_ids))
+                    .into_tuple::<String>()
+                    .one(tx)
+                    .await?
+                    .is_some()
+            {
+                return Ok(true);
+            }
+            if request_ids.is_empty() {
+                continue;
+            }
+            let prior = records::Entity::find()
                 .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-                .filter(records::Column::RecordId.is_in(ids))
+                .filter(records::Column::Kind.eq(INVENTORY_KIND))
+                .filter(records::Column::RecordId.is_in(request_ids))
                 .all(tx)
                 .await?;
-            for row in matches {
-                // M0 executions do not contain the authenticated principal.
-                // A known paid ID with no recoverable attribution is spent.
-                if row.kind == EXECUTION_KIND {
-                    return Ok(true);
-                }
-                let prior: GatewayRequest = serde_json::from_str(&row.body)?;
-                ensure!(prior.request_id == id, "invalid imported request identity");
-                if prior.route_scope_id == principal {
+            for row in prior {
+                let request: GatewayRequest = serde_json::from_str(&row.body)?;
+                let original = Self::store_for(
+                    self.db.clone(),
+                    &request.route_scope_id,
+                    &request.controller_instance_id,
+                )?;
+                ensure!(
+                    request.request_id == id && original.scope_id == row.scope_id,
+                    "invalid imported request identity"
+                );
+                if request.route_scope_id == principal {
                     return Ok(true);
                 }
             }

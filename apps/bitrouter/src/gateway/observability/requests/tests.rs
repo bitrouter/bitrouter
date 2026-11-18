@@ -47,6 +47,8 @@ impl PreRequestHook for NormalizedScope {
                 .headers()
                 .get("x-bitrouter-controller-id")
                 .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             acp_session_id: ctx
                 .headers()
@@ -122,15 +124,11 @@ async fn fixture_with_storage(
         source: "fixture".into(),
         native_session_id: "session".into(),
     };
-    // Prove live requests do not depend on BRO tables on any fixture generation.
-    for table in [
-        "acp_capture_events",
-        "acp_canonical_sessions",
-        "acp_capture_connections",
-    ] {
-        db.execute_unprepared(&format!("DROP TABLE IF EXISTS {table}"))
-            .await?;
-    }
+    let bro_tables = db.query_one(sea_orm::Statement::from_string(
+        sea_orm::DbBackend::Sqlite,
+        "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND (name LIKE 'acp_capture_%' OR name='acp_canonical_sessions')"
+    )).await?.context("no gateway schema")?.try_get::<i64>("","n")?;
+    assert_eq!(bro_tables, 0, "fresh gateway database contains BRO tables");
     let upstream = MockServer::start().await;
     if matches!(failure, Failure::Upstream) {
         Mock::given(method("POST"))
