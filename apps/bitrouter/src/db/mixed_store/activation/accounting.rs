@@ -23,6 +23,12 @@ pub(super) async fn verify(db: &DatabaseConnection) -> Result<()> {
         })?;
     }
     drop(rows);
+    // A fresh M0 admission minted one attempt UUID. Two request identities
+    // cannot establish separate ownership of the same provider attempt.
+    use sea_orm::ConnectionTrait;
+    ensure!(db.query_one(super::super::sql(
+        "SELECT 1 FROM checkpoint_evolution WHERE kind='gateway_request' GROUP BY json_extract(body,'$.attempt_id') HAVING count(*)>1 LIMIT 1"
+    )).await?.is_none(), "gateway request attempt has multiple owners");
     // Release the cursor before the associated metering lookup on single-connection SQLite.
     let mut after = None;
     loop {
@@ -322,7 +328,12 @@ async fn inventory(
             && !request.request_id.is_empty(),
         "invalid or capture-bound M0 request identity"
     );
-    uuid::Uuid::parse_str(&request.attempt_id)?;
+    let attempt = uuid::Uuid::parse_str(&request.attempt_id)?;
+    ensure!(
+        attempt.get_version() == Some(uuid::Version::Random)
+            && attempt.to_string() == request.attempt_id,
+        "invalid M0 gateway attempt identity"
+    );
     uuid::Uuid::parse_str(&request.runtime_epoch)?;
     captures::admit(captures, &request)?;
     let settlement = request.settlement.context("request still in transit")?;

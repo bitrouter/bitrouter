@@ -272,6 +272,7 @@ async fn refuses_in_transit_unbacked_and_conflicting_gateway_facts() -> Result<(
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.total_cost_micro_usd',30) WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.hops[1].provider','first') WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.anchors',json('{}')) WHERE json_extract(body,'$.request_id')='m0-single-paid'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.attempt_id',(SELECT json_extract(body,'$.attempt_id') FROM checkpoint_evolution WHERE json_extract(body,'$.request_id')='m0-single-paid')) WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
         "UPDATE checkpoint_evolution SET revision=revision-1 WHERE kind='gateway_coverage'",
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.runtime_epoch','ffffffff-ffff-4fff-8fff-ffffffffffff') WHERE kind='gateway_request'",
         "UPDATE requests SET session_identity_json=json_set(session_identity_json,'$.router_request_id','different') WHERE request_id='m0-fallback-paid'",
