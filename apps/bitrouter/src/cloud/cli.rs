@@ -38,6 +38,11 @@ use super::management::{
 /// `bro cloud …`. All variants land in [`run`].
 #[derive(Subcommand)]
 pub enum CloudAction {
+    /// Browser-approved Agent access, independent from developer login.
+    Agent {
+        #[command(subcommand)]
+        action: super::agent::cli::AgentAction,
+    },
     /// Print the cloud identity stored on this machine alongside the
     /// `/v1/*` base URL the CLI will target.
     Whoami,
@@ -556,6 +561,10 @@ pub struct JsonFlag {
 
 /// Entry point dispatched by `apps/bitrouter/src/main.rs`.
 pub async fn run(action: CloudAction, format: crate::output::Format) -> Result<()> {
+    let action = match action {
+        CloudAction::Agent { action } => return super::agent::cli::run(action, format).await,
+        action => action,
+    };
     let _ = CLOUD_FORMAT.set(format);
     let manager = super::default_manager()?;
     let result = run_inner(action, Arc::clone(&manager)).await;
@@ -573,6 +582,9 @@ async fn run_inner(
     manager: Arc<CredentialManager>,
 ) -> std::result::Result<(), SdkError> {
     match action {
+        CloudAction::Agent { .. } => Err(SdkError::Auth(anyhow::anyhow!(
+            "Agent actions use their independent profile"
+        ))),
         CloudAction::Whoami => whoami(manager).await,
         CloudAction::Api(args) => super::api::run(args, manager).await.map_err(SdkError::Auth),
         CloudAction::Login {

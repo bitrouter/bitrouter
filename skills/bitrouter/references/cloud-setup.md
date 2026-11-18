@@ -1,5 +1,9 @@
 # Cloud setup
 
+Browser-approved Agent connections are an opt-in auth-only path; see
+[section D](#d-browser-approved-agent-auth). Keep them separate from developer
+login and API keys. They do not activate inference routing or spending.
+
 The user chose **BitRouter Cloud** (managed proxy at `api.bitrouter.ai`, one bill, no per-provider keys). This file covers the three entry points and the operational details for each: web playground (A), dashboard-minted API key in code (B), and headless CLI sign-in (C — recommended for terminal-first users).
 
 ## A. Web playground (no install, no code)
@@ -182,3 +186,70 @@ client.chat.completions.create(model="openai/gpt-4o", messages=[...])
 ```
 
 A user can run both side-by-side (different base URLs in different environments) — Cloud for production, Local for offline development, no code branching needed.
+
+## D. Browser-approved Agent auth
+
+This opt-in auth profile requires a cooperating Console. An unsupported server
+fails visibly; it does not fall back to developer login or mint an API key.
+Agent spending and provider/inference routing are separate rollout work.
+
+```bash
+bro cloud agent connect --profile laptop --name "Laptop Agent"
+bro cloud agent status --profile laptop
+bro cloud agent connect --profile laptop --name "Laptop Agent" --renew
+bro cloud agent disconnect --profile laptop
+```
+
+Show the verification URL and pairing code to the owning human. They choose an
+owned namespace, explicit finite daily limit and expiry in the browser. Approval
+is followed by a separate client confirmation after durable credential storage.
+Keep `--profile` to resume an interrupted operation; an omitted profile creates
+an independent ID. Resume an interrupted registration with its original `--name`.
+Ctrl-C detaches the waiter; it does not revoke the request.
+
+Keys default to the OS key store. On supported Unix systems an explicit
+`--key-storage file` fallback stores the key in a private profile. There is no
+silent fallback. Tokens and pending state live under
+`$XDG_DATA_HOME/bitrouter/agent-connections/`, or
+`~/.local/share/bitrouter/agent-connections/`, outside the project. Directories
+are mode 0700 and profiles mode 0600, with a cross-process lock and synced atomic
+replacement. Platforms without qualified file-permission checks refuse before
+storing credentials. Do not copy profiles or expose them to a model.
+
+`status` can complete a previously approved pairing and rotate near-expiry
+credentials. A lost rotation response stays `refresh_uncertain`; it does not
+replay an old refresh token. Use fresh browser renewal with the same profile/key
+or disconnect. Renewal retains the predecessor until confirmation succeeds.
+Disconnect cancels the profile's native clients using their initiating key,
+including before approval or after expiry/revocation; local secrets are erased
+after server acknowledgement. Browser logout is independent.
+Saved confirmation candidates are reconciled before renewal can replace them,
+even after the confirmation deadline or access-token expiry. A key-bound read
+recovers only a committed current receipt; it cannot approve or activate a
+pending request. The recovered successor is saved before refresh. If refresh
+then becomes uncertain, `--renew` retains the correct successor as predecessor.
+Lookup errors retain the candidate for retry or disconnect. An older server
+missing the recovery endpoint requires a server update; no fallback is attempted.
+
+Local MCP auth bridge (requires the `mcp` build feature):
+
+```bash
+bro cloud agent mcp
+# Explicit headless file fallback, when the OS key store is unavailable:
+bro cloud agent mcp --key-storage file
+```
+
+It exposes only `agent_connect`, `agent_status`, and `agent_disconnect`, using the
+same library and profiles. Connect returns the human pairing information;
+status saves/confirms after human approval. Tools return safe IDs/status, never
+tokens, proofs, private keys or browser sessions. The issuer/resource/key-storage
+settings belong to server startup, not model-supplied tool arguments.
+Status and disconnect reject saved profiles for another startup issuer/resource
+before network access or changes to saved connection state. This is a local
+stdio auth bridge, not remote MCP OAuth or an automatically installed
+origin MCP server. It does not change the daemon's inference credentials.
+
+Self-hosted deployments explicitly set `--issuer` and `--resource` on connect or
+MCP startup. Both must be trusted HTTPS authorities; the resource may include an
+explicit path. Every native/control endpoint must remain on the configured
+issuer. Redirects and legacy/API-key fallback are refused.

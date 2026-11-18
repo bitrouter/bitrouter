@@ -1890,7 +1890,11 @@ async fn async_main() {
     );
     let raw_agent_stream = matches!(
         &cli.command,
-        Some(Command::Run {
+        Some(Command::Cloud {
+            action: bitrouter::cloud::cli::CloudAction::Agent {
+                action: bitrouter::cloud::agent::cli::AgentAction::Mcp { .. }
+            }
+        }) | Some(Command::Run {
             background: false,
             ..
         }) | Some(Command::Acp {

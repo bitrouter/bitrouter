@@ -2459,3 +2459,66 @@ the technical read under the original guards. Old retained payload1/2 returns
 null through V3, without relabelling history or inventing observer samples. A
 scope-only fallback remains readable through V2. The new SDK getter performs no
 automatic downgrade, repeated inference, additional admission or source repair.
+
+## First-party Cloud Agent authorization profile
+
+The optional Agent profile is an additive discovery extension with discriminator
+`bitrouter_agent_profile.version = 1`. Existing root metadata retains the legacy
+developer endpoints. The extension embeds the native authorization server's
+`authorization_server_metadata` and names its resource, initiating-key
+authentication, mandatory DPoP/nonces and fixed first-party control URLs. Client
+DTOs are defined in `apps/bitrouter/src/cloud/agent/wire.rs`. OAuth device flow,
+assertions, revocation and proofs retain RFC 8628/7523/7009/9449 semantics; the
+extension does not claim general remote MCP OAuth or external token exchange.
+
+The client MUST pin the configured Console issuer and explicit Cloud resource,
+validate the nested native issuer, profile version, required methods/algorithms
+and same-issuer endpoints, and refuse redirects. Registration proves the exact
+P-256 initiating key; the browser alone supplies account/namespace consent and
+finite terms. Only a synced saved token envelope can confirm activation. The
+fixed self-read endpoint requires current authority and `agent:self:read`, with
+a proof for that exact Console URL and the registered logical Cloud audience.
+The separate key-bound disconnect action only reduces authority and remains
+usable before approval or after token expiry/revoke. Its proof binds the native
+client ID in the path; it cannot retarget a copied proof to another connection.
+The required `activation_endpoint_template` names
+`/api/agent-connections/{client_id}/activation`. Its empty-object POST uses the
+same initiating-key DPoP/AS-nonce boundary, without an access token. It returns
+`pending`, `expired`, `unavailable`, or `active` with an already committed current
+activation receipt. The response binds `client_id` and `connection_id`; only a
+current active receipt includes Agent/Grant identity. This control read MUST NOT
+activate a pending grant, mint tokens or extend its delivery deadline.
+
+Native refresh remains serialized across local processes. Before a potentially
+rotating request the client persists an uncertainty marker. A lost response MUST
+NOT cause blind reuse of the old refresh token. A saved candidate survives a
+process restart; confirmation retries must return the same activation instead
+of advancing generation again. Renewal retains the previous session until that
+same-key successor confirms. It must not silently rebase a stale predecessor.
+An interrupted confirmation MUST be reconciled before local expiry or candidate
+discard, including retained `expired` profiles. After access-token expiry, the
+key-bound read can recover the current receipt. Persist that successor as current
+before journaled refresh, so refresh uncertainty renews from the correct
+Connection. Lookup errors retain all candidate credentials and IDs. A terminal
+pending client must be cancelled and acknowledged before replacement. Existing
+readers ignore the additive metadata endpoint; a new client on a server missing
+it fails discovery without credential fallback. The private profile format stays
+at version 1.
+
+CLI/MCP output uses the safe `Status` DTO in `cloud/agent/mod.rs`: IDs, state,
+pairing information and explicit terms. It MUST NOT contain access/refresh
+tokens, private keys, assertions, proofs or browser sessions. MCP tools cannot
+override startup issuer/resource/storage settings. Status and disconnect require
+the same pinned issuer/resource; selecting a saved profile for another authority
+MUST fail before network access or changing its saved connection state.
+Local private profiles use `format: 1`; unknown versions are refused before
+credentials are sent. They are
+not migrated from, or written into, `account-credentials.json`.
+
+Compatibility is directional: old clients ignore the additive root extension
+and retain their developer flow; a new Agent client on an old/disabled server
+reports unsupported without fallback or key minting. An old executable does not
+recognize the new commands and leaves Agent files untouched. Rollback must
+preserve current-authority enforcement or revoke live Agent grants first.
+Authentication qualification does not authorize spending or prove hosted ingress,
+financial admission, external mail/provider behavior or cross-host availability.
