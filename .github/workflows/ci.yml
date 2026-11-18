@@ -476,6 +476,7 @@ jobs:
       if: matrix.backend == 'mysql'
       run: |
         docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
+        SET GLOBAL log_bin_trust_function_creators = 1;
         GRANT ALL PRIVILEGES ON `m0\_baseline\_%`.* TO 'fixture'@'%';
         SQL
     - name: verify current schema baseline and refusal before populating the database
@@ -508,7 +509,6 @@ jobs:
       if: matrix.backend == 'mysql'
       run: |
         docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
-        SET GLOBAL log_bin_trust_function_creators = 1;
         GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
         SQL
     - name: verify tenant eval composites share one stable transaction
