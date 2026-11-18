@@ -149,16 +149,28 @@ pub async fn check_loaded(
 }
 
 fn unresolved_marker(name: &str) -> String {
-    format!("{UNRESOLVED_MARKER}{name}")
+    let label = if name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        name
+    } else {
+        ""
+    };
+    format!("{UNRESOLVED_MARKER}{label}")
 }
 
 fn unresolved_reference(value: &str) -> Option<&str> {
-    let rest = value.split(UNRESOLVED_MARKER).nth(1)?;
+    let (_, rest) = value.split_once(UNRESOLVED_MARKER)?;
     let end = rest
         .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .unwrap_or(rest.len());
-    let name = &rest[..end];
-    if name.is_empty() { None } else { Some(name) }
+    Some(&rest[..end])
+}
+
+fn reference_error(field: &str, name: &str) -> String {
+    if name.is_empty() {
+        format!("{field} reference could not be resolved")
+    } else {
+        format!("{field} reference '${{{name}}}' could not be resolved")
+    }
 }
 
 fn connections(
@@ -230,6 +242,12 @@ fn static_headers(provider: &ProviderConfig) -> Result<http::HeaderMap> {
     let mut headers = http::HeaderMap::new();
     for rule in provider.outbound_headers()? {
         if let Some(value) = rule.default() {
+            if let Some(name) = std::str::from_utf8(value.as_bytes())
+                .ok()
+                .and_then(unresolved_reference)
+            {
+                return Err(BitrouterError::bad_request(reference_error("header", name)));
+            }
             headers.insert(rule.name().clone(), value.clone());
         }
     }
@@ -242,12 +260,7 @@ async fn probe(
     timeouts: HttpTimeouts,
 ) -> ProviderConnectionCheck {
     if let Some(name) = unresolved_reference(&slot.api_base) {
-        return failed_row(
-            &slot.id,
-            "",
-            "",
-            &format!("endpoint reference '${{{name}}}' could not be resolved"),
-        );
+        return failed_row(&slot.id, "", "", &reference_error("endpoint", name));
     }
     if slot.api_base.is_empty() {
         return failed_row(&slot.id, "", "", "endpoint is not configured");
@@ -261,7 +274,7 @@ async fn probe(
             &slot.id,
             &slot.api_base,
             protocol,
-            &format!("credential reference '${{{name}}}' could not be resolved"),
+            &reference_error("credential", name),
         );
     }
     let target = ModelTarget {

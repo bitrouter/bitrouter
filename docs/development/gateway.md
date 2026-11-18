@@ -113,9 +113,8 @@ and their consuming tests define the supported conversion shapes.
 configuration and requests its model catalog. Local HTTP and online HTTPS use
 that same check. It resolves `api_base`, an account's endpoint override,
 `protocol_endpoints`, and `${VAR}` credential references the way config load
-does. An unresolved endpoint or credential reference fails that connection and
-does not open a socket. A resolved empty credential is allowed; a local
-endpoint may omit a key.
+does. An unresolved reference in the endpoint, credential, or static header
+fails before dialing. A local endpoint may omit its API key.
 
 The request is a GET of the selected protocol's model list. Chat Completions,
 Responses, and Messages use `{api_base}/models` and accept `{ "data": [{ "id" }] }`.

@@ -233,6 +233,31 @@ async fn checker_resolves_fallbacks_and_validates_the_effective_endpoint() -> Re
 }
 
 #[tokio::test]
+async fn unresolved_headers_and_unlabeled_endpoint_references_fail_before_a_request() -> Result<()>
+{
+    let server = wiremock::MockServer::start().await;
+    let yaml = format!(
+        "providers:\n  header:\n    api_base: {base}/v1\n    headers:\n      X-Gateway-Key: ${{CHECK_HEADER}}\n  endpoint:\n    api_base: ${{-MISSING_ENDPOINT}}\n",
+        base = server.uri()
+    );
+    let error = check_document(&yaml, "header", None, lookup_none)
+        .await
+        .expect_err("an unresolved header cannot be sent");
+    ensure!(
+        error
+            .to_string()
+            .contains("header reference '${CHECK_HEADER}'")
+    );
+    let report = check_document(&yaml, "endpoint", None, lookup_none).await?;
+    ensure!(!report.connections[0].answered && report.connections[0].endpoint.is_empty());
+    ensure!(
+        report.connections[0].error.as_deref() == Some("endpoint reference could not be resolved")
+    );
+    ensure!(requests(&server).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn another_providers_unresolved_reference_does_not_block_this_check() -> Result<()> {
     let server = wiremock::MockServer::start().await;
     catalog(&server, serde_json::json!({"data": [{"id": "ready"}]})).await;
