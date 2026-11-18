@@ -276,7 +276,7 @@ async fn failure_after_service_import_can_retry_without_reusing_partial_work() -
                 .starts_with(".bitrouter-store-split-")
         });
     let abandoned = staged.next().context("missing abandoned attempt")?.path();
-    let partial = abandoned.join("bitrouter/store.sqlite");
+    let partial = abandoned.join("bitrouter/bitrouter.db");
     ensure!(
         mixed_store::verify_owner(&partial, Owner::BitRouter)
             .await
@@ -350,7 +350,7 @@ async fn explicitly_activates_a_clean_pair_and_rejects_staged_gateway_startup() 
         gateway.close().await?;
         mixed_store::verify_owner(&pair.bro, Owner::Bro).await?;
     }
-    ensure!(pair.bitrouter == active.join("bitrouter/bitrouter.db"));
+    ensure!(pair.bitrouter == active.canonicalize()?.join("bitrouter/bitrouter.db"));
     ensure!(mixed_store::activate(&path, &active).await.is_err());
     let second = dir.path().join("second-owner");
     ensure!(mixed_store::activate(&path, &second).await.is_err() && !second.exists());
