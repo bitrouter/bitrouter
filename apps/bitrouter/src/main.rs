@@ -5804,12 +5804,8 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
                     .await?
                 }
             };
-            let answered = report
-                .connections
-                .iter()
-                .all(|connection| connection.answered);
             output.emit(&report)?;
-            if answered { Ok(()) } else { exit_with(1) }
+            exit_with(report.exit_code())
         }
         ProviderAction::Login {
             provider,
@@ -6754,10 +6750,9 @@ async fn run_agent_prompt(
     exit_with(tally.exit_code())
 }
 
-/// Leave with a status a successful command chose for itself — `spawn
-/// --check`'s report and a headless prompt's permission tally both do — or
+/// Leave with a status a successful command chose for itself — `providers
+/// check`, `spawn --check`, and a headless prompt's permission tally — or
 /// return normally for zero.
-#[cfg(any(feature = "harness", feature = "mcp"))]
 fn exit_with(code: i32) -> Result<()> {
     if code == 0 {
         Ok(())
