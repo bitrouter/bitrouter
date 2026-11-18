@@ -1,15 +1,9 @@
-//! Opt-in regressions for MySQL's default REPEATABLE READ isolation.
-//!
-//! Requires BITROUTER_TEST_DATABASE_URL naming a dedicated MySQL test database.
-//! Applies pending migrations, uses UUID-scoped fixtures, and retains them after
-//! each run. Only the deletion scenario deletes its own captured session content.
-//! No harness process, model, database truncation, or global fixture cleanup runs.
-//! ACP fixture updates follow https://github.com/agentclientprotocol/agent-client-protocol.
+//! Opt-in regressions for MySQL REPEATABLE READ against an isolated M0 catalog.
 
 use std::future::Future;
 use std::time::Duration;
 
-use super::MIGRATIONS;
+use crate::db::migration::{m0_fixture, server_fixture::OwnedServer};
 use sea_orm::{ConnectOptions, Database, DatabaseBackend, DatabaseConnection, Statement};
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -27,40 +21,26 @@ where
     F: FnOnce(CanonicalStore) -> Fut,
     Fut: Future<Output = Result<()>>,
 {
-    let database_url = std::env::var("BITROUTER_TEST_DATABASE_URL").context(
-        "set BITROUTER_TEST_DATABASE_URL to a dedicated MySQL test database; no fallback",
-    )?;
-    let parsed = url::Url::parse(&database_url)?;
-    ensure!(
-        parsed.scheme() == "mysql" && !parsed.path().trim_matches('/').is_empty(),
-        "BITROUTER_TEST_DATABASE_URL must explicitly name a MySQL test database"
-    );
-    let mut options = ConnectOptions::new(database_url);
-    options
-        .min_connections(2)
-        .max_connections(2)
-        .connect_timeout(Duration::from_secs(10))
-        .acquire_timeout(Duration::from_secs(10))
-        .sqlx_logging(false);
-    let db = tokio::time::timeout(RACE_TIMEOUT, Database::connect(options))
-        .await
-        .context("MySQL checkpoint test connection timed out")??;
+    let fixture = OwnedServer::new(DatabaseBackend::MySql, "BITROUTER_TEST_DATABASE_URL").await?;
     let result = tokio::time::timeout(Duration::from_secs(120), async {
-        {
-            let _guard = MIGRATIONS.lock().await;
-            crate::db::run_migrations(&db).await?;
-        }
-        scenario(CanonicalStore::new(db.clone())).await
+        m0_fixture::install(&fixture.database).await?;
+        // Hold one snapshot open while the other connection commits its update.
+        let mut options = ConnectOptions::new(fixture.url.as_str());
+        options
+            .min_connections(2)
+            .max_connections(2)
+            .connect_timeout(Duration::from_secs(10))
+            .acquire_timeout(Duration::from_secs(10))
+            .sqlx_logging(false);
+        let db = Database::connect(options).await?;
+        let result = scenario(CanonicalStore::new(db.clone())).await;
+        db.close().await?;
+        result
     })
     .await
     .context("MySQL checkpoint regression exceeded its two-minute deadline")
     .and_then(|result| result);
-    let closed = tokio::time::timeout(RACE_TIMEOUT, db.close())
-        .await
-        .context("MySQL checkpoint test pool close timed out");
-    result?;
-    closed??;
-    Ok(())
+    fixture.finish(result).await
 }
 
 async fn mysql_connection_id(db: &impl ConnectionTrait) -> Result<u64> {

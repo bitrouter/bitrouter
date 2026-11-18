@@ -1,6 +1,4 @@
-//! Single-definition checkpoint scenarios with explicit offline/live backends.
-//! Offline readers run in every profile; harness builds also exercise the real
-//! recorder through separate named tests using the same assertions.
+//! Checkpoint compatibility scenarios for retained M0 capture data.
 
 mod cases;
 #[cfg(feature = "db-mysql")]
@@ -18,9 +16,6 @@ use crate::acp_trajectory::CanonicalStore;
 use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::acp_trajectory::tests::event;
 use crate::storage::capture::{CaptureEvent, CaptureKind};
-
-#[cfg(feature = "db-mysql")]
-static MIGRATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Clone, Copy)]
 enum Backend {

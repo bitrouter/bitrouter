@@ -163,9 +163,10 @@ impl Preflight {
             .then(|| crate::tenancy::ownership::acquire_path(&copy, false))
             .transpose()?;
         let candidate = match &snapshot_owner {
-            Some(owner) => crate::db::connect_tenancy(&copy_url, owner).await?,
-            None => crate::db::connect(&copy_url).await?,
-        };
+            Some(owner) => crate::db::connect_tenancy(&copy_url, owner).await,
+            None => crate::db::connect(&copy_url).await,
+        }
+        .context("snapshot migration preflight failed while opening the candidate")?;
         crate::db::run_migrations(&candidate)
             .await
             .context("snapshot migration preflight failed")?;
@@ -292,7 +293,7 @@ mod tests {
             "{detail}"
         );
         assert!(
-            detail.contains("incompatible current authority schema"),
+            detail.contains("incompatible schema for tenancy_resource_lifecycle"),
             "{detail}"
         );
         assert_eq!(std::fs::read(&path)?, original);

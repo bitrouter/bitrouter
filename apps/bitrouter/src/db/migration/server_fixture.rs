@@ -22,6 +22,10 @@ impl OwnedServer {
             },
             "wrong backend selected for baseline campaign"
         );
+        ensure!(
+            !selected.path().trim_matches('/').is_empty(),
+            "{url_env} must explicitly name a dedicated test database"
+        );
         let mut options = ConnectOptions::new(address);
         options
             .max_connections(1)

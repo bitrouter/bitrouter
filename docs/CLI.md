@@ -1392,10 +1392,11 @@ refuses to serve an existing mixed server database. The offline split command
 accepts stopped SQLite files. PostgreSQL shared deployments retain their separate
 shared migration ledger alongside the ordinary gateway schema.
 
-An existing MySQL **gateway** with a case-insensitive or space-padding metering
-identity column fails its startup catalog check. Stop writers and take a verified
-backup. On a copy, set these `requests` columns to `VARCHAR(255) CHARACTER SET
-utf8mb4 COLLATE utf8mb4_0900_bin`. Keep their existing keys and nullability.
+For a MySQL gateway with the `m20261118_000007_gateway_server` ledger, a
+case-insensitive or space-padding metering identity column fails the startup
+catalog check. Stop writers and take a verified backup. On a copy, set these
+`requests` columns to `VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`.
+Keep their existing keys and nullability.
 
 - `request_id`, `user_id`, and `api_key_id` are required.
 - `route_scope_id`, `launch_id`, `controller_instance_id`, `acp_session_id`,
@@ -1403,6 +1404,9 @@ utf8mb4 COLLATE utf8mb4_0900_bin`. Keep their existing keys and nullability.
 
 Verify the retained settlements and restart the gateway on the corrected copy
 before directing traffic to it. Keep its existing gateway migration ledger.
+Earlier development gateway ledgers can contain principal-scoped reservations.
+Retain those databases with the matching binary and start the current gateway
+with a fresh empty database. Relabeling the ledger would bypass replay protection.
 
 ## Offline DB evidence (Unix SQLite only)
 
