@@ -27,9 +27,9 @@ impl Fixture {
         let out_dir = root.join("selected-out");
         fs::create_dir(&out_dir)?;
         let name = if target.contains("-windows-") {
-            "bro.exe"
+            "bitrouter.exe"
         } else {
-            "bro"
+            "bitrouter"
         };
         let executable = root.join(name);
         fs::write(&executable, BINARY)?;
@@ -134,6 +134,7 @@ fn cli_requires_target_and_limits_profile_choices() -> Result<()> {
     ensure!(options.out == Path::new("fresh-package"));
     for extra in [
         ["--profile", "custom"],
+        ["--profile", "full"],
         ["--cargo-profile", "release"],
         ["--force", "true"],
     ] {
@@ -158,7 +159,7 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
     for (profile, cargo_profile) in [
         (PackageProfile::Gateway, CargoProfile::Dist),
         (PackageProfile::GatewayShared, CargoProfile::Dist),
-        (PackageProfile::Full, CargoProfile::Dev),
+        (PackageProfile::Gateway, CargoProfile::Dev),
     ] {
         fixture.options.profile = profile;
         fixture.options.cargo_profile = cargo_profile;
@@ -173,7 +174,7 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
             "-p",
             "bitrouter",
             "--bin",
-            "bro",
+            "bitrouter",
             "--target",
             "x86_64-unknown-linux-gnu",
             "--profile",
@@ -188,7 +189,6 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
             PackageProfile::GatewayShared => {
                 expected.extend(["--no-default-features", "--features", "multi-instance"])
             }
-            PackageProfile::Full => {}
         }
         ensure!(args == expected);
         ensure!(command.get_current_dir() == Some(fixture.directory.path()));
@@ -266,14 +266,14 @@ fn metadata_selects_exact_workspace_package_id() -> Result<()> {
 
 fn messages(fixture: &Fixture) -> Vec<Value> {
     vec![
-        json!({"reason": "compiler-artifact", "package_id": "other", "target": {"name": "bro", "kind": ["bin"]},
+        json!({"reason": "compiler-artifact", "package_id": "other", "target": {"name": "bitrouter", "kind": ["bin"]},
             "profile": {"test": false}, "executable": fixture.directory.path().join("wrong-bro")}),
         json!({"reason": "build-script-executed", "package_id": "other", "out_dir": fixture.directory.path().join("stale-out")}),
         json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "build-script-build", "kind": ["custom-build"]},
             "executable": fixture.directory.path().join("build-script")}),
-        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bro", "kind": ["bin"]},
+        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bitrouter", "kind": ["bin"]},
             "profile": {"test": true}, "executable": fixture.directory.path().join("test-bro")}),
-        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bro", "kind": ["bin"]},
+        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bitrouter", "kind": ["bin"]},
             "profile": {"test": false}, "fresh": true, "executable": fixture.artifacts.executable}),
         json!({"reason": "build-script-executed", "package_id": PACKAGE_ID, "out_dir": fixture.artifacts.out_dir}),
         json!({"reason": "build-finished", "success": true}),
@@ -319,7 +319,7 @@ fn incomplete_failed_or_ambiguous_cargo_messages_are_rejected() -> Result<()> {
         json!({"reason": "build-finished", "success": false}),
         json!({"reason": "build-script-executed", "package_id": PACKAGE_ID, "out_dir": fixture.directory.path().join("stale-out")}),
         json!({"reason": "build-script-executed", "package_id": PACKAGE_ID, "out_dir": "relative/path"}),
-        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bro", "kind": ["bin"]},
+        json!({"reason": "compiler-artifact", "package_id": PACKAGE_ID, "target": {"name": "bitrouter", "kind": ["bin"]},
             "profile": {"test": false}, "executable": fixture.directory.path().join("other-bro")}),
     ] {
         let mut invalid = original.clone();
@@ -395,11 +395,7 @@ fn archive_contents(
 #[test]
 fn profiled_archives_round_trip_contents_modes_identity_and_hashes() -> Result<()> {
     for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
-        for profile in [
-            PackageProfile::Gateway,
-            PackageProfile::GatewayShared,
-            PackageProfile::Full,
-        ] {
+        for profile in [PackageProfile::Gateway, PackageProfile::GatewayShared] {
             let fixture = Fixture::new(target, profile)?;
             let windows = target.contains("-windows-");
             let root = format!("bitrouter-{}-{target}", profile.identity().as_str());
@@ -409,7 +405,11 @@ fn profiled_archives_round_trip_contents_modes_identity_and_hashes() -> Result<(
             ensure!(summary.archive == fixture.out().join(&filename));
             ensure!(summary.checksum == fixture.out().join(format!("{filename}.sha256")));
             let files = archive_contents(&summary.archive, &root, windows)?;
-            let binary_name = if windows { "bro.exe" } else { "bro" };
+            let binary_name = if windows {
+                "bitrouter.exe"
+            } else {
+                "bitrouter"
+            };
             let (binary, mode) = files.get(binary_name).context("missing binary")?;
             ensure!(binary == BINARY && *mode == 0o755);
             ensure!(files.get("LICENSE") == Some(&(b"test license\n".to_vec(), 0o644)));
@@ -423,6 +423,7 @@ fn profiled_archives_round_trip_contents_modes_identity_and_hashes() -> Result<(
             let (bytes, mode) = files.get("manifest.json").context("missing manifest")?;
             let manifest: Manifest = serde_json::from_slice(bytes)?;
             ensure!(*mode == 0o644 && manifest.identity == fixture.identity);
+            ensure!(manifest.package == "bitrouter");
             ensure!(manifest.cargo_profile == "dev" && manifest.binary.path == binary_name);
             ensure!(manifest.binary.bytes == 3 && manifest.binary.sha256 == BINARY_SHA256);
             let expected_hash = hex::encode(Sha256::digest(fs::read(&summary.archive)?));
@@ -441,6 +442,7 @@ fn wrong_identity_or_missing_revision_never_produces_outputs() -> Result<()> {
     let fixture = Fixture::new("x86_64-unknown-linux-gnu", PackageProfile::Gateway)?;
     for (field, value) in [
         ("profile", json!("full")),
+        ("features", json!(["http2"])),
         ("profile", json!("custom")),
         ("target", json!("aarch64-apple-darwin")),
         ("version", json!("0.0.0")),

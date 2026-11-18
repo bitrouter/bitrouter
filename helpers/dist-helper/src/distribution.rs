@@ -39,7 +39,6 @@ pub(super) struct PackageOptions {
 enum PackageProfile {
     Gateway,
     GatewayShared,
-    Full,
 }
 
 impl PackageProfile {
@@ -47,7 +46,6 @@ impl PackageProfile {
         match self {
             Self::Gateway => DistributionProfile::Gateway,
             Self::GatewayShared => DistributionProfile::GatewayShared,
-            Self::Full => DistributionProfile::Full,
         }
     }
 }
@@ -87,6 +85,7 @@ struct BuildArtifacts {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
+    package: String,
     identity: ArtifactIdentity,
     cargo_profile: String,
     binary: Binary,
@@ -162,7 +161,7 @@ fn build_command(root: &Path, options: &PackageOptions, build_dir: &Path) -> Com
         "-p",
         "bitrouter",
         "--bin",
-        "bro",
+        "bitrouter",
         "--target",
         &options.target,
         "--profile",
@@ -178,7 +177,6 @@ fn build_command(root: &Path, options: &PackageOptions, build_dir: &Path) -> Com
         PackageProfile::GatewayShared => {
             command.args(["--no-default-features", "--features", "multi-instance"]);
         }
-        PackageProfile::Full => {}
     }
     command
 }
@@ -239,7 +237,7 @@ fn parse_build(bytes: &[u8], package_id: &str) -> Result<BuildArtifacts> {
                 finished = true;
             }
             Some("compiler-artifact") if message["package_id"] == package_id => {
-                if message["target"]["name"] == "bro"
+                if message["target"]["name"] == "bitrouter"
                     && message["target"]["kind"] == serde_json::json!(["bin"])
                     && message["profile"]["test"] == false
                 {
@@ -254,7 +252,7 @@ fn parse_build(bytes: &[u8], package_id: &str) -> Result<BuildArtifacts> {
     }
     ensure!(finished, "missing successful Cargo build-finished message");
     Ok(BuildArtifacts {
-        executable: executable.context("Cargo did not report the bro executable")?,
+        executable: executable.context("Cargo did not report the bitrouter service executable")?,
         out_dir: out_dir.context("Cargo did not report bitrouter's OUT_DIR")?,
     })
 }
@@ -345,7 +343,12 @@ fn validate_identity(
         identity.profile == options.profile.identity(),
         "artifact profile does not match selection"
     );
-    if matches!(options.profile, PackageProfile::GatewayShared) {
+    if matches!(options.profile, PackageProfile::Gateway) {
+        ensure!(
+            identity.features.is_empty(),
+            "minimal gateway must have no features"
+        );
+    } else {
         ensure!(
             identity.features == ["db-postgres", "multi-instance"],
             "shared gateway artifact must contain exactly db-postgres,multi-instance"
@@ -390,7 +393,11 @@ fn package_archive(
         "Cargo executable must be a regular file"
     );
     let windows = options.target.split('-').any(|part| part == "windows");
-    let binary_name = if windows { "bro.exe" } else { "bro" };
+    let binary_name = if windows {
+        "bitrouter.exe"
+    } else {
+        "bitrouter"
+    };
     ensure!(
         artifacts
             .executable
@@ -416,14 +423,19 @@ fn package_archive(
     let (bytes, sha256) = hash_file(&copied_binary)?;
     ensure!(bytes > 0, "Cargo executable is empty");
     fs::copy(root.join("LICENSE"), contents.join("LICENSE")).context("copying LICENSE")?;
-    let invocation = if windows { ".\\bro.exe" } else { "./bro" };
+    let invocation = if windows {
+        ".\\bitrouter.exe"
+    } else {
+        "./bitrouter"
+    };
     fs::write(
         contents.join("README.md"),
         format!(
             "# BitRouter {profile}\n\nTarget: `{}`. Cargo profile: `{}`.\n\n\
          This is a distinct profiled artifact for manual installation and use.\n\
          Extract the archive on the matching target, then run `{invocation} --help`.\n\
-         Gateway disables defaults; gateway-shared adds only multi-instance (including db-postgres); full uses defaults.\n\
+         To update or roll back, extract the same profile and target from the selected release into a fresh directory, verify its checksum and build-info, then switch the service executable.\n\
+         When migrating an older gateway archive, point the service at the extracted bitrouter executable and retain the old directory for rollback.\n\
          See manifest.json for build identity and the binary SHA-256.\n\
          These archives have their own names and layout, independent of cargo-dist releases.\n",
             options.target,
@@ -432,6 +444,7 @@ fn package_archive(
     )
     .context("writing package README")?;
     let manifest = Manifest {
+        package: "bitrouter".to_owned(),
         identity,
         cargo_profile: options.cargo_profile.as_str().to_owned(),
         binary: Binary {

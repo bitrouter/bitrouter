@@ -53,7 +53,7 @@ jobs:
         PROFILE_FEATURES: ${{ matrix.features }}
       run: |
         # Check production before dev-dependencies can unify extra features.
-        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
+        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bitrouter
         cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
         cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
         # Only the minimal gateway distributions promise an h2-free
@@ -164,8 +164,8 @@ jobs:
       run: cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test host_lifecycle --jobs 2 -- --test-threads=2
     - name: verify base contracts without harness
       if: matrix.features == ''
-      run: cargo nextest run -p bitrouter --no-default-features --lib --bin bro --build-jobs 2 --test-threads 2 -E 'test(client::agent_local::) | test(providers::cli_install::)
-        | test(skills::) | test(skills_init_tests) | test(config::yaml::) | test(daemon::tests::opaque_session) | binary(bro)'
+      run: cargo nextest run -p bitrouter --no-default-features --lib --bin bitrouter --build-jobs 2 --test-threads 2 -E 'test(client::agent_local::) | test(providers::cli_install::)
+        | test(skills::) | test(skills_init_tests) | test(config::yaml::) | test(daemon::tests::opaque_session) | binary(bitrouter)'
     - name: verify stored history without live capture
       if: matrix.features == '' || matrix.features == 'core'
       env:
@@ -298,18 +298,18 @@ jobs:
       shell: bash
       run: |
         mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
-        cargo build --locked -p bitrouter --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
-        cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
-        cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
-        cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"
+        cargo build --locked -p bitrouter --bin bitrouter --jobs 2
+        cp target/debug/bitrouter "$RUNNER_TEMP/profile-full/bitrouter"
+        cargo build --locked -p bitrouter --no-default-features --bin bitrouter --jobs 2
+        cp target/debug/bitrouter "$RUNNER_TEMP/profile-gateway/bitrouter"
+        cargo build --locked -p bitrouter --no-default-features --features harness --bin bitrouter --jobs 2
+        cp target/debug/bitrouter "$RUNNER_TEMP/profile-harness/bitrouter"
     - name: verify real daemon profile transitions and artifact metadata
       shell: bash
       env:
-        BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bro
-        BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bro
-        BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bro
+        BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bitrouter
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bitrouter
+        BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bitrouter
       run: |
         cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
         result=0
@@ -337,7 +337,7 @@ jobs:
       shell: bash
       env:
         CARGO_TARGET_DIR: ${{ runner.temp }}/measurement-target
-        BITROUTER_MEASUREMENT_TEST_BINARY: ${{ runner.temp }}/profile-gateway/bro
+        BITROUTER_MEASUREMENT_TEST_BINARY: ${{ runner.temp }}/profile-gateway/bitrouter
       run: |
         cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
         cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
@@ -380,12 +380,12 @@ jobs:
     - name: run SDK harness against the official core-only process
       shell: bash
       run: |
-        cargo build --locked -p bitrouter --no-default-features --features core --bin bro
+        cargo build --locked -p bitrouter --no-default-features --features core --bin bitrouter
         suffix=""
         if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix=".exe"; fi
         mkdir -p "$RUNNER_TEMP/core-sdk-artifact"
-        cp "target/debug/bro$suffix" "$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
-        core_binary="$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
+        cp "target/debug/bitrouter$suffix" "$RUNNER_TEMP/core-sdk-artifact/bitrouter$suffix"
+        core_binary="$RUNNER_TEMP/core-sdk-artifact/bitrouter$suffix"
         consumer_binary="$PWD/target/sdk-consumer/debug/bitrouter-core-sdk-consumer$suffix"
         if [[ "$RUNNER_OS" == 'Windows' ]]; then
           core_binary="$(cygpath -m "$core_binary")"
@@ -438,7 +438,7 @@ jobs:
       run: |
         cargo metadata --no-deps --format-version 1 | jq -e '
           [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.
