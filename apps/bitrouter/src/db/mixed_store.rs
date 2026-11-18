@@ -119,13 +119,15 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         Err(e) => return Err(e.into()),
         Ok(_) => anyhow::bail!("migration destination already exists"),
     }
+    let mut threads = BTreeMap::new();
     if activate {
         // Check the clean, immutable source before creating even a work directory.
         let reader = open_immutable(&owner.path).await?;
         let result = activation::blockers(&reader).await;
         reader.close().await?;
         witness.check()?;
-        let blockers = result?;
+        let (blockers, checked) = result?;
+        threads = checked;
         if !blockers.is_empty() {
             return Ok(Activation {
                 dispatch_allowed: false,
@@ -176,6 +178,26 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         activation::verify_service(&work.join(bitrouter)).await?;
         let mut marker = private_file(&work.join("bro/ACTIVATED"))?;
         writeln!(marker, "{}", Owner::Bro.marker())?;
+        if !threads.is_empty() {
+            use sha2::{Digest, Sha256};
+            let dir = work.join("bro/threads");
+            private_dir(&dir)?;
+            for (id, thread) in &threads {
+                let mut file = private_file(&dir.join(format!("{id}.json")))?;
+                serde_json::to_writer(&mut file, thread)?;
+                file.sync_all()?;
+            }
+            File::open(&dir)?.sync_all()?;
+            let mut hash = Sha256::new();
+            let mut file=File::open(work.join(bro))?;
+            let mut buf=[0u8;64*1024];
+            loop {
+                let count=std::io::Read::read(&mut file,&mut buf)?;
+                if count==0 {break;}
+                hash.update(&buf[..count]);
+            }
+            writeln!(marker, "sealed-v1 {}", hex::encode(hash.finalize()))?;
+        }
         marker.sync_all()?;
     }
     for subdir in ["rollback", "bitrouter", "bro", "."] {
@@ -231,7 +253,7 @@ pub(crate) async fn initialize_gateway_schema(db: &impl ConnectionTrait) -> Resu
     );
     ensure!(
         db.query_one(sql(
-            "SELECT 1 FROM main.sqlite_schema UNION ALL SELECT 1 FROM temp.sqlite_schema LIMIT 1"
+            "SELECT 1 FROM main.sqlite_schema LIMIT 1"
         ))
         .await?
         .is_none(),

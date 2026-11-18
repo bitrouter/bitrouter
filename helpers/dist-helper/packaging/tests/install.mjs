@@ -2,14 +2,16 @@
 // and two real versioned releases. Pass the pinned dist executable on PATH.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
+import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
   symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scripts = fileURLToPath(new URL('../', import.meta.url));
-const root = mkdtempSync(join(tmpdir(), 'split-install-'));
+// cargo-dist compares Cargo's canonical workspace root with its starting path.
+// On Windows TEMP can contain a DOS short name for the user profile.
+const root = realpathSync.native(mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'split-install-')));
 const windows = process.platform === 'win32';
 const ext = windows ? '.exe' : '';
 const names = { bitrouter: 'bitrouter', 'bitrouter-bro': 'bro' };

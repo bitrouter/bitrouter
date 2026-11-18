@@ -201,6 +201,8 @@ mod tests {
             None,
             Some("m20240101_000048_native_generate_content"),
             Some(BASELINE),
+            Some(super::super::mixed_store::Owner::BitRouter.marker()),
+            Some(super::super::mixed_store::Owner::Bro.marker()),
             Some("m20990101_future"),
         ] {
             let db = crate::db::connect("sqlite::memory:").await?;

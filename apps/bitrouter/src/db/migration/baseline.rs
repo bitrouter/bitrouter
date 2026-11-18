@@ -215,12 +215,53 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_current_baseline_matches_frozen_catalog() -> Result<()> {
-        // Independently captured sqlite_schema: 55 tables and 59 explicit indexes
-        // from the prior retained fixture. The sole schema retirement is the
-        // capacity-upgrade table. No rows, keys or old executable are included.
-        let frozen: Vec<SchemaObject> =
+        // Pin the service's table inventory independently of the production
+        // classifier. Every retained table and index must match the M0 DDL.
+        const SERVICE_TABLES: &[&str] = &[
+            "api_keys",
+            "checkpoint_evolution",
+            "eval_admission_events",
+            "eval_import_provenance",
+            "eval_results",
+            "eval_snapshots",
+            "eval_subjects",
+            "provider_continuation_key_epoch",
+            "provider_continuations",
+            "requests",
+            "seaql_migrations",
+            "tenancy_active_configurations",
+            "tenancy_bindings",
+            "tenancy_configurations",
+            "tenancy_continuation_epoch",
+            "tenancy_credentials",
+            "tenancy_dispatch_intents",
+            "tenancy_execution_receipts",
+            "tenancy_installation",
+            "tenancy_oauth_slots",
+            "tenancy_operations",
+            "tenancy_principals",
+            "tenancy_receipt_archive",
+            "tenancy_receipt_auxiliary",
+            "tenancy_resource_lifecycle",
+            "tenancy_resource_revisions",
+            "tenancy_tenants",
+            "tenancy_unknown_obligations",
+            "tenancy_usage_evidence",
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_outbox",
+            "trajectory_prefix_index",
+            "trajectory_requests",
+            "users",
+        ];
+        let mixed: Vec<SchemaObject> =
             serde_json::from_str(include_str!("baseline/fixtures/sqlite-current-schema.json"))?;
-        ensure!(frozen.len() == 113);
+        ensure!(mixed.len() == 113);
+        let frozen: Vec<_> = mixed
+            .into_iter()
+            .filter(|object| SERVICE_TABLES.contains(&object.tbl_name.as_str()))
+            .collect();
+        ensure!(frozen.len() == 78);
         let db = crate::db::connect("sqlite::memory:").await?;
         super::super::Migrator::up(&db, None).await?;
         let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
@@ -269,7 +310,10 @@ mod tests {
             ))
             .await?;
         let ledger = super::super::Migrator::get_migration_models(&db).await?;
-        ensure!(ledger.len() == 1 && ledger[0].version == store_format::BASELINE);
+        ensure!(
+            ledger.len() == 1
+                && ledger[0].version == crate::db::mixed_store::Owner::BitRouter.marker()
+        );
         super::super::Migrator::up(&db, None).await?;
         let after = db
             .query_all(Statement::from_string(

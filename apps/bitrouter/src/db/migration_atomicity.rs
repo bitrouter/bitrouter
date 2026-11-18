@@ -122,7 +122,10 @@ async fn failed_ledger_insert_rolls_back_ddl_and_retry_succeeds() -> Result<()> 
         ensure!(table_exists(&db, "tenancy_resource_lifecycle").await?);
         ensure!(table_exists(&db, "tenancy_usage_evidence").await?);
         let applied = Migrator::get_migration_models(&db).await?;
-        ensure!(applied.len() == 1 && applied[0].version == store_format::BASELINE);
+        ensure!(
+            applied.len() == 1
+                && applied[0].version == super::mixed_store::Owner::BitRouter.marker()
+        );
         run_migrations(&db).await?;
         ensure!(Migrator::get_migration_models(&db).await? == applied);
         db.close().await?;
@@ -164,7 +167,7 @@ async fn unknown_existing_table_is_preserved_and_never_adopted() -> Result<()> {
             db.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "INSERT INTO seaql_migrations VALUES (?,123)",
-                [store_format::BASELINE.into()],
+                [super::mixed_store::Owner::BitRouter.marker().into()],
             ))
             .await?;
         }
@@ -189,7 +192,10 @@ async fn unknown_existing_table_is_preserved_and_never_adopted() -> Result<()> {
                     ))
                     .await?
                     .context("original marker disappeared")?;
-                ensure!(row.try_get::<String>("", "version")? == store_format::BASELINE);
+                ensure!(
+                    row.try_get::<String>("", "version")?
+                        == super::mixed_store::Owner::BitRouter.marker()
+                );
                 ensure!(row.try_get::<i64>("", "applied_at")? == 123);
             } else {
                 ensure!(!table_exists(&db, "seaql_migrations").await?);
