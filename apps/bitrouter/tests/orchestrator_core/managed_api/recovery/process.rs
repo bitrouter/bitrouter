@@ -130,7 +130,7 @@ models:
             .append(true)
             .open(&log_path)?;
         drop(listener);
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .arg("serve")
             .arg("--config")
             .arg(&config)

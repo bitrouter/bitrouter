@@ -167,7 +167,7 @@ models:
         }
         let source = fs::read_to_string(config)?;
         let output = File::options().create(true).append(true).open(&self.log)?;
-        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .args(["serve", "--managed-child", "--config"])
             .arg(config)

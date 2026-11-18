@@ -46,7 +46,7 @@ impl Environment {
         })
     }
     fn command(&self) -> Result<Command> {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .env_clear()
             .env("PATH", inherited_path()?)

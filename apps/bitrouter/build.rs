@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Err(std::env::VarError::NotPresent) => None,
         Err(error) => return Err(error.into()),
     };
-    let revision = build_artifact::source_revision(&manifest, explicit_revision.as_deref())?;
+    let revision = bitrouter_build::source_revision(&manifest, explicit_revision.as_deref())?;
     for path in revision.rerun_paths {
         println!("cargo::rerun-if-changed={}", path.display());
     }

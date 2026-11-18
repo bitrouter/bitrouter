@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 
 fn command(directory: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(directory)
         .env_clear()

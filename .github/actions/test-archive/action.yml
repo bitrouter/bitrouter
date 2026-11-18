@@ -37,13 +37,12 @@ runs:
         # https://nexte.st/docs/ci-features/archiving/
         mkdir -p ci-evidence
         /usr/bin/time -v -o ci-evidence/extract.txt tar --zstd -xf .ci-archive/tests.tar.zst
-        test -x target/debug/bro
+        test -x target/debug/bitrouter
         test -x target/debug/examples/owned_capture_fixture
         printf '%s\n' \
           "BITROUTER_TEST_PREBUILT_ONLY=1" \
           "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
-          "BITROUTER_TEST_BRO=$GITHUB_WORKSPACE/target/debug/bro" \
-          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bitrouter" \
           "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
         # A consumer must never silently turn a missing artifact into a rebuild.
         # Keep rustc available: the coding judge verifies tiny temporary Rust

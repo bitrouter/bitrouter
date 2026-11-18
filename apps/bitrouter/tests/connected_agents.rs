@@ -13,7 +13,7 @@ use tokio::process::{Child, Command};
 mod example_binary;
 
 fn command(home: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())

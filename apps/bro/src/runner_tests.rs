@@ -1,0 +1,305 @@
+//! Real HTTP/SSE requests exercise the public SDK and the stored restart boundary.
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::time::{Duration, Instant};
+use std::{fs, thread};
+
+use anyhow::{Context, Result, ensure};
+use bitrouter_ai::harness::agent::ToolMode;
+use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter_sdk::gateway::GatewayClient;
+use serde_json::{Value, json};
+
+use crate::{
+    checkpoint::{Home, ModelState, Next, Thread, ToolState},
+    runner,
+};
+
+struct Mock {
+    endpoint: String,
+    requests: thread::JoinHandle<Result<Vec<Value>>>,
+}
+
+impl Mock {
+    fn start(replies: Vec<String>) -> Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        listener.set_nonblocking(true)?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let requests = thread::spawn(move || {
+            let mut requests = vec![];
+            for reply in replies {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let (mut socket, _) = loop {
+                    match listener.accept() {
+                        Ok(stream) => break stream,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                };
+                socket.set_nonblocking(false)?;
+                socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+                let mut reader = BufReader::new(&socket);
+                let mut headers = String::new();
+                loop {
+                    let previous = headers.len();
+                    ensure!(reader.read_line(&mut headers)? > 0, "truncated headers");
+                    if headers.len() == previous + 2 {
+                        break;
+                    }
+                }
+                let headers = headers.to_ascii_lowercase();
+                ensure!(
+                    headers.starts_with("post /v1/chat/completions ")
+                        && headers.contains("authorization: bearer scoped-test-key\r\n"),
+                    "wrong SDK endpoint or credentials"
+                );
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .context("missing length")?
+                    .parse()?;
+                let mut bytes = vec![0; length];
+                reader.read_exact(&mut bytes)?;
+                requests.push(serde_json::from_slice(&bytes)?);
+                write!(socket, "{reply}")?;
+            }
+            Ok(requests)
+        });
+        Ok(Self { endpoint, requests })
+    }
+
+    fn join(self) -> Result<Vec<Value>> {
+        self.requests
+            .join()
+            .map_err(|_| anyhow::anyhow!("mock gateway worker failed"))?
+    }
+}
+
+fn chunk(delta: Value, finish: Option<&str>) -> String {
+    format!(
+        "data: {}\n\n",
+        json!({"id":"completion-1","object":"chat.completion.chunk","model":"fixture",
+        "choices":[{"index":0,"delta":delta,"finish_reason":finish}]})
+    )
+}
+fn stream(body: String) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+}
+fn call_stream(done: bool) -> String {
+    let mut body = chunk(
+        json!({"role":"assistant","reasoning_content":"retained","tool_calls":[
+            {"index":0,"id":"read1","type":"function","function":{"name":"read","arguments":"{\"path\":\"seed\"}"}},
+            {"index":1,"id":"write1","type":"function","extra_content":{"google":{"thought_signature":"signed"}},"function":{"name":"write","arguments":"{\"path\":"}}
+        ]}),
+        None,
+    );
+    body.push_str(&chunk(json!({"tool_calls":[{"index":1,"function":{"arguments":"\"answer\",\"content\":\"done\"}"}}]}),Some("tool_calls")));
+    if done {
+        body.push_str("data: [DONE]\n\n");
+    }
+    stream(body)
+}
+
+struct Work {
+    _dir: tempfile::TempDir,
+    home: Home,
+    thread: Thread,
+    client: GatewayClient,
+}
+
+impl Work {
+    fn new(endpoint: &str) -> Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().join("work");
+        fs::create_dir(&root)?;
+        fs::write(root.join("seed"), "original\n")?;
+        let home = Home::open(&dir.path().join("bro"))?;
+        let mut thread = Thread::new(
+            root.canonicalize()?,
+            endpoint.into(),
+            "fixture".into(),
+            None,
+            None,
+            ToolMode::Coding,
+        );
+        thread.start("Inspect and write".into(), None)?;
+        home.admit(&thread)?;
+        let client = GatewayClient::new(endpoint, Some("scoped-test-key"))?;
+        Ok(Self {
+            _dir: dir,
+            home,
+            thread,
+            client,
+        })
+    }
+}
+
+#[tokio::test]
+async fn approval_restart_keeps_confirmed_results_and_continuity() -> Result<()> {
+    for approved in [true, false] {
+        let final_reply =
+            stream(chunk(json!({"content":"Finished."}), Some("stop")) + "data: [DONE]\n\n");
+        let mock = Mock::start(vec![call_stream(true), final_reply])?;
+        let Work {
+            _dir,
+            home,
+            mut thread,
+            client,
+        } = Work::new(&mock.endpoint)?;
+        runner::run(&home, &mut thread, &client).await?;
+        let mut restored = home.load(thread.thread_id)?;
+        let request_id = restored
+            .current()?
+            .pending()
+            .context("expected approval")?
+            .request_id
+            .clone();
+        ensure!(
+            !restored.workspace.join("answer").exists(),
+            "write ran before approval"
+        );
+        fs::write(restored.workspace.join("seed"), "changed after read")?;
+        assert!(runner::answer(&home, &mut restored, "stale", approved).is_err());
+        runner::answer(&home, &mut restored, &request_id, approved)?;
+        let mut restored = home.load(thread.thread_id)?;
+        runner::run(&home, &mut restored, &client).await?;
+        assert_eq!(restored.current()?.status(false), TurnStatus::Completed);
+        assert_eq!(restored.workspace.join("answer").exists(), approved);
+        // Another explicit resume of an already settled Turn must stay offline.
+        runner::run(&home, &mut restored, &client).await?;
+        let requests = mock.join()?;
+        assert_eq!(requests.len(), 2);
+        let history = requests[1]["messages"]
+            .as_array()
+            .context("missing history")?;
+        let assistant = history
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .context("missing assistant")?;
+        assert_eq!(assistant["reasoning_content"], "retained");
+        assert_eq!(
+            assistant["tool_calls"][1]["extra_content"]["google"]["thought_signature"],
+            "signed"
+        );
+        let results: Vec<_> = history.iter().filter(|m| m["role"] == "tool").collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["tool_call_id"], "read1");
+        assert!(
+            results[0]["content"]
+                .as_str()
+                .context("missing read output")?
+                .contains("original")
+        );
+        assert_eq!(results[1]["tool_call_id"], "write1");
+        let saved = serde_json::to_string(&restored)?;
+        assert!(!saved.contains("scoped-test-key"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn truncated_paid_stream_refuses_any_replay() -> Result<()> {
+    let mock = Mock::start(vec![call_stream(false)])?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    assert!(runner::run(&home, &mut thread, &client).await.is_err());
+    let mut restored = home.load(thread.thread_id)?;
+    assert_eq!(
+        restored.current()?.status(false),
+        TurnStatus::RecoveryRequired
+    );
+    assert!(restored.start("retry".into(), None).is_err());
+    assert!(runner::run(&home, &mut restored, &client).await.is_err());
+    assert!(!restored.workspace.join("answer").exists());
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn lost_worker_with_tool_intent_blocks_even_after_cancel() -> Result<()> {
+    let mock = Mock::start(vec![call_stream(true)])?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    runner::run(&home, &mut thread, &client).await?;
+    let pending = thread
+        .current()?
+        .pending()
+        .context("missing pending call")?
+        .request_id
+        .clone();
+    runner::answer(&home, &mut thread, &pending, true)?;
+    thread.response_mut()?.calls[1].state = ToolState::ToolIntent;
+    home.save(&thread)?;
+    let mut loaded = home.load(thread.thread_id)?;
+    assert_eq!(loaded.current()?.next(), Next::Blocked);
+    runner::cancel_turn(&home, &mut loaded)?;
+    assert_eq!(
+        home.load(thread.thread_id)?.current()?.status(false),
+        TurnStatus::RecoveryRequired
+    );
+    assert!(loaded.start("new".into(), None).is_err());
+    assert!(!loaded.workspace.join("answer").exists());
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_waiting_approval_settles_without_effects() -> Result<()> {
+    let mock = Mock::start(vec![call_stream(true)])?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    runner::run(&home, &mut thread, &client).await?;
+    runner::cancel_turn(&home, &mut thread)?;
+    let loaded = home.load(thread.thread_id)?;
+    assert_eq!(loaded.current()?.status(false), TurnStatus::Cancelled);
+    assert!(loaded.current()?.pending().is_none());
+    assert!(!loaded.workspace.join("answer").exists());
+    let last = loaded.current()?.steps.last().context("missing step")?;
+    assert!(
+        matches!(&last.state,ModelState::ModelResponse {response} if matches!(response.calls[1].state,ToolState::ToolResult{effect:bitrouter_ai::harness::runtime::EffectStatus::NotExecuted,..}))
+    );
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn denied_gateway_request_has_no_model_or_tool_output() -> Result<()> {
+    let body =
+        r#"{"error":{"message":"denied","type":"permission_error","code":"permission_denied"}}"#;
+    let mock = Mock::start(vec![format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )])?;
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&mock.endpoint)?;
+    assert!(runner::run(&home, &mut thread, &client).await.is_err());
+    let loaded = home.load(thread.thread_id)?;
+    assert_eq!(loaded.current()?.status(false), TurnStatus::Failed);
+    assert!(loaded.current()?.response().is_none());
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}

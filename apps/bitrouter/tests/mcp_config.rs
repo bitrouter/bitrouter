@@ -13,7 +13,7 @@ use tokio::process::Command;
 mod mcp_fixture;
 
 fn cli(home: &Path, path: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("HOME", home)
@@ -308,7 +308,7 @@ async fn shortcut_creation_path_and_explicit_connect_only_on_check() -> Result<(
     let raw: Value = serde_saphyr::from_str(&std::fs::read_to_string(&args_path)?)?;
     ensure!(raw["mcp_servers"]["local"]["transport"]["args"] == json!(["--flag", "two words"]));
     let default = home.path().join("bitrouter.yaml");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home.path())
         .env("HOME", home.path())
@@ -398,14 +398,14 @@ async fn shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts() -> 
         reported.is_absolute() && std::fs::canonicalize(reported)? == std::fs::canonicalize(&path)?
     );
     for command in ["list", "show", "add", "edit", "remove", "check"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["mcp", command, "--help"])
             .output()
             .await?;
         ensure!(output.status.success(), "help failed for {command}");
         ensure!(!output.stdout.contains(&0x1b));
     }
-    let help = Command::new(env!("CARGO_BIN_EXE_bro"))
+    let help = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args(["mcp", "--help"])
         .output()
         .await?;

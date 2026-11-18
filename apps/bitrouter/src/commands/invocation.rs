@@ -1,22 +1,10 @@
-//! The CLI name to print inside a runnable hint.
-//!
-//! Hints and error messages all over this workspace tell the operator what to
-//! type next — "run `bro cloud login`", "run `bro start`". The binary ships as
-//! `bro`, but installers also create a `bitrouter` compatibility alias (removed
-//! in 1.0.0), so the name the user actually typed is not knowable at compile
-//! time. Every such message therefore renders [`name`] instead of a literal.
-//!
-//! The value is a process-wide constant established once, at startup, by the
-//! CLI calling [`record_argv0`]. It is deliberately **not** derived lazily from
-//! `argv[0]`: this crate is also an assembly library embedded in other
-//! binaries, and a hint reading "run `their-app cloud login`" would be wrong.
-//! Anything that never records a name — an embedder, a unit test — sees the
-//! canonical [`DEFAULT`] spelling, which is always correct advice.
+//! Service command name for operator hints. Embedders and unit tests use the
+//! canonical package executable. The CLI records its invocation once at startup.
 
 use std::sync::OnceLock;
 
 /// The canonical name the CLI is installed and documented as.
-pub const DEFAULT: &str = "bro";
+pub const DEFAULT: &str = "bitrouter";
 
 static INVOKED: OnceLock<String> = OnceLock::new();
 
@@ -83,6 +71,6 @@ mod tests {
         // The CLI binary is the only caller of `record_argv0`, so a unit test
         // binary always sees the default — which is what makes hint assertions
         // in this workspace deterministic.
-        assert_eq!(name(), "bro");
+        assert_eq!(name(), "bitrouter");
     }
 }

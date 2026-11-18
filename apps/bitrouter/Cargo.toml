@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter"
-description = "BitRouter: an LLM API router. CLI + assembly library."
+description = "BitRouter model gateway, routing service and operator CLI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,15 +12,12 @@ rust-version.workspace = true
 name = "bitrouter"
 path = "src/lib.rs"
 
-# The CLI is invoked as `bro`. The package, the library, and the product
-# keep the `bitrouter` name; installers add a deprecated `bitrouter` alias
-# (see `[dist.bin-aliases]` in `dist-workspace.toml`).
 [[bin]]
-name = "bro"
+name = "bitrouter"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql", "http2"]
+default = ["mcp", "server-tools", "otel-http", "db-postgres", "db-mysql", "http2"]
 # The same JSON/SSE API over HTTP/2, including cleartext private-network ingress.
 http2 = ["axum/http2", "reqwest/http2", "bitrouter-sdk/http2", "dep:h2"]
 core = ["dep:rand_distr"]
@@ -151,6 +148,7 @@ winapi-util = "0.1"
 rustix = { workspace = true, features = ["process", "event", "termios", "fs"] }
 
 [build-dependencies]
+bitrouter-build.workspace = true
 # Reads the committed registry artifacts to generate the ACP harness catalog.
 serde_json.workspace = true
 sha2.workspace = true
@@ -158,6 +156,7 @@ sha2.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+bitrouter-build.workspace = true
 # Differential stored-history tests use the pinned schema without activating
 # an ACP runtime in the application's normal/build dependency closure.
 agent-client-protocol-schema.workspace = true
@@ -229,9 +228,6 @@ required-features = ["core"]
 name = "workflow_state_replay"
 required-features = ["core"]
 
-[[test]]
-name = "eval_exchange_equivalence"
-required-features = ["core"]
 
 [[test]]
 name = "workflow_state_real_agent_e2e"

@@ -505,7 +505,7 @@ async fn chain(
 async fn run(home: PathBuf, deadline: Instant, cancel: CancellationToken) -> Result<()> {
     crate::runtime_crypto::DeploymentKey::from_environment(producer::KEY_ENV)?;
     let binary = PathBuf::from(
-        std::env::var_os("BITROUTER_TEST_BRO")
+        std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY")
             .context("explicit built bro required; no build/skip")?,
     );
     ensure!(binary.is_absolute());

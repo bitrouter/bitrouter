@@ -123,7 +123,7 @@ impl Host {
         let output = File::create(&self.log)?;
         drop(reservation);
         self.child = Some(
-            Command::new(env!("CARGO_BIN_EXE_bro"))
+            Command::new(env!("CARGO_BIN_EXE_bitrouter"))
                 .args(["serve", "--managed-child", "--config"])
                 .arg(self.home.join("bitrouter.yaml"))
                 .current_dir(&self.home)

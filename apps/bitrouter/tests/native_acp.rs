@@ -22,7 +22,7 @@ struct Peer {
 }
 impl Peer {
     async fn connect(config: &Path, home: &Path, version: u32) -> Result<Self> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args([
                 "acp",
                 "serve",
@@ -123,7 +123,7 @@ async fn stdio_disconnect_restores_same_approval_across_versions_and_daemon_rest
             ),
         )?;
         let launch = || -> Result<Child> {
-            Ok(Command::new(env!("CARGO_BIN_EXE_bro"))
+            Ok(Command::new(env!("CARGO_BIN_EXE_bitrouter"))
                 .args(["serve", "--config"])
                 .arg(&config)
                 .env("BITROUTER_HOME", home.path())
@@ -274,7 +274,7 @@ async fn stdio_disconnect_restores_same_approval_across_versions_and_daemon_rest
             .await?;
         observer.detach().await?;
         second.detach().await?;
-        let stopped = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let stopped = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["stop", "--config"])
             .arg(&config)
             .env("BITROUTER_HOME", home.path())
@@ -311,7 +311,7 @@ async fn stdio_disconnect_restores_same_approval_across_versions_and_daemon_rest
             "load replayed model work"
         );
         cold.detach().await?;
-        let _ = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let _ = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["stop", "--config"])
             .arg(&config)
             .env("BITROUTER_HOME", home.path())

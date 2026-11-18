@@ -30,6 +30,7 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
+bitrouter-build = { path = "helpers/bitrouter-build", version = "1.0.0-beta.1" }
 bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-beta.1" }
 bitrouter-registry = { path = "crates/bitrouter-registry", version = "1.0.0-beta.1" }
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-beta.1", default-features = false }

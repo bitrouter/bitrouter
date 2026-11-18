@@ -14,7 +14,7 @@ fn source(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 async fn run(root: &Path, args: &[&str], success: bool) -> Result<Value> {
-    let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+    let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .current_dir(root)
         .env("HOME", root)
         .env("CODEX_HOME", root.join(".codex"))

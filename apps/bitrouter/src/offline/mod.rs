@@ -1,4 +1,4 @@
-//! Explicit local evidence and migration adapters for `bro tenancy offline`.
+//! Explicit local evidence and migration adapters for `bitrouter tenancy offline`.
 //!
 //! Evidence is application-private, not an AI/SDK DTO, runtime authority grant
 //! or authorization to release ingress or complete cutover.
@@ -617,4 +617,27 @@ pub async fn recover_with_options(
 ) -> Result<impl CliReport> {
     recovery::run_with_options(plan, report, validation, options).await
         .map_err(|_| failure("offline recovery verification failed or cleanup is unconfirmed: retain incomplete evidence and the stopped target; do not release ingress"))
+}
+
+impl crate::output::CliReport for crate::db::mixed_store::StagedStores {
+    fn render(&self, h: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
+        h.field("gateway database", self.bitrouter.display())?;
+        h.field("BRO database", self.bro.display())?;
+        h.field("rollback snapshot", self.rollback.display())?;
+        h.field("dispatch allowed", self.dispatch_allowed)
+    }
+}
+
+impl crate::output::CliReport for crate::db::mixed_store::Activation {
+    fn render(&self, h: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
+        if let Some(stores) = &self.stores {
+            stores.render(h)?;
+        } else {
+            h.field("dispatch allowed", self.dispatch_allowed)?;
+            for blocker in &self.blockers {
+                h.field("blocked by", blocker)?;
+            }
+        }
+        Ok(())
+    }
 }

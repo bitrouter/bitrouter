@@ -721,6 +721,7 @@ dependencies = [
  "axum-test",
  "base64 0.22.1",
  "bitrouter-ai",
+ "bitrouter-build",
  "bitrouter-guardrails",
  "bitrouter-registry",
  "bitrouter-sdk",
@@ -813,6 +814,40 @@ dependencies = [
  "tokio",
  "toml",
  "tower",
+]
+
+[[package]]
+name = "bitrouter-bro"
+version = "1.0.0-beta.1"
+dependencies = [
+ "agent-client-protocol-schema",
+ "anyhow",
+ "bitrouter-ai",
+ "bitrouter-build",
+ "bitrouter-sdk",
+ "clap",
+ "futures",
+ "globset",
+ "ignore",
+ "process-wrap",
+ "regex",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "similar",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "bitrouter-build"
+version = "1.0.0-beta.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

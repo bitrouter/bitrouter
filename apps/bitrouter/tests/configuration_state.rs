@@ -299,7 +299,7 @@ async fn invalid_or_missing_saved_config_does_not_erase_the_live_daemon() -> Res
 async fn mcp_cli_save_requires_restart_and_never_reloads_the_running_target() -> Result<()> {
     let fixture = RunningFixture::start().await?;
     let before = configuration(&fixture.status(&fixture.source).await?)?;
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .current_dir(fixture.directory.path())
         .env("HOME", fixture.directory.path())
         .env("BITROUTER_HOME", fixture.directory.path())
@@ -371,7 +371,7 @@ async fn unknown_field_diagnostics_do_not_disclose_dynamic_keys_or_values() -> R
 }
 
 fn isolated_cli(home: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("HOME", home)

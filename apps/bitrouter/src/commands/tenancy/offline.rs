@@ -49,6 +49,17 @@ impl Working {
 
 #[derive(Subcommand)]
 pub(crate) enum Action {
+    /// Stage separate service and BRO stores from a stopped mixed SQLite database.
+    /// The destination must be new. Retain the snapshot and external keys until recovery.
+    SplitStore {
+        /// Publish runnable stores when the snapshot has no unresolved ownership.
+        #[arg(long)]
+        activate: bool,
+        #[arg(long)]
+        database: PathBuf,
+        #[arg(long)]
+        destination: PathBuf,
+    },
     /// Verify retired evidence and fresh provisioning read-only; never release ingress.
     Recover {
         #[arg(long)]
@@ -139,6 +150,22 @@ pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output)
         .into());
     }
     match action {
+        Action::SplitStore {
+            database,
+            destination,
+            activate,
+        } => {
+            if *activate {
+                let activation =
+                    bitrouter::db::mixed_store::activate(database, destination).await?;
+                output.emit(&activation)?;
+                if !activation.dispatch_allowed {
+                    std::process::exit(1);
+                }
+            } else {
+                output.emit(&bitrouter::db::mixed_store::stage(database, destination).await?)?;
+            }
+        }
         Action::Recover {
             plan,
             report,

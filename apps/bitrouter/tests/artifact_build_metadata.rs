@@ -7,7 +7,8 @@ use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 
-use build_artifact::{BuildMetadata, FeatureSelection, source_revision};
+use bitrouter_build::source_revision;
+use build_artifact::{BuildMetadata, FeatureSelection};
 use sha2::{Digest, Sha256};
 
 const MANIFEST: &str = include_str!("../Cargo.toml");
@@ -27,7 +28,8 @@ fn handoff_tracks_only_compiled_session_and_scheduler_sources() -> Result<(), Bo
         (vec!["multi-instance"], false, false),
         (vec!["harness"], true, false),
         (vec!["core"], false, true),
-        (vec!["default"], true, true),
+        (vec!["default"], false, false),
+        (vec!["core", "harness"], true, true),
     ] {
         let selected = selection(MANIFEST, &roots)?;
         let sources: Vec<_> = selected.handoff_sources().collect();

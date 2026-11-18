@@ -37,7 +37,7 @@ fn startup_home() -> std::io::Result<TempDir> {
 }
 
 fn isolated_command(home: &Path) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("HOME", home)
@@ -350,7 +350,7 @@ async fn configured_runtime_is_reused_without_a_file_chat_agent_or_client_creden
 /// Run the compiled binary with an isolated home/data dir and a null (non-TTY)
 /// stdin. `extra_env` layers provider-key or `BITROUTER_HOME` overrides on top.
 fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .args(args)
         .current_dir(home)

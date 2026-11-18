@@ -92,7 +92,7 @@ impl Terminal {
         command.args([
             std::ffi::OsStr::new("terminal"),
             home.path().as_os_str(),
-            std::ffi::OsStr::new(env!("CARGO_BIN_EXE_bro")),
+            std::ffi::OsStr::new(env!("CARGO_BIN_EXE_bitrouter")),
         ]);
         command.args(args);
         command.cwd(home.path());

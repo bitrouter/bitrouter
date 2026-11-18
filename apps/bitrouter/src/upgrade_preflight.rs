@@ -1,15 +1,12 @@
 //! Read-only migration preflight for an automatic local daemon handoff.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use sea_orm::{
     ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, QueryResult, Statement,
 };
-use sea_orm_migration::MigratorTrait;
 
-use crate::db::migration::Migrator;
 use crate::paths::ConfigSource;
 
 pub struct Preflight {
@@ -85,14 +82,10 @@ async fn applied(db: &DatabaseConnection) -> Result<Vec<String>> {
 }
 
 fn validate_lineage(applied: &[String]) -> Result<()> {
-    let known: HashSet<String> = Migrator::migrations()
-        .iter()
-        .map(|migration| migration.name().to_string())
-        .collect();
     for name in applied {
         ensure!(
-            known.contains(name),
-            "database_ahead_of_binary: unknown applied migration {name}"
+            name == crate::db::mixed_store::Owner::BitRouter.marker(),
+            "database_ahead_of_binary: unsupported service migration {name}"
         );
     }
     Ok(())
@@ -221,7 +214,6 @@ impl Preflight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm_migration::MigratorTrait;
 
     #[test]
     fn unknown_applied_migration_is_rejected() {
@@ -238,7 +230,7 @@ mod tests {
         };
         let path = home.path().join("bitrouter.db");
         let db = crate::db::connect(&format!("sqlite://{}?mode=rwc", path.display())).await?;
-        Migrator::up(&db, None).await?;
+        crate::db::run_migrations(&db).await?;
         db.execute(Statement::from_string(DatabaseBackend::Sqlite,
             "INSERT INTO seaql_migrations (version, applied_at) VALUES ('m20240101_000022_add_upstream_account_ref', 1)".to_string())).await?;
         db.close().await?;

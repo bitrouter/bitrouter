@@ -25,6 +25,14 @@ pub(super) async fn open(connection: SchemaManagerConnection<'_>) -> Result<(), 
         let state = store_format::inspect(&tx)
             .await
             .map_err(|error| DbErr::Custom(error.to_string()))?;
+        if tx.get_database_backend() == DatabaseBackend::Sqlite {
+            if state == State::Empty {
+                crate::db::mixed_store::initialize_gateway_schema(&tx)
+                    .await
+                    .map_err(|error| DbErr::Custom(error.to_string()))?;
+            }
+            return validate(&tx).await;
+        }
         if state == State::Current {
             return validate(&tx).await;
         }

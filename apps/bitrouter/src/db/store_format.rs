@@ -12,7 +12,30 @@ pub(crate) enum State {
     Current,
 }
 
+/// Select the product schema before enabling WAL or acquiring write authority.
 pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
+    let marker = if db.get_database_backend() == DatabaseBackend::Sqlite {
+        super::mixed_store::Owner::BitRouter.marker()
+    } else {
+        BASELINE
+    };
+    let state = inspect_marker(db, marker).await?;
+    if state == State::Current && db.get_database_backend() == DatabaseBackend::Sqlite {
+        super::mixed_store::validate_gateway_schema(db).await?;
+    }
+    Ok(state)
+}
+
+/// The offline importer is the only reader that accepts the mixed SQLite ledger.
+pub(crate) async fn inspect_m0(db: &impl ConnectionTrait) -> Result<State> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite,
+        "expected a SQLite snapshot"
+    );
+    inspect_marker(db, BASELINE).await
+}
+
+async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State> {
     let backend = db.get_database_backend();
     if backend == DatabaseBackend::Sqlite {
         ensure!(
@@ -83,8 +106,8 @@ pub(crate) async fn inspect(db: &impl ConnectionTrait) -> Result<State> {
         "incomplete or unsupported store format ledger"
     );
     ensure!(
-        rows[0].try_get::<String>("", "version")? == BASELINE,
-        "unsupported historical or future store format; use a fresh database"
+        rows[0].try_get::<String>("", "version")? == marker,
+        "unsupported database role or format; stage a supported mixed SQLite database with `bitrouter tenancy offline split-store` or use a fresh database"
     );
     let _: i64 = rows[0].try_get("", "applied_at")?;
     // Format selection is not content authentication. This cheap catalog pass

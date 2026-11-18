@@ -55,7 +55,7 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
             upstream.uri()
         ),
     )?;
-    let binary = env!("CARGO_BIN_EXE_bro");
+    let binary = env!("CARGO_BIN_EXE_bitrouter");
     let output = tokio::time::timeout(
         Duration::from_secs(60),
         Command::new(binary)
@@ -212,7 +212,7 @@ async fn verification_losing_declared_shell_records_no_effect_and_never_falls_ba
     let search_path = std::env::join_paths(std::iter::once(bins).chain(std::env::split_paths(
         &std::env::var_os("PATH").context("PATH missing")?,
     )))?;
-    let binary = env!("CARGO_BIN_EXE_bro");
+    let binary = env!("CARGO_BIN_EXE_bitrouter");
     let output = tokio::time::timeout(
         Duration::from_secs(60),
         Command::new(binary)
@@ -332,7 +332,7 @@ async fn simultaneous_local_clients_join_one_server() -> Result<()> {
             upstream.uri()
         ),
     )?;
-    let binary = env!("CARGO_BIN_EXE_bro");
+    let binary = env!("CARGO_BIN_EXE_bitrouter");
     let workspaces = [home.path().join("one"), home.path().join("two")];
     for workspace in &workspaces {
         std::fs::create_dir(workspace)?;
@@ -455,7 +455,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
             upstream.uri()
         ),
     )?;
-    let binary = env!("CARGO_BIN_EXE_bro");
+    let binary = env!("CARGO_BIN_EXE_bitrouter");
     let mut server = Command::new(binary)
         .arg("serve")
         .arg("--config")

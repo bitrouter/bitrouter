@@ -6,7 +6,7 @@ use std::process::Command;
 use anyhow::{Context, Result, ensure};
 
 fn run_json(config: &Path, args: &[&str]) -> Result<serde_json::Value> {
-    let output = Command::new(env!("CARGO_BIN_EXE_bro"))
+    let output = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args(args)
         .arg("--config")
         .arg(config)

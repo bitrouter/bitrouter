@@ -1483,7 +1483,7 @@ async fn run_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
                 "env":{"BITROUTER_PTY_CAPTURE":dir.path().join("captured.ndjson")}}}}
         }))?,
     )?;
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args([
             "run", "stub", "-", "--format", "text", "--direct", "--config",
         ])

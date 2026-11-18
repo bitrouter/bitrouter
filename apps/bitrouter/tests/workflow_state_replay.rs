@@ -577,7 +577,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
     PolicyDecisionRecord::write_jsonl(&decisions_path, &[generic_decision, terminus_decision])
         .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args([
             "workflow-state",
             "apply-reward-feedback",
@@ -665,7 +665,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
         .unwrap();
     PolicyDecisionRecord::write_jsonl(&conflicting_decisions_path, &[conflicting_decision])
         .unwrap();
-    let conflicting_output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+    let conflicting_output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
         .args([
             "workflow-state",
             "apply-reward-feedback",

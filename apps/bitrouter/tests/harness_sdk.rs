@@ -33,7 +33,7 @@ struct Server {
 impl Server {
     fn start(config: &Path, log: &Path) -> Result<Self> {
         let output = std::fs::File::create(log)?;
-        let child = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let child = Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(["serve", "--config"])
             .arg(config)
             .env("BRO_HARNESS_SDK_TEST_TOKEN", TOKEN)
@@ -78,7 +78,7 @@ impl Server {
     async fn stop(&mut self) -> Result<()> {
         let stopped = tokio::time::timeout(
             Duration::from_secs(15),
-            Command::new(env!("CARGO_BIN_EXE_bro"))
+            Command::new(env!("CARGO_BIN_EXE_bitrouter"))
                 .args(["stop", "--config"])
                 .arg(&self.config)
                 .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")

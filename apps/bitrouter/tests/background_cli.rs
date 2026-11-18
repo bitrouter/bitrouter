@@ -92,7 +92,7 @@ impl Drop for MockAcp {
 
 impl MockAcp {
     fn bro_command(&self) -> Result<tokio::process::Command> {
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .env_clear()
             .env("PATH", inherited_path()?)
@@ -998,7 +998,7 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
 
 impl RemoteFixture {
     fn command(&self) -> tokio::process::Command {
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
         command
             .args(["--context", "fixture"])
             .env_clear()

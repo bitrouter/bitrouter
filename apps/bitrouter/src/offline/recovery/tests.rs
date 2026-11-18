@@ -28,10 +28,9 @@ struct Fixture {
     provisioning: Value,
 }
 fn binary() -> Result<PathBuf> {
-    let binary = PathBuf::from(
-        std::env::var_os("BITROUTER_TEST_BRO")
-            .context("explicit built BITROUTER_TEST_BRO required; test never builds or skips")?,
-    );
+    let binary = PathBuf::from(std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY").context(
+        "explicit built BITROUTER_TEST_GATEWAY_BINARY required; test never builds or skips",
+    )?);
     ensure!(binary.is_absolute(), "absolute bro binary required");
     let binary = binary.canonicalize()?;
     ensure!(
@@ -283,7 +282,7 @@ fn stopped_bytes(path: &Path) -> Result<Vec<u8>> {
 }
 
 #[tokio::test]
-#[ignore = "actual bro CLI and normal Service/SDK; requires explicit BITROUTER_TEST_BRO and BITROUTER_TEST_RECOVERY_KEY"]
+#[ignore = "actual bro CLI and normal Service/SDK; requires explicit BITROUTER_TEST_GATEWAY_BINARY and BITROUTER_TEST_RECOVERY_KEY"]
 async fn actual_cli_verifies_fresh_static_provisioning_and_rejects_changed_evidence() -> Result<()>
 {
     let binary = binary()?;

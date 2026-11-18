@@ -33,7 +33,7 @@ async fn source(path: &Path) -> Result<()> {
     Ok(())
 }
 fn command(home: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .current_dir(home)
         .env("BITROUTER_HOME", home)

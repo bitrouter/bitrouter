@@ -141,7 +141,7 @@ jobs:
         trap 'exit 143' TERM
         trap 'exit 130' INT
         /usr/bin/time -v -o ci-evidence/build-fixtures.txt \
-          cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 1
+          cargo build --locked -p bitrouter --all-features --bin bitrouter --examples --profile ci-capacity --jobs 1
         # Listing binaries builds the harness once and preserves reusable metadata.
         # https://nexte.st/docs/ci-features/archiving/#manually-creating-your-own-archives
         /usr/bin/time -v -o ci-evidence/build-tests.txt \
@@ -157,7 +157,7 @@ jobs:
             test -x "$binary"
             sha256sum -- "$binary"
           done < ci-evidence/test-binary-paths.txt > ci-evidence/qualification-binaries.sha256
-          sha256sum target/ci-capacity/bro >> ci-evidence/qualification-binaries.sha256
+          sha256sum target/ci-capacity/bitrouter >> ci-evidence/qualification-binaries.sha256
           find target/ci-capacity/examples -maxdepth 1 -type f -executable -print0 \
             | sort -z | xargs -0 -r sha256sum >> ci-evidence/qualification-binaries.sha256
         fi
@@ -198,7 +198,7 @@ jobs:
       timeout-minutes: 190
       env:
         BITROUTER_TEST_PREBUILT_ONLY: '1'
-        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/ci-capacity/bro
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/ci-capacity/bitrouter
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/ci-capacity/examples
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/ci-capacity/examples/owned_capture_fixture
       run: |
@@ -253,7 +253,7 @@ jobs:
     - name: Run isolated full-capacity and long-history campaigns
       if: ${{ !inputs.qualification }}
       env:
-        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/ci-capacity/bro
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/ci-capacity/bitrouter
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/ci-capacity/examples
       run: |
         cargo nextest run --locked -p bitrouter --all-features --lib --test core_execution --cargo-profile ci-capacity --test-threads 1 --run-ignored all --retries 0 --no-tests fail -E 'test(tenancy::tests::execution::native::session::choice::headroom::) | test(capacity::tree_limits::) | test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery)'

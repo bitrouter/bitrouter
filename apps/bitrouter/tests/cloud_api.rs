@@ -88,7 +88,7 @@ fn save_oauth(data_home: &Path, base_url: &str) {
 }
 
 fn run_cli(data_home: &Path, args: &[&str], stdin: Option<&[u8]>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bitrouter"));
     command
         .args(args)
         .env("XDG_DATA_HOME", data_home)

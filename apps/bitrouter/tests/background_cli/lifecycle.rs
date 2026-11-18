@@ -321,7 +321,7 @@ async fn remote_context_rejects_background_and_session_mutations_before_local_st
     ];
 
     for args in invocations {
-        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
             .args(args)
             .env_clear()
             .env("PATH", inherited_path()?)
