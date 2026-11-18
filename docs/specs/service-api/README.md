@@ -73,6 +73,90 @@ from a successful response. Deployments requiring a transitive deadline use
 compatible gateways and retain an outer deadline. JSON/SSE bodies and the existing
 error vocabulary remain unchanged; no SDK DTO or JSON discriminator is added.
 
+### Proposed destination-uncertainty release
+
+This subsection is a proposal. It is not part of revision beta.4. A current
+operator server MUST reject the read and the mutation action below as unknown.
+Ordinary generation requests gain no field, header, or URL. Adopting the
+proposal adds these operations to the existing operator listener and updates
+the operator DTO in the same revision. This document does not add that DTO now.
+
+The read and the mutation exist so an operator can release one held
+uncertainty credit on a local-engine destination specified by the
+[configuration proposal](../configuration/README.md#proposed-local-engine-destinations).
+They do not dispatch inference and do not add an inference listener. A process
+without the operator listener has no release operation. On that process, the
+existing advisory expiry remains the only automatic release of the credit.
+
+When adopted, `GET /operator/v1/scheduler-custody` takes no query. The
+response is JSON, rejects unknown fields, and sends `Cache-Control: no-store`:
+
+```json
+{
+  "generation": "routing-generation",
+  "held": [
+    {
+      "destination_id": "vllm-a",
+      "attempt_id": "attempt-1",
+      "state": "unknown"
+    }
+  ]
+}
+```
+
+`held` lists only attempts whose uncertainty credit is still held. It carries
+no prompt, response, credential, or prefix. `generation` is the process
+routing generation those attempt IDs belong to. An empty `held` array is a
+successful read. An inference or legacy-control credential cannot call this
+route. The caller needs the operator `read` grant.
+
+`POST /operator/v1/mutations` gains the action
+`release_destination_uncertainty`:
+
+```json
+{
+  "operation_id": "release-vllm-a-1",
+  "command": {
+    "action": "release_destination_uncertainty",
+    "input": {
+      "generation": "routing-generation",
+      "destination_id": "vllm-a",
+      "attempt_id": "attempt-1",
+      "expected_state": "unknown",
+      "confirmed_not_running": true,
+      "evidence_reference": "ticket-1842"
+    }
+  }
+}
+```
+
+The object rejects unknown fields and null. `confirmed_not_running` MUST be
+true. `evidence_reference` is 1 through 512 printable ASCII characters. The
+server MUST NOT require it to contain a prompt, response, or credential. Every
+identity field MUST match one currently held record in `generation`. A match
+releases that credit only. The stored receipt is `operator_released`. That
+value is not provider success, and the attempt MUST NOT be dispatched again.
+Other destinations and other held attempts stay unchanged. The same actor and
+`operation_id` replay returns the stored receipt and releases nothing again.
+A mismatched generation, attempt, or state is `conflict` and releases nothing.
+
+The caller needs the new operator grant `release_scheduler_custody`. The
+existing `read` grant covers the custody read only. None of the existing write
+grants implies `release_scheduler_custody`. An inference or legacy-control
+credential cannot call either operation. A timed-out mutation stays `unknown`
+under the existing operator rule. It is not proof that the credit was released.
+The client rereads custody as the same actor before sending another operation
+ID.
+
+| Peer | Exchange | Required behavior |
+| --- | --- | --- |
+| Beta.4 server | custody read or `release_destination_uncertainty` | Reject the unknown route or action; release no credit |
+| Adopting server | inference credential | Reject before reading or releasing custody |
+| Adopting server | matching held attempt | Release that credit; leave every other credit held |
+| Adopting server | same actor and operation replay | Return the stored receipt; do not release another credit |
+| Adopting server | mismatched generation, attempt, or state | `conflict`; release nothing |
+| Adopting client | ordinary generation | Send no custody field and no new inference URL |
+
 ### Offline recovery evidence v2
 
 Offline plan writers, provisioning recorders and independent verifiers use the

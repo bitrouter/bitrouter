@@ -479,3 +479,122 @@ explicit policy bindings, `policy.path`, adaptive policy mode and `decision_mode
 without `semantic-routing`. Static model/router/check bindings remain supported.
 The Core feature retains its existing policy capability through a dependency on
 `semantic-routing`; neither routing feature enables Core, Harness or transports.
+
+### Proposed local-engine destinations
+
+This subsection is a proposal. It is not part of revision beta.4. A beta.4
+reader MUST reject an `engine` field anywhere under `inference_routing` as an
+unknown field, including when scheduling is disabled. Omission keeps the beta.4
+scheduler. Adopting the proposal requires a later specification revision that
+updates `config::inference_routing`, the generated schema, the example, and the
+executable cases together. Until that revision, the shapes below are not a
+supported configuration, and this document does not add a DTO.
+
+The consumers are the operator of one local inference gateway and a user-side
+semantic gateway that forwards ordinary generation to it. Clients continue to
+call Chat Completions, Messages, and Responses on that gateway. The proposal
+adds no inference URL, request body, client credential, or second scheduler.
+
+A destination remains the exact `(provider, model, endpoint, account)` tuple
+and the process-local concurrency pool defined above. It is the placement
+target for that endpoint. It does not name a replica, rank, or prefill/decode
+phase inside the endpoint. Placement across several vLLM processes is one
+destination per process endpoint.
+
+`engine` is an optional object on `DestinationConfig`. The adopting reader
+rejects unknown fields and null. Every field below is restart-required. A hot
+reload that adds, removes, or changes `engine` is rejected with the whole
+candidate, and the published generation stays.
+
+| Field | Type and bounds | When `engine` is present |
+| --- | --- | --- |
+| `kind` | the constant `vllm` | required |
+| `metrics_url` | absolute HTTP(S) URL with no userinfo, query, or fragment | required |
+| `metrics_bearer_env` | environment-variable name | omitted means the metrics request carries no bearer |
+| `max_metric_age_ms` | integer, 1 through 60,000 milliseconds | required |
+| `max_running` | integer, 0 through 100,000 requests | required |
+| `max_waiting` | integer, 0 through 100,000 requests | required |
+| `max_kv_cache_usage_percent` | integer, 1 through 100 percent | required |
+| `tokenize` | boolean | omitted means `true` |
+
+`metrics_bearer_env` names a variable that holds the bearer sent only to
+`metrics_url`. The destination's inference credential is not reused for metrics
+unless the operator names that same variable. An empty or unset variable makes
+the sample unavailable. `metrics_url` names the metrics endpoint of the same
+engine as `endpoint`. The reader does not infer that relationship from the
+URLs.
+
+When `engine` is absent, ranking, the byte-derived queue charge, prefix
+projection, and uncertainty follow the beta.4 rules.
+
+When `engine` is present, a destination is ineligible for a new acquire while
+any of the following is true:
+
+- the metrics sample is missing, its gateway collection time is older than
+  `max_metric_age_ms`, or it lacks any of `vllm:num_requests_running`,
+  `vllm:num_requests_waiting`, and `vllm:kv_cache_usage_perc` as a finite
+  non-negative number; running and waiting must be whole numbers, and KV usage
+  must be from 0 through 100
+- sampled running requests exceed `max_running`, sampled waiting requests
+  exceed `max_waiting`, or sampled KV usage exceeds
+  `max_kv_cache_usage_percent`
+- sampled running requests, plus that destination's current Reserved, Sending,
+  and Unknown occupancy, plus the one reservation this acquire would add,
+  exceeds `max_running`
+
+A sample cannot prove that a local reservation is already inside the gauge.
+The gateway therefore adds its own unfinished occupancy to the sampled running
+count and MUST NOT subtract its own occupancy from a gauge. A missing or
+invalid sample is ineligible. It is not zero load. The gateway queue length is
+not added to `vllm:num_requests_waiting`; queue bounds remain the beta.4 queue
+limits. KV usage is compared with the sample alone.
+
+Ineligibility removes that destination from the attempt's remaining sequence.
+It does not change another destination and does not disable the scheduler. If
+no eligible destination remains, acquire is refused before `begin_send`. No
+generation request is sent. The refusal uses the existing local unavailable
+response and creates no upstream receipt. Engine limits do not raise the
+beta.4 active or uncertainty credits.
+
+When `tokenize` is true, after a reservation is granted and before
+`begin_send`, the gateway makes one POST to the same origin as `endpoint`,
+with the path replaced by `/tokenize`. The endpoint's existing path is not
+appended. The call uses that destination's inference credential, sends no
+proxy request, follows no redirect, and is not retried. It submits the same
+model and messages the generation would send, with the generation prompt added
+and final-message continuation disabled.
+
+The returned `count` MUST equal the length of the returned token array, and
+`count` plus the attempt's output bound MUST fit the returned
+`max_model_len`. A zero count, a missing field, a transport failure, or a
+mismatched body releases the reservation as unsent. The gateway MUST NOT poll
+the generation transport. On success, `count` replaces
+`projected_input_bytes / 4` in that attempt's work charge before `begin_send`.
+Deficit already recorded for the queue is not rewritten. The active-slot and
+uncertainty credits remain one per attempt. When `tokenize` is false, the
+beta.4 byte-derived charge remains, and metrics eligibility still applies.
+
+Prefix affinity stays the beta.4 approximate projection. This proposal does
+not add a KV-block index, another prefix mode, or prefill/decode roles.
+
+Uncertainty stays the beta.4 rule. After `begin_send`, an ambiguous outcome
+retains that destination's credit, forbids fallback, and forbids another
+reserved attempt for that work. Expiry releases only the advisory credit. It
+is not proof that the endpoint stopped and it does not authorize retry. One
+destination's unknown occupancy does not make another destination ineligible.
+The proposal does not hold a credit until an operator acts. Early release of
+one held credit is the operator mutation in the
+[service API proposal](../service-api/README.md#proposed-destination-uncertainty-release).
+It is not a configuration field.
+
+| Reader | Document or outcome | Required behavior |
+| --- | --- | --- |
+| Beta.4 | `engine` present | Reject before activation. This row is the executable case `proposed engine field is rejected` |
+| Adopting reader | `engine` omitted | Beta.4 scheduling |
+| Adopting reader | stale, missing, or invalid metrics | That destination is ineligible; other destinations stay eligible |
+| Adopting reader | tokenize failure | Release the reservation unsent; send no generation request |
+| Adopting reader | unknown after send | No fallback and no retry; other destinations stay eligible |
+| Adopting reader | hot reload changes `engine` | Reject the whole reload and keep the published generation |
+
+The adopting-reader rows become executable cases only in the revision that
+accepts `engine`. They are not current parser acceptance.

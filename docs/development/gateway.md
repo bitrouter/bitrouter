@@ -143,7 +143,10 @@ backend. Semantic builds retain model decisions. Scheduling starts after route
 hooks and frozen request checks; disabled requests retain the existing chain and
 allocate no queue, reservation or prefix state. Configuration belongs to the
 [canonical configuration contract](../specs/configuration/README.md#inference-routing-configuration).
-The runtime uses application modules, with no new crate, RPC or public plugin ABI.
+The [local-engine destination proposal](../specs/configuration/README.md#proposed-local-engine-destinations)
+and the [custody-release proposal](../specs/service-api/README.md#proposed-destination-uncertainty-release)
+are not accepted by the beta.4 reader or the current operator API. The runtime
+uses application modules, with no new crate, RPC or public plugin ABI.
 
 ### Composition and feature ownership
 
