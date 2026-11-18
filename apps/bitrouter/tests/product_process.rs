@@ -1,11 +1,12 @@
 //! The separately built BRO uses the gateway API for both sides of a tool call.
+use std::io::Read;
 use std::net::TcpListener;
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
+#[path = "support/product_bro.rs"]
+mod product_bro;
 use tokio::process::Command;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -25,53 +26,6 @@ fn stream(delta: Value, reason: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
 }
 
-async fn bro(
-    binary: &Path,
-    home: &Path,
-    endpoint: &str,
-    credential: &str,
-    args: &[&str],
-    input: Option<&str>,
-) -> Result<Value> {
-    let mut child = Command::new(binary)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("BITROUTER_API_KEY", credential)
-        .env("HOME", home)
-        .env("BRO_HOME", home.join("bro"))
-        .current_dir(home)
-        .args(["--endpoint", endpoint])
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    if let Some(text) = input {
-        child
-            .stdin
-            .take()
-            .context("missing piped stdin")?
-            .write_all(text.as_bytes())
-            .await?;
-    }
-    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output()).await??;
-    ensure!(
-        !output.stdout.contains(&0x1b),
-        "redirected BRO emitted terminal controls"
-    );
-    ensure!(
-        output.status.success(),
-        "BRO {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let line = std::str::from_utf8(&output.stdout)?
-        .lines()
-        .last()
-        .context("empty BRO output")?;
-    Ok(serde_json::from_str(line)?)
-}
-
 #[tokio::test]
 #[ignore = "requires the separately built BRO executable in BITROUTER_TEST_BRO"]
 async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
@@ -79,12 +33,13 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         std::env::var_os("BITROUTER_TEST_BRO").context("BRO executable required")?,
     )?;
     let provider = MockServer::start().await;
+    let provider_key = uuid::Uuid::new_v4().to_string();
     let call = json!({"role":"assistant","tool_calls":[{"index":0,"id":"write-1","type":"function",
         "function":{"name":"write","arguments":json!({"path":"note","content":"approved"}).to_string()}}]});
     let model_call = || {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .and(header("authorization", "Bearer fixture-provider-key"))
+            .and(header("authorization", format!("Bearer {provider_key}")))
     };
     model_call()
         .and(|r: &wiremock::Request| {
@@ -126,7 +81,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
     std::fs::write(
         &config,
         format!(
-            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: false}}\ndatabase: {{url: 'sqlite://service.db?mode=rwc'}}\nproviders:\n  fixture:\n    api_base: '{}'\n    api_key: fixture-provider-key\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
+            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: false}}\ndatabase: {{url: 'sqlite://service.db?mode=rwc'}}\nproviders:\n  fixture:\n    api_base: '{}'\n    api_key: {provider_key}\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
             provider.uri()
         ),
     )?;
@@ -210,57 +165,65 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
             .context("provider history")?
             .is_empty()
     );
-    let created = bro(
-        &binary,
-        client.path(),
-        &endpoint,
+    // The denied-open probes must target populated files used by this gateway.
+    ensure!(std::fs::read_to_string(&config)?.contains(&format!("api_key: {provider_key}")));
+    let database = service.path().join("service.db");
+    let mut signature = [0; 16];
+    std::fs::File::open(&database)?.read_exact(&mut signature)?;
+    ensure!(
+        &signature == b"SQLite format 3\0",
+        "missing gateway SQLite database"
+    );
+    let bro = product_bro::Bro {
+        binary: &binary,
+        home: client.path(),
+        endpoint: &endpoint,
         credential,
-        &[
-            "thread",
-            "create",
-            "--managed",
-            "--model",
-            "test-model",
-            "--workspace",
-            workspace.to_str().context("workspace path")?,
-        ],
-        None,
-    )
-    .await?;
+        #[cfg(target_os = "linux")]
+        gateway_files: [&config, &database],
+    };
+    let created = bro
+        .run(
+            &[
+                "thread",
+                "create",
+                "--managed",
+                "--model",
+                "test-model",
+                "--workspace",
+                workspace.to_str().context("workspace path")?,
+            ],
+            None,
+        )
+        .await?;
     let thread = created["thread_id"].as_str().context("thread ID")?;
-    let pending = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &["thread", "start", thread, "--prompt-file", "-"],
-        Some("write the note\n"),
-    )
-    .await?;
+    let pending = bro
+        .run(
+            &["thread", "start", thread, "--prompt-file", "-"],
+            Some("write the note\n"),
+        )
+        .await?;
     ensure!(pending["thread_id"] == thread);
     let turn = pending["turn_id"].as_str().context("turn ID")?;
     let request = pending["pending_input"]["request_id"]
         .as_str()
         .with_context(|| format!("expected approval: {pending}"))?;
     ensure!(!workspace.join("note").exists());
-    let complete = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &[
-            "thread",
-            "answer",
-            thread,
-            "--turn",
-            turn,
-            "--request",
-            request,
-            "allow",
-        ],
-        None,
-    )
-    .await?;
+    let complete = bro
+        .run(
+            &[
+                "thread",
+                "answer",
+                thread,
+                "--turn",
+                turn,
+                "--request",
+                request,
+                "allow",
+            ],
+            None,
+        )
+        .await?;
     ensure!(
         complete["status"] == "completed" && complete["final_answer"] == "Finished.",
         "{complete}"
@@ -268,15 +231,9 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
     ensure!(std::fs::read_to_string(workspace.join("note"))? == "approved");
     ensure!(!service.path().join("note").exists());
     std::fs::write(workspace.join("note"), "after completion")?;
-    let resumed = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &["thread", "resume", thread, "--turn", turn],
-        None,
-    )
-    .await?;
+    let resumed = bro
+        .run(&["thread", "resume", thread, "--turn", turn], None)
+        .await?;
     ensure!(
         resumed["status"] == "completed"
             && std::fs::read_to_string(workspace.join("note"))? == "after completion"
@@ -286,15 +243,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         .await
         .context("provider history")?;
     ensure!(received.len() == 2);
-    let history = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &["thread", "history", thread],
-        None,
-    )
-    .await?;
+    let history = bro.run(&["thread", "history", thread], None).await?;
     let steps = history["turns"][0]["steps"]
         .as_array()
         .context("BRO step ledger")?;
@@ -388,51 +337,39 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
             .mount(&provider)
             .await;
     }
-    let continued = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &[
-            "thread",
-            "start",
-            thread,
-            "verify saved note",
-            "--request-id",
-            "next",
-        ],
-        None,
-    )
-    .await?;
+    let continued = bro
+        .run(
+            &[
+                "thread",
+                "start",
+                thread,
+                "verify saved note",
+                "--request-id",
+                "next",
+            ],
+            None,
+        )
+        .await?;
     ensure!(
         continued["final_answer"] == "independent read complete",
         "{continued}"
     );
-    let pending = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &["thread", "start", thread, "propose another edit"],
-        None,
-    )
-    .await?;
+    let pending = bro
+        .run(&["thread", "start", thread, "propose another edit"], None)
+        .await?;
     ensure!(pending["status"] == "waiting_for_input");
-    let cancelled = bro(
-        &binary,
-        client.path(),
-        &endpoint,
-        credential,
-        &[
-            "thread",
-            "cancel",
-            thread,
-            "--turn",
-            pending["turn_id"].as_str().context("turn")?,
-        ],
-        None,
-    )
-    .await?;
+    let cancelled = bro
+        .run(
+            &[
+                "thread",
+                "cancel",
+                thread,
+                "--turn",
+                pending["turn_id"].as_str().context("turn")?,
+            ],
+            None,
+        )
+        .await?;
     ensure!(
         cancelled["status"] == "cancelled"
             && std::fs::read_to_string(workspace.join("note"))? == "after completion"

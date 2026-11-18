@@ -311,6 +311,12 @@ jobs:
       with:
         product: service-process
         companion: 'true'
+    - name: Install the BRO process-test sandbox
+      run: |
+        if [[ ! -x /usr/bin/bwrap ]]; then
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+        fi
     - name: Run the two executable approval regression
       run: bash .github/scripts/ci-test.sh gateway-bro --exact-tests 'binary(=product_process)' ignored gateway_routes_the_approved_bro_tool_continuation
     - uses: actions/upload-artifact@v4

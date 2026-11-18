@@ -241,6 +241,12 @@ jobs:
         cp target/debug/bitrouter "$RUNNER_TEMP/profile-gateway/bitrouter"
         cargo build --locked -p bitrouter-bro --bin bro
         cp target/debug/bro "$RUNNER_TEMP/profile-bro/bro"
+    - name: Install the BRO process-test sandbox
+      run: |
+        if [[ ! -x /usr/bin/bwrap ]]; then
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+        fi
     - name: verify resident transitions, storage, policy and the public product boundary
       shell: bash
       env:
