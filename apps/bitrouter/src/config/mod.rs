@@ -1595,6 +1595,19 @@ pub fn substitute_with<F>(input: &str, lookup: F) -> Result<String>
 where
     F: Fn(&str) -> Option<String>,
 {
+    substitute_with_missing(input, lookup, |name| {
+        Err(BitrouterError::bad_request(format!(
+            "config references undefined environment variable '{name}'"
+        )))
+    })
+}
+
+/// Resolve defaults before handing undefined, unqualified references to a diagnostic.
+pub(crate) fn substitute_with_missing<F, M>(input: &str, lookup: F, missing: M) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+    M: Fn(&str) -> Result<String>,
+{
     let mut out = String::with_capacity(input.len());
     let mut iter = input.char_indices().peekable();
     // Whether the previous char was a line break / start-of-input or inline
@@ -1637,11 +1650,7 @@ where
                         Some(v) => v,
                         None => match default {
                             Some(d) => d.to_string(),
-                            None => {
-                                return Err(BitrouterError::bad_request(format!(
-                                    "config references undefined environment variable '{name}'"
-                                )));
-                            }
+                            None => missing(name)?,
                         },
                     };
                     out.push_str(&value);

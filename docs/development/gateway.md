@@ -119,9 +119,11 @@ endpoint may omit a key.
 
 The request is a GET of the selected protocol's model list. Chat Completions,
 Responses, and Messages use `{api_base}/models` and accept `{ "data": [{ "id" }] }`.
-Authentication, static provider headers, and upstream timeouts are the ones the
-gateway uses for that provider. The check does not render a prompt, does not
-enter scheduling, and does not change `active` or write `bitrouter.yaml`.
+The check uses configured API keys, static provider headers, and upstream
+timeouts. A provider that uses stored login credentials needs a configured API
+key or static authentication header for this check. A redirect returns its
+original HTTP status. The check does not render a prompt, does not enter
+scheduling, and does not change `active` or write `bitrouter.yaml`.
 Model ids it sees are reported only. `auto_discover` still runs only at startup
 and reload.
 

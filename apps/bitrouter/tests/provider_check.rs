@@ -181,6 +181,58 @@ async fn unresolved_credential_fails_before_any_request() -> Result<()> {
 }
 
 #[tokio::test]
+async fn checker_reports_redirect_without_sending_another_request() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/v1/models"))
+        .respond_with(wiremock::ResponseTemplate::new(302).insert_header("location", "/other"))
+        .mount(&server)
+        .await;
+    let yaml = format!(
+        "providers:\n  localbox:\n    api_base: {}/v1\n",
+        server.uri()
+    );
+    let report = check_document(&yaml, "localbox", None, lookup_none).await?;
+    ensure!(!report.connections[0].answered);
+    ensure!(report.connections[0].error.as_deref() == Some("endpoint returned HTTP 302"));
+    ensure!(requests(&server).await?.len() == 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn checker_reports_the_supported_authentication_modes_after_rejection() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/v1/models"))
+        .respond_with(wiremock::ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let yaml = format!(
+        "providers:\n  localbox:\n    api_base: {}/v1\n",
+        server.uri()
+    );
+    let report = check_document(&yaml, "localbox", None, lookup_none).await?;
+    let error = report.connections[0].error.as_deref().unwrap_or_default();
+    ensure!(error.contains("HTTP 401") && error.contains("configured API key"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn checker_resolves_fallbacks_and_validates_the_effective_endpoint() -> Result<()> {
+    let server = wiremock::MockServer::start().await;
+    catalog(&server, serde_json::json!({"data": [{"id": "fixture"}]})).await;
+    let yaml = format!(
+        "providers:\n  localbox:\n    api_base: ${{CHECK_ENDPOINT:-{base}/v1}}\n    api_key: ${{CHECK_KEY:-fixture}}\n  invalid:\n    api_base: {base}/v1\n    protocol_endpoints:\n      chat_completions: file:///model-list\n",
+        base = server.uri()
+    );
+    let report = check_document(&yaml, "localbox", None, lookup_none).await?;
+    ensure!(report.connections[0].answered);
+    let report = check_document(&yaml, "invalid", None, lookup_none).await?;
+    ensure!(!report.connections[0].answered && report.connections[0].endpoint.is_empty());
+    ensure!(report.connections[0].error.as_deref() == Some("endpoint is not allowed"));
+    ensure!(requests(&server).await?.len() == 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn another_providers_unresolved_reference_does_not_block_this_check() -> Result<()> {
     let server = wiremock::MockServer::start().await;
     catalog(&server, serde_json::json!({"data": [{"id": "ready"}]})).await;
