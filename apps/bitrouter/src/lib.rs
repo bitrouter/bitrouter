@@ -58,7 +58,6 @@ pub mod daemon_handoff;
 pub mod daemon_locator;
 pub mod db;
 pub mod error_report;
-#[path = "core/eval/mod.rs"]
 pub mod eval;
 pub mod gateway;
 #[cfg(feature = "harness")]

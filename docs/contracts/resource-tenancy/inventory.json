@@ -24,7 +24,7 @@
   {
     "name": "eval",
     "paths": [
-      "apps/bitrouter/src/core/eval"
+      "apps/bitrouter/src/eval"
     ],
     "existing": "owner_user_id, evidence root",
     "target": "tenant predicates and creator principal provenance",
