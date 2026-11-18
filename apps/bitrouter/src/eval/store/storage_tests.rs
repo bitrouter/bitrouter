@@ -82,7 +82,7 @@ async fn delegated_legacy_eval_sql_failure_fences_without_publishing_subject() -
     Ok(())
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 #[tokio::test]
 async fn settlement_writer_waits_for_budget_and_replays_its_schema_two_identity() -> Result<()> {
     let (store, tenancy, cell) = fixture().await?;

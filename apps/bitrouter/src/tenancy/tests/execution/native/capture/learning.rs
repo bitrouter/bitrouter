@@ -1,7 +1,6 @@
 //! Real checked capture/actor -> native judge -> receipt -> assessment consumer.
 //! Most cases use finite recorded ACP observations; the ignored controller case
 //! also crosses the separately built Rust child and public checked facade.
-#![cfg(feature = "core")]
 use super::*;
 use crate::{
     harness::acp::capture::CapturePort,

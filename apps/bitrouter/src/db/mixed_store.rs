@@ -1,8 +1,9 @@
 //! Offline projection of a stopped M0 SQLite installation into two owner stores.
-//! The caller fences all writers through the subsequent startup configuration switch.
+//! Explicit activation retires the stopped source before one successor is published.
 
 mod activation;
 mod catalog;
+mod cutover;
 mod project;
 
 use std::{
@@ -17,6 +18,8 @@ use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement,
     sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+
+const GATEWAY_DB: &str = "bitrouter/bitrouter.db";
 
 /// Product whose rows and schema are expected in a projected database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,7 +47,7 @@ impl Owner {
 
 /// Paths in the published directory and verified application row counts.
 /// The M0 schema ledger is replaced with one product-specific ledger per store.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StagedStores {
     /// True only for an explicitly activated clean pair.
     pub dispatch_allowed: bool,
@@ -65,7 +68,9 @@ pub struct Activation {
 }
 
 /// Publish a clean product pair to a new directory. Select its product homes
-/// together and keep all original writers permanently fenced. The original
+/// together. Activation replaces the old path with a fence after syncing its
+/// byte-exact rollback image. Retry an interrupted publication at the same
+/// destination. The original
 /// wrapping keys, configuration and per-product startup checks remain required.
 ///
 /// # Errors
@@ -119,13 +124,22 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         Err(e) => return Err(e.into()),
         Ok(_) => anyhow::bail!("migration destination already exists"),
     }
+    if activate && let Some(stores) = cutover::resume(&owner.path, &destination)? {
+        return Ok(Activation {
+            dispatch_allowed: true,
+            blockers: Vec::new(),
+            stores: Some(stores),
+        });
+    }
+    let mut threads = BTreeMap::new();
     if activate {
         // Check the clean, immutable source before creating even a work directory.
         let reader = open_immutable(&owner.path).await?;
         let result = activation::blockers(&reader).await;
         reader.close().await?;
         witness.check()?;
-        let blockers = result?;
+        let (blockers, checked) = result?;
+        threads = checked;
         if !blockers.is_empty() {
             return Ok(Activation {
                 dispatch_allowed: false,
@@ -134,10 +148,11 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
             });
         }
     }
-    let work = parent.join(format!(".bitrouter-store-split-{}", uuid::Uuid::new_v4()));
+    let publication = uuid::Uuid::new_v4();
+    let work = cutover::work_path(&parent, publication);
     private_dir(&work)?;
     let rollback = Path::new("rollback/source.sqlite");
-    let bitrouter = Path::new("bitrouter/store.sqlite");
+    let bitrouter = Path::new(GATEWAY_DB);
     let bro = Path::new("bro/store.sqlite");
     for subdir in ["rollback", "bitrouter", "bro"] {
         private_dir(&work.join(subdir))?;
@@ -168,6 +183,28 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         project::import(&snapshot, &work.join(bitrouter), Owner::BitRouter, &catalog).await?;
     let bro_rows = project::import(&snapshot, &work.join(bro), Owner::Bro, &catalog).await?;
     project::finish_pair(&work.join(bitrouter), &work.join(bro), activate).await?;
+    // Bind the exact sealed projection in the immutable BRO database itself.
+    // A different history file cannot authorize dispatch even with a rewritten sidecar.
+    let projections = serde_json::to_vec(&threads)?;
+    let projection_hash = crate::storage::checkpoint::sha256(&projections);
+    if !threads.is_empty() {
+        let db = open(&work.join(bro), false).await?;
+        let update = db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE seaql_migrations SET version=? WHERE version=?",
+                [
+                    format!("{}:sealed-v1:{projection_hash}", Owner::Bro.marker()).into(),
+                    Owner::Bro.marker().into(),
+                ],
+            ))
+            .await;
+        db.close().await?;
+        ensure!(
+            update?.rows_affected() == 1,
+            "could not bind M0 sealed history"
+        );
+    }
     for (path, role) in [(bitrouter, Owner::BitRouter), (bro, Owner::Bro)] {
         verify_owner(&work.join(path), role).await?;
         File::open(work.join(path))?.sync_all()?;
@@ -176,17 +213,42 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         activation::verify_service(&work.join(bitrouter)).await?;
         let mut marker = private_file(&work.join("bro/ACTIVATED"))?;
         writeln!(marker, "{}", Owner::Bro.marker())?;
+        if !threads.is_empty() {
+            use sha2::{Digest, Sha256};
+            let dir = work.join("bro/threads");
+            private_dir(&dir)?;
+            for (id, thread) in &threads {
+                let mut file = private_file(&dir.join(format!("{id}.json")))?;
+                serde_json::to_writer(&mut file, thread)?;
+                file.sync_all()?;
+            }
+            File::open(&dir)?.sync_all()?;
+            let mut hash = Sha256::new();
+            let mut file = File::open(work.join(bro))?;
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let count = std::io::Read::read(&mut file, &mut buf)?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buf[..count]);
+            }
+
+            let mut origins = private_file(&work.join("bro/sealed.json"))?;
+            origins.write_all(&projections)?;
+            origins.sync_all()?;
+            writeln!(
+                marker,
+                "sealed-v1 {} {}",
+                hex::encode(hash.finalize()),
+                projection_hash
+            )?;
+        }
         marker.sync_all()?;
     }
     for subdir in ["rollback", "bitrouter", "bro", "."] {
         File::open(work.join(subdir))?.sync_all()?;
     }
-    witness.check()?;
-    publish(&work, &destination)?;
-    File::open(parent)?
-        .sync_all()
-        .context("stores published, directory durability uncertain")?;
-    drop(owner);
     let stores = StagedStores {
         dispatch_allowed: activate,
         rollback: destination.join(rollback),
@@ -195,6 +257,23 @@ async fn split(source: &Path, destination: &Path, activate: bool) -> Result<Acti
         bitrouter_rows,
         bro_rows,
     };
+    if activate {
+        cutover::fence(
+            &owner.path,
+            &witness,
+            &work,
+            &destination,
+            publication,
+            &stores,
+        )?;
+    } else {
+        witness.check()?;
+    }
+    publish(&work, &destination)?;
+    File::open(parent)?
+        .sync_all()
+        .context("stores published, directory durability uncertain")?;
+    drop(owner);
     Ok(Activation {
         dispatch_allowed: activate,
         blockers: Vec::new(),
@@ -230,11 +309,9 @@ pub(crate) async fn initialize_gateway_schema(db: &impl ConnectionTrait) -> Resu
         "SQLite required"
     );
     ensure!(
-        db.query_one(sql(
-            "SELECT 1 FROM main.sqlite_schema LIMIT 1"
-        ))
-        .await?
-        .is_none(),
+        db.query_one(sql("SELECT 1 FROM main.sqlite_schema LIMIT 1"))
+            .await?
+            .is_none(),
         "gateway initialization requires an empty database"
     );
     project::create_tables(db, Owner::BitRouter, &catalog::frozen()?).await?;

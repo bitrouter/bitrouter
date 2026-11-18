@@ -11,12 +11,8 @@ pub(super) struct Hosts {
     slots: Arc<Semaphore>,
     tasks: Arc<OwnedTasks>,
     stop: CancellationToken,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    capture: Arc<std::sync::Mutex<Option<std::sync::Weak<super::capture::Binding>>>>,
     #[cfg(test)]
     resources_gate: std::sync::Mutex<Option<(HostBoundary, Arc<HostGate>)>>,
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    block_test_seeds: std::sync::OnceLock<([u64; 2], std::sync::atomic::AtomicUsize)>,
     #[cfg(all(test, unix))]
     first_cleanup_unknown:
         std::sync::OnceLock<(&'static std::panic::Location<'static>, tokio::time::Instant)>,
@@ -26,8 +22,6 @@ pub(crate) struct HostSlot {
     permit: Option<OwnedSemaphorePermit>,
     source: Option<Source>,
     finished: tokio::sync::watch::Sender<bool>,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    capture: Arc<std::sync::Mutex<Option<std::sync::Weak<super::capture::Binding>>>>,
 }
 
 impl HostSlot {
@@ -37,18 +31,6 @@ impl HostSlot {
 }
 impl Drop for HostSlot {
     fn drop(&mut self) {
-        #[cfg(all(feature = "core", feature = "harness"))]
-        match self.capture.lock() {
-            Ok(mut capture) => {
-                *capture = None;
-            }
-            Err(_) => {
-                // A poisoned liveness slot cannot acknowledge resource release.
-                std::mem::forget(self.permit.take());
-                std::mem::forget(self.source.take());
-                return;
-            }
-        }
         drop(self.permit.take());
         drop(self.source.take());
         self.finished.send_replace(true);
@@ -61,12 +43,8 @@ impl Hosts {
             slots: Arc::new(Semaphore::new(1)),
             tasks: Arc::new(OwnedTasks::default()),
             stop: CancellationToken::new(),
-            #[cfg(all(feature = "core", feature = "harness"))]
-            capture: Default::default(),
             #[cfg(test)]
             resources_gate: Default::default(),
-            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-            block_test_seeds: Default::default(),
             #[cfg(all(test, unix))]
             first_cleanup_unknown: Default::default(),
         }
@@ -106,16 +84,8 @@ pub(crate) enum HostBoundary {
     BeforeTransport,
     Transport,
     Resources,
-    #[cfg(all(unix, feature = "core", feature = "harness"))]
-    RecoveryCommitted,
     Cleanup,
     ChoiceOutcomeAck,
-    #[cfg(all(unix, feature = "core", feature = "harness"))]
-    BlockIntentAck,
-    #[cfg(all(unix, feature = "core", feature = "harness"))]
-    NativeAttemptIntentAck,
-    #[cfg(all(unix, feature = "core", feature = "harness"))]
-    NativeAttemptOutcomeAck,
 }
 
 #[cfg(test)]
@@ -219,8 +189,6 @@ impl Service {
             permit: Some(permit),
             source: Some(source),
             finished,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            capture: self.hosts.capture.clone(),
         })
     }
     pub(crate) fn host_stop(&self) -> CancellationToken {
@@ -256,77 +224,5 @@ impl Service {
     }
 }
 
-#[cfg(all(feature = "core", feature = "harness"))]
-impl Service {
-    /// Only the actual opener holding this Service's original slot can register.
-    pub(crate) fn register_capture(
-        &self,
-        slot: &HostSlot,
-        binding: &Arc<super::capture::Binding>,
-    ) -> Result<(), Failure> {
-        if !Arc::ptr_eq(&slot.capture, &self.hosts.capture)
-            || !binding.origin(&self.cleanup)
-            || slot.permit.is_none()
-        {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        binding.check()?;
-        let mut capture = self
-            .hosts
-            .capture
-            .lock()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
-        if capture.is_some() {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        *capture = Some(Arc::downgrade(binding));
-        Ok(())
-    }
-
-    pub(in crate::tenancy) fn linked_capture(
-        &self,
-        link: &str,
-    ) -> Result<Arc<super::capture::Binding>, Failure> {
-        let capture = self
-            .hosts
-            .capture
-            .lock()
-            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-            .ok_or_else(|| Failure::from(ErrorCode::Forbidden))?;
-        if !capture.matches_block_link(link) {
-            return Err(ErrorCode::Forbidden.into());
-        }
-        capture.check()?;
-        Ok(capture)
-    }
-}
-
 // Only deterministic random inputs to the original H enrollment, never a
 // control/intent/receipt override. Scoped to the same Service and used once.
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-impl Service {
-    pub(crate) fn block_draw_seeds_for_test(&self, seeds: [u64; 2]) -> anyhow::Result<()> {
-        self.hosts
-            .block_test_seeds
-            .set((seeds, std::sync::atomic::AtomicUsize::new(0)))
-            .map_err(|_| anyhow::anyhow!("Block test draw source already installed"))
-    }
-    pub(crate) fn next_block_seed_for_test(&self) -> Option<u64> {
-        let (seeds, next) = self.hosts.block_test_seeds.get()?;
-        let mut index = next.load(std::sync::atomic::Ordering::SeqCst);
-        loop {
-            let seed = *seeds.get(index)?;
-            match next.compare_exchange(
-                index,
-                index + 1,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            ) {
-                Ok(_) => return Some(seed),
-                Err(observed) => index = observed,
-            }
-        }
-    }
-}

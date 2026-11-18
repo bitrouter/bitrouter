@@ -3,7 +3,7 @@
 use crate::config::EvalAuthorityConfig;
 use crate::config::EvalAuthorityKind;
 use crate::config::EvalConfig;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::trajectory::evaluation::validate_builtin_trajectory_result;
 use anyhow::Result;
 use bitrouter_ai::eval::AdmissionOutcome;
@@ -18,7 +18,7 @@ use {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubmissionPrincipal {
     LocalOperator,
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     BuiltinTrajectory {
         owner_user_id: String,
     },
@@ -32,7 +32,7 @@ impl SubmissionPrincipal {
     pub fn owner_user_id(&self) -> &str {
         match self {
             Self::LocalOperator => "local",
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             Self::BuiltinTrajectory { owner_user_id } => owner_user_id,
             Self::ApiKey { user_id, .. } => user_id,
         }
@@ -49,7 +49,7 @@ pub async fn submit(
         SubmissionPrincipal::LocalOperator => {
             store.subject_for_owner(&result.eval_id, "local").await?
         }
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         SubmissionPrincipal::BuiltinTrajectory { owner_user_id } => {
             store
                 .subject_for_owner(&result.eval_id, owner_user_id)
@@ -61,7 +61,7 @@ pub async fn submit(
     }
     .ok_or_else(|| anyhow::anyhow!("unknown eval subject '{}'", result.eval_id))?;
     validate_result_for_subject(&result, &subject)?;
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     if matches!(&principal, SubmissionPrincipal::BuiltinTrajectory { .. }) {
         validate_builtin_trajectory_result(&result)?;
     }
@@ -73,7 +73,7 @@ pub async fn submit(
 
     let authority = match &principal {
         SubmissionPrincipal::LocalOperator => None,
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         SubmissionPrincipal::BuiltinTrajectory { .. } => None,
         SubmissionPrincipal::ApiKey { key_id, user_id } => {
             let Some(authority) = config.authorities.get(&result.evaluator.authority_id) else {
@@ -418,7 +418,7 @@ mod tests {
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into()
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn builtin_trajectory_principal_is_owner_scoped_and_metric_limited() -> anyhow::Result<()>
     {
@@ -503,7 +503,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn builtin_trajectory_principal_rejects_non_operational_identity_and_metrics()
     -> anyhow::Result<()> {

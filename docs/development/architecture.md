@@ -16,6 +16,7 @@ credential for local and hosted gateways.
 | `crates/bitrouter-registry` | Registry types and source-bound catalog handling |
 | `extensions/regex-checker` | Separately selectable request-check implementation |
 | `helpers/bitrouter-build`, `helpers/bitrouter-update` | Build provenance and product-owned release updates |
+| `helpers/bitrouter-skills` | Shared Agent Skills frontmatter and bounded inspection used by gateway MCP and local BRO |
 | `helpers/dist-helper` | Contributor registry, schema and distribution tools |
 
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter::gateway::extensions::registry::ExtensionApi` inside `assemble::build_app_with_extensions`; the application also retains legacy `Plugin`/hook interfaces for trusted host assembly. See [the extension directory guide](../../extensions/README.md) and [guardrails](../../extensions/regex-checker/README.md).

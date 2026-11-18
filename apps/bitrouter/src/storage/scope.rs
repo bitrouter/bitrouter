@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::{InstallationId, PrincipalId, TenantId};
 use sea_orm::sea_query::{Condition, Expr, IntoColumnRef};
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 use crate::tenancy::execution::TenantExecution;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,24 +45,6 @@ pub(crate) enum KeyDomain {
     EvalResult,
     EvalIdempotency,
     EvalSnapshot,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    NativeSession,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    CaptureConnection,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    CaptureSession,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    CaptureCheckpoint,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    CaptureSchedule,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    LearningBudget,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    LearningJob,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    LearningPending,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    AssessmentRevision,
 }
 
 impl KeyDomain {
@@ -73,24 +55,6 @@ impl KeyDomain {
             Self::EvalResult => "eval.result",
             Self::EvalIdempotency => "eval.idempotency",
             Self::EvalSnapshot => "eval.snapshot",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::NativeSession => "native.session",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::CaptureConnection => "capture.connection",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::CaptureSession => "capture.session",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::CaptureCheckpoint => "capture.checkpoint",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::CaptureSchedule => "capture.schedule",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::LearningBudget => "learning.budget",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::LearningJob => "learning.job",
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::LearningPending => super::partition::LEARNING_PENDING,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::AssessmentRevision => "learning.assessment",
         }
     }
 }
@@ -100,7 +64,7 @@ impl Scope {
         Self(Namespace::Legacy)
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) fn for_execution(execution: &TenantExecution) -> (Self, Provenance) {
         let (installation, tenant, principal) = execution.storage_identity();
         (
@@ -129,48 +93,6 @@ impl Scope {
             installation,
             tenant,
         })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn for_session(
-        authority: &crate::tenancy::execution::session::Authority,
-    ) -> (Self, Provenance) {
-        let (installation, tenant, principal) = authority.storage_identity();
-        (
-            Self(Namespace::Tenant {
-                installation: installation.clone(),
-                tenant: tenant.clone(),
-            }),
-            Provenance(Some(principal.clone())),
-        )
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn for_host(
-        authority: &crate::tenancy::execution::host::Authority,
-    ) -> (Self, Provenance) {
-        let (installation, tenant, principal) = authority.identity();
-        (
-            Self(Namespace::Tenant {
-                installation: installation.clone(),
-                tenant: tenant.clone(),
-            }),
-            Provenance(Some(principal.clone())),
-        )
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn for_paid_recovery(
-        identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
-    ) -> (Self, Provenance) {
-        let (installation, tenant, principal) = identity.storage_identity();
-        (
-            Self(Namespace::Tenant {
-                installation: installation.clone(),
-                tenant: tenant.clone(),
-            }),
-            Provenance(Some(principal.clone())),
-        )
     }
 
     pub(crate) fn is_legacy(&self) -> bool {

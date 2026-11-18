@@ -1,351 +1,20 @@
-//! CLI and protocol business regressions migrated from the retired TUI harness.
+//! Authenticated remote service administration through the public CLI.
 
 #![cfg(unix)]
 
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter::client::sessions::wire;
-use std::collections::VecDeque;
-use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::{Child as ProcessChild, ChildStdin, Command, Stdio};
+use std::path::PathBuf;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError},
 };
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 const PTY_TIMEOUT: Duration = Duration::from_secs(15);
 const REMOTE_FIXTURE_TOKEN: &str = "remote-a12-fixture-token-0123456789";
-const MOCK_DAEMON_CONFIG: &str =
-    "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
-#[path = "support/example_binary.rs"]
-mod example_binary;
-#[path = "background_cli/lifecycle.rs"]
-mod lifecycle;
-
-#[derive(Debug, Clone, Copy)]
-enum MockScenario {
-    Minimal,
-    DelayedCancel,
-    DelayedNormal,
-    OverlappingPermissions,
-    SessionLifecycle,
-}
-
-impl MockScenario {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Minimal => "minimal",
-            Self::DelayedCancel => "delayed-cancel",
-            Self::DelayedNormal => "delayed-normal",
-            Self::OverlappingPermissions => "overlapping-permissions",
-            Self::SessionLifecycle => "session-lifecycle",
-        }
-    }
-}
-
-/// Files and command needed for one mock ACP agent.
-struct MockAcp {
-    _directory: tempfile::TempDir,
-    config_path: PathBuf,
-    capture_path: PathBuf,
-    control_path: PathBuf,
-    home_path: PathBuf,
-    bitrouter_home_path: PathBuf,
-    temporary_path: PathBuf,
-    fixture_binary: PathBuf,
-    scenario: MockScenario,
-}
-
-impl Drop for MockAcp {
-    fn drop(&mut self) {
-        // Code now starts a resident owner. Tear down only this fixture's
-        // explicit endpoint before deleting its temporary configuration.
-        let Ok(text) = std::fs::read_to_string(&self.config_path) else {
-            return;
-        };
-        let Ok(config) = bitrouter::config::parse_with(&text, |_| None) else {
-            return;
-        };
-        let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
-        let socket = bitrouter::daemon::socket_path_for(&source, &config);
-        let Ok(mut stream) = UnixStream::connect(&socket) else {
-            return;
-        };
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        if stream.write_all(b"{\"cmd\":\"stop\"}\n").is_err() {
-            return;
-        }
-        let mut acknowledgement = String::new();
-        let _ = BufReader::new(stream).read_line(&mut acknowledgement);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while socket.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-impl MockAcp {
-    fn bro_command(&self) -> Result<tokio::process::Command> {
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
-        command
-            .env_clear()
-            .env("PATH", inherited_path()?)
-            .env("HOME", &self.home_path)
-            .env("BITROUTER_HOME", &self.bitrouter_home_path)
-            .env("TMPDIR", &self.temporary_path)
-            .env("NO_COLOR", "1")
-            .current_dir(self._directory.path())
-            .kill_on_drop(true);
-        Ok(command)
-    }
-
-    async fn supervisor_socket(&self) -> Result<PathBuf> {
-        let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
-        let config = bitrouter::paths::load_config(&source).await?;
-        Ok(bitrouter::daemon::socket_path_for(&source, &config))
-    }
-
-    async fn supervised_runs(&self) -> Result<Vec<bitrouter::client::sessions::wire::RunSnapshot>> {
-        let socket = self.supervisor_socket().await?;
-        let grant = bitrouter::client::sessions::authorize(
-            &socket,
-            "pty-observer",
-            [bitrouter::client::sessions::wire::SessionScope::Peek]
-                .into_iter()
-                .collect(),
-        )
-        .await?;
-        match bitrouter::client::sessions::request(
-            &socket,
-            &grant,
-            bitrouter::client::sessions::wire::SessionCommand::PeekAll,
-        )
-        .await?
-        {
-            bitrouter::client::sessions::wire::SessionResponse::Runs { runs } => Ok(runs),
-            _ => bail!("supervisor omitted its run inventory"),
-        }
-    }
-
-    fn new(scenario: MockScenario) -> Result<Self> {
-        let directory = tempfile::tempdir().context("creating PTY fixture directory")?;
-        let fixture_binary = acp_fixture_executable()?;
-        let config_path = directory.path().join("bitrouter.yaml");
-        let capture_path = directory.path().join("acp-input.ndjson");
-        let control_path = directory.path().join("acp-control.sock");
-        let home_path = directory.path().join("home");
-        let bitrouter_home_path = directory.path().join("bitrouter-home");
-        let temporary_path = directory.path().join("tmp");
-
-        for path in [&home_path, &bitrouter_home_path, &temporary_path] {
-            std::fs::create_dir_all(path)
-                .with_context(|| format!("creating isolated directory {}", path.display()))?;
-        }
-
-        let command = yaml_string(&fixture_binary)?;
-        let capture = yaml_string(&capture_path)?;
-        let control = yaml_string(&control_path)?;
-        let config = format!(
-            "agents:\n\
-             \u{20} stub:\n\
-             \u{20} \u{20} name: stub\n\
-             \u{20} \u{20} transport:\n\
-             \u{20} \u{20} \u{20} type: stdio\n\
-             \u{20} \u{20} \u{20} command: {command}\n\
-             \u{20} \u{20} \u{20} args: []\n\
-             \u{20} \u{20} \u{20} env:\n\
-             \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_SCENARIO: {}\n\
-             \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_CAPTURE: {capture}\n\
-             \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_CONTROL: {control}\n",
-            scenario.name()
-        );
-        std::fs::write(&config_path, format!("{MOCK_DAEMON_CONFIG}{config}"))
-            .context("writing mock ACP config")?;
-
-        Ok(Self {
-            _directory: directory,
-            config_path,
-            capture_path,
-            control_path,
-            home_path,
-            bitrouter_home_path,
-            temporary_path,
-            fixture_binary,
-            scenario,
-        })
-    }
-
-    fn start(&self) -> Result<MockProcess> {
-        let mut command = Command::new(&self.fixture_binary);
-        command
-            .env_clear()
-            .env("PATH", inherited_path()?)
-            .env("HOME", &self.home_path)
-            .env("BITROUTER_HOME", &self.bitrouter_home_path)
-            .env("TMPDIR", &self.temporary_path)
-            .env("BITROUTER_PTY_SCENARIO", self.scenario.name())
-            .env("BITROUTER_PTY_CAPTURE", &self.capture_path)
-            .env("BITROUTER_PTY_CONTROL", &self.control_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let mut child = command.spawn().context("starting mock ACP process")?;
-        let stdin = child.stdin.take().context("taking mock ACP stdin")?;
-        let stdout = child.stdout.take().context("taking mock ACP stdout")?;
-        MockProcess::new(child, stdin, stdout)
-    }
-
-    fn captured_prompts(&self) -> Result<Vec<String>> {
-        let bytes = match std::fs::read(&self.capture_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).context("reading captured ACP input"),
-        };
-        let mut prompts = Vec::new();
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            let value: serde_json::Value =
-                serde_json::from_slice(line).context("parsing captured ACP input")?;
-            if value.get("method").and_then(serde_json::Value::as_str) == Some("session/prompt")
-                && let Some(text) = find_text(&value)
-            {
-                prompts.push(text);
-            }
-        }
-        Ok(prompts)
-    }
-
-    fn captured_request(&self, method: &str) -> Result<Option<serde_json::Value>> {
-        let bytes = match std::fs::read(&self.capture_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error).context("reading captured ACP input"),
-        };
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            let value: serde_json::Value =
-                serde_json::from_slice(line).context("parsing captured ACP input")?;
-            if value.get("method").and_then(serde_json::Value::as_str) == Some(method) {
-                return Ok(Some(value));
-            }
-        }
-        Ok(None)
-    }
-
-    fn wait_for_request(&self, method: &str) -> Result<serde_json::Value> {
-        let deadline = Instant::now() + PTY_TIMEOUT;
-        loop {
-            if let Some(request) = self.captured_request(method)? {
-                return Ok(request);
-            }
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for mock ACP request {method}");
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    fn captured_prompt(&self) -> Result<Option<String>> {
-        Ok(self.captured_prompts()?.into_iter().next())
-    }
-
-    fn captured_permission_outcomes(&self) -> Result<Vec<(String, serde_json::Value)>> {
-        let bytes = match std::fs::read(&self.capture_path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error).context("reading captured ACP input"),
-        };
-        let mut outcomes = Vec::new();
-        for line in bytes.split(|byte| *byte == b'\n') {
-            if line.is_empty() {
-                continue;
-            }
-            let value: serde_json::Value =
-                serde_json::from_slice(line).context("parsing captured ACP input")?;
-            let Some(id) = value.get("id").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            if !matches!(id, "permission-1" | "permission-2") {
-                continue;
-            }
-            if let Some(outcome) = value.get("result").and_then(|result| result.get("outcome")) {
-                outcomes.push((id.to_string(), outcome.clone()));
-            }
-        }
-        Ok(outcomes)
-    }
-
-    fn wait_for_permission_outcomes(
-        &self,
-        expected: usize,
-    ) -> Result<Vec<(String, serde_json::Value)>> {
-        let deadline = Instant::now() + PTY_TIMEOUT;
-        loop {
-            let outcomes = self.captured_permission_outcomes()?;
-            if outcomes.len() >= expected {
-                return Ok(outcomes);
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out waiting for {expected} permission outcomes; received {outcomes:?}"
-                );
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    fn release(&self) -> Result<()> {
-        self.control("release")
-    }
-
-    fn disconnect(&self) -> Result<()> {
-        self.control("disconnect")
-    }
-
-    fn control(&self, message: &str) -> Result<()> {
-        let mut stream = UnixStream::connect(&self.control_path).with_context(|| {
-            format!(
-                "connecting to mock ACP control {}",
-                self.control_path.display()
-            )
-        })?;
-        stream
-            .set_read_timeout(Some(PTY_TIMEOUT))
-            .context("bounding mock ACP control response")?;
-        stream
-            .set_write_timeout(Some(PTY_TIMEOUT))
-            .context("bounding mock ACP control write")?;
-        stream
-            .write_all(message.as_bytes())
-            .context("sending mock ACP control command")?;
-        stream
-            .write_all(b"\n")
-            .context("terminating mock ACP control command")?;
-        stream
-            .flush()
-            .context("flushing mock ACP control command")?;
-        let mut acknowledgement = [0_u8; 3];
-        stream
-            .read_exact(&mut acknowledgement)
-            .context("reading mock ACP control acknowledgement")?;
-        ensure!(
-            acknowledgement == *b"ok\n",
-            "unexpected mock ACP control acknowledgement {acknowledgement:?}"
-        );
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum RemoteScenario {
     Healthy,
@@ -641,361 +310,6 @@ fn write_remote_response(stream: &mut TcpStream, status: u16, body: &str) -> Res
         .context("flushing remote fixture HTTP response")
 }
 
-/// A bounded JSON-RPC client for exercising the mock agent itself.
-struct MockProcess {
-    child: ProcessChild,
-    stdin: ChildStdin,
-    receiver: Receiver<Result<serde_json::Value, String>>,
-    pending: VecDeque<serde_json::Value>,
-}
-
-impl MockProcess {
-    fn new(
-        child: ProcessChild,
-        stdin: ChildStdin,
-        stdout: std::process::ChildStdout,
-    ) -> Result<Self> {
-        let (sender, receiver) = mpsc::channel();
-        thread::Builder::new()
-            .name("bitrouter-mock-acp-reader".to_string())
-            .spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    let message = match line {
-                        Ok(line) => serde_json::from_str(&line).map_err(|error| error.to_string()),
-                        Err(error) => Err(error.to_string()),
-                    };
-                    if sender.send(message).is_err() {
-                        return;
-                    }
-                }
-            })
-            .context("starting mock ACP reader")?;
-        Ok(Self {
-            child,
-            stdin,
-            receiver,
-            pending: VecDeque::new(),
-        })
-    }
-
-    fn send(&mut self, value: serde_json::Value) -> Result<()> {
-        serde_json::to_writer(&mut self.stdin, &value).context("encoding mock ACP request")?;
-        self.stdin
-            .write_all(b"\n")
-            .context("terminating mock ACP request")?;
-        self.stdin.flush().context("flushing mock ACP request")
-    }
-
-    fn request(
-        &mut self,
-        id: &str,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        self.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }))?;
-        self.wait_for(&format!("response {id}"), |value| {
-            value.get("id").and_then(serde_json::Value::as_str) == Some(id)
-        })
-    }
-
-    fn wait_for<F>(&mut self, description: &str, predicate: F) -> Result<serde_json::Value>
-    where
-        F: Fn(&serde_json::Value) -> bool,
-    {
-        if let Some(index) = self.pending.iter().position(&predicate)
-            && let Some(value) = self.pending.remove(index)
-        {
-            return Ok(value);
-        }
-
-        let deadline = Instant::now() + PTY_TIMEOUT;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                bail!("timed out waiting for {description}");
-            }
-            match self.receiver.recv_timeout(remaining) {
-                Ok(Ok(value)) if predicate(&value) => return Ok(value),
-                Ok(Ok(value)) => self.pending.push_back(value),
-                Ok(Err(error)) => {
-                    bail!("mock ACP reader failed while waiting for {description}: {error}")
-                }
-                Err(RecvTimeoutError::Timeout) => bail!("timed out waiting for {description}"),
-                Err(RecvTimeoutError::Disconnected) => {
-                    bail!("mock ACP exited while waiting for {description}")
-                }
-            }
-        }
-    }
-}
-
-impl Drop for MockProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
-
-fn inherited_path() -> Result<OsString> {
-    std::env::var_os("PATH").context("the PTY fixture requires PATH to locate its configured agent")
-}
-
-fn acp_fixture_executable() -> Result<PathBuf> {
-    static BINARY: std::sync::OnceLock<std::result::Result<PathBuf, String>> =
-        std::sync::OnceLock::new();
-    BINARY
-        .get_or_init(|| example_binary::build("bitrouter", "pty_acp_fixture"))
-        .clone()
-        .map_err(anyhow::Error::msg)
-}
-
-fn yaml_string(path: &Path) -> Result<String> {
-    serde_json::to_string(path.to_string_lossy().as_ref()).context("encoding YAML path")
-}
-
-fn find_text(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Object(object) => {
-            if object.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                && let Some(text) = object.get("text").and_then(serde_json::Value::as_str)
-            {
-                return Some(text.to_string());
-            }
-            object.values().find_map(find_text)
-        }
-        serde_json::Value::Array(values) => values.iter().find_map(find_text),
-        _ => None,
-    }
-}
-
-#[test]
-fn mock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text() -> Result<()> {
-    let mock = MockAcp::new(MockScenario::Minimal)?;
-    let mut agent = mock.start()?;
-    let initialize = agent.request(
-        "initialize",
-        "initialize",
-        serde_json::json!({"protocolVersion": 1}),
-    )?;
-    ensure!(
-        initialize["result"]["agentCapabilities"]
-            .as_object()
-            .is_some_and(|capabilities| capabilities.is_empty()),
-        "minimal fixture unexpectedly advertised optional capabilities: {initialize}"
-    );
-    let session = agent.request(
-        "new",
-        "session/new",
-        serde_json::json!({"cwd": "/", "mcpServers": []}),
-    )?;
-    ensure!(
-        session["result"]["sessionId"] == "pty-native",
-        "minimal fixture did not return its native id: {session}"
-    );
-    let loaded = agent.request(
-        "load",
-        "session/load",
-        serde_json::json!({"sessionId": "pty-native", "cwd": "/", "mcpServers": []}),
-    )?;
-    ensure!(
-        loaded["result"]["_meta"]["loadedBy"] == "pty-fixture",
-        "load result was not fixture-authored: {loaded}"
-    );
-
-    let prompt = "  中文 👩‍💻\nsecond line  ";
-    let completed = agent.request(
-        "prompt",
-        "session/prompt",
-        serde_json::json!({
-            "sessionId": "pty-native",
-            "prompt": [{"type": "text", "text": prompt}],
-        }),
-    )?;
-    ensure!(
-        completed["result"]["stopReason"] == "end_turn",
-        "normal fixture prompt did not settle: {completed}"
-    );
-    ensure!(
-        mock.captured_prompt()?.as_deref() == Some(prompt),
-        "fixture did not preserve the exact multiline prompt"
-    );
-    Ok(())
-}
-
-#[test]
-fn mock_acp_models_delayed_cancellation_and_overlapping_permissions() -> Result<()> {
-    let delayed = MockAcp::new(MockScenario::DelayedCancel)?;
-    let mut cancelling = delayed.start()?;
-    let _ = cancelling.request(
-        "initialize",
-        "initialize",
-        serde_json::json!({"protocolVersion": 1}),
-    )?;
-    let _ = cancelling.request(
-        "new",
-        "session/new",
-        serde_json::json!({"cwd": "/", "mcpServers": []}),
-    )?;
-    cancelling.send(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "prompt",
-        "method": "session/prompt",
-        "params": {"sessionId": "pty-native", "prompt": [{"type": "text", "text": "wait"}]},
-    }))?;
-    let _ = cancelling.wait_for("delayed cancellation update", |value| {
-        value["params"]["update"]["content"]["text"] == "FXCN"
-    })?;
-    cancelling.send(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "cancel",
-        "method": "session/cancel",
-        "params": {"sessionId": "pty-native"},
-    }))?;
-    let cancelled = cancelling.wait_for("cancelled prompt", |value| {
-        value.get("id").and_then(serde_json::Value::as_str) == Some("prompt")
-    })?;
-    ensure!(
-        cancelled["result"]["stopReason"] == "cancelled",
-        "delayed cancellation did not settle the original prompt: {cancelled}"
-    );
-
-    let permissions = MockAcp::new(MockScenario::OverlappingPermissions)?;
-    let mut answering = permissions.start()?;
-    let _ = answering.request(
-        "initialize",
-        "initialize",
-        serde_json::json!({"protocolVersion": 1}),
-    )?;
-    let _ = answering.request(
-        "new",
-        "session/new",
-        serde_json::json!({"cwd": "/", "mcpServers": []}),
-    )?;
-    answering.send(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": "permission-prompt",
-        "method": "session/prompt",
-        "params": {"sessionId": "pty-native", "prompt": [{"type": "text", "text": "ask"}]},
-    }))?;
-    let first = answering.wait_for("first permission", |value| {
-        value.get("id").and_then(serde_json::Value::as_str) == Some("permission-1")
-    })?;
-    let second = answering.wait_for("second permission", |value| {
-        value.get("id").and_then(serde_json::Value::as_str) == Some("permission-2")
-    })?;
-    ensure!(
-        first["params"]["toolCall"]["title"] == "fixture permission 1"
-            && second["params"]["toolCall"]["title"] == "fixture permission 2",
-        "overlapping permission identities were not distinct"
-    );
-    for id in ["permission-1", "permission-2"] {
-        answering.send(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {"outcome": "selected"},
-        }))?;
-    }
-    let completed = answering.wait_for("permission prompt settlement", |value| {
-        value.get("id").and_then(serde_json::Value::as_str) == Some("permission-prompt")
-    })?;
-    ensure!(
-        completed["result"]["stopReason"] == "end_turn",
-        "permission fixture did not settle after both responses: {completed}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn background_cli_returns_before_settlement_and_run_survives_client_exit() -> Result<()> {
-    let mock = MockAcp::new(MockScenario::DelayedNormal)?;
-    let output = tokio::time::timeout(
-        PTY_TIMEOUT,
-        mock.bro_command()?
-            .args([
-                "run",
-                "stub",
-                "work after this client exits",
-                "--direct",
-                "--background",
-                "--json",
-            ])
-            .output(),
-    )
-    .await??;
-    ensure!(
-        output.status.success(),
-        "background launch failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let run_id = report
-        .get("agent_run_id")
-        .and_then(serde_json::Value::as_str)
-        .context("successful background launch omitted attachable run ID")?;
-    let runs = mock.supervised_runs().await?;
-    let run = runs
-        .iter()
-        .find(|run| run.run_id == run_id)
-        .context("accepted run missing after CLI exited")?;
-    assert_eq!(
-        run.process,
-        bitrouter::client::sessions::wire::ProcessState::Running
-    );
-    assert_eq!(
-        run.turn,
-        bitrouter::client::sessions::wire::TurnState::Working
-    );
-    assert!(run.lease.is_none());
-    mock.wait_for_request("session/prompt")?;
-    mock.release()?;
-    tokio::time::timeout(PTY_TIMEOUT, async {
-        loop {
-            let runs = mock.supervised_runs().await?;
-            if runs.iter().any(|run| {
-                run.run_id == run_id
-                    && run.review == bitrouter::client::sessions::wire::ReviewState::Unread
-                    && run.turn == bitrouter::client::sessions::wire::TurnState::Idle
-            }) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await??;
-    let stopped = tokio::time::timeout(
-        PTY_TIMEOUT,
-        mock.bro_command()?
-            .args(["agents", "stop", run_id, "--json"])
-            .output(),
-    )
-    .await??;
-    ensure!(
-        stopped.status.success(),
-        "stop failed: {}",
-        String::from_utf8_lossy(&stopped.stderr)
-    );
-    let removed = tokio::time::timeout(
-        PTY_TIMEOUT,
-        mock.bro_command()?
-            .args(["agents", "remove", run_id, "--json"])
-            .output(),
-    )
-    .await??;
-    ensure!(
-        removed.status.success(),
-        "remove failed: {}",
-        String::from_utf8_lossy(&removed.stderr)
-    );
-    assert!(mock.supervised_runs().await?.is_empty());
-    Ok(())
-}
-
 impl RemoteFixture {
     fn command(&self) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"));
@@ -1096,5 +410,59 @@ async fn remote_cli_errors_do_not_fall_back_to_local_models() -> Result<()> {
     }
     remote.assert_bearer(&remote.wait_for_request("GET", "/control/v1/capabilities")?)?;
     remote.assert_bearer(&remote.wait_for_request("GET", "/control/v1/models")?)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_context_rejects_background_and_session_mutations_before_local_start() -> Result<()>
+{
+    let remote = RemoteFixture::new(RemoteScenario::Healthy)?;
+    let invocations = [
+        vec![
+            "--context",
+            "fixture",
+            "run",
+            "stub",
+            "must remain remote",
+            "--direct",
+            "--background",
+        ],
+        vec!["--context", "fixture", "agents", "review", "run-1"],
+        vec!["--context", "fixture", "agents", "stop", "run-1"],
+        vec!["--context", "fixture", "agents", "remove", "run-1"],
+    ];
+
+    for args in invocations {
+        let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+            .args(args)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", &remote.home_path)
+            .env("BITROUTER_HOME", &remote.bitrouter_home_path)
+            .env("TMPDIR", &remote.temporary_path)
+            .env("NO_COLOR", "1")
+            .env("BITROUTER_A12_TOKEN", REMOTE_FIXTURE_TOKEN)
+            .current_dir(remote._directory.path())
+            .kill_on_drop(true)
+            .output()
+            .await?;
+        assert!(!output.status.success());
+        let error = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        ensure!(
+            (error.contains("local-only") || error.contains("unrecognized subcommand")),
+            "remote execution was not rejected by the pre-dispatch gate: {error}"
+        );
+        ensure!(
+            !error.contains("BITROUTER_HOME") && !error.contains("bitrouter.yaml"),
+            "remote execution reached local config resolution: {error}"
+        );
+    }
+
+    assert!(!remote.bitrouter_home_path.join("bitrouter.sock").exists());
+    assert!(!remote.bitrouter_home_path.join("bitrouter.pid").exists());
     Ok(())
 }

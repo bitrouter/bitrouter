@@ -1,8 +1,5 @@
 //! Frozen evidence export preserves exact subject identity; it never compiles Policy.
 
-#[cfg(feature = "core")]
-use std::collections::BTreeSet;
-
 use anyhow::Result;
 use serde::Serialize;
 
@@ -69,18 +66,4 @@ impl EvalEvidenceSnapshot {
             records,
         })
     }
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
-    let mut cohorts = subject
-        .evidence
-        .iter()
-        .filter(|item| item.kind == "routing.assessment")
-        .filter_map(|item| item.attributes.get("classifier_digest").cloned())
-        .collect::<BTreeSet<_>>();
-    if cohorts.is_empty() {
-        cohorts.insert("unassessed".into());
-    }
-    cohorts
 }

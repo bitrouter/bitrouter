@@ -71,7 +71,13 @@ impl WorkspaceTools {
         if updated.len() as u64 > MAX_FILE_BYTES {
             return Err("edited file exceeds the 2 MiB limit".into());
         }
-        persist_text(&path, updated.as_bytes(), Some(&original_bytes), effect)?;
+        persist_text(
+            &self.root,
+            &path,
+            updated.as_bytes(),
+            Some(&original_bytes),
+            effect,
+        )?;
         *effect = EffectStatus::Completed;
         let diff = similar::TextDiff::from_lines(original, &updated)
             .unified_diff()

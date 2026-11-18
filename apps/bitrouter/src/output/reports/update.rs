@@ -1,4 +1,4 @@
-//! Report for the `bro update` self-updater.
+//! Report for the `bitrouter update` self-updater.
 //!
 //! Every terminal outcome of `update` — a package-manager delegation, a
 //! `--check` probe, a declined confirmation, a no-op, or a completed swap —
@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
-/// Result of `bro update`. `status` is the discriminant; the remaining
+/// Result of `bitrouter update`. `status` is the discriminant; the remaining
 /// fields are populated only for the outcomes they belong to.
 #[derive(Debug, Serialize)]
 pub struct UpdateReport {
@@ -483,7 +483,7 @@ mod tests {
             h.contains("✓ updated 1.0.0-alpha.19 -> 1.0.0-alpha.20"),
             "{h:?}"
         );
-        assert!(h.contains("Run `bro restart`"), "{h:?}");
+        assert!(h.contains("Run `bitrouter restart`"), "{h:?}");
     }
 
     #[test]

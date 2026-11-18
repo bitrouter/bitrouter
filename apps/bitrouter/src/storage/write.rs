@@ -125,19 +125,6 @@ impl Write {
         Ok(())
     }
 
-    /// Validation fixtures retain their read view and explicitly roll back the
-    /// lock-only writes. Complete custody only after that rollback is acknowledged.
-    #[cfg(all(test, feature = "core"))]
-    pub(crate) async fn rollback(mut self, tx: DatabaseTransaction) -> Result<()> {
-        tx.rollback()
-            .await
-            .map_err(|_| BitrouterError::internal("local write rollback unconfirmed"))?;
-        if let Some(charge) = self.charge.take() {
-            charge.complete().map_err(capacity_error)?;
-        }
-        Ok(())
-    }
-
     pub(crate) async fn finish<T>(
         mut self,
         tx: DatabaseTransaction,
@@ -228,11 +215,3 @@ mod tests;
 
 #[cfg(all(test, unix, any(feature = "otel-http", feature = "otel-grpc")))]
 pub(crate) mod measurement;
-
-#[cfg(all(
-    test,
-    unix,
-    feature = "core",
-    any(feature = "otel-http", feature = "otel-grpc")
-))]
-mod calibration;

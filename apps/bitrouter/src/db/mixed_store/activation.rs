@@ -1,12 +1,15 @@
 use super::*;
 use sea_orm::sqlx::{ConnectOptions, Connection};
 
-/// The new BRO scheduler consumes its own new checkpoints. Retained work is
-/// inspectable, but cannot authorize a new effect until that scheduler supports
-/// the original grant, tombstones, budget and recovery contract.
-pub(super) async fn blockers(db: &DatabaseConnection) -> Result<Vec<String>> {
+mod managed;
+mod transfer;
+
+type Threads = BTreeMap<uuid::Uuid, serde_json::Value>;
+
+pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Threads)> {
     let objects = catalog::source(db).await?;
     let mut blockers = Vec::new();
+    let mut retained = std::collections::BTreeSet::new();
     for object in objects.iter().filter(|o| o.kind == "table") {
         let table = object.name.as_str();
         if table == "seaql_migrations" || !catalog::belongs(table, Owner::Bro)? {
@@ -18,27 +21,13 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<Vec<String>> {
             _ => format!("SELECT 1 FROM {table} LIMIT 1"),
         };
         if db.query_one(sql(query)).await?.is_some() {
-            blockers.push(format!(
-                "retained BRO state in {table} requires inspection-only recovery"
-            ));
+            retained.insert(table);
         }
     }
     for (reason, query) in [
         (
-            "unresolved execution obligations",
-            "SELECT 1 FROM tenancy_unknown_obligations",
-        ),
-        (
             "unsettled dispatch intent",
             "SELECT 1 FROM tenancy_dispatch_intents",
-        ),
-        (
-            "unknown execution receipt",
-            "SELECT 1 FROM tenancy_execution_receipts WHERE unknown_outcome<>0",
-        ),
-        (
-            "unknown auxiliary receipt",
-            "SELECT 1 FROM tenancy_receipt_auxiliary WHERE unknown_outcome<>0",
         ),
         (
             "unresolved provider credential refresh",
@@ -93,7 +82,48 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<Vec<String>> {
             }
         }
     }
-    Ok(blockers)
+    // A historical Unknown is a durable service obligation. Only the service's
+    // canonical audit can establish its complete source and accounting coverage.
+    if db.query_one(sql("SELECT 1 FROM tenancy_unknown_obligations UNION ALL SELECT 1 FROM tenancy_execution_receipts WHERE unknown_outcome<>0 UNION ALL SELECT 1 FROM tenancy_receipt_auxiliary WHERE unknown_outcome<>0 LIMIT 1")).await?.is_some()
+        && let Err(error) = crate::tenancy::audit::validation::validate_m0_service(db).await
+    {
+        blockers.push(format!("inconsistent execution obligations: {error:#}"));
+    }
+    let mut threads = Threads::new();
+    if retained.contains("bro_executions") {
+        match transfer::threads(db).await {
+            Ok(checked) => {
+                threads.extend(checked);
+                for table in [
+                    "bro_execution_records",
+                    "bro_executions",
+                    "bro_acceptance_keys",
+                    "bro_execution_index",
+                    "bro_runtime_owners",
+                    "bro_runtime_ownership",
+                ] {
+                    retained.remove(table);
+                }
+            }
+            Err(error) => blockers.push(format!("bro_execution_records: {error:#}")),
+        }
+    }
+    if retained.contains("bro_managed_sessions") {
+        match managed::threads(db).await {
+            Ok(checked) if checked.keys().all(|id| !threads.contains_key(id)) => {
+                threads.extend(checked);
+                retained.remove("bro_managed_sessions");
+            }
+            Ok(_) => blockers.push("colliding managed and thread identities".into()),
+            Err(error) => blockers.push(format!("bro_managed_sessions: {error:#}")),
+        }
+    }
+    blockers.extend(
+        retained.into_iter().map(|table| {
+            format!("retained BRO state in {table} requires inspection-only recovery")
+        }),
+    );
+    Ok((blockers, threads))
 }
 
 /// Reuse the ordinary stopped-authority validator on the completed gateway
@@ -108,23 +138,29 @@ pub(super) async fn verify_service(path: &Path) -> Result<()> {
         .connect()
         .await?;
     let result: Result<()> = async {
-        let id: Option<String> =
-            sea_orm::sqlx::query_scalar("SELECT installation_id FROM tenancy_installation")
-                .fetch_optional(&mut reader)
-                .await?;
-        if let Some(id) = id {
-            let id = id.try_into()?;
-            crate::tenancy::audit::recovery::inspect_source(
-                &mut reader,
-                &id,
-                &|| Ok(()),
-                crate::offline::ValidationBudget::default(),
-            )
-            .await?;
-        }
+        super::cutover::verify_key_grants(&mut reader).await?;
+        verify_tenant(&mut reader).await?;
         Ok(())
     }
     .await;
     reader.close().await?;
     result.context("gateway recovery validation failed before activation")
+}
+
+async fn verify_tenant(reader: &mut sea_orm::sqlx::SqliteConnection) -> Result<()> {
+    let id: Option<String> =
+        sea_orm::sqlx::query_scalar("SELECT installation_id FROM tenancy_installation")
+            .fetch_optional(&mut *reader)
+            .await?;
+    if let Some(id) = id {
+        let id = id.try_into()?;
+        crate::tenancy::audit::recovery::inspect_source(
+            reader,
+            &id,
+            &|| Ok(()),
+            crate::offline::ValidationBudget::default(),
+        )
+        .await?;
+    }
+    Ok(())
 }

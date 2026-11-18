@@ -1,10 +1,5 @@
 use bitrouter_ai::harness::resources::MaterialRef;
-use bitrouter_ai::harness::skills::{LocalSkill, LocalSkillCatalog};
-
-use std::path::Path;
-
-use crate::gateway::caller::CallerContext;
-use async_trait::async_trait;
+use bitrouter_ai::harness::skills::LocalSkill;
 
 use crate::storage::checkpoint::sha256;
 
@@ -35,27 +30,6 @@ impl LocalSkillExt for LocalSkill {
             provenance: format!("local_skill:{:?}:{}", self.scope, self.directory_id),
         })
     }
-}
-
-#[async_trait]
-pub trait SkillDirectory: Send + Sync {
-    /// Discover existing local skill directories; never download or publish content.
-    async fn catalog(
-        &self,
-        workspace: &Path,
-        caller: &CallerContext,
-    ) -> Result<LocalSkillCatalog, String>;
-
-    /// Read the original directory only while its file commitments still match.
-    /// Each read rechecks authority, containment and the exact file's raw bytes.
-    async fn read(
-        &self,
-        workspace: &Path,
-        caller: &CallerContext,
-        binding: &LocalSkill,
-        relative_path: &str,
-        max_bytes: u64,
-    ) -> Result<Vec<u8>, String>;
 }
 
 pub(crate) fn canonical(value: serde_json::Value) -> serde_json::Value {

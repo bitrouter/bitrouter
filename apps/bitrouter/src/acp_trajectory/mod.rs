@@ -8,9 +8,6 @@ pub mod checkpoint;
 #[cfg(test)]
 pub(crate) mod fixtures;
 
-#[cfg(all(test, feature = "harness"))]
-mod live_tests;
-
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::storage::capture::{CaptureEvent, CaptureKind};
@@ -86,15 +83,6 @@ pub struct SessionTranscript {
 }
 
 impl CanonicalStore {
-    #[cfg(feature = "core")]
-    pub(crate) fn with_storage_budget(
-        mut self,
-        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
-    ) -> Self {
-        self.storage_budget = budget;
-        self
-    }
-
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,

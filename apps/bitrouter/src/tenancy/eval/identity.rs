@@ -8,7 +8,7 @@ use bitrouter_ai::{
 use sea_orm::ConnectionTrait;
 
 /// Derive producer identity from admitted immutable facts, never from caller metadata.
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) fn for_execution(
     execution: &super::super::execution::TenantExecution,
 ) -> anyhow::Result<EvalSubjectIdentity> {

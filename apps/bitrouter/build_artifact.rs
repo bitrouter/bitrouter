@@ -13,27 +13,15 @@ pub struct FeatureSelection {
     pub wire_profile: &'static str,
 }
 
-impl FeatureSelection {
-    /// Hash only the takeover protocols compiled into this executable.
-    pub fn handoff_sources(&self) -> impl Iterator<Item = &'static str> + '_ {
-        const SOURCES: &[(&str, Option<&str>)] = &[
-            ("src/daemon.rs", None),
-            ("src/daemon_handoff.rs", None),
-            ("src/client/sessions/mod.rs", Some("harness")),
-            ("src/client/sessions/wire.rs", Some("harness")),
-            ("src/harness/supervisor.rs", Some("harness")),
-            ("src/core/evolution/scheduler.rs", Some("core")),
-            ("src/main.rs", None),
-            ("src/upgrade.rs", None),
-            ("src/upgrade_preflight.rs", None),
-        ];
-        SOURCES.iter().filter_map(|&(path, feature)| {
-            feature
-                .is_none_or(|required| self.features.iter().any(|name| name == required))
-                .then_some(path)
-        })
-    }
+pub const HANDOFF_SOURCES: &[&str] = &[
+    "src/daemon.rs",
+    "src/daemon_handoff.rs",
+    "src/main.rs",
+    "src/upgrade.rs",
+    "src/upgrade_preflight.rs",
+];
 
+impl FeatureSelection {
     pub fn from_manifest(
         manifest: &str,
         enabled: impl Fn(&str) -> bool,

@@ -16,7 +16,7 @@ const MODEL: &str = "provider:literal-route";
 mod cache;
 mod defaults;
 mod eval_loop;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 mod evaluation;
 mod http_continuation;
 mod ingress;

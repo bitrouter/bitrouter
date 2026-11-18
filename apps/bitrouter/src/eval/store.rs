@@ -13,7 +13,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-#[cfg(all(test, feature = "core"))]
+#[cfg(all(test, feature = "eval-publication"))]
 mod authority_tests;
 mod codec;
 mod io;
@@ -130,7 +130,7 @@ impl EvalStore {
         self
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) fn for_execution(
         db: DatabaseConnection,
         execution: &crate::tenancy::execution::TenantExecution,
@@ -218,7 +218,7 @@ impl EvalStore {
             .await
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(super) async fn insert_settlement_subject_owned(
         &self,
         subject: &EvalSubject,
@@ -753,7 +753,7 @@ fn parse_admission_status(value: &str) -> Result<AdmissionStatus> {
     }
 }
 
-#[cfg(all(test, feature = "core"))]
+#[cfg(all(test, feature = "eval-publication"))]
 #[path = "store/scope_tests.rs"]
 mod scope_tests;
 #[cfg(test)]

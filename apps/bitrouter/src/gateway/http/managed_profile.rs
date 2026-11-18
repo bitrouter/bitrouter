@@ -41,7 +41,6 @@ pub(crate) fn is_managed(body: &serde_json::Value) -> bool {
     body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true
 }
 
-#[cfg(any(not(feature = "core"), feature = "multi-instance", test))]
 pub(crate) fn unavailable() -> axum::response::Response {
     failure(CoreError::rejected(
         ErrorCode::UnsupportedCapability,
@@ -49,7 +48,6 @@ pub(crate) fn unavailable() -> axum::response::Response {
     ))
 }
 
-#[cfg(any(not(feature = "core"), test))]
 pub(crate) fn disabled(router: axum::Router) -> axum::Router {
     router.layer(axum::middleware::from_fn_with_state(
         Arc::new(Semaphore::new(4)),
@@ -57,7 +55,6 @@ pub(crate) fn disabled(router: axum::Router) -> axum::Router {
     ))
 }
 
-#[cfg(any(not(feature = "core"), test))]
 async fn reject(
     axum::extract::State(inspections): axum::extract::State<Arc<Semaphore>>,
     request: axum::extract::Request,
@@ -80,7 +77,6 @@ async fn reject(
     }
 }
 
-#[cfg(any(not(feature = "core"), feature = "multi-instance", test))]
 fn failure(error: CoreError) -> axum::response::Response {
     use axum::response::IntoResponse;
     let status = match error.code {
@@ -214,7 +210,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "core"))]
     #[tokio::test]
     async fn base_gateway_mounts_guard_without_the_core_host_wrapper() -> TestResult {
         use crate::gateway::http::{AppState, build_router};

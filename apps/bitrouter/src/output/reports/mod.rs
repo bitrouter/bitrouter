@@ -7,7 +7,7 @@
 pub mod admin;
 pub mod administration;
 pub mod agents;
-mod artifact;
+pub mod artifact;
 pub mod commands;
 pub mod config;
 pub mod daemon;

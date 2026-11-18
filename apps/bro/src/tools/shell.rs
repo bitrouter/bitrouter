@@ -1,7 +1,6 @@
 //! Declared shell interpreter, streaming output and owned process cleanup.
 
-use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -17,56 +16,132 @@ use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
 
 #[derive(Clone)]
 pub(super) struct Interpreter {
-    pub(super) executable: PathBuf,
-    pub(super) dialect: &'static str,
+    pub(super) launcher: &'static str,
 }
 
 impl Interpreter {
-    pub(super) fn discover() -> std::io::Result<Self> {
-        #[cfg(windows)]
-        let candidates = [("pwsh.exe", "powershell"), ("powershell.exe", "powershell")];
-        #[cfg(not(windows))]
-        let candidates = [("bash", "bash"), ("sh", "sh")];
-        Self::search(std::env::var_os("PATH").as_deref(), &candidates)
+    pub(super) fn discover(root: &Path) -> Option<Self> {
+        let launcher = if cfg!(target_os = "macos") {
+            "/usr/bin/sandbox-exec"
+        } else if cfg!(target_os = "linux") {
+            "/usr/bin/bwrap"
+        } else {
+            return None;
+        };
+        let sandbox = Self { launcher };
+        // A package on PATH, or an installed bwrap without usable namespaces,
+        // cannot establish the grant. Probe exactly the execution configuration.
+        sandbox
+            .command(root, ":")
+            .ok()?
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .ok()?
+            .success()
+            .then_some(sandbox)
     }
 
-    pub(super) fn search(
-        search_path: Option<&std::ffi::OsStr>,
-        candidates: &[(&str, &'static str)],
-    ) -> std::io::Result<Self> {
-        if let Some(search_path) = search_path {
-            for (name, dialect) in candidates {
-                for directory in std::env::split_paths(search_path) {
-                    let path = directory.join(name);
-                    let Ok(metadata) = fs::metadata(&path) else {
-                        continue;
-                    };
-                    if !metadata.is_file() {
-                        continue;
-                    }
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if metadata.permissions().mode() & 0o111 == 0 {
-                            continue;
-                        }
-                    }
-                    return Ok(Self {
-                        executable: path.canonicalize()?,
-                        dialect,
-                    });
+    fn command(&self, root: &Path, script: &str) -> std::io::Result<std::process::Command> {
+        let mut cmd = std::process::Command::new(self.launcher);
+        cmd.env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("LC_ALL", "C")
+            .current_dir(root);
+        if cfg!(target_os = "macos") {
+            let mut parameter = std::ffi::OsString::from("BRO_WORKSPACE=");
+            parameter.push(root);
+            cmd.arg("-D").arg(parameter).args([
+                "-p",
+                include_str!("shell.sb"),
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                script,
+            ]);
+        } else {
+            cmd.args([
+                "--unshare-all",
+                "--die-with-parent",
+                "--new-session",
+                "--cap-drop",
+                "ALL",
+            ]);
+            for path in [
+                "/bin",
+                "/lib",
+                "/lib64",
+                "/usr/bin",
+                "/usr/lib",
+                "/usr/lib64",
+            ] {
+                if Path::new(path).is_dir() {
+                    cmd.args(["--ro-bind", path, path]);
                 }
             }
+            cmd.args(["--dev", "/dev", "--tmpfs", "/tmp", "--bind"])
+                .arg(root)
+                .args([
+                    "/workspace",
+                    "--remount-ro",
+                    "/",
+                    "--chdir",
+                    "/workspace",
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    script,
+                ]);
         }
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no supported shell interpreter is available in the server PATH",
-        ))
+        #[cfg(unix)]
+        seal_inherited_descriptors(&mut cmd)?;
+        Ok(cmd)
     }
 
-    pub(super) fn identity(&self) -> serde_json::Value {
-        serde_json::json!({"executable": self.executable, "dialect": self.dialect})
+    fn identity(&self) -> serde_json::Value {
+        let (executable, dialect) = if cfg!(target_os = "macos") {
+            ("/bin/bash", "bash")
+        } else {
+            ("/bin/sh", "sh")
+        };
+        serde_json::json!({"executable":executable, "dialect":dialect, "sandbox":self.launcher})
     }
+}
+
+// BRO opens its own files close-on-exec. Also seal descriptors supplied by
+// the invoking process, which could otherwise carry authority across the sandbox.
+#[cfg(unix)]
+fn seal_inherited_descriptors(cmd: &mut std::process::Command) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    let mut inherited = Vec::new();
+    for entry in std::fs::read_dir("/dev/fd")? {
+        if let Some(fd) = entry?
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+            && fd > 2
+        {
+            inherited.push(fd);
+        }
+    }
+    // SAFETY: only async-signal-safe fcntl runs in the child. CLOEXEC keeps
+    // Rust's own child-error pipe usable until exec. A closed fd needs no action.
+    unsafe {
+        cmd.pre_exec(move || {
+            for &fd in &inherited {
+                if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) == -1 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EBADF) {
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 impl WorkspaceTools {
@@ -86,30 +161,14 @@ impl WorkspaceTools {
             return Err("timeout must be in 1..=120 seconds".into());
         }
         let interpreter = self
-            .interpreter
-            .as_ref()
-            .ok_or("shell interpreter unavailable")?;
-        let mut command = Command::new(&interpreter.executable);
-        let command_text = if interpreter.dialect == "powershell" {
-            command.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-            ]);
-            format!(
-                "try {{ [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 }} catch {{}}\n{}",
-                args.command
-            )
-        } else {
-            command.arg("-c");
-            args.command
-        };
+            .interpreter()
+            .ok_or("shell disabled: workspace sandbox unavailable")?;
+        let mut command = Command::from(
+            interpreter
+                .command(&self.root, &args.command)
+                .map_err(|e| format!("preparing shell sandbox: {e}"))?,
+        );
         command
-            .env_remove("BITROUTER_API_KEY")
-            .arg(&command_text)
-            .current_dir(&self.root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -179,7 +238,9 @@ impl WorkspaceTools {
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
-        if !timed_out {
+        // A sandbox supervisor may encode a fatal signal as 128 + signal.
+        // Interrupted commands can leave partial writes even after cleanup.
+        if !timed_out && status.code().is_some_and(|code| (0..128).contains(&code)) {
             *effect = EffectStatus::Completed;
         }
         Ok(ToolResultOutput::Json {

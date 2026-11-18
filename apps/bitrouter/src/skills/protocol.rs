@@ -145,18 +145,7 @@ pub fn strip_label(label: &str, uri: &str) -> Option<String> {
 }
 
 /// Shared Agent Skills name grammar: Unicode characters, not UTF-8 bytes.
-pub fn valid_agent_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.chars().count())
-        && name.chars().all(|c| {
-            c == '-'
-                || (c.is_alphanumeric()
-                    && !c.is_uppercase()
-                    && c.to_lowercase().eq(std::iter::once(c)))
-        })
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-}
+pub use bitrouter_skills::valid_agent_skill_name;
 
 /// Validate absolute URI/IRI syntax without interpreting its scheme or
 /// resolving an authority. Syntax alone does not identify or activate a skill.

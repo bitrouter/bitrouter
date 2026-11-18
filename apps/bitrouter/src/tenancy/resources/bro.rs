@@ -4,24 +4,6 @@ use anyhow::Result;
 use std::sync::Arc;
 
 impl Service {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    #[cfg(all(test, unix))]
-    pub(in crate::tenancy) async fn open_owned_bro_profile(
-        database: crate::db::OwnedDatabase,
-        config: &crate::config::tenancy::TenancyConfig,
-        continuations: &crate::config::ContinuationConfig,
-    ) -> Result<Self> {
-        Self::open_owned_bro_profile_observed_startup(
-            database,
-            config,
-            continuations,
-            crate::telemetry::receipt_latency::Sink::default(),
-            #[cfg(test)]
-            None,
-        )
-        .await
-    }
-
     pub(crate) async fn open_owned_bro_profile_observed(
         database: crate::db::OwnedDatabase,
         config: &crate::config::tenancy::TenancyConfig,

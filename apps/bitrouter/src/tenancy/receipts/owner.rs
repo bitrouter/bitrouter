@@ -35,8 +35,6 @@ enum Phase {
 }
 
 pub(crate) struct Owner {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    learning: std::sync::OnceLock<Arc<crate::tenancy::learning::owner::Owner>>,
     pub(in crate::tenancy) identity: Identity,
     pub(in crate::tenancy) intent: std::sync::OnceLock<Arc<super::ordered::intent::Intent>>,
     pub(in crate::tenancy) intent_ready: std::sync::atomic::AtomicBool,
@@ -65,95 +63,6 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn recovery_seed(
-        &self,
-        service: &crate::tenancy::Service,
-    ) -> anyhow::Result<Option<super::recovery::Seed>> {
-        anyhow::ensure!(
-            Arc::ptr_eq(&self.origin, &service.cleanup),
-            "receipt origin mismatch"
-        );
-        service
-            .startup
-            .as_ref()
-            .map(|startup| {
-                startup
-                    .stamp(&self.origin)
-                    .map(|stamp| super::recovery::Seed::from_owner(&self.identity, stamp))
-            })
-            .transpose()
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn attach_learning(
-        &self,
-        owner: Arc<crate::tenancy::learning::owner::Owner>,
-    ) -> crate::gateway::error::Result<()> {
-        if owner.execution != self.identity.execution || !owner.binding.origin(&self.origin) {
-            return Err(crate::gateway::error::BitrouterError::internal(
-                "assessment receipt mismatch",
-            ));
-        }
-        self.learning.set(owner).map_err(|_| {
-            crate::gateway::error::BitrouterError::internal("assessment receipt already bound")
-        })
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) async fn drain_learning(&self) -> Result<(), ErrorCode> {
-        if let Some(owner) = self.learning.get() {
-            owner.drain().await?;
-        }
-        Ok(())
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn learning_seed(
-        &self,
-        binding: &crate::tenancy::learning::source::Binding,
-        prepared: &crate::tenancy::learning::store::Prepared,
-    ) -> anyhow::Result<Option<crate::tenancy::learning::recovery::Seed>> {
-        anyhow::ensure!(binding.origin(&self.origin), "paid owner origin mismatch");
-        binding
-            .assessment_check()
-            .map_err(|_| anyhow::anyhow!("paid owner authority rejected"))?;
-        let Some(startup) = &binding.service().startup else {
-            return Ok(None);
-        };
-        let origin = startup.stamp(&self.origin)?;
-        Ok(Some(crate::tenancy::learning::recovery::Seed::from_owner(
-            &self.identity,
-            origin,
-            binding,
-            prepared,
-        )?))
-    }
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn learning_terminal(&self) -> Result<Arc<Candidate>, ErrorCode> {
-        let phase = self
-            .phase
-            .lock()
-            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        match &*phase {
-            Phase::Durable(candidate) => candidate
-                .v1()
-                .cloned()
-                .map_err(|_| ErrorCode::CapabilityMismatch),
-            _ => Err(ErrorCode::AuthorityUnavailable),
-        }
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn stopped_learning(
-        &self,
-    ) -> Result<Option<Arc<crate::tenancy::learning::owner::Owner>>, ErrorCode> {
-        // Missing aux evidence is not permission to discard an auxiliary effect.
-        if !self.auxiliary.snapshot()?.is_empty() {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        Ok(self.learning.get().cloned())
-    }
-
     pub(in crate::tenancy) fn new(
         identity: Identity,
         journal: Arc<Journal>,
@@ -170,8 +79,6 @@ impl Owner {
     ) -> Arc<Self> {
         let (deadline, cancelled, settings, observation) = observed_deadline;
         Arc::new(Self {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            learning: std::sync::OnceLock::new(),
             identity,
             intent: std::sync::OnceLock::new(),
             intent_ready: std::sync::atomic::AtomicBool::new(false),
@@ -271,34 +178,6 @@ impl Owner {
             |_| tokio::time::Instant::now(),
             |deadline| deadline.unwrap_or_else(|| self.cleanup_bound()),
         )
-    }
-    /// Active work has no cleanup clock until terminalization or cancellation.
-    /// A configured total still bounds cleanup even if no producer is polled.
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) async fn cleanup_elapsed(&self) {
-        loop {
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let deadline = match self.cleanup.lock() {
-                Ok(value) => *value,
-                Err(_) => return,
-            }
-            .or_else(|| {
-                self.deadline
-                    .instant()
-                    .and_then(|deadline| deadline.checked_add(std::time::Duration::from_secs(30)))
-            });
-            tokio::select! {
-                () = changed => {},
-                () = async {
-                    match deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending().await,
-                    }
-                } => return,
-            }
-        }
     }
     pub(crate) fn cancel(&self) {
         if let Ok(mut deadline) = self.cancellation_cleanup.lock() {

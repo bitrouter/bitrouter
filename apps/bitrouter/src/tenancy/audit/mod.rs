@@ -5,7 +5,7 @@ mod listener;
 pub(crate) mod recovery;
 #[cfg(all(test, unix))]
 pub(super) mod tests;
-mod validation;
+pub(crate) mod validation;
 
 use super::{
     error::Failure,

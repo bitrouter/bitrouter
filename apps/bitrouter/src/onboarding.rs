@@ -512,7 +512,6 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
 }
 
 async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
-    #[cfg(not(feature = "harness"))]
     anyhow::ensure!(
         flags.harnesses.is_empty() && flags.after != Some(AfterAction::Launch),
         "agent configuration and native launch require the harness feature"
@@ -944,39 +943,6 @@ async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
     .context("BitRouter Cloud sign-in")
 }
 
-#[cfg(feature = "harness")]
-async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
-    if !flags.harnesses.is_empty() {
-        return Ok(flags
-            .harnesses
-            .iter()
-            .copied()
-            .map(acp_id)
-            .map(String::from)
-            .collect());
-    }
-    let harnesses = crate::harness::catalog::CATALOG;
-    let mut items: Vec<_> = harnesses
-        .iter()
-        .map(|harness| crate::prompt::Item::new(harness.id, harness.description))
-        .collect();
-    items.push(crate::prompt::Item::new(
-        "Skip",
-        "keep existing agent settings and continue to optional MCP/skills setup",
-    ));
-    let selected = crate::prompt::select(
-        "Step 2/3 — Agents and resources (optional)",
-        "Select an ACP adapter default, or Skip. Selection does not install or connect an agent.",
-        items,
-        harnesses.len(),
-    )
-    .await?;
-    Ok(harnesses
-        .get(selected)
-        .map(|harness| vec![harness.id.to_string()])
-        .unwrap_or_default())
-}
-
 async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
     use crate::prompt::Item;
     if let Some(after) = flags.after {
@@ -1022,35 +988,6 @@ fn native_id(id: &str) -> Option<&'static str> {
         "codex-acp" => Some("codex"),
         _ => None,
     }
-}
-
-/// Explicit opt-in to a native launcher, never the first-party Code UI.
-#[cfg(feature = "harness")]
-async fn finish_launch(
-    path: &std::path::Path,
-    report: OnboardingReport,
-    output: &Output,
-    no_install: bool,
-) -> Result<()> {
-    let source = crate::paths::resolve_config(Some(path))?;
-    let config = crate::paths::load_config(&source).await?;
-    let id = config.chat.agent.as_deref().and_then(native_id).context("--after launch needs --harness claude or codex; use bro launch <agent> for other native tools")?;
-    let prepared = crate::spawn::prepare(
-        &source,
-        &config,
-        crate::spawn::SpawnOptions {
-            agent: crate::spawn::resolve_launch_agent(id)?,
-            model: config.chat.model.clone(),
-            agent_args: Vec::new(),
-            base_url: None,
-            no_install,
-            no_start: false,
-            check: false,
-        },
-    )
-    .await?;
-    emit(output, &report)?;
-    crate::spawn::exec_inherited(prepared).await
 }
 
 async fn finish_serve(
@@ -1225,7 +1162,6 @@ fn print_hint() {
     eprintln!();
 }
 
-#[cfg(not(feature = "harness"))]
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     anyhow::ensure!(
         flags.harnesses.is_empty(),
@@ -1234,7 +1170,6 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     Ok(Vec::new())
 }
 
-#[cfg(not(feature = "harness"))]
 async fn finish_launch(
     _path: &std::path::Path,
     _report: OnboardingReport,

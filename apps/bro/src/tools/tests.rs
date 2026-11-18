@@ -1,7 +1,9 @@
+#[cfg(unix)]
 use std::time::Duration;
 
 use bitrouter_ai::types::{Tool, ToolResultOutput};
 use tempfile::TempDir;
+#[cfg(unix)]
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +13,7 @@ use super::read::{directory_name, sort_directory_entries};
 use super::*;
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::harness::runtime::EffectStatus;
+#[cfg(unix)]
 use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
 
 fn success(output: ToolResultOutput) -> Result<ToolResultOutput, String> {
@@ -43,14 +46,16 @@ async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
             .collect();
         assert_eq!(
             names,
-            if mode == ToolMode::Coding {
+            if tools.interpreter().is_some() {
                 vec!["read", "glob", "grep", "write", "edit", "shell"]
+            } else if mode == ToolMode::Coding {
+                vec!["read", "glob", "grep", "write", "edit"]
             } else {
                 vec!["read", "glob", "grep"]
             }
         );
         for name in ["ls", "find", "bash", "powershell"] {
-            assert!(!WorkspaceTools::allowed(mode, name));
+            assert!(tools.authorize(name).is_err());
             assert!(WorkspaceTools::validate(name, "{}").is_err());
             let (output, effect) = tools
                 .execute_with_effect(name, "{}", &CancellationToken::new(), "legacy", None)
@@ -59,7 +64,7 @@ async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
             assert_eq!(effect, EffectStatus::NotExecuted);
         }
         if mode == ToolMode::ReadOnly {
-            assert!(tools.interpreter.is_none());
+            assert!(tools.interpreter().is_none());
             assert!(
                 tools
                     .execute(
@@ -73,8 +78,7 @@ async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
                     .is_error()
             );
             assert!(!workspace.path().join("created").exists());
-        } else {
-            let shell = tools.interpreter.as_ref().ok_or("missing interpreter")?;
+        } else if let Some(shell) = tools.interpreter() {
             let Tool::Function {
                 description: Some(description),
                 ..
@@ -82,7 +86,7 @@ async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
             else {
                 return Err("shell description missing".into());
             };
-            assert!(description.contains(&shell.executable.display().to_string()));
+            assert!(description.contains(shell.launcher));
         }
     }
     for args in [
@@ -406,58 +410,34 @@ async fn glob_paths_directories_limits_and_cancellation_keep_search_semantics()
     Ok(())
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn interpreter_availability_fallback_is_declared_and_never_retried()
--> Result<(), Box<dyn std::error::Error>> {
-    use std::os::unix::fs::PermissionsExt;
+async fn missing_sandbox_omits_and_refuses_shell() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let bins = TempDir::new()?;
-    let candidates = [("bash", "bash"), ("sh", "sh")];
-    assert!(Interpreter::search(None, &candidates).is_err());
-    assert!(Interpreter::search(Some(bins.path().as_os_str()), &candidates).is_err());
-    let sh = bins.path().join("sh");
-    fs::write(&sh, "#!/bin/sh\nprintf fallback > unexpected\n")?;
-    fs::set_permissions(&sh, fs::Permissions::from_mode(0o755))?;
-    let fallback = Interpreter::search(Some(bins.path().as_os_str()), &candidates)?;
-    assert_eq!(fallback.dialect, "sh");
-    let bash = bins.path().join("bash");
-    fs::write(&bash, "#!/bin/sh\nprintf selected\n")?;
-    fs::set_permissions(&bash, fs::Permissions::from_mode(0o755))?;
-    let preferred = Interpreter::search(Some(bins.path().as_os_str()), &candidates)?;
-    assert_eq!(preferred.dialect, "bash");
     let tools = WorkspaceTools {
         root: workspace.path().canonicalize()?,
         mode: ToolMode::Coding,
-        interpreter: Some(preferred),
+        interpreter: OnceLock::from(None),
     };
-    let value = success(
-        tools
-            .execute(
-                "shell",
-                r#"{"command":"echo hi"}"#,
-                &CancellationToken::new(),
-                "selected",
-                None,
-            )
-            .await,
-    )?;
     assert!(
-        matches!(value, ToolResultOutput::Json { value } if value["interpreter"]["dialect"] == "bash" && value["stdout"] == "selected")
+        tools
+            .declarations()
+            .iter()
+            .all(|tool| !matches!(tool, Tool::Function {name, ..} if name == "shell"))
     );
-    fs::remove_file(bash)?;
-    let (output, effect) = tools
+    let (result, effect) = tools
         .execute_with_effect(
             "shell",
-            r#"{"command":"echo hi"}"#,
+            r#"{"command":"printf hello > note"}"#,
             &CancellationToken::new(),
-            "lost",
+            "call",
             None,
         )
         .await;
-    assert!(output.is_error());
+    assert!(
+        matches!(result, ToolResultOutput::ErrorJson {value} if value["error"].as_str().is_some_and(|reason| reason.contains("workspace sandbox unavailable")))
+    );
     assert_eq!(effect, EffectStatus::NotExecuted);
-    assert!(!workspace.path().join("unexpected").exists());
+    assert!(!workspace.path().join("note").exists());
     Ok(())
 }
 
@@ -467,6 +447,9 @@ async fn shell_nonzero_exit_and_output_caps_remain_explicit()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        return Ok(());
+    }
     let result = success(
         tools
             .execute(
@@ -507,6 +490,9 @@ async fn shell_nonzero_exit_and_output_caps_remain_explicit()
 async fn assert_unix_descendant_cleanup(action: &str) -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        return Ok(());
+    }
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let (sender, mut receiver) = mpsc::channel(64);
@@ -759,6 +745,9 @@ async fn write_rejects_parent_symlink_escape() -> Result<(), Box<dyn std::error:
 async fn shell_emits_output_before_exit() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        return Ok(());
+    }
     let (sender, mut receiver) = mpsc::channel(64);
     let command = tokio::spawn(async move {
         tools
@@ -786,6 +775,9 @@ async fn shell_emits_output_before_exit() -> Result<(), Box<dyn std::error::Erro
 async fn shell_exit_stops_background_descendants() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        return Ok(());
+    }
     let result = tokio::time::timeout(Duration::from_secs(5), tools.execute("shell",
         r#"{"command":"while true; do echo tick >>ticks.txt; sleep 0.05; done & while [ ! -s ticks.txt ]; do sleep 0.01; done"}"#,
         &CancellationToken::new(), "shell", None)).await?;
@@ -794,177 +786,6 @@ async fn shell_exit_stops_background_descendants() -> Result<(), Box<dyn std::er
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(ticks, std::fs::read(workspace.path().join("ticks.txt"))?);
     Ok(())
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn powershell_nonzero_exit_output_caps_and_streaming()
--> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
-    let cancel = CancellationToken::new();
-    let result = success(
-        tools
-            .execute(
-                "shell",
-                r#"{"command":"[Console]::Write('out'); [Console]::Error.Write('err'); exit 7"}"#,
-                &cancel,
-                "exit",
-                None,
-            )
-            .await,
-    )?;
-    assert!(
-        matches!(result, ToolResultOutput::Json { value } if value["exit_status"] == 7 && value["stdout"] == "out" && value["stderr"] == "err" && value["timed_out"] == false && value["interpreter"]["dialect"] == "powershell")
-    );
-    let result = success(
-        tools
-            .execute(
-                "shell",
-                r#"{"command":"[Console]::Write(('x' * 40000)); [Console]::Error.Write(('y' * 40000))"}"#,
-                &cancel,
-                "cap",
-                None,
-            )
-            .await,
-    )?;
-    let ToolResultOutput::Json { value } = result else {
-        return Err("expected shell output".into());
-    };
-    for stream in ["stdout", "stderr"] {
-        assert_eq!(
-            value[stream].as_str().ok_or("missing stream")?.len(),
-            MAX_OUTPUT_BYTES
-        );
-        assert_eq!(value[format!("{stream}_truncated")], true);
-    }
-    let (sender, mut receiver) = mpsc::channel(64);
-    let command = tokio::spawn(async move {
-        tools
-            .execute(
-                "shell",
-                r#"{"command":"[Console]::Write('first'); Start-Sleep -Seconds 2; [Console]::Write('second')"}"#,
-                &CancellationToken::new(),
-                "stream",
-                Some(&sender),
-            )
-            .await
-    });
-    let first = tokio::time::timeout(Duration::from_secs(10), receiver.recv())
-        .await?
-        .ok_or("missing live output")?;
-    assert!(matches!(first, RunEvent::ToolOutputDelta { text, .. } if text.contains("first")));
-    assert!(!command.is_finished());
-    assert!(
-        matches!(success(command.await?)?, ToolResultOutput::Json { value } if value["stdout"] == "firstsecond")
-    );
-    Ok(())
-}
-
-#[cfg(windows)]
-async fn assert_windows_descendant_cleanup(action: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    std::fs::write(
-        workspace.path().join("child.ps1"),
-        "Add-Content ticks.txt tick\n[Console]::WriteLine('ready')\nwhile ($true) { Add-Content ticks.txt tick; Start-Sleep -Milliseconds 50 }",
-    )?;
-    let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
-    let cancel = CancellationToken::new();
-    let task_cancel = cancel.clone();
-    let (sender, mut receiver) = mpsc::channel(64);
-    let command = if action == "exit" {
-        // The shell exits normally while its background child owns a file.
-        "Start-Process powershell.exe -ArgumentList '-NoProfile -NonInteractive -File child.ps1' -NoNewWindow; while (!(Test-Path ticks.txt)) { Start-Sleep -Milliseconds 20 }; [Console]::WriteLine('ready')"
-    } else {
-        "& powershell.exe -NoProfile -NonInteractive -File child.ps1"
-    };
-    let timeout = if action == "timeout" { 3 } else { 30 };
-    let task = tokio::spawn(async move {
-        tools
-            .execute(
-                "shell",
-                &serde_json::json!({"command":command, "timeout":timeout}).to_string(),
-                &task_cancel,
-                "shell",
-                Some(&sender),
-            )
-            .await
-    });
-    let ready = tokio::time::timeout(Duration::from_secs(10), async {
-        while let Some(event) = receiver.recv().await {
-            if matches!(event, RunEvent::ToolOutputDelta {text, ..} if text.contains("ready")) {
-                return Ok::<(), String>(());
-            }
-        }
-        Err("shell exited before descendant started".to_string())
-    })
-    .await;
-    if !matches!(ready, Ok(Ok(()))) {
-        cancel.cancel();
-        task.await?;
-        return Err("descendant did not start".into());
-    }
-    match action {
-        "cancel" => cancel.cancel(),
-        "drop" => task.abort(),
-        _ => {}
-    }
-    let result = tokio::time::timeout(Duration::from_secs(10), task).await?;
-    match action {
-        "cancel" => assert!(result?.is_error()),
-        "drop" => assert!(result.is_err_and(|error| error.is_cancelled())),
-        "timeout" => assert!(
-            matches!(success(result?)?, ToolResultOutput::Json {value} if value["timed_out"] == true)
-        ),
-        "exit" => {
-            success(result?)?;
-        }
-        _ => return Err("unknown cleanup action".into()),
-    }
-    let ticks_path = workspace.path().join("ticks.txt");
-    // Aborting the future drops the job guard, but Windows termination and
-    // pending I/O cancellation finish asynchronously. Observe file release
-    // within a fixed bound; the stability assertion still rejects a live writer.
-    // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess
-    let ticks = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match std::fs::read(&ticks_path) {
-                Ok(bytes) => return Ok(bytes),
-                Err(error) if action == "drop" && error.raw_os_error() == Some(32) => {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    })
-    .await??;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(ticks, std::fs::read(&ticks_path)?);
-    Ok(())
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn powershell_cancellation_stops_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    assert_windows_descendant_cleanup("cancel").await
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn powershell_timeout_stops_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    assert_windows_descendant_cleanup("timeout").await
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn powershell_exit_stops_background_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    assert_windows_descendant_cleanup("exit").await
-}
-
-#[cfg(windows)]
-#[tokio::test]
-async fn dropped_powershell_future_stops_descendants() -> Result<(), Box<dyn std::error::Error>> {
-    assert_windows_descendant_cleanup("drop").await
 }
 
 #[tokio::test]
@@ -1024,8 +845,81 @@ fn persistence_failure_after_temporary_write_retains_uncertainty()
     let path = workspace.path().join("note.txt");
     fs::write(&path, "newer content")?;
     let mut effect = EffectStatus::NotExecuted;
-    assert!(persist_text(&path, b"replacement", Some(b"stale content"), &mut effect).is_err());
+    assert!(
+        persist_text(
+            workspace.path(),
+            &path,
+            b"replacement",
+            Some(b"stale content"),
+            &mut effect
+        )
+        .is_err()
+    );
     assert_eq!(effect, EffectStatus::Unknown);
     assert_eq!(fs::read_to_string(&path)?, "newer content");
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_and_edit_honor_readonly_file_in_writable_directory()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = TempDir::new()?;
+    let tools = WorkspaceTools::new(fixture.path(), ToolMode::Coding)?;
+    let note = fixture.path().join("note");
+    fs::write(&note, "original")?;
+    let original = fs::metadata(&note)?.permissions();
+    let mut readonly = original.clone();
+    readonly.set_readonly(true);
+    fs::set_permissions(&note, readonly)?;
+    for (name, args) in [
+        (
+            "write",
+            serde_json::json!({"path":"note","content":"changed"}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path":"note","edits":[{"oldText":"original","newText":"changed"}]}),
+        ),
+    ] {
+        let (output, effect) = tools
+            .execute_with_effect(
+                name,
+                &args.to_string(),
+                &CancellationToken::new(),
+                "readonly",
+                None,
+            )
+            .await;
+        assert!(output.is_error());
+        assert_eq!(effect, EffectStatus::NotExecuted);
+        assert_eq!(fs::read_to_string(&note)?, "original");
+    }
+    fs::set_permissions(note, original)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn interrupted_shell_keeps_partial_effect_unknown() -> Result<(), Box<dyn std::error::Error>>
+{
+    let workspace = TempDir::new()?;
+    let tools = WorkspaceTools::new(workspace.path(), ToolMode::Coding)?;
+    if tools.interpreter().is_none() {
+        return Ok(());
+    }
+    let (_, effect) = tools
+        .execute_with_effect(
+            "shell",
+            r#"{"command":"printf partial > note; kill -TERM $$"}"#,
+            &CancellationToken::new(),
+            "interrupted",
+            None,
+        )
+        .await;
+    assert_eq!(effect, EffectStatus::Unknown);
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("note"))?,
+        "partial"
+    );
     Ok(())
 }

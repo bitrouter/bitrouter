@@ -177,7 +177,7 @@ pub(crate) struct CorrelateAndBeginResult {
     pub guarded_route: Option<GuardedRouteResult>,
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub(crate) struct OutboxBatchItem {
     pub outbox_id: String,
     pub owner_user_id: String,
@@ -1029,7 +1029,7 @@ impl TrajectoryStore {
             .collect()
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn pending_outbox_batch(&self, limit: usize) -> Result<Vec<OutboxBatchItem>> {
         if limit == 0 || limit > MAX_OUTBOX_BATCH_SIZE {
             anyhow::bail!(
@@ -1048,7 +1048,7 @@ impl TrajectoryStore {
         Ok(rows.into_iter().map(stored_outbox_batch_item).collect())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn pending_outbox_count(&self) -> Result<u64> {
         outbox_entity::Entity::find()
             .filter(legacy_scope("trajectory_outbox"))
@@ -1058,7 +1058,7 @@ impl TrajectoryStore {
             .map_err(Into::into)
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn record_outbox_attempt(
         &self,
         owner_user_id: &str,
@@ -3251,7 +3251,7 @@ pub(super) fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> 
     })
 }
 
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
     let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
         .ok()
@@ -3341,7 +3341,7 @@ mod tests {
     use super::*;
     use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::trajectory::replay::replay_episode;
     use crate::trajectory::types::*;
 
@@ -3947,7 +3947,7 @@ mod tests {
             committed.intent.trajectory_snapshot_digest,
             factual_prefix.evidence_digest
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         assert_eq!(
             replay_episode(
                 &store,

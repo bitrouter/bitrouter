@@ -157,8 +157,6 @@ async fn exercise(database_url: &str) -> Result<()> {
 
         write_auth(&connection, &fixture).await?;
         write_evolution(&connection, &fixture).await?;
-        #[cfg(feature = "core")]
-        exercise_reliability(&connection, &fixture).await?;
         write_metering(&connection, &fixture).await?;
         write_trajectory(&connection, &fixture).await?;
         check_auth(&connection, &fixture).await?;
@@ -468,68 +466,6 @@ async fn check_evolution(connection: &DatabaseConnection, fixture: &Fixture) -> 
         ensure!(row.session_key == session_key && row.revision == revision);
         ensure!(serde_json::from_str::<serde_json::Value>(&row.body)? == body);
     }
-    Ok(())
-}
-
-#[cfg(feature = "core")]
-async fn exercise_reliability(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
-    use bitrouter::core::adequacy::reliability::{
-        ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
-    };
-    use bitrouter::core::adequacy::store::{AdequacyStore, ReliabilityAppendOutcome};
-
-    let store = AdequacyStore::new(connection.clone());
-    let event = ReliabilityEvent {
-        request_id: fixture.id("reliability-request"),
-        route_key: fixture.id("route"),
-        endpoint_key: ReliabilityKey {
-            provider: fixture.id("provider"),
-            model: fixture.id("model"),
-            credential_class: "api-key".into(),
-            endpoint_scope: "fixture.invalid:443".into(),
-            protocol: "responses".into(),
-        },
-        observation: ReliabilityObservation::TransientFailure,
-        half_open_probe: false,
-        observed_at_unix: 100,
-    };
-    let (first, concurrent) = tokio::join!(
-        store.append_reliability_event(&event),
-        store.append_reliability_event(&event),
-    );
-    let outcomes = [first?, concurrent?];
-    ensure!(
-        outcomes
-            .iter()
-            .filter(|outcome| **outcome == ReliabilityAppendOutcome::Inserted)
-            .count()
-            == 1,
-        "exactly one writer must report a new reliability event"
-    );
-    ensure!(outcomes.contains(&ReliabilityAppendOutcome::Duplicate));
-    let original: Vec<_> = store
-        .load_reliability_events()
-        .await?
-        .into_iter()
-        .filter(|row| row.event.request_id == event.request_id)
-        .collect();
-    ensure!(original.len() == 1 && original[0].event == event);
-    let mut retry = event.clone();
-    retry.observed_at_unix = 101;
-    ensure!(
-        store.append_reliability_event(&retry).await? == ReliabilityAppendOutcome::Duplicate,
-        "a retry observation timestamp does not create another event"
-    );
-    let mut conflict = event.clone();
-    conflict.observation = ReliabilityObservation::Success;
-    ensure!(store.append_reliability_event(&conflict).await.is_err());
-    let retained: Vec<_> = store
-        .load_reliability_events()
-        .await?
-        .into_iter()
-        .filter(|row| row.event.request_id == event.request_id)
-        .collect();
-    ensure!(retained == original, "retries changed reliability evidence");
     Ok(())
 }
 

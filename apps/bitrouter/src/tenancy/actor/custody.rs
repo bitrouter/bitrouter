@@ -298,8 +298,6 @@ mod fairness_tests {
 #[derive(Clone, Copy)]
 enum Policy {
     Management,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    Native,
     CredentialRead,
     Receipt,
     TerminalReceipt,
@@ -333,8 +331,6 @@ impl Worker {
     ) {
         // The owning frame is outside every fallible transaction continuation.
         let _owner = &self.owner;
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let paid_recovery = crate::tenancy::learning::store::recovery::Bootstrap::default();
         let result = AssertUnwindSafe(async {
             let started = std::time::Instant::now();
             let mut directory_snapshot = None;
@@ -468,10 +464,6 @@ impl Worker {
                 let volume = self.owner.as_ref().and_then(|owner| owner.path.parent());
                 let free = crate::tenancy::receipts::capacity::free_space(volume)
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                #[cfg(all(feature = "core", feature = "harness"))]
-                paid_recovery
-                    .inventory(&inventory)
-                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 self.admission
                     .initialize_receipts(inventory, free)
                     .map_err(|code| self.unavailable(code))?;
@@ -480,12 +472,7 @@ impl Worker {
                     outcome = "started",
                     "tenant startup validation"
                 );
-                self.learning_startup(
-                    &control,
-                    #[cfg(all(feature = "core", feature = "harness"))]
-                    &paid_recovery,
-                )
-                .await?;
+                self.learning_startup(&control).await?;
                 tracing::info!(
                     phase = "obligations",
                     outcome = "started",
@@ -497,14 +484,6 @@ impl Worker {
             let result = self
                 .supervise(work, &control, None, Policy::Management, None)
                 .await;
-            #[cfg(all(feature = "core", feature = "harness"))]
-            let result = match paid_recovery.settle(self.proof.disposition()) {
-                Ok(()) => result,
-                Err(_) => {
-                    self.proof.quarantine();
-                    Err(self.unavailable(ErrorCode::StorageUnavailable))
-                }
-            };
             // The privileged manifest contains plaintext definitions. It is
             // bootstrap work, not actor state retained for the serving lifetime.
             drop(import);
@@ -715,21 +694,12 @@ impl Worker {
                 Turn::Queue(None) => break,
             };
             let control = self.control();
-            #[cfg(all(test, feature = "core"))]
+            #[cfg(all(test, feature = "eval-publication"))]
             let control = {
                 use crate::tenancy::transaction::JobTarget;
                 control.with_test_target(match &job {
                     Job::Eval(_) => Some(JobTarget::Eval),
                     Job::Settlement(_) => Some(JobTarget::Settlement),
-                    #[cfg(feature = "harness")]
-                    Job::Native(message)
-                        if matches!(
-                            &message.request,
-                            crate::tenancy::session::Request::Load(_)
-                        ) =>
-                    {
-                        Some(JobTarget::NativeLoad)
-                    }
                     _ => None,
                 })
             };
@@ -928,95 +898,6 @@ impl Worker {
                     // after a confirmed rollback; an ambiguous actor never releases either.
                     drop(owner);
                 }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::Learning(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_learning(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    message.work.settled(self.proof.disposition());
-                    let crate::tenancy::learning::queue::Job {
-                        work,
-                        reply,
-                        _read: read,
-                        ..
-                    } = *message;
-                    let _ = reply.send(result);
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((work, read));
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::Capture(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_capture(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::OwnedEval,
-                            None,
-                        )
-                        .await;
-                    let crate::tenancy::capture::queue::Job {
-                        binding,
-                        request,
-                        reply,
-                        _read: read,
-                        ..
-                    } = *message;
-                    if reply
-                        .send(crate::tenancy::capture::queue::Outcome {
-                            result,
-                            disposition: self.proof.disposition(),
-                        })
-                        .is_err()
-                    {
-                        tracing::debug!(
-                            "capture operation completed without its response receiver"
-                        );
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((binding, request, read));
-                }
-                #[cfg(all(feature = "core", feature = "harness"))]
-                Job::Native(message) => {
-                    let result = self
-                        .supervise(
-                            self.execute_native_journal(&message, &control),
-                            &control,
-                            message.deadline,
-                            Policy::Native,
-                            None,
-                        )
-                        .await;
-                    let crate::tenancy::session::Job {
-                        request,
-                        reply,
-                        _read: read,
-                        ..
-                    } = *message;
-                    if reply
-                        .send(crate::tenancy::session::Outcome {
-                            result,
-                            disposition: self.proof.disposition(),
-                        })
-                        .is_err()
-                    {
-                        tracing::debug!("native journal completed without a response receiver");
-                    }
-                    if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety, completions).await;
-                    }
-                    drop((request, read));
-                }
                 Job::Command(message) => {
                     let Message {
                         caller,
@@ -1205,7 +1086,7 @@ impl Worker {
                         }
                     }
                 }
-                #[cfg(feature = "core")]
+                #[cfg(feature = "eval-publication")]
                 Job::Settlement(message) => {
                     let result = self
                         .supervise(
@@ -1295,9 +1176,6 @@ impl Worker {
                             Policy::Management => !control.preparing_read(),
                             Policy::Receipt | Policy::TerminalReceipt => true,
                             Policy::CredentialRead => false,
-                            #[cfg(all(feature = "core", feature = "harness"))]
-                            Policy::Native => matches!(control.phase(), Phase::Committing)
-                                || self.proof.disposition() == Disposition::Committed,
                             Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
                                 || self.proof.disposition() == Disposition::Committed,
                         };
@@ -1438,34 +1316,6 @@ impl Job {
             Self::ReceiptRead(read) => {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
             }
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::Learning(message) => {
-                // An already quarantined actor cannot attest the pending H phase.
-                message.work.settled(Disposition::Ambiguous);
-                let _ = message
-                    .reply
-                    .send(Err(ErrorCode::AuthorityUnavailable.into()));
-            }
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::Capture(message) => {
-                if message
-                    .reply
-                    .send(crate::tenancy::capture::queue::Outcome::rejected())
-                    .is_err()
-                {
-                    tracing::debug!("rejected capture had no response receiver");
-                }
-            }
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Self::Native(message) => {
-                if message
-                    .reply
-                    .send(crate::tenancy::session::Outcome::rejected())
-                    .is_err()
-                {
-                    tracing::debug!("rejected native journal had no response receiver");
-                }
-            }
             Self::Command(message) => {
                 let error = Failure::new(
                     ErrorCode::AuthorityUnavailable,
@@ -1484,7 +1334,7 @@ impl Job {
                     tracing::debug!("rejected evaluation had no response receiver");
                 }
             }
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             Self::Settlement(message) => {
                 message.observation.fail();
                 if message

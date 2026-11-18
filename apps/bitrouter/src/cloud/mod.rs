@@ -82,49 +82,6 @@ pub fn default_manager() -> Result<Arc<CredentialManager>> {
     Ok(Arc::new(manager))
 }
 
-/// One lazily constructed account manager shared by the Cloud consumers of a
-/// standalone ACP invocation. Construction does not read the credential store;
-/// resolution remains best-effort at each consumer boundary.
-#[cfg(feature = "harness")]
-#[derive(Clone)]
-pub(crate) struct StandaloneCloudCredentials {
-    manager: Option<Arc<CredentialManager>>,
-}
-
-#[cfg(feature = "harness")]
-impl StandaloneCloudCredentials {
-    /// Construct the invocation-scoped manager once. A path-construction
-    /// failure preserves the existing best-effort fallback behavior.
-    pub(crate) fn new() -> Self {
-        Self {
-            manager: default_manager().ok(),
-        }
-    }
-
-    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
-    pub(crate) fn with_manager(manager: Arc<CredentialManager>) -> Self {
-        Self {
-            manager: Some(manager),
-        }
-    }
-
-    /// Resolve the stored account bearer for ACP routing, when available.
-    pub(crate) async fn routing_fallback(&self, target_base_url: &str) -> Option<String> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_for_base_url_with_manager(manager, target_base_url).await
-    }
-
-    /// Build the account telemetry source from the same invocation manager.
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    pub(crate) async fn telemetry_bearer(
-        &self,
-        endpoint: &str,
-    ) -> Option<Arc<dyn TelemetryBearer>> {
-        let manager = self.manager.as_ref()?.clone();
-        cloud_bearer_source(manager, endpoint).await
-    }
-}
-
 /// Register the BitRouter Cloud applier on `appliers` when the `bitrouter`
 /// provider appears in `config.providers`. No-op otherwise.
 pub fn register_if_configured(

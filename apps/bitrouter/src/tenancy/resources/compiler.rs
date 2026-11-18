@@ -61,15 +61,10 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
     prepare_current_route(import, policy)
 }
 
-pub(super) fn prepare_bro_capture_route(
+pub(super) fn prepare_current_route(
     import: &Import,
     policy: Option<&Artifact>,
 ) -> Result<RouteEnvelope> {
-    import.definition.require_bro_capture()?;
-    prepare_current_route(import, policy)
-}
-
-fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<RouteEnvelope> {
     let (routing, selector, policy_ref, credentials, exploration, block) = match &import.definition
     {
         Definition::Route {

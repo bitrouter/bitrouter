@@ -183,12 +183,6 @@ pub(super) fn cancellation(ctx: &PipelineContext) -> Result<tokio_util::sync::Ca
     let Some(execution) = execution(ctx) else {
         return Ok(tokio_util::sync::CancellationToken::new());
     };
-    #[cfg(all(feature = "core", feature = "harness"))]
-    if let Some(gate) = execution.choice_gate()? {
-        // Owner cancellation also cancels this gate; the Choice driver can
-        // independently cancel it while retaining the child's receipt/ACK work.
-        return Ok(gate.cancellation());
-    }
     Ok(execution.receipt_owner()?.cancelled.clone())
 }
 

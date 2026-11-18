@@ -57,16 +57,6 @@ async fn authenticated_old_policy_bytes_are_refused_on_every_current_open() -> R
     assert!(resources.validate_compiled(&historical).is_err());
     assert!(resources.validate_executable(&historical).is_err());
     assert!(resources.open_execution(&historical).is_err());
-    #[cfg(all(feature = "core", feature = "harness"))]
-    {
-        let check = || Ok(());
-        let budget = crate::storage::operation_budget::OperationBudget::new(&check);
-        assert!(
-            resources
-                .open_obligation_recovery(&historical, &budget)
-                .is_err()
-        );
-    }
     Ok(())
 }
 

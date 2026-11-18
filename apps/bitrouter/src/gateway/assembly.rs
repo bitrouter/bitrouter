@@ -139,57 +139,6 @@ pub struct App {
 }
 
 impl App {
-    #[cfg(feature = "core")]
-    pub(crate) fn require_legacy_core(
-        &self,
-    ) -> std::result::Result<(), bitrouter_ai::core::protocol::CoreError> {
-        if self.tenancy.is_some() {
-            return Err(bitrouter_ai::core::protocol::CoreError::rejected(
-                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
-                "tenant Core requires the authenticated native harness",
-            ));
-        }
-        Ok(())
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn native_session_service(
-        &self,
-    ) -> std::result::Result<crate::tenancy::Service, bitrouter_ai::core::protocol::CoreError> {
-        self.tenancy.clone().ok_or_else(|| {
-            bitrouter_ai::core::protocol::CoreError::rejected(
-                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
-                "authenticated native harness requires tenancy",
-            )
-        })
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) async fn execute_native_owned(
-        &self,
-        step: &crate::tenancy::execution::session::StepBinding,
-        prompt: bitrouter_ai::types::Prompt,
-        headers: http::HeaderMap,
-        control: std::sync::Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
-    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::PipelineResponse> {
-        let service = self
-            .tenancy
-            .as_ref()
-            .ok_or_else(|| crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
-        service
-            .execute_session_native(step, prompt, headers, control)
-            .await
-    }
-
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn capture_service(
-        &self,
-    ) -> std::result::Result<crate::tenancy::Service, anyhow::Error> {
-        self.tenancy
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("authenticated capture requires tenancy"))
-    }
-
     pub(crate) fn owned_inference_router(&self, router: axum::Router) -> axum::Router {
         match &self.tenancy {
             Some(service) => router.layer(axum::middleware::from_fn_with_state(

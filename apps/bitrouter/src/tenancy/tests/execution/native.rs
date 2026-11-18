@@ -56,15 +56,11 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-mod capture;
 mod continuation;
 pub(in crate::tenancy) mod counting;
 mod lifetime;
 mod limits;
 mod receipts_authority;
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-mod session;
 
 #[cfg(not(unix))]
 #[test]

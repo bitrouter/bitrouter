@@ -115,9 +115,15 @@ pub(super) async fn validate_role(db: &impl ConnectionTrait, owner: Owner) -> Re
             "SELECT version, typeof(applied_at) AS clock_type FROM seaql_migrations LIMIT 2",
         ))
         .await?;
+    ensure!(rows.len() == 1, "wrong product format marker");
+    let version: String = rows[0].try_get("", "version")?;
+    let sealed = owner == Owner::Bro
+        && version
+            .strip_prefix(owner.marker())
+            .and_then(|v| v.strip_prefix(":sealed-v1:"))
+            .is_some_and(|v| bitrouter_ai::core::checkpoint::validate_digest(v).is_ok());
     ensure!(
-        rows.len() == 1
-            && rows[0].try_get::<String>("", "version")? == owner.marker()
+        (version == owner.marker() || sealed)
             && rows[0].try_get::<String>("", "clock_type")? == "integer",
         "wrong product format marker"
     );

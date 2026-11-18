@@ -11,17 +11,17 @@ fn run_json(config: &Path, args: &[&str]) -> Result<serde_json::Value> {
         .arg("--config")
         .arg(config)
         .output()
-        .with_context(|| format!("running bro {}", args.join(" ")))?;
+        .with_context(|| format!("running bitrouter {}", args.join(" ")))?;
     ensure!(
         output.status.success(),
-        "bro {} failed with {}: stderr={} stdout={}",
+        "bitrouter {} failed with {}: stderr={} stdout={}",
         args.join(" "),
         output.status,
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout)
     );
     serde_json::from_slice(&output.stdout)
-        .with_context(|| format!("bro {} did not emit JSON", args.join(" ")))
+        .with_context(|| format!("bitrouter {} did not emit JSON", args.join(" ")))
 }
 
 #[test]
@@ -44,8 +44,8 @@ providers:
 "#,
     )?;
 
-    let skill = include_str!("../../../skills/bitrouter/SKILL.md");
-    for command in ["bro status", "bro models", "bro route"] {
+    let skill = include_str!("../../../skills/bitrouter/references/diagnose.md");
+    for command in ["bitrouter status", "bitrouter models", "bitrouter route"] {
         ensure!(skill.contains(command), "shipped Skill omits `{command}`");
     }
 

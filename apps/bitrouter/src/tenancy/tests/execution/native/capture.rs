@@ -7,12 +7,6 @@ mod faults;
 #[cfg(unix)]
 mod ingress;
 mod learning;
-#[cfg(all(
-    unix,
-    feature = "core",
-    any(feature = "db-postgres", feature = "db-mysql")
-))]
-mod server;
 
 use super::*;
 use crate::{

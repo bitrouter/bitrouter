@@ -356,20 +356,6 @@ impl Definition {
         Ok(())
     }
 
-    pub(super) fn require_bro_capture(&self) -> Result<()> {
-        ensure!(
-            cfg!(all(feature = "core", feature = "harness")),
-            "BRO capture requires core and harness"
-        );
-        if let Self::Route { exploration, .. } = self {
-            ensure!(
-                exploration.is_empty(),
-                "retired route exploration is not a current BRO obligation"
-            );
-        }
-        Ok(())
-    }
-
     pub(super) fn is_admission_profile(&self) -> bool {
         matches!(
             self,

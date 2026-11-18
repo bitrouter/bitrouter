@@ -36,49 +36,6 @@ pub(crate) fn validate_tool_start_fences(fences: &[ToolStartFence]) -> Result<()
     Ok(())
 }
 
-/// A verified decode tied to immutable bytes and the limits used to admit them.
-/// Internal replay consumers can share it without accepting an arbitrary payload.
-#[cfg(feature = "harness")]
-pub(crate) struct VerifiedBatch<'a> {
-    batch: &'a CheckpointBatch,
-    limits: &'a Limits,
-    payload: CheckpointPayload,
-}
-
-#[cfg(feature = "harness")]
-impl VerifiedBatch<'_> {
-    pub(crate) fn batch(&self) -> &CheckpointBatch {
-        self.batch
-    }
-
-    pub(crate) fn payload(&self) -> &CheckpointPayload {
-        &self.payload
-    }
-
-    pub(crate) fn validate_append(
-        &self,
-        grant: &OwnershipGrant,
-        head: &DurableHead,
-        limits: &Limits,
-        available: &BTreeMap<String, ArtifactRef>,
-        retained_ack: Option<&CheckpointAck>,
-    ) -> Result<CheckpointAck, CoreError> {
-        if self.limits != limits {
-            return Err(conflict("verified checkpoint limits changed"));
-        }
-        grant.validate()?;
-        head.validate()?;
-        validate_decoded_append(
-            self.batch,
-            &self.payload,
-            grant,
-            head,
-            available,
-            retained_ack,
-        )
-    }
-}
-
 fn validate_payload(payload: &CheckpointPayload) -> Result<(), CoreError> {
     validate_tool_start_fences(&payload.tool_start_fences)?;
     validate_id(&payload.identity.batch_id)?;
@@ -294,58 +251,6 @@ impl CheckpointBatchExt for CheckpointBatch {
         let ack = validate_decoded_append(self, &payload, grant, head, available, retained_ack)?;
         Ok((ack, payload))
     }
-}
-
-#[cfg(feature = "harness")]
-pub(crate) fn verified_batch<'a>(
-    batch: &'a CheckpointBatch,
-    limits: &'a Limits,
-) -> Result<VerifiedBatch<'a>, CoreError> {
-    Ok(VerifiedBatch {
-        batch,
-        limits,
-        payload: batch.decode(limits)?,
-    })
-}
-
-/// Check a projected payload length without allocating its base64 bytes.
-/// Base64 contains no JSON-escaped characters, so the empty wire envelope
-/// plus its encoded length gives the exact transport size.
-#[cfg(feature = "core")]
-pub(crate) fn check_projected_size(
-    identity: &BatchIdentity,
-    payload_bytes: u64,
-    limits: &Limits,
-) -> Result<(), CoreError> {
-    if payload_bytes > limits.checkpoint_bytes {
-        return Err(CoreError::rejected(
-            ErrorCode::LimitExceeded,
-            "checkpoint cleanup capacity exhausted",
-        ));
-    }
-    let encoded = payload_bytes
-        .checked_add(2)
-        .and_then(|bytes| (bytes / 3).checked_mul(4))
-        .ok_or_else(|| {
-            CoreError::rejected(ErrorCode::LimitExceeded, "checkpoint size exhausted")
-        })?;
-    let envelope = CheckpointBatch {
-        identity: identity.clone(),
-        payload_encoding: "base64-json".into(),
-        payload_bytes: String::new(),
-        payload_sha256: "0".repeat(64),
-    };
-    if envelope
-        .wire_bytes()?
-        .checked_add(encoded)
-        .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
-    {
-        return Err(CoreError::rejected(
-            ErrorCode::LimitExceeded,
-            "checkpoint cleanup wire capacity exhausted",
-        ));
-    }
-    Ok(())
 }
 
 fn check_wire_limit(batch: &CheckpointBatch, limits: &Limits) -> Result<(), CoreError> {

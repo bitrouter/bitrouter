@@ -2,8 +2,6 @@
 //!
 //! Assembly layer: turns a [`crate::config::Config`] into a running
 //! [`crate::gateway::assembly::App`], and carries the management-command logic.
-//! The external-agent ACP controller, client and process transport live in
-//! `crate::harness::acp`; this app assembles their product adapters.
 //!
 //! Foreground custom hosts register typed capabilities through
 //! [`crate::gateway::extensions::registry::ExtensionApi`] and [`host::serve_with_extensions`],
@@ -15,25 +13,11 @@
 //! never depends back on this product host; `main.rs` is the CLI entry point.
 
 #![forbid(unsafe_code)]
-// Owned sessions retain MCP resources through Core's continuation owners. The
-// complete Send/Sync proof exceeds rustc's default trait-query recursion depth.
 #![recursion_limit = "256"]
 
-#[cfg(feature = "harness")]
-pub mod acp_cli;
 pub mod acp_trajectory;
 pub mod actions;
 pub mod administration_target;
-#[cfg(feature = "harness")]
-pub mod agent_api;
-#[cfg(feature = "harness")]
-pub mod agent_registry;
-#[cfg(feature = "harness")]
-pub mod agent_sessions;
-#[cfg(feature = "harness")]
-pub mod agent_store;
-#[cfg(feature = "harness")]
-pub mod agents;
 pub mod artifact;
 pub mod assemble;
 pub mod auth;
@@ -43,16 +27,10 @@ pub mod cloud;
 mod codex_router;
 pub mod commands;
 pub mod config;
-#[cfg(feature = "harness")]
-pub mod config_synthesis;
-#[cfg(feature = "harness")]
-pub mod conformance;
 pub mod connected_agents;
 pub mod contexts;
 pub mod continuation;
 pub mod control_output;
-#[cfg(feature = "core")]
-pub mod core;
 pub mod daemon;
 pub mod daemon_handoff;
 pub mod daemon_locator;
@@ -60,28 +38,14 @@ pub mod db;
 pub mod error_report;
 pub mod eval;
 pub mod gateway;
-#[cfg(feature = "harness")]
-pub mod gateways;
-#[cfg(feature = "harness")]
-pub mod harness;
 pub mod host;
-#[cfg(feature = "harness")]
-mod local_cli;
-#[cfg(feature = "harness")]
-pub mod managed_store;
-pub mod managed_task;
 pub mod mcp_config;
 pub mod mcp_registry;
 pub mod metering;
 mod model_policy;
-#[cfg(feature = "harness")]
-pub mod native_acp;
-pub mod thread_cli;
 
 pub mod offline;
 pub mod onboarding;
-#[cfg(feature = "core")]
-pub mod orchestrator_api;
 pub mod output;
 pub mod paths;
 pub mod policy;
@@ -97,8 +61,6 @@ mod runtime_crypto;
 pub mod session_diagnostics;
 pub mod session_identity;
 pub mod skills;
-#[cfg(feature = "harness")]
-pub mod spawn;
 pub mod storage;
 pub mod style;
 mod tenancy;
@@ -112,7 +74,7 @@ pub mod upgrade_preflight;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 
-/// Crate version string, surfaced by `bro --version`.
+/// Crate version string, surfaced by `bitrouter --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Build fingerprint of the local handoff and migration contract.
 pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");

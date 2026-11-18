@@ -14,8 +14,6 @@ enum State {
 
 struct Shared {
     state: Mutex<State>,
-    #[cfg(all(test, feature = "core", feature = "harness"))]
-    closing: tokio::sync::Notify,
 }
 
 /// Both the outer MCP owner and its handshake/service facade retain this state.
@@ -27,8 +25,6 @@ impl Owner {
     pub(super) fn new(transport: Http) -> Self {
         Self(Arc::new(Shared {
             state: Mutex::new(State::Open(Box::new(transport))),
-            #[cfg(all(test, feature = "core", feature = "harness"))]
-            closing: tokio::sync::Notify::new(),
         }))
     }
 
@@ -54,8 +50,6 @@ impl Owner {
                             .map_err(|_| "MCP HTTP worker did not join cleanly".into())
                     }));
                 }
-                #[cfg(all(test, feature = "core", feature = "harness"))]
-                self.0.closing.notify_one();
             }
             match &mut *state {
                 State::Closing(close) => match close.as_mut().poll(cx) {
@@ -70,11 +64,6 @@ impl Owner {
             }
         })
         .await
-    }
-
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(super) fn observe(&self) -> Probe {
-        Probe(Arc::downgrade(&self.0))
     }
 }
 
@@ -142,32 +131,3 @@ impl Transport<RoleClient> for Owner {
 
 // Weak inspection of the actual retained transport/close future. It owns no
 // worker and cannot mark cleanup complete, cancel it, or drive a separate join.
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-pub(super) struct Probe(std::sync::Weak<Shared>);
-
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-impl Probe {
-    #[cfg(unix)]
-    pub(super) async fn closing(&self) -> Result<(), String> {
-        let shared = self.0.upgrade().ok_or("HTTP worker owner was lost")?;
-        loop {
-            let notified = shared.closing.notified();
-            if !matches!(
-                &*shared.state.lock().map_err(|_| "HTTP owner poisoned")?,
-                State::Open(_)
-            ) {
-                return Ok(());
-            }
-            notified.await;
-        }
-    }
-
-    pub(super) fn joined(&self) -> Result<bool, String> {
-        let shared = self.0.upgrade().ok_or("HTTP worker owner was lost")?;
-        let state = shared.state.lock().map_err(|_| "HTTP owner poisoned")?;
-        match &*state {
-            State::Closed(result) => result.clone().map(|()| true),
-            _ => Ok(false),
-        }
-    }
-}

@@ -287,17 +287,3 @@ pub(crate) async fn review_in(
         evidence,
     ))
 }
-
-/// Bounded historical namespace data; this cannot construct a live host binding.
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) fn recovery_prefix(bytes: &str) -> Result<super::Prefix> {
-    ensure!(bytes.len() <= MANIFEST_BYTES, "paid checkpoint bound");
-    let manifest: Manifest = serde_json::from_str(bytes)?;
-    ensure!(
-        manifest.version == 1
-            && manifest.prefix_digest == manifest.prefix.digest()?
-            && io::json(&manifest, MANIFEST_BYTES)? == bytes,
-        "paid checkpoint encoding"
-    );
-    Ok(manifest.prefix)
-}

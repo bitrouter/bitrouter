@@ -1,21 +1,18 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-#[cfg(any(feature = "core", feature = "harness"))]
 use self::evidence::EvidenceBlock;
 use super::SessionSnapshot;
 use crate::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
 use crate::gateway::model::decision::types::{DecisionError, DecisionRequest, DecisionResponse};
 use crate::gateway::pipeline::native::NativePlan;
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
-#[cfg(any(feature = "core", feature = "harness"))]
 use bitrouter_ai::types::Content;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod action;
 pub mod evidence;
 pub mod inspection;
-#[cfg(any(feature = "core", feature = "harness"))]
 pub(crate) mod validation;
 pub mod view;
 
@@ -121,7 +118,6 @@ pub(crate) fn enabled(state: &SessionSnapshot) -> bool {
 
 /// Opaque provider continuations stay with their originating conversation.
 /// Related tasks can share plain text and complete ordinary tool exchanges.
-#[cfg(any(feature = "core", feature = "harness"))]
 pub(crate) fn portable(block: &EvidenceBlock) -> bool {
     if block.source.skill_binding.is_some() {
         return false;

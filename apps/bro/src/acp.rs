@@ -1,4 +1,5 @@
 //! BRO-owned, single-turn headless ACP client for gateway-bound external agents.
+mod serve;
 #[cfg(test)]
 mod tests;
 mod translate;
@@ -20,6 +21,8 @@ use wire::Peer;
 pub(crate) enum AcpCommand {
     /// Show bundled adapters and whether their headless gateway routing is available.
     List,
+    /// Supervise one ACP adapter for a local manager over stdio.
+    Serve(serve::Options),
     /// Send one prompt to a local adapter. Streams NDJSON and denies tool permission requests.
     Prompt {
         #[arg(long)]
@@ -35,12 +38,16 @@ pub(crate) enum AcpCommand {
 
 pub(crate) async fn run(
     command: AcpCommand,
-    endpoint: &str,
+    endpoint: Option<&str>,
     token: Option<&str>,
     workspace: &Path,
 ) -> Result<i32> {
     let mut out = std::io::stdout();
     match command {
+        AcpCommand::Serve(options) => {
+            serve::run(options, endpoint, token, workspace).await?;
+            Ok(0)
+        }
         AcpCommand::List => {
             for h in catalog::CATALOG {
                 let route = if h.adapter.is_some() {
@@ -60,7 +67,7 @@ pub(crate) async fn run(
         } => {
             let harness = catalog::find(&agent)?;
             let token = token.context("a gateway token is required for an ACP prompt")?;
-            let plan = Endpoint::new(harness, endpoint, token)?;
+            let plan = Endpoint::new(harness, endpoint.unwrap_or(crate::DEFAULT_ENDPOINT), token)?;
             let workspace = std::fs::canonicalize(workspace).context("opening ACP workspace")?;
             ensure!(workspace.is_dir(), "ACP workspace must be a directory");
             let mut home = tempfile::Builder::new();
@@ -120,7 +127,14 @@ fn agent_command(
     model: Option<&str>,
     home: &Path,
 ) -> Command {
-    cmd.args(harness.args).env_clear();
+    cmd.args(harness.args);
+    isolated_environment(&mut cmd, home);
+    plan.apply(&mut cmd, model);
+    cmd
+}
+
+fn isolated_environment(cmd: &mut Command, home: &Path) {
+    cmd.env_clear();
     // Forward only runtime plumbing. Provider keys, daemon config, shell hooks and agent-login
     // profiles must not cross into the adapter. session/new supplies the actual workspace.
     for key in [
@@ -149,8 +163,6 @@ fn agent_command(
         cmd.env(key, home);
     }
     cmd.current_dir(home);
-    plan.apply(&mut cmd, model);
-    cmd
 }
 
 struct Process {
@@ -166,8 +178,56 @@ impl Drop for Process {
     }
 }
 
+impl Process {
+    fn spawn(mut command: Command) -> Result<Self> {
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut wrapped = CommandWrap::from(command);
+        #[cfg(unix)]
+        wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
+        #[cfg(windows)]
+        wrapped.wrap(process_wrap::tokio::JobObject);
+        wrapped.wrap(KillOnDrop);
+        Ok(Self {
+            child: wrapped.spawn().context("starting the local ACP adapter")?,
+            reaped: false,
+        })
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        // Even an adapter that has already exited can leave a package-runner descendant.
+        #[cfg(unix)]
+        let group = self
+            .child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .context("missing ACP process group")?;
+        let kill = self.child.start_kill();
+        timeout(Duration::from_secs(3), self.child.wait())
+            .await
+            .context("ACP process cleanup timed out")??;
+        self.reaped = true;
+        if let Err(error) = kill {
+            // Darwin can return EPERM when the exited child is the last zombie in its group.
+            // Only accept a failed signal after waiting and confirming the whole group is gone.
+            #[cfg(unix)]
+            if rustix::process::test_kill_process_group(group) != Err(rustix::io::Errno::SRCH) {
+                return Err(error).context("stopping ACP process group");
+            }
+            #[cfg(not(unix))]
+            if error.kind() != std::io::ErrorKind::InvalidInput {
+                return Err(error).context("stopping ACP process tree");
+            }
+        }
+        Ok(())
+    }
+}
+
 async fn execute(
-    mut command: Command,
+    command: Command,
     plan: &Endpoint<'_>,
     token: &str,
     workspace: &Path,
@@ -175,20 +235,7 @@ async fn execute(
     deadline: Duration,
     out: &mut dyn Write,
 ) -> Result<i32> {
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut wrapped = CommandWrap::from(command);
-    #[cfg(unix)]
-    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
-    #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
-    wrapped.wrap(KillOnDrop);
-    let mut process = Process {
-        child: wrapped.spawn().context("starting the local ACP adapter")?,
-        reaped: false,
-    };
+    let mut process = Process::spawn(command)?;
     let mut peer = Peer::new(
         process.child.stdin().take().context("missing ACP stdin")?,
         process
@@ -209,31 +256,7 @@ async fn execute(
         let _ = timeout(Duration::from_millis(250), peer.cancel()).await;
     }
     drop(peer);
-    // Even an adapter that has already exited can leave a package-runner descendant.
-    #[cfg(unix)]
-    let group = process
-        .child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .and_then(rustix::process::Pid::from_raw)
-        .context("missing ACP process group")?;
-    let kill = process.child.start_kill();
-    timeout(Duration::from_secs(3), process.child.wait())
-        .await
-        .context("ACP process cleanup timed out")??;
-    process.reaped = true;
-    if let Err(error) = kill {
-        // Darwin can return EPERM when the exited child is the last zombie in its group.
-        // Only accept a failed signal after waiting and confirming the whole group is gone.
-        #[cfg(unix)]
-        if rustix::process::test_kill_process_group(group) != Err(rustix::io::Errno::SRCH) {
-            return Err(error).context("stopping ACP process group");
-        }
-        #[cfg(not(unix))]
-        if error.kind() != std::io::ErrorKind::InvalidInput {
-            return Err(error).context("stopping ACP process tree");
-        }
-    }
+    process.shutdown().await?;
     result
 }
 

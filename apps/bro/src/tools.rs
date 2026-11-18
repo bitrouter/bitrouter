@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use bitrouter_ai::types::{Tool, ToolResultOutput};
 use globset::Glob;
@@ -37,7 +38,7 @@ const MAX_GREP_LINE_CHARS: usize = 500;
 pub(crate) struct WorkspaceTools {
     root: PathBuf,
     mode: ToolMode,
-    interpreter: Option<Interpreter>,
+    interpreter: OnceLock<Option<Interpreter>>,
 }
 
 #[derive(Deserialize)]
@@ -248,11 +249,8 @@ impl ToolKind {
             Self::Write => "Create or overwrite a UTF-8 workspace file, creating parent directories as needed.".into(),
             Self::Edit => "Edit one existing workspace file. Each nonempty oldText must match exactly one non-overlapping region of the original file; all edits apply together.".into(),
             Self::Shell => {
-                let selected = interpreter.map_or_else(|| "unavailable".into(), |shell| {
-                    let dialect = match shell.dialect { "bash" => "Bash", "sh" => "POSIX sh", _ => "PowerShell" };
-                    format!("{dialect} at {}", shell.executable.display())
-                });
-                format!("Run a noninteractive command in the server workspace. Uses {selected} on the server. Commands can affect paths outside the workspace. Returns exit status and bounded stdout/stderr. timeout is in seconds (default 30, maximum 120).")
+                let selected = interpreter.map_or("unavailable", |shell| shell.launcher);
+                format!("Run a noninteractive POSIX shell command in the granted workspace using {selected}. Workspace files can be changed. The shell has a clean environment, isolated filesystem access and no external network. Returns exit status and bounded stdout/stderr. Timeout defaults to 30 seconds, maximum 120.")
             }
         }
     }
@@ -271,20 +269,31 @@ impl WorkspaceTools {
                 "workspace is not a directory",
             ));
         }
-        let interpreter = if mode == ToolMode::Coding {
-            Some(Interpreter::discover()?)
-        } else {
-            None
-        };
         Ok(Self {
             root,
             mode,
-            interpreter,
+            interpreter: OnceLock::new(),
         })
     }
 
-    pub(crate) fn allowed(mode: ToolMode, name: &str) -> bool {
-        ToolKind::lookup(name).is_ok_and(|kind| kind.read_only() || mode == ToolMode::Coding)
+    fn interpreter(&self) -> Option<&Interpreter> {
+        if self.mode != ToolMode::Coding {
+            return None;
+        }
+        self.interpreter
+            .get_or_init(|| Interpreter::discover(&self.root))
+            .as_ref()
+    }
+
+    pub(crate) fn authorize(&self, name: &str) -> Result<(), String> {
+        let kind = ToolKind::lookup(name)?;
+        if !kind.read_only() && self.mode != ToolMode::Coding {
+            return Err(format!("tool unavailable in this workspace mode: {name}"));
+        }
+        if matches!(kind, ToolKind::Shell) && self.interpreter().is_none() {
+            return Err("shell disabled: workspace sandbox unavailable".into());
+        }
+        Ok(())
     }
 
     pub(crate) fn read_only(name: &str) -> bool {
@@ -298,10 +307,10 @@ impl WorkspaceTools {
     pub(crate) fn declarations(&self) -> Vec<Tool> {
         TOOL_KINDS
             .into_iter()
-            .filter(|kind| Self::allowed(self.mode, kind.name()))
+            .filter(|kind| self.authorize(kind.name()).is_ok())
             .map(|kind| Tool::Function {
                 name: kind.name().into(),
-                description: Some(kind.description(self.interpreter.as_ref())),
+                description: Some(kind.description(self.interpreter())),
                 parameters: kind.schema(),
                 strict: Some(false),
                 provider_metadata: Default::default(),
@@ -332,46 +341,43 @@ impl WorkspaceTools {
         live: Option<&mpsc::Sender<RunEvent>>,
     ) -> (ToolResultOutput, EffectStatus) {
         let mut effect = EffectStatus::NotExecuted;
-        let result = if Self::allowed(self.mode, name) {
-            match ToolKind::lookup(name).and_then(|kind| kind.parse(arguments)) {
-                Ok(ToolArgs::Read(args)) => {
-                    let tools = self.clone();
-                    let cancel = cancel.clone();
-                    tokio::task::spawn_blocking(move || {
-                        if cancel.is_cancelled() {
-                            return Err("cancelled before reading".into());
-                        }
-                        tools.read(args)
-                    })
+        let result = match self
+            .authorize(name)
+            .and_then(|()| ToolKind::lookup(name)?.parse(arguments))
+        {
+            Ok(ToolArgs::Read(args)) => {
+                let tools = self.clone();
+                let cancel = cancel.clone();
+                tokio::task::spawn_blocking(move || {
+                    if cancel.is_cancelled() {
+                        return Err("cancelled before reading".into());
+                    }
+                    tools.read(args)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|result| result)
+            }
+            Ok(ToolArgs::Glob(args)) => {
+                let tools = self.clone();
+                let cancel = cancel.clone();
+                tokio::task::spawn_blocking(move || tools.glob(args, &cancel))
                     .await
                     .map_err(|error| error.to_string())
                     .and_then(|result| result)
-                }
-                Ok(ToolArgs::Glob(args)) => {
-                    let tools = self.clone();
-                    let cancel = cancel.clone();
-                    tokio::task::spawn_blocking(move || tools.glob(args, &cancel))
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result)
-                }
-                Ok(ToolArgs::Grep(args)) => {
-                    let tools = self.clone();
-                    let cancel = cancel.clone();
-                    tokio::task::spawn_blocking(move || tools.grep(args, &cancel))
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result)
-                }
-                Ok(ToolArgs::Write(args)) => self.write(args, &mut effect),
-                Ok(ToolArgs::Edit(args)) => self.edit(args, &mut effect),
-                Ok(ToolArgs::Shell(args)) => {
-                    self.shell(args, cancel, tool_id, live, &mut effect).await
-                }
-                Err(error) => Err(error),
             }
-        } else {
-            Err(format!("tool is unavailable in this task mode: {name}"))
+            Ok(ToolArgs::Grep(args)) => {
+                let tools = self.clone();
+                let cancel = cancel.clone();
+                tokio::task::spawn_blocking(move || tools.grep(args, &cancel))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+            }
+            Ok(ToolArgs::Write(args)) => self.write(args, &mut effect),
+            Ok(ToolArgs::Edit(args)) => self.edit(args, &mut effect),
+            Ok(ToolArgs::Shell(args)) => self.shell(args, cancel, tool_id, live, &mut effect).await,
+            Err(error) => Err(error),
         };
         match result {
             Ok(value) => (
@@ -439,7 +445,7 @@ impl WorkspaceTools {
             }
             if !parent.exists() {
                 *effect = EffectStatus::Unknown;
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                crate::durable::create_dirs(parent, false).map_err(|error| error.to_string())?;
             }
         }
         let parent = parent.canonicalize().map_err(|error| error.to_string())?;
@@ -480,46 +486,63 @@ fn workspace_walk(path: &Path) -> WalkBuilder {
 }
 
 fn persist_text(
+    workspace: &Path,
     path: &Path,
     updated: &[u8],
     original: Option<&[u8]>,
     effect: &mut EffectStatus,
 ) -> Result<(), String> {
-    let parent = path.parent().ok_or("path has no parent")?;
+    let parent = path
+        .parent()
+        .filter(|dir| dir.starts_with(workspace))
+        .ok_or("file publication outside workspace")?;
+    let overwrite = if original.is_some() {
+        // Atomic replacement requires directory permission. Also honor the
+        // existing file's write permission before staging replacement contents.
+        let mut options = fs::OpenOptions::new();
+        options.write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let target = options.open(path).map_err(|e| e.to_string())?;
+        let metadata = target.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.permissions().readonly() {
+            return Err("existing target is not a writable regular file".into());
+        }
+        atomicwrites::AllowOverwrite
+    } else {
+        atomicwrites::DisallowOverwrite
+    };
     *effect = EffectStatus::Unknown;
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
-    temporary
-        .write_all(updated)
-        .map_err(|error| error.to_string())?;
-    if original.is_some() {
-        let permissions = fs::metadata(path)
-            .map_err(|error| error.to_string())?
-            .permissions();
-        temporary
-            .as_file()
-            .set_permissions(permissions)
-            .map_err(|error| error.to_string())?;
-    }
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    match original {
-        Some(bytes) => {
-            if fs::read(path).map_err(|error| error.to_string())? != bytes {
-                return Err("file changed while preparing the edit".into());
+    crate::durable::write_file(path, overwrite, |file| {
+        file.write_all(updated)?;
+        if let Some(expected) = original {
+            file.set_permissions(fs::metadata(path)?.permissions())?;
+            if fs::read(path)? != expected {
+                return Err(std::io::Error::other(
+                    "file changed while preparing the edit",
+                ));
             }
-            temporary
-                .persist(path)
-                .map_err(|error| error.error.to_string())?;
         }
-        None => {
-            temporary
-                .persist_noclobber(path)
-                .map_err(|error| error.error.to_string())?;
-        }
+        Ok(())
+    })
+    .map_err(|error| error.to_string())?;
+    // The publisher synced the immediate parent. Flush the links to that
+    // directory as well, including directories left by an interrupted mkdir.
+    #[cfg(unix)]
+    for ancestor in parent
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(workspace))
+    {
+        fs::File::open(ancestor)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|e| e.to_string())?;
     }
+    #[cfg(windows)]
+    let _ = parent; // create_dirs published every new directory with write-through.
     Ok(())
 }
 

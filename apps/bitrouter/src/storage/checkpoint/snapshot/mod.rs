@@ -310,6 +310,51 @@ pub struct SessionSnapshot {
 }
 
 impl SessionSnapshot {
+    /// Validate the stored identity, root and context evidence against its verified
+    /// batch. The importer checks the subset of completed lifecycles it supports.
+    pub fn validate_checkpoint(
+        &self,
+        identity: &bitrouter_ai::core::checkpoint::BatchIdentity,
+        limits: &bitrouter_ai::core::protocol::Limits,
+    ) -> Result<(), bitrouter_ai::core::protocol::CoreError> {
+        use bitrouter_ai::core::protocol::{CoreError, ErrorCode, validate_id};
+        if self.session_id != identity.session_id {
+            return Err(CoreError::rejected(
+                ErrorCode::UnauthorizedScope,
+                "snapshot belongs to another session",
+            ));
+        }
+        limits.validate()?;
+        validate_id(&self.agent_id)?;
+        let root = self
+            .agents
+            .get(&self.agent_id)
+            .ok_or_else(|| context::invalid("snapshot root is absent"))?;
+        if root.agent_id != self.agent_id
+            || root.parent_id.is_some()
+            || root.depth != 0
+            || self.agents.len() > limits.agents as usize
+        {
+            return Err(context::invalid("snapshot agent tree is invalid"));
+        }
+        if let Some(run) = &self.run {
+            validate_id(&run.run_id)?;
+            validate_id(&run.agent_turn_id)?;
+            super::validation::limits_within(&run.limits, limits)?;
+        }
+        context::validation::validate(self)
+    }
+
+    /// Reject changes to immutable context evidence between two verified batches.
+    pub fn validate_context_successor(
+        &self,
+        next: &Self,
+    ) -> Result<(), bitrouter_ai::core::protocol::CoreError> {
+        let mut history = context::validation::History::default();
+        context::validation::validate_store_history(&self.context_store, &mut history)?;
+        context::validation::validate_store_history(&next.context_store, &mut history)
+    }
+
     pub fn skill_selection(
         &self,
         agent_turn_id: &str,

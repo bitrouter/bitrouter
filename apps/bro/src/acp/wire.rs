@@ -154,7 +154,7 @@ fn decode<T: DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|_| anyhow::anyhow!("invalid ACP message body"))
 }
 
-fn redact(value: &mut Value, token: &str) {
+pub(super) fn redact(value: &mut Value, token: &str) {
     match value {
         Value::String(s) if s.contains(token) => *s = s.replace(token, "[REDACTED]"),
         Value::Object(fields) => fields.values_mut().for_each(|v| redact(v, token)),

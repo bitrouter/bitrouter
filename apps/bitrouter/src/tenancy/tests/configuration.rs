@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(not(feature = "core"))]
 mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
     Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,
@@ -101,7 +100,6 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
     Ok(())
 }
 
-#[cfg(not(feature = "core"))]
 #[tokio::test]
 async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> Result<()> {
     use sha2::{Digest, Sha256};

@@ -21,8 +21,11 @@ default = ["http2"]
 http2 = ["bitrouter-sdk/http2"]
 
 [dependencies]
+bitrouter-skills.workspace = true
+bitrouter-update.workspace = true
 agent-client-protocol-schema.workspace = true
 anyhow.workspace = true
+atomicwrites.workspace = true
 bitrouter-ai.workspace = true
 bitrouter-sdk.workspace = true
 clap.workspace = true
@@ -31,17 +34,22 @@ globset.workspace = true
 ignore.workspace = true
 process-wrap = { workspace = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 regex.workspace = true
+same-file = "1"
 similar.workspace = true
+sha2.workspace = true
+hex.workspace = true
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 tempfile.workspace = true
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["rt", "codec"] }
 url.workspace = true
+serde-saphyr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "io-util", "fs", "process"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "io-std", "io-util", "fs", "process"] }
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 rustix = { workspace = true, features = ["process"] }
 
 [build-dependencies]

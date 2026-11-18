@@ -1,21 +1,8 @@
-//! CLI inspection and scaffolding for installed Agent Skills.
-//!
-//! This module owns the shared format parser and offline discovery rules,
-//! selects CLI roots and renders reports. Installing skills remains the
-//! ecosystem's responsibility.
-//! The managed harness publishes metadata and returns versioned materials to
-//! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
+//! Skill format and evidence shared with the gateway MCP client.
 
-pub mod cli;
-#[cfg(feature = "harness")]
-pub mod delivery;
-pub mod directory;
-pub mod explain;
-mod files;
 pub mod format;
 pub mod library;
 pub mod mcp;
-pub(crate) mod native;
 pub mod protocol;
 pub mod root;
 

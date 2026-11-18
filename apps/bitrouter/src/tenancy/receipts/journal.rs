@@ -743,7 +743,7 @@ impl Journal {
         Ok(())
     }
 
-    #[cfg(any(test, all(feature = "core", feature = "harness")))]
+    #[cfg(test)]
     fn link_child(&self, child: &Self) -> Result<(), Error> {
         if self.ordered.is_some()
             || child.ordered.is_some()
@@ -786,19 +786,4 @@ impl Journal {
         child_state.usage_evidence.parent = Some(self.owner.execution.clone());
         Ok(())
     }
-}
-
-/// Link only the actual admitted parent and child, before the child starts work.
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) fn link_owned_child(
-    parent: &TenantExecution,
-    child: &TenantExecution,
-) -> Result<(), bitrouter_ai::tenancy::operation::ErrorCode> {
-    if parent.storage_identity() != child.storage_identity() {
-        return Err(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden);
-    }
-    parent
-        .journal()?
-        .link_child(child.journal()?)
-        .map_err(super::journal_error)
 }

@@ -326,23 +326,6 @@ pub(in crate::tenancy::receipts) async fn validate(
         load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
     Ok(())
 }
-#[cfg(all(test, feature = "core", feature = "harness"))]
-pub(in crate::tenancy::receipts) async fn validate_bounded(
-    db: &impl ConnectionTrait,
-    candidate: &mut Candidate,
-    expected: Option<&str>,
-    charge: &Charge<'_>,
-) -> Result<()> {
-    candidate.usage_evidence = load(
-        db,
-        &candidate.receipt,
-        &candidate.digest,
-        expected,
-        Some(charge),
-    )
-    .await?;
-    Ok(())
-}
 /// The terminal caller must still verify the complete database candidate.
 pub(in crate::tenancy::receipts) async fn insert_fresh(
     db: &impl ConnectionTrait,

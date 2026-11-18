@@ -139,6 +139,9 @@ async fn drive(
     client: &GatewayClient,
     cancel: &CancellationToken,
 ) -> Result<()> {
+    if matches!(thread.current()?.next(), Next::Model | Next::Tool(_)) {
+        home.check_owner(thread)?;
+    }
     let tools = WorkspaceTools::new(&thread.workspace, thread.tool_mode)?;
     ensure!(
         tools.root() == thread.workspace,
@@ -230,13 +233,29 @@ async fn run_model(
     let reply = match reply {
         Ok(reply) => reply,
         Err(error) => {
-            let status = if gateway_denied(&error) {
-                thread.step_mut()?.state = ModelState::GatewayDenied;
-                TurnStatus::Failed
-            } else {
-                TurnStatus::RecoveryRequired
-            };
-            settle(home, thread, status, &error.to_string(), None)?;
+            if let bitrouter_sdk::error::Error::Service(failure) = &error {
+                // A rejected or malformed reply can still identify a paid execution.
+                let identity = |name: &str| {
+                    let mut values = failure.headers.get_all(name).iter();
+                    let value = values.next()?.to_str().ok()?;
+                    (values.next().is_none()
+                        && !value.is_empty()
+                        && value.len() <= 256
+                        && value.bytes().all(|b| b.is_ascii_graphic()))
+                    .then(|| value.to_owned())
+                };
+                let step = thread.step_mut()?;
+                step.request_id = identity("x-bitrouter-request-id");
+                step.execution_id = identity("x-bitrouter-execution-id");
+            }
+            // HTTP denial can follow an upstream send and failed receipt publication.
+            settle(
+                home,
+                thread,
+                TurnStatus::RecoveryRequired,
+                &error.to_string(),
+                None,
+            )?;
             return Ok(());
         }
     };
@@ -314,28 +333,6 @@ async fn run_model(
     Ok(())
 }
 
-// A provider can return 403 after dispatch. Only a gateway authentication
-// or permission rejection settles a paid intent as never started.
-fn gateway_denied(error: &bitrouter_sdk::error::Error) -> bool {
-    use bitrouter_ai::gateway::GatewayErrorValue;
-    let bitrouter_sdk::error::Error::Service(failure) = error else {
-        return false;
-    };
-    let Some(GatewayErrorValue::Detail(detail)) = failure.body.as_ref().map(|body| &body.error)
-    else {
-        return false;
-    };
-    let code = detail
-        .code
-        .as_ref()
-        .and_then(Option::as_ref)
-        .and_then(serde_json::Value::as_str);
-    matches!(
-        (failure.status, code),
-        (401, Some("authentication_error")) | (403, Some("permission_denied"))
-    )
-}
-
 fn denied(reason: &str) -> ToolResultOutput {
     ToolResultOutput::ExecutionDenied {
         reason: Some(reason.into()),
@@ -349,9 +346,8 @@ async fn run_tool(
     index: usize,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let mode = thread.tool_mode;
-    let turn_id = thread.current()?.turn_id;
     let thread_id = thread.thread_id;
+    let turn_id = thread.current()?.turn_id;
     let response = thread.response_mut()?;
     let call = &response.message.tool_calls[index];
     let name = call.function.name.clone();
@@ -359,11 +355,8 @@ async fn run_tool(
     let inv = &mut response.calls[index];
     let item_id = inv.item_id.to_string();
     let decision = inv.approval.as_ref().and_then(|a| a.approved);
-    let (output, effect) = if !WorkspaceTools::allowed(mode, &name) {
-        (
-            denied("tool unavailable in this workspace mode"),
-            EffectStatus::NotExecuted,
-        )
+    let (output, effect) = if let Err(reason) = tools.authorize(&name) {
+        (denied(&reason), EffectStatus::NotExecuted)
     } else if let Err(error) = WorkspaceTools::validate(&name, &args) {
         (
             ToolResultOutput::ErrorText { value: error },

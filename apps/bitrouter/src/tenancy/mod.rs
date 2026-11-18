@@ -5,8 +5,6 @@ mod admission;
 pub(crate) mod audit;
 mod authority;
 mod cache;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod capture;
 mod command;
 mod configuration;
 mod configuration_store;
@@ -15,11 +13,7 @@ mod directory;
 mod error;
 pub(crate) mod eval;
 pub(crate) mod execution;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod hosts;
 pub(crate) mod http;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod learning;
 mod model;
 mod mutation;
 pub(crate) mod oauth;
@@ -31,8 +25,6 @@ mod profile_observation;
 pub(crate) mod receipts;
 pub(crate) mod resources;
 pub(crate) mod routing;
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(crate) mod session;
 pub(crate) mod storage;
 mod store;
 #[cfg(test)]
@@ -119,8 +111,6 @@ pub(crate) struct Service {
     stop: CancellationToken,
     accepting: Arc<std::sync::Mutex<bool>>,
     cleanup: Arc<transaction::Proof>,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    hosts: Arc<hosts::Hosts>,
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
@@ -144,10 +134,6 @@ pub(crate) struct Service {
     #[cfg(test)]
     receipt_credential_gate:
         Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    choice_final_gate: Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    paid_finish_gate: Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
     completion: Shared<BoxFuture<'static, Result<(), Arc<tokio::task::JoinError>>>>,
 }
 
@@ -496,8 +482,6 @@ impl Service {
             accepting,
             eval,
             cleanup,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            hosts: Arc::new(hosts::Hosts::new()),
             reads,
             resources,
             native_continuation: None,
@@ -517,10 +501,6 @@ impl Service {
             ),
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
-            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-            choice_final_gate: Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-            paid_finish_gate: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             receipt_credential_gate: Arc::default(),
             completion,
@@ -628,27 +608,7 @@ impl Service {
         self.stop_dispatch()?;
         self.admission.close();
         self.pipelines.close();
-        #[cfg(all(feature = "core", feature = "harness"))]
-        self.hosts.close();
         let draining = async {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            tokio::time::timeout(Duration::from_secs(30), self.hosts.drain())
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("native host cleanup did not drain; owner retained")
-                })??;
-            #[cfg(all(feature = "core", feature = "harness"))]
-            if self.startup.is_some() {
-                // Optional recovery evidence never substitutes for ordinary
-                // shutdown. Unsupported coverage leaves no stamp and the
-                // unchanged full drain below still decides cleanup success.
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-                if let Ok(Some(proof)) = self.pipelines.paid_stop_set(deadline).await {
-                    crate::tenancy::learning::queue::stop_set(proof, deadline)
-                        .await
-                        .map_err(|_| anyhow::anyhow!("paid stop-set retention unconfirmed"))?;
-                }
-            }
             tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
                 .await
                 .map_err(|_| {
@@ -876,8 +836,6 @@ impl Service {
 
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
-            #[cfg(all(feature = "core", feature = "harness"))]
-            Job::Native(_) | Job::Capture(_) | Job::Learning(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::OAuth(_)
             | Job::Directory(_)
@@ -891,7 +849,7 @@ impl Service {
             #[cfg(test)]
             Job::Escalate { .. } | Job::Archive { .. } => None,
             Job::Eval(_) => None,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             Job::Settlement(_) => None,
         };
         let accepting = self

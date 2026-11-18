@@ -52,7 +52,6 @@ fn activate(service: &Service, transfer: &Transfer, operation: &str) -> Result<C
     ))
 }
 
-#[cfg(not(feature = "core"))]
 mod consumer {
     use super::*;
     use crate::tenancy::{ownership, resources::Resources, store};

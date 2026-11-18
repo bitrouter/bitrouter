@@ -1234,16 +1234,6 @@ mod tests {
 
     use super::*;
     use crate::config::PolicyKeyStrategy;
-    #[cfg(feature = "core")]
-    use crate::eval::settlement::EvalSettlementRecorder;
-    #[cfg(feature = "core")]
-    use crate::eval::store::EvalStore;
-    #[cfg(feature = "core")]
-    use crate::gateway::caller::CallerContext;
-    #[cfg(feature = "core")]
-    use crate::gateway::observability::event::EventBus;
-    #[cfg(feature = "core")]
-    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
     use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
     use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
     use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
@@ -1251,8 +1241,6 @@ mod tests {
     use crate::policy_lock::semantic_digest;
     use crate::trajectory::canonical::CorrelationKey;
     use bitrouter_ai::eval::ExperimentAssignmentUnit;
-    #[cfg(feature = "core")]
-    use bitrouter_ai::types::UsageOrigin;
     use bitrouter_ai::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
@@ -2996,78 +2984,6 @@ mod tests {
         assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
         assert_eq!(correlated.task_family_reason_codes, Vec::<String>::new());
 
-        #[cfg(feature = "core")]
-        {
-            let db = crate::db::connect("sqlite::memory:").await?;
-            crate::db::run_migrations(&db).await?;
-            let store = EvalStore::new(db);
-            let recorder = EvalSettlementRecorder::new(store.clone(), pending);
-            let mut settlement = SettlementContext {
-                operation: bitrouter_ai::types::ModelOperation::Generation,
-                request_id: "request-unified-v1".into(),
-                caller: CallerContext::local(),
-                target: None,
-                model_id: "gpt-5.6-sol".into(),
-                reasoning_effort: None,
-                provider_id: "openai-codex".into(),
-                account_label: None,
-                prompt_tokens: 10,
-                completion_tokens: 5,
-                reasoning_tokens: 0,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                usage_origin: UsageOrigin::ProviderReported,
-                raw_usage: None,
-                web_search_count: 0,
-                media_input_count: 0,
-                media_output_count: 0,
-                server_tool_calls: Vec::new(),
-                streamed: false,
-                request_duration_ms: 100,
-                upstream_duration_ms: Some(90),
-                ttft_ms: None,
-                generation_duration_ms: None,
-                first_token_kind: None,
-                finish_reason: None,
-                error: None,
-                events: EventBus::default(),
-            };
-            settlement.emit(invocation);
-            recorder.record(&mut settlement).await?;
-            let subject = store
-                .subject("request:request-unified-v1")
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
-            let settled = subject
-                .decisions
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
-            assert_eq!(
-                settled.route_projection,
-                "semantic_route/v1|code:generation|implement|normal"
-            );
-            assert_eq!(
-                settled.request_key,
-                "semantic_route/v1|unknown|implement|normal"
-            );
-            assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
-            assert_eq!(
-                subject
-                    .evidence
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
-                    .attributes
-                    .get("task_family_reason_codes")
-                    .map(String::as_str),
-                None
-            );
-
-            assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
-            assert_eq!(
-                subject.schema_version,
-                bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
-            );
-        }
         Ok(())
     }
 

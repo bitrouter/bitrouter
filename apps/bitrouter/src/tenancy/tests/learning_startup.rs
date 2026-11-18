@@ -1,164 +1,161 @@
-//! Separately built reduced binaries must fence an interrupted paid draft.
-//! The full producer uses leased physical SQLite from its first connection.
+//! An interrupted predecessor judge sent one request before it was killed.
+//! The three serialized rows are from that stopped SQLite database. Mount them
+//! under their original installation and tenant; no producer or judge is needed.
+
+#![cfg(unix)]
+
 use super::*;
-use crate::tenancy::{ownership, resources::Resources, store};
-use bitrouter_ai::tenancy::identity::RevisionId;
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
-use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Arc, time::Duration};
+use crate::tenancy::ownership;
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-mod driver;
+const ROWS: &str = include_str!("learning_startup/accepted.json");
 
-pub(in crate::tenancy::tests) const ROOT: &str = "BITROUTER_PAID_STARTUP_ROOT";
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-pub(in crate::tenancy::tests) const MODE: &str = "BITROUTER_PAID_STARTUP_MODE";
-#[cfg(all(unix, feature = "core", feature = "harness"))]
-pub(in crate::tenancy::tests) const WITNESS: &str = "paid-startup-physical-file-ready";
-pub(in crate::tenancy::tests) const KEY: &str = "BITROUTER_PAID_STARTUP_KEY";
-const PROFILE: &str = "BITROUTER_PAID_STARTUP_PROFILE";
-
-#[derive(Serialize, Deserialize)]
-pub(in crate::tenancy::tests) struct Transfer {
-    pub installation: InstallationId,
-    pub tenant: TenantId,
-    pub revision: RevisionId,
+#[derive(serde::Deserialize)]
+struct PaidRow {
+    installation_id: String,
+    tenant_id: String,
+    creator_principal_id: String,
+    kind: String,
+    scope_id: String,
+    session_key: Option<String>,
+    revision: i64,
+    body: String,
+    record_id: String,
 }
 
-async fn retained(db: &DatabaseConnection) -> Result<Vec<Vec<serde_json::Value>>> {
-    // Fixture observations only: inspect complete paid rows, not just counts.
-    // Check lengths before decoding bodies, then cap the actual projection.
-    let lengths = db.query_all(Statement::from_string(db.get_database_backend(),
-        "SELECT length(body) AS bytes FROM checkpoint_evolution WHERE kind IN ('owned_judge_job','owned_judge_active_v3','owned_judge_budget','owned_judge_pending') LIMIT 4")).await?;
-    ensure!(lengths.len() <= 3);
-    for row in lengths {
-        ensure!(row.try_get::<i64>("", "bytes")? <= 1024 * 1024);
-    }
-    let rows = db.query_all(Statement::from_string(db.get_database_backend(),
-        "SELECT record_id, scope_id, kind, session_key, revision, body, installation_id, tenant_id, creator_principal_id FROM checkpoint_evolution WHERE kind IN ('owned_judge_job','owned_judge_active_v3','owned_judge_budget','owned_judge_pending') ORDER BY record_id LIMIT 4")).await?;
-    ensure!(rows.len() <= 3);
+async fn retained(db: &sea_orm::DatabaseConnection) -> Result<Vec<String>> {
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
+        "SELECT json_array(record_id,scope_id,kind,session_key,revision,body,installation_id,tenant_id,creator_principal_id) AS facts FROM checkpoint_evolution ORDER BY record_id"
+    )).await?;
     rows.into_iter()
-        .map(|row| {
-            let mut fields = Vec::new();
-            for column in [
-                "record_id",
-                "scope_id",
-                "kind",
-                "session_key",
-                "body",
-                "installation_id",
-                "tenant_id",
-                "creator_principal_id",
-            ] {
-                fields.push(serde_json::to_value(
-                    row.try_get::<Option<String>>("", column)?,
-                )?);
-            }
-            fields.push(row.try_get::<i64>("", "revision")?.into());
-            Ok(fields)
-        })
+        .map(|row| Ok(row.try_get("", "facts")?))
         .collect()
 }
 
-async fn consume(path: &Path, pending: bool) -> Result<()> {
-    let transfer: Transfer = serde_json::from_slice(&std::fs::read(path.with_extension("json"))?)?;
-    let owner = ownership::acquire_path(path, false)?;
-    let db =
-        crate::db::connect_tenancy(&format!("sqlite://{}?mode=rw", path.display()), &owner).await?;
-    let checked = async {
-        let before = retained(&db).await?;
-        ensure!(before.len() == if pending { 3 } else { 0 });
-        let state = store::load(&db, Utc::now()).await?;
-        ensure!(state.installation == transfer.installation);
-        ensure!(
-            crate::tenancy::configuration_store::active_revision_page(&db, None)
-                .await?
-                .is_empty(),
-            "an active profile could mask the pending fence"
-        );
-        let resources = Resources::fixture_key(&transfer.installation, Some(KEY))?;
-        let draft = crate::tenancy::configuration_store::configuration(
-            &db,
-            &transfer.tenant,
-            &transfer.revision,
-        )
-        .await?
-        .context("actual inactive assessed draft")?;
-        resources
-            .validate_compiled(&draft)
-            .map_err(|code| anyhow::anyhow!("draft integrity failed: {code:?}"))?;
-        ensure!(resources.validate_executable(&draft) == Err(ErrorCode::CapabilityMismatch));
-        let started =
-            Service::start_prepared(db.clone(), Some(owner.clone()), state, Arc::new(resources))
-                .await;
-        match started {
-            Ok(service) => {
-                let healthy = service.current().is_ok();
-                service.shutdown().await?;
-                ensure!(
-                    !pending && healthy,
-                    "pending accepted work published readiness"
-                );
-            }
-            Err(error) => ensure!(pending, "clean inactive draft failed startup: {error:#}"),
-        }
-        ensure!(
-            retained(&db).await? == before,
-            "startup changed accepted job/budget/pending bytes or metadata"
-        );
-        Ok(())
-    }
-    .await;
-    let closed = db.close().await;
-    drop(owner);
-    checked?;
-    closed?;
-    // A confirmed refusal must retire the bootstrap owner; ambiguity must not
-    // be counted as a passing rejection just because the waiter saw an error.
-    let lease = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match ownership::acquire_path(path, false) {
-                Ok(lease) => break Ok(lease),
-                Err(error)
-                    if matches!(
-                        error.downcast_ref::<std::fs::TryLockError>(),
-                        Some(std::fs::TryLockError::WouldBlock)
-                    ) =>
-                {
-                    tokio::task::yield_now().await
-                }
-                Err(error) => break Err(error),
-            }
-        }
-    })
-    .await??;
-    drop(lease);
-    Ok(())
+async fn empty_tenant(
+    path: &std::path::Path,
+    installation: &str,
+) -> Result<(sea_orm::DatabaseConnection, ownership::Lease, String)> {
+    let url = format!("sqlite://{}?mode=rwc", path.display());
+    let owner = ownership::acquire_path(path, true)?;
+    let db = crate::db::connect_tenancy(&url, &owner).await?;
+    crate::db::run_migrations(&db).await?;
+    // Fix the empty installation's identity before the first tenant is issued.
+    // A different partition would never exercise this tenant's readiness check.
+    super::super::store::initial_header(&db, Utc::now()).await?;
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "UPDATE tenancy_installation SET installation_id=? WHERE singleton=1",
+        [installation.into()],
+    ))
+    .await?;
+    let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
+    ensure!(fixture.installation.as_str() == installation && fixture.tenant.as_str() == "tenant-a");
+    fixture.service.shutdown().await?;
+    drop(fixture);
+    Ok((db, owner, url))
 }
 
 #[tokio::test]
-#[ignore = "only the full producer driver supplies these real files to a separately built reduced libtest"]
-async fn reduced_consumer() -> Result<()> {
-    let expected = std::env::var(PROFILE)?;
-    let actual = match (cfg!(feature = "core"), cfg!(feature = "harness")) {
-        (false, false) => "gateway",
-        (true, false) => "core-only",
-        (false, true) => "harness-only",
-        (true, true) => "full",
-    };
-    ensure!(
-        expected == actual && actual != "full",
-        "wrong consumer feature profile"
-    );
-    let root = std::path::PathBuf::from(std::env::var_os(ROOT).context("transfer directory")?);
-    tokio::time::timeout(Duration::from_secs(30), async {
-        consume(&root.join("clean.db"), false).await?;
-        consume(&root.join("pending.db"), true).await
-    })
-    .await??;
-    std::fs::write(
-        root.join("consumer-ack"),
-        format!("paid-pending-refused:{actual}"),
-    )?;
+async fn interrupted_paid_work_fences_restart_and_preserves_original_rows() -> Result<()> {
+    let rows: Vec<PaidRow> = serde_json::from_str(ROWS)?;
+    let first = rows.first().context("paid fixture is empty")?;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("paid.sqlite");
+    ensure!(first.tenant_id == "tenant-a");
+    let (db, owner, url) = empty_tenant(&path, &first.installation_id).await?;
+    let clean = Service::open(db.clone(), Some(owner.clone())).await?;
+    clean.shutdown().await?;
+    drop(clean);
+    for row in rows {
+        db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "INSERT INTO checkpoint_evolution(record_id,scope_id,kind,session_key,revision,body,installation_id,tenant_id,creator_principal_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            [row.record_id.into(),row.scope_id.into(),row.kind.into(),row.session_key.into(),row.revision.into(),row.body.into(),row.installation_id.into(),row.tenant_id.into(),row.creator_principal_id.into()]
+        )).await?;
+    }
+    let before = retained(&db).await?;
+    ensure!(before.len() == 3);
+    db.close().await?;
+    drop(owner);
+    for _ in 0..2 {
+        let owner = ownership::acquire_path(&path, false)?;
+        let reopened = crate::db::connect_tenancy(&url, &owner).await?;
+        ensure!(
+            Service::open(reopened.clone(), Some(owner.clone()))
+                .await
+                .is_err(),
+            "interrupted job admitted at startup"
+        );
+        ensure!(
+            retained(&reopened).await? == before,
+            "restart changed accepted work"
+        );
+        let counts = reopened.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT (SELECT count(*) FROM tenancy_execution_receipts) AS receipts, (SELECT count(*) FROM tenancy_dispatch_intents) AS sends"
+        )).await?.context("missing evidence counts")?;
+        ensure!(
+            counts.try_get::<i64>("", "receipts")? == 0 && counts.try_get::<i64>("", "sends")? == 0
+        );
+        reopened.close().await?;
+    }
+    Ok(())
+}
+
+/// A predecessor crash left one paid request without a terminal observation.
+/// Its original M0 repair produced an Unknown receipt and its obligation. Read
+/// those exact bytes through the current receipt integrity checks on two boots.
+#[tokio::test]
+async fn recovered_paid_receipts_and_usage_keep_original_identity_on_restart() -> Result<()> {
+    use crate::tenancy::receipts::store::lookup_candidate;
+    use bitrouter_ai::tenancy::execution::ReceiptState;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("repaired.sqlite");
+    let installation: bitrouter_ai::tenancy::identity::InstallationId =
+        "96591372-bae1-4698-b2d6-f00b36102bac".try_into()?;
+    let tenant = "tenant-a".try_into()?;
+    let (db, owner, url) = empty_tenant(&path, installation.as_str()).await?;
+    db.execute_unprepared(include_str!("learning_startup/repaired.sql"))
+        .await?;
+    db.close().await?;
+    drop(owner);
+    for _ in 0..2 {
+        let owner = ownership::acquire_path(&path, false)?;
+        let db = crate::db::connect_tenancy(&url, &owner).await?;
+        let service = Service::open(db.clone(), Some(owner)).await?;
+        let judge = lookup_candidate(
+            &db,
+            &installation,
+            &tenant,
+            &"6cbb3418-3b52-448a-9c98-f35b2c380c76".try_into()?,
+        )
+        .await?
+        .context("missing recovered paid receipt")?;
+        ensure!(
+            judge.receipt.state == ReceiptState::Unknown
+                && judge.digest
+                    == "d1dc845e7efb2e2755957fec03172d51a72432b203f49c30bef7f74ba114c694"
+        );
+        let subject = lookup_candidate(
+            &db,
+            &installation,
+            &tenant,
+            &"66abfed2-503e-4a1e-85d5-ae60190a38f2".try_into()?,
+        )
+        .await?
+        .context("missing subject receipt")?;
+        ensure!(
+            subject.digest == "59c1748ebcc0a7c2f95d1c86f21df159ca972be4f70568459fc768198ed3b903"
+        );
+        let counts = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT (SELECT count(*) FROM tenancy_unknown_obligations) AS obligations, (SELECT count(*) FROM tenancy_dispatch_intents) AS sends, (SELECT count(*) FROM tenancy_execution_receipts) AS receipts"
+        )).await?.context("missing repair counts")?;
+        ensure!(
+            counts.try_get::<i64>("", "obligations")? == 1
+                && counts.try_get::<i64>("", "sends")? == 0
+                && counts.try_get::<i64>("", "receipts")? == 2
+        );
+        service.shutdown().await?;
+        db.close().await?;
+    }
     Ok(())
 }

@@ -2,12 +2,16 @@
 mod acp;
 mod catalog;
 mod checkpoint;
+mod durable;
 mod gateway;
 mod migrated;
+mod orchestration;
 mod runner;
 #[cfg(test)]
 mod runner_tests;
+mod skills;
 mod tools;
+mod update;
 
 use std::fs::{File, TryLockError};
 use std::io::{Read, Write};
@@ -24,6 +28,8 @@ use serde_json::json;
 use uuid::Uuid;
 
 use checkpoint::{Home, Thread};
+
+const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4356";
 
 #[derive(Parser)]
 #[command(
@@ -49,6 +55,8 @@ struct Cli {
 enum Command {
     /// Print the compiled product identity.
     BuildInfo,
+    /// Update the standalone BRO installation.
+    Update(update::Options),
     /// Submit a headless coding task.
     Task {
         #[command(subcommand)]
@@ -60,7 +68,17 @@ enum Command {
         #[command(subcommand)]
         action: ThreadCommand,
     },
-    /// Inspect a migrated M0 managed session without acquiring its execution grant.
+    /// Inspect and maintain local Agent Skills directories.
+    Skills {
+        #[command(subcommand)]
+        action: skills::Action,
+    },
+    /// Schedule child threads in this local BRO home.
+    Agent {
+        #[command(subcommand)]
+        action: orchestration::AgentCommand,
+    },
+    /// Inspect M0 evidence or bind an imported thread to its local workspace and gateway.
     Managed {
         #[command(subcommand)]
         action: migrated::ManagedCommand,
@@ -96,6 +114,9 @@ struct ThreadOptions {
     effort: Option<ReasoningEffort>,
     #[arg(long,value_parser=clap::value_parser!(u32).range(1..))]
     max_output_tokens: Option<u32>,
+    /// Bind a local project skill by name or directory identity. Repeat to select more.
+    #[arg(long = "skill", value_name = "NAME")]
+    skills: Vec<String>,
     /// Expose only read, glob and grep.
     #[arg(long)]
     read_only: bool,
@@ -207,14 +228,17 @@ fn create(options: ThreadOptions, endpoint: String) -> Result<Thread> {
     };
     let root = workspace(options.workspace)?;
     tools::WorkspaceTools::new(&root, mode)?;
-    Ok(Thread::new(
+    let selections = skills::select(&root, &options.skills)?;
+    let mut thread = Thread::new(
         root,
         endpoint,
         options.model,
         options.effort,
         options.max_output_tokens,
         mode,
-    ))
+    );
+    thread.skills = selections;
+    Ok(thread)
 }
 
 fn inspect(thread: &Thread, turn: Option<Uuid>, running: bool) -> Result<()> {
@@ -247,18 +271,26 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         let revision = env!("BRO_BUILD_REVISION");
         emit(
             &json!({"product":"bitrouter-bro","version":env!("CARGO_PKG_VERSION"),"target":env!("BRO_BUILD_TARGET"),
-            "source_revision":(!revision.is_empty()).then_some(revision)}),
+            "features": if cfg!(feature="http2") { &["http2"][..] } else { &[][..] }, "source_revision":(!revision.is_empty()).then_some(revision)}),
         )?;
+        return Ok(0);
+    }
+    if let Command::Update(options) = cli.command {
+        update::run(options).await?;
+        return Ok(0);
+    }
+    if let Command::Skills { action } = cli.command {
+        skills::run(action, cli.data_dir)?;
         return Ok(0);
     }
     let root = data_dir(cli.data_dir)?;
     let selected_endpoint = cli
         .endpoint
         .or_else(|| std::env::var("BITROUTER_ENDPOINT").ok());
-    let endpoint = selected_endpoint
-        .as_deref()
-        .unwrap_or("http://127.0.0.1:4356");
-    if migrated::present(&root)? && migrated::dispatch(&root, &cli.command).await? {
+    let endpoint = selected_endpoint.as_deref().unwrap_or(DEFAULT_ENDPOINT);
+    if migrated::present(&root)?
+        && migrated::dispatch(&root, &cli.command, selected_endpoint.as_deref()).await?
+    {
         return Ok(0);
     }
     if let Command::Acp {
@@ -266,7 +298,13 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         workspace: path,
     } = cli.command
     {
-        return acp::run(command, endpoint, token()?.as_deref(), &workspace(path)?).await;
+        return acp::run(
+            command,
+            selected_endpoint.as_deref(),
+            token()?.as_deref(),
+            &workspace(path)?,
+        )
+        .await;
     }
     let home = Home::open(&root)?;
     match cli.command {
@@ -284,6 +322,9 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Thread { action } => {
             thread_command(&home, action, selected_endpoint.as_deref()).await?
         }
+        Command::Agent { action } => {
+            orchestration::run(&home, action, selected_endpoint.as_deref()).await?
+        }
         Command::Managed { .. } => bail!("managed inspection requires an M4 staged BRO store"),
         _ => bail!("unsupported command"),
     }
@@ -294,7 +335,7 @@ async fn thread_command(home: &Home, action: ThreadCommand, endpoint: Option<&st
     match action {
         ThreadCommand::List => emit(&json!({"threads":home.ids()?})),
         ThreadCommand::Create { options } => {
-            let t = create(options, endpoint.unwrap_or("http://127.0.0.1:4356").into())?;
+            let t = create(options, endpoint.unwrap_or(DEFAULT_ENDPOINT).into())?;
             let _worker = home.worker(t.thread_id)?;
             home.admit(&t)?;
             inspect(&t, None, false)
@@ -388,6 +429,10 @@ async fn thread_command(home: &Home, action: ThreadCommand, endpoint: Option<&st
 }
 
 fn for_thread(thread: &Thread, endpoint: Option<&str>) -> Result<GatewayClient> {
+    ensure!(
+        !thread.endpoint.is_empty(),
+        "bind the imported thread with managed restore first"
+    );
     ensure!(
         endpoint.is_none_or(|e| e == thread.endpoint),
         "gateway endpoint differs from the thread binding"

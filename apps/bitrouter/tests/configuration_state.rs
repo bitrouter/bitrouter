@@ -74,12 +74,8 @@ impl RunningFixture {
                 reloader.clone(),
                 assembled.observe,
                 daemon::AcpControlPlane {
-                    #[cfg(feature = "harness")]
-                    runtime: assembled.acp_runtime,
                     metering: bitrouter::metering::MeteringStore::new(assembled.db),
                     inventory: None,
-                    #[cfg(feature = "core")]
-                    evolution: None,
                 },
                 Some(administration),
             ),

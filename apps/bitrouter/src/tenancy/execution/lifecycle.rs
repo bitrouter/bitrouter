@@ -18,8 +18,6 @@ use futures::{
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) mod paid;
 #[cfg(test)]
 const MAX_ACTIVE: usize = 128;
 #[derive(Clone)]
@@ -33,7 +31,7 @@ type PipelineDrain = Shared<BoxFuture<'static, Result<()>>>;
 #[derive(Clone)]
 struct Attached {
     pipeline: Arc<Pipeline>,
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     observation: Option<Arc<crate::tenancy::eval::observation::RequiredObservation>>,
 }
 enum Attachment {
@@ -49,8 +47,6 @@ struct Entry {
     task: Mutex<Option<DrainTask>>,
     pipeline_drain: Mutex<Option<PipelineDrain>>,
     receipt: Option<Arc<Owner>>,
-    #[cfg(all(feature = "core", feature = "harness"))]
-    effects_stopped: std::sync::atomic::AtomicBool,
 }
 #[derive(Default)]
 struct State {
@@ -119,8 +115,6 @@ impl Registry {
             task: Mutex::new(None),
             pipeline_drain: Mutex::new(None),
             receipt: Some(receipt),
-            #[cfg(all(feature = "core", feature = "harness"))]
-            effects_stopped: std::sync::atomic::AtomicBool::new(false),
         });
         state.entries.insert(entry.id.clone(), entry.clone());
         *entry
@@ -138,11 +132,11 @@ impl Registry {
         self.register_inner(
             id,
             pipeline,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             None,
         )
     }
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     pub(crate) fn register_observed(
         self: &Arc<Self>,
         id: &ExecutionId,
@@ -155,7 +149,7 @@ impl Registry {
         self: &Arc<Self>,
         id: &ExecutionId,
         pipeline: Arc<Pipeline>,
-        #[cfg(feature = "core")] observation: Option<
+        #[cfg(feature = "eval-publication")] observation: Option<
             Arc<crate::tenancy::eval::observation::RequiredObservation>,
         >,
     ) -> Result<Registration> {
@@ -185,8 +179,6 @@ impl Registry {
                     task: Mutex::new(None),
                     pipeline_drain: Mutex::new(None),
                     receipt: None,
-                    #[cfg(all(feature = "core", feature = "harness"))]
-                    effects_stopped: std::sync::atomic::AtomicBool::new(false),
                 })
             }
         };
@@ -210,7 +202,7 @@ impl Registry {
         let pipeline_ref = Arc::downgrade(&pipeline);
         *attached = Attachment::Attached(Attached {
             pipeline,
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             observation,
         });
         drop(attached);
@@ -292,51 +284,6 @@ impl Registry {
             Some(error) => Err(error),
             None => Ok(()),
         }
-    }
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(crate) fn callback_owner_for_test(
-        &self,
-        id: &ExecutionId,
-    ) -> Result<(Arc<Owner>, Arc<OwnedTasks>)> {
-        let state = self.state();
-        let entry = state
-            .entries
-            .get(id)
-            .ok_or_else(|| BitrouterError::internal("test execution is absent"))?;
-        let receipt = entry
-            .receipt
-            .clone()
-            .ok_or_else(|| BitrouterError::internal("test receipt is absent"))?;
-        let attachment = entry
-            .attachment
-            .lock()
-            .map_err(|_| BitrouterError::internal("test attachment unavailable"))?;
-        let Attachment::Attached(attached) = &*attachment else {
-            return Err(BitrouterError::internal("test pipeline is not attached"));
-        };
-        let tasks = attached
-            .pipeline
-            .owned_tasks()
-            .cloned()
-            .ok_or_else(|| BitrouterError::internal("test task owner is absent"))?;
-        Ok((receipt, tasks))
-    }
-
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(crate) async fn join_pipeline_for_test(&self, id: &ExecutionId) -> Result<()> {
-        let entry = self
-            .state()
-            .entries
-            .get(id)
-            .cloned()
-            .ok_or_else(|| BitrouterError::internal("test execution is absent"))?;
-        let task = entry
-            .pipeline_drain
-            .lock()
-            .map_err(|_| BitrouterError::internal("test pipeline drain unavailable"))?
-            .clone()
-            .ok_or_else(|| BitrouterError::internal("test pipeline drain absent"))?;
-        task.await
     }
 
     fn completed(&self, entry: &Arc<Entry>) {
@@ -489,7 +436,7 @@ impl Entry {
                 }
                 return Completion::Retryable(error);
             }
-            #[cfg(feature = "core")]
+            #[cfg(feature = "eval-publication")]
             if let Some(observation) = attached.observation
                 && let Err(error) = observation.drained()
             {
@@ -502,25 +449,11 @@ impl Entry {
         // This marker follows the actual pipeline/finalizer/observation joins.
         // A later receipt/learning failure cannot undo those local joins, but it
         // also cannot manufacture their proof when an earlier drain failed.
-        #[cfg(all(feature = "core", feature = "harness"))]
-        {
-            self.effects_stopped
-                .store(true, std::sync::atomic::Ordering::Release);
-            self.changed.notify_waiters();
-        }
         if let Some(receipt) = &self.receipt
             && receipt.finish_or_join(Outcome::Cancelled).await.is_err()
         {
             return Completion::Retryable(BitrouterError::internal(
                 "durable receipt unavailable; ownership retained",
-            ));
-        }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if let Some(receipt) = &self.receipt
-            && receipt.drain_learning().await.is_err()
-        {
-            return Completion::Retryable(BitrouterError::internal(
-                "assessment completion unconfirmed; ownership retained",
             ));
         }
         if let Some(receipt) = &self.receipt

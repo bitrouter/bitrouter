@@ -17,6 +17,24 @@ pub(super) async fn load(
         crate::db::store_format::inspect(db).await? == crate::db::store_format::State::Current,
         "offline inspection requires a current store"
     );
+    load_contents(db, budget).await
+}
+
+/// Called only by the stopped mixed-store importer after its frozen schema check.
+/// Authenticate the original ledger here, then use the ordinary accounting checks.
+pub(crate) async fn validate_m0_service(db: &impl ConnectionTrait) -> Result<()> {
+    anyhow::ensure!(
+        crate::db::store_format::inspect_m0(db).await? == crate::db::store_format::State::Current,
+        "expected a complete M0 ledger"
+    );
+    load_contents(db, ValidationBudget::default()).await?;
+    Ok(())
+}
+
+async fn load_contents(
+    db: &impl ConnectionTrait,
+    budget: ValidationBudget,
+) -> Result<startup::LoadedHeader> {
     // Authority pages honor the requested row budget. Evidence uses fixed
     // 32-key pages and a separately reserved overlapping decode envelope.
     if budget.rows < obligations::VALIDATION_PAGE_ROWS

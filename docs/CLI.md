@@ -120,6 +120,15 @@ Use `bro acp list` to see bundled adapters and their headless gateway routing
 support. For example, `bro acp --workspace . prompt --agent codex 'Inspect this
 project'` runs an installed adapter with the selected gateway credentials.
 
+### Local skills
+
+Run `bro skills list` to inspect project skills, or add `--global` or `--root`
+to select another source. `show`, `read`, `write` and `init` operate on source
+files. Select project skills on `bro thread create` or `bro task run` with
+repeated `--skill NAME` arguments. BRO freezes the selected instructions at
+thread creation and retains their digests for `bro skills explain --thread ID
+--turn ID`. Reads and approvals use the thread's existing permissions.
+
 ## Logging (`RUST_LOG`)
 
 Diagnostics are emitted with `tracing` and filtered by **`RUST_LOG`**, using standard [`EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. When `RUST_LOG` is unset the filter defaults to `info`; a malformed value falls back to `info` rather than failing to start.

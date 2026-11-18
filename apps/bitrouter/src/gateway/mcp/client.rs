@@ -34,8 +34,6 @@ use tokio_util::sync::CancellationToken;
 // MCP startup waits. Legacy discovery keeps its existing local-host contract.
 #[derive(Clone, Default)]
 pub(crate) struct Discovery {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    native: Option<Arc<crate::tenancy::execution::session::Authority>>,
     cancel: CancellationToken,
 }
 
@@ -46,32 +44,9 @@ pub(crate) struct ConnectionCatalog<'a> {
 }
 
 impl Discovery {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(crate) fn native(
-        authority: Arc<crate::tenancy::execution::session::Authority>,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self {
-            native: Some(authority),
-            cancel,
-        }
-    }
-
     pub(crate) fn with<T>(&self, work: impl FnOnce() -> T) -> Result<T, String> {
         if self.cancel.is_cancelled() {
             return Err("native discovery cancelled".into());
-        }
-        #[cfg(all(feature = "core", feature = "harness"))]
-        if let Some(authority) = &self.native {
-            return authority
-                .with_authority(|| {
-                    if self.cancel.is_cancelled() || authority.service().host_stop().is_cancelled()
-                    {
-                        return Err("native discovery cancelled".into());
-                    }
-                    Ok(work())
-                })
-                .map_err(|_| "native discovery authority is unavailable".to_owned())?;
         }
         Ok(work())
     }
@@ -176,8 +151,6 @@ struct Binding {
 /// Discovery and failed initialization share the same confirmed cleanup path.
 #[derive(Default)]
 pub struct BoundedMcpClient {
-    #[cfg(all(test, feature = "core", feature = "harness"))]
-    pub(crate) discovery_gate: Option<Arc<crate::tenancy::hosts::HostGate>>,
     connections: BTreeMap<String, Connection>,
     closing: tokio::sync::Mutex<Vec<futures::future::BoxFuture<'static, Result<(), String>>>>,
     close_error: Option<String>,
@@ -293,16 +266,6 @@ impl BoundedMcpClient {
                 return Err(reject("duplicate MCP server name").into());
             }
         }
-        #[cfg(all(test, feature = "core", feature = "harness"))]
-        if let Some(authority) = &discovery.native {
-            let gate = authority
-                .service()
-                .take_host_gate(crate::tenancy::hosts::HostBoundary::BeforeTransport)
-                .map_err(|_| reject("native discovery test gate unavailable"))?;
-            if let Some(gate) = gate {
-                gate.reached().await;
-            }
-        }
         let workspace = discovery
             .with(|| workspace.canonicalize())?
             .map_err(|_| reject("MCP workspace is unavailable"))?;
@@ -316,24 +279,6 @@ impl BoundedMcpClient {
             result = self.connect_all(&workspace, servers, tool_servers, version, cancel, discovery) => result,
         };
         if let Err(error) = result {
-            #[cfg(all(test, feature = "core", feature = "harness"))]
-            if let Some(authority) = &discovery.native {
-                let gate = authority
-                    .service()
-                    .take_host_gate(crate::tenancy::hosts::HostBoundary::Cleanup)
-                    .map_err(|_| ConnectError {
-                        message: "MCP cleanup test gate unavailable".into(),
-                        cleanup_unknown: true,
-                    })?;
-                if let Some(gate) = gate {
-                    for owner in &self.cleanup {
-                        owner.hold_cleanup(gate.clone()).map_err(|_| ConnectError {
-                            message: "MCP cleanup test gate poisoned".into(),
-                            cleanup_unknown: true,
-                        })?;
-                    }
-                }
-            }
             return Err(match self.shutdown().await {
                 Ok(()) => ConnectError {
                     message: error,
@@ -408,10 +353,6 @@ impl BoundedMcpClient {
             );
             // The owned native discovery test faults after a real child and
             // connected transport exist, before the resource factory returns.
-            #[cfg(all(test, feature = "core", feature = "harness"))]
-            if let Some(gate) = self.discovery_gate.take() {
-                gate.reached().await;
-            }
             let connection = self
                 .connections
                 .get_mut(&server.name)
@@ -564,17 +505,6 @@ impl BoundedMcpClient {
         Ok((&binding.upstream_name, connection.service.peer()))
     }
 
-    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-    pub(crate) async fn retained_processes_for_test(&self) -> Vec<u32> {
-        let mut ids = Vec::new();
-        for owner in &self.cleanup {
-            if let Some(id) = owner.retained_pid().await {
-                ids.push(id);
-            }
-        }
-        ids
-    }
-
     pub async fn shutdown(&mut self) -> Result<(), String> {
         tokio::time::timeout(Duration::from_secs(5), self.close())
             .await
@@ -666,12 +596,6 @@ impl BoundedMcpClient {
                 // Register the actual worker owner before polling handshake. A
                 // cancelled/failed handshake drops only its facade, never this owner.
                 self.http.push(transport.clone());
-                #[cfg(all(test, unix, feature = "core", feature = "harness"))]
-                if let Some(gate) = &self.discovery_gate {
-                    gate.http
-                        .set(HttpProbe(transport.observe()))
-                        .map_err(|_| reject("HTTP test owner observer already set"))?;
-                }
                 discovery
                     .request(async {
                         match lifecycle {
@@ -722,18 +646,4 @@ fn validate_id(name: &str) -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-pub(crate) struct HttpProbe(http_owner::Probe);
-
-#[cfg(all(test, unix, feature = "core", feature = "harness"))]
-impl HttpProbe {
-    #[cfg(unix)]
-    pub(crate) async fn closing(&self) -> Result<(), String> {
-        self.0.closing().await
-    }
-    pub(crate) fn joined(&self) -> Result<bool, String> {
-        self.0.joined()
-    }
 }

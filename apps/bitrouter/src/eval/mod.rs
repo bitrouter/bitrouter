@@ -3,9 +3,9 @@
 pub mod admission;
 pub mod api;
 pub mod compiler;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub mod publisher;
-#[cfg(feature = "core")]
+#[cfg(feature = "eval-publication")]
 pub mod settlement;
 pub mod store;
 

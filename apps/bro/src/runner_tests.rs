@@ -1,98 +1,21 @@
 //! Real HTTP/SSE requests exercise the public SDK and the stored restart boundary.
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
-use std::time::{Duration, Instant};
-use std::{fs, thread};
+use std::fs;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_sdk::gateway::GatewayClient;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     checkpoint::{Home, ModelState, Next, Thread, ToolState},
     runner,
 };
 
-struct Mock {
-    endpoint: String,
-    requests: thread::JoinHandle<Result<Vec<Value>>>,
-}
+#[path = "../tests/support/gateway.rs"]
+mod gateway_fixture;
+use gateway_fixture::{Mock, chunk, stream};
 
-impl Mock {
-    fn start(replies: Vec<String>) -> Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
-        let endpoint = format!("http://{}", listener.local_addr()?);
-        let requests = thread::spawn(move || {
-            let mut requests = vec![];
-            for reply in replies {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                let (mut socket, _) = loop {
-                    match listener.accept() {
-                        Ok(stream) => break stream,
-                        Err(e)
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                && Instant::now() < deadline =>
-                        {
-                            thread::sleep(Duration::from_millis(5))
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                };
-                socket.set_nonblocking(false)?;
-                socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-                let mut reader = BufReader::new(&socket);
-                let mut headers = String::new();
-                loop {
-                    let previous = headers.len();
-                    ensure!(reader.read_line(&mut headers)? > 0, "truncated headers");
-                    if headers.len() == previous + 2 {
-                        break;
-                    }
-                }
-                let headers = headers.to_ascii_lowercase();
-                ensure!(
-                    headers.starts_with("post /v1/chat/completions ")
-                        && headers.contains("authorization: bearer scoped-test-key\r\n"),
-                    "wrong SDK endpoint or credentials"
-                );
-                let length: usize = headers
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length: "))
-                    .context("missing length")?
-                    .parse()?;
-                let mut bytes = vec![0; length];
-                reader.read_exact(&mut bytes)?;
-                requests.push(serde_json::from_slice(&bytes)?);
-                write!(socket, "{reply}")?;
-            }
-            Ok(requests)
-        });
-        Ok(Self { endpoint, requests })
-    }
-
-    fn join(self) -> Result<Vec<Value>> {
-        self.requests
-            .join()
-            .map_err(|_| anyhow::anyhow!("mock gateway worker failed"))?
-    }
-}
-
-fn chunk(delta: Value, finish: Option<&str>) -> String {
-    format!(
-        "data: {}\n\n",
-        json!({"id":"completion-1","object":"chat.completion.chunk","model":"fixture",
-        "choices":[{"index":0,"delta":delta,"finish_reason":finish}]})
-    )
-}
-fn stream(body: String) -> String {
-    format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    )
-}
 fn call_stream(done: bool) -> String {
     let mut body = chunk(
         json!({"role":"assistant","reasoning_content":"retained","tool_calls":[
@@ -283,11 +206,11 @@ async fn cancelling_waiting_approval_settles_without_effects() -> Result<()> {
 }
 
 #[tokio::test]
-async fn denied_gateway_request_has_no_model_or_tool_output() -> Result<()> {
+async fn permission_denial_after_dispatch_preserves_receipts_and_ownership() -> Result<()> {
     let body =
         r#"{"error":{"message":"denied","type":"permission_error","code":"permission_denied"}}"#;
     let mock = Mock::start(vec![format!(
-        "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 403 Forbidden\r\nX-BitRouter-Request-Id: req-fixture\r\nX-BitRouter-Execution-Id: exec-fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )])?;
     let Work {
@@ -297,9 +220,54 @@ async fn denied_gateway_request_has_no_model_or_tool_output() -> Result<()> {
         client,
     } = Work::new(&mock.endpoint)?;
     assert!(runner::run(&home, &mut thread, &client).await.is_err());
-    let loaded = home.load(thread.thread_id)?;
-    assert_eq!(loaded.current()?.status(false), TurnStatus::Failed);
+    let mut loaded = home.load(thread.thread_id)?;
+    assert_eq!(
+        loaded.current()?.status(false),
+        TurnStatus::RecoveryRequired
+    );
+    let step = &loaded.current()?.steps[0];
+    assert_eq!(step.request_id.as_deref(), Some("req-fixture"));
+    assert_eq!(step.execution_id.as_deref(), Some("exec-fixture"));
     assert!(loaded.current()?.response().is_none());
+    assert!(loaded.start("retry".into(), None).is_err());
+    assert!(runner::run(&home, &mut loaded, &client).await.is_err());
     assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_success_preserves_each_unambiguous_receipt_independently() -> Result<()> {
+    for (headers, request, execution) in [
+        (
+            "X-BitRouter-Request-Id: first\r\nX-BitRouter-Request-Id: second\r\nX-BitRouter-Execution-Id: execution\r\n",
+            None,
+            Some("execution"),
+        ),
+        (
+            "X-BitRouter-Request-Id: request\r\nX-BitRouter-Execution-Id: invalid identity\r\n",
+            Some("request"),
+            None,
+        ),
+    ] {
+        let mock = Mock::start(vec![format!(
+            "HTTP/1.1 200 OK\r\n{headers}Content-Type: text/event-stream\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )])?;
+        let Work {
+            _dir,
+            home,
+            mut thread,
+            client,
+        } = Work::new(&mock.endpoint)?;
+        assert!(runner::run(&home, &mut thread, &client).await.is_err());
+        let restored = home.load(thread.thread_id)?;
+        assert_eq!(
+            restored.current()?.status(false),
+            TurnStatus::RecoveryRequired
+        );
+        let step = &restored.current()?.steps[0];
+        assert_eq!(step.request_id.as_deref(), request);
+        assert_eq!(step.execution_id.as_deref(), execution);
+        assert_eq!(mock.join()?.len(), 1);
+    }
     Ok(())
 }

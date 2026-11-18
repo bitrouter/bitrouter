@@ -86,6 +86,10 @@ impl<'a> Endpoint<'a> {
         })
     }
 
+    pub(crate) fn token(&self) -> &str {
+        self.token
+    }
+
     pub(crate) fn set_provider(&self) -> SetProviderRequest {
         let mut headers: HashMap<_, _> = self
             .headers

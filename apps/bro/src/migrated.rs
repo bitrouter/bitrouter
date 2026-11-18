@@ -1,5 +1,5 @@
 //! Read the public history projection and managed checkpoint evidence from the
-//! split M0 store. Its execution grants do not transfer to a foreground worker.
+//! split M0 store. Only offline-verified, sealed history can enter the local worker.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,12 @@ pub(crate) enum ManagedCommand {
     List,
     /// Inspect the recorded checkpoint ACK, starts and confirmed tool outcomes.
     Show { id: String },
+    /// Bind the sealed thread to a local workspace and explicitly selected endpoint.
+    Restore {
+        thread_id: uuid::Uuid,
+        #[arg(long)]
+        workspace: PathBuf,
+    },
 }
 
 const LEDGER: &str = "m20261118_000004_bro_sqlite";
@@ -50,7 +56,7 @@ pub(super) fn present(root: &Path) -> Result<bool> {
     Ok(store)
 }
 
-async fn verify_empty(db: &mut SqliteConnection) -> Result<()> {
+async fn verify_catalog(db: &mut SqliteConnection, sealed: bool) -> Result<()> {
     let tables = [
         "acp_assessment_revisions",
         "acp_canonical_sessions",
@@ -77,6 +83,9 @@ async fn verify_empty(db: &mut SqliteConnection) -> Result<()> {
     expected.sort_unstable();
     let actual:Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT GLOB 'sqlite_*' ORDER BY name").fetch_all(&mut *db).await?;
     ensure!(actual == expected, "unexpected transferred BRO catalog");
+    if sealed {
+        return Ok(());
+    } // The activation marker binds all immutable rows by digest.
     for table in tables {
         let sql = format!("SELECT EXISTS(SELECT 1 FROM {table})");
         ensure!(
@@ -95,8 +104,12 @@ async fn verify_empty(db: &mut SqliteConnection) -> Result<()> {
 }
 
 // true means the transferred store handled the command. A fresh worker may
-// open this home only after M4 published an explicitly activated, empty split.
-pub(super) async fn dispatch(root: &Path, command: &Command) -> Result<bool> {
+// open this home only after M4 published and verified the activated split.
+pub(super) async fn dispatch(
+    root: &Path,
+    command: &Command,
+    endpoint: Option<&str>,
+) -> Result<bool> {
     let mut db = SqliteConnectOptions::new()
         .filename(root.join("store.sqlite"))
         .read_only(true)
@@ -107,8 +120,15 @@ pub(super) async fn dispatch(root: &Path, command: &Command) -> Result<bool> {
         sqlx::query_scalar("SELECT version FROM seaql_migrations ORDER BY version")
             .fetch_all(&mut db)
             .await?;
+    let db_seal = versions
+        .first()
+        .and_then(|v| v.strip_prefix(LEDGER))
+        .and_then(|v| v.strip_prefix(":sealed-v1:"));
     ensure!(
-        versions == [LEDGER],
+        versions == [LEDGER]
+            || (versions.len() == 1
+                && db_seal
+                    .is_some_and(|d| bitrouter_ai::core::checkpoint::validate_digest(d).is_ok())),
         "unsupported store owner or migration marker"
     );
     let application: i64 = sqlx::query_scalar("PRAGMA main.application_id")
@@ -132,11 +152,57 @@ pub(super) async fn dispatch(root: &Path, command: &Command) -> Result<bool> {
             );
         }
         ensure!(
-            std::fs::metadata(&marker)?.len() == (LEDGER.len() + 1) as u64
-                && std::fs::read_to_string(&marker)? == format!("{LEDGER}\n"),
-            "invalid BRO activation marker"
+            std::fs::metadata(&marker)?.len() <= 256,
+            "oversized BRO activation marker"
         );
-        verify_empty(&mut db).await?;
+        let raw = std::fs::read_to_string(&marker)?;
+        let rest = raw
+            .strip_prefix(&format!("{LEDGER}\n"))
+            .context("invalid BRO activation marker")?;
+        let sealed = !rest.is_empty();
+        ensure!(
+            sealed == db_seal.is_some(),
+            "M0 activation and database seal disagree"
+        );
+        let origins = if let Some(digest) = db_seal {
+            verify_sealed(root, rest, digest)?
+        } else {
+            BTreeMap::new()
+        };
+        verify_catalog(&mut db, sealed).await?;
+        if let Command::Managed {
+            action:
+                ManagedCommand::Restore {
+                    thread_id,
+                    workspace,
+                },
+        } = command
+        {
+            let origin = origins
+                .get(thread_id)
+                .context("no verified M0 transfer for thread")?;
+            let home = crate::checkpoint::Home::open(root)?;
+            let _guard = home.worker(*thread_id)?;
+            let mut thread = home.load(*thread_id)?;
+            verify_prefix(origin, &thread)?;
+            let endpoint =
+                endpoint.context("select a gateway endpoint for the transferred thread")?;
+            crate::client(endpoint)?;
+            let workspace = workspace.canonicalize()?;
+            crate::tools::WorkspaceTools::new(&workspace, thread.tool_mode)?;
+            if thread.endpoint.is_empty() {
+                thread.workspace = workspace;
+                thread.endpoint = endpoint.to_owned();
+                home.admit(&thread)?;
+            } else {
+                ensure!(
+                    thread.workspace == workspace && thread.endpoint == endpoint,
+                    "thread already bound to another workspace or endpoint"
+                );
+            }
+            crate::inspect(&thread, None, false)?;
+            return Ok(true);
+        }
         if !matches!(command, Command::Managed { .. }) {
             return Ok(false);
         }
@@ -181,6 +247,67 @@ pub(super) async fn dispatch(root: &Path, command: &Command) -> Result<bool> {
         ),
     }?;
     Ok(true)
+}
+
+fn verify_sealed(
+    root: &Path,
+    marker: &str,
+    db_seal: &str,
+) -> Result<BTreeMap<uuid::Uuid, crate::checkpoint::Thread>> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    let mut file = std::fs::File::open(root.join("store.sqlite"))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hash.update(&buf[..n]);
+    }
+    let path = root.join("sealed.json");
+    ensure!(regular(&path)?, "missing sealed thread projections");
+    let bytes = std::fs::read(path)?;
+    ensure!(
+        hex::encode(Sha256::digest(&bytes)) == db_seal
+            && marker == format!("sealed-v1 {} {}\n", hex::encode(hash.finalize()), db_seal),
+        "M0 transfer digest mismatch"
+    );
+    let origins: BTreeMap<uuid::Uuid, crate::checkpoint::Thread> = serde_json::from_slice(&bytes)?;
+    ensure!(!origins.is_empty(), "missing sealed threads");
+    let home = crate::checkpoint::Home::open(root)?;
+    for (id, origin) in &origins {
+        ensure!(
+            *id == origin.thread_id && regular(&root.join("threads").join(format!("{id}.json")))?,
+            "missing or misidentified transferred checkpoint"
+        );
+        verify_prefix(origin, &home.load(*id)?)?;
+    }
+    Ok(origins)
+}
+
+fn verify_prefix(origin: &crate::checkpoint::Thread, t: &crate::checkpoint::Thread) -> Result<()> {
+    ensure!(
+        t.thread_id == origin.thread_id
+            && t.parent_id == origin.parent_id
+            && serde_json::to_value(&t.skills)? == serde_json::to_value(&origin.skills)?
+            && t.model == origin.model
+            && t.m0_instructions == origin.m0_instructions
+            && t.tool_mode == origin.tool_mode
+            && t.effort == origin.effort
+            && t.max_output_tokens == origin.max_output_tokens
+            && !origin.turns.is_empty()
+            && t.turns.len() >= origin.turns.len()
+            && t.turns[origin.turns.len()..]
+                .iter()
+                .all(|turn| turn.sealed_messages.is_empty())
+            && (!t.endpoint.is_empty()
+                || (t.workspace == origin.workspace && t.turns.len() == origin.turns.len()))
+            && serde_json::to_value(&t.turns[..origin.turns.len()])?
+                == serde_json::to_value(&origin.turns)?,
+        "local thread identity or sealed M0 history differs from verified transfer"
+    );
+    Ok(())
 }
 
 #[derive(Deserialize)]

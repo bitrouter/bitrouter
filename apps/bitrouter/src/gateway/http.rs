@@ -330,7 +330,6 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/health", get(health))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state);
-    #[cfg(not(feature = "core"))]
     let router = managed_profile::disabled(router);
     match options.router_wrapper {
         Some(wrapper) => wrapper(router),

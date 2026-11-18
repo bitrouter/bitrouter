@@ -15,7 +15,9 @@ use crate::acp_trajectory::checkpoint::types::{
     AssessmentContent, AssessmentSource, CriterionScore, RevisionInput,
 };
 use crate::core::evolution::jobs::JudgeJobs;
-use crate::gateway::observability::inventory::GatewayInventory;
+use crate::gateway::observability::inventory::{
+    COVERAGE_KIND, CoverageRegistration, INVENTORY_VERSION, lock_connection,
+};
 use crate::harness::acp::capture::CapturePort;
 use crate::harness::trajectory::{Recorder, RecordingScope};
 use crate::storage::capture::{
@@ -58,12 +60,16 @@ async fn recorded(db: &DatabaseConnection, name: &str) -> Result<std::sync::Arc<
         },
     )
     .await?;
-    GatewayInventory::new(db.clone())
-        .register_capture(
-            recorder.connection_id(),
-            "fixture-principal",
-            &format!("controller-{name}"),
-        )
+    // This fixture represents an already recorded M0 coverage fact.
+    let registration = CoverageRegistration {
+        version: INVENTORY_VERSION.into(),
+        connection_id: recorder.connection_id().into(),
+        runtime_epoch: "fixture-epoch".into(),
+        registered_at: chrono::Utc::now().to_rfc3339(),
+        invalid_reason: None,
+    };
+    EvolutionStore::new(db.clone(), "fixture-owner")?
+        .initialize(COVERAGE_KIND, recorder.connection_id(), None, &registration)
         .await?;
     recorder
         .record(event(
@@ -340,16 +346,14 @@ pub(crate) async fn mixed_namespace(db: &DatabaseConnection) -> Result<()> {
             .await
             .is_err()
     );
+    use sea_orm::TransactionTrait;
+    let legacy_reader = db.begin().await?;
     ensure!(
-        GatewayInventory::new(db.clone())
-            .register_capture(
-                foreign.connection_id(),
-                "fixture-principal",
-                "controller-marked"
-            )
+        lock_connection(&legacy_reader, foreign.connection_id())
             .await
             .is_err()
     );
+    legacy_reader.rollback().await?;
     // A live recorder cannot append or mark an ownership-tagged connection failed.
     ensure!(
         foreign

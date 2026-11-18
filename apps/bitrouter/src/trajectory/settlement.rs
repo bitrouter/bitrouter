@@ -314,15 +314,15 @@ fn digest_hex(digest: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use std::sync::Arc;
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::config::EvalConfig;
     use crate::gateway::caller::CallerContext;
     use crate::gateway::observability::event::EventBus;
     use crate::gateway::pipeline::settlement::SettlementContext;
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::gateway::pipeline::settlement::SettlementRecorder;
     use bitrouter_ai::types::{
         ApiProtocol, Content, DataContent, GenerationParams, Message, Prompt, Role, UsageOrigin,
@@ -333,18 +333,18 @@ mod tests {
         TrajectorySettlementDisposition, TrajectorySettlementRecorder, build_from_evidence,
         build_operational_evaluation, build_settlement,
     };
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::eval::publisher::TrajectoryOutboxPublisher;
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::eval::{
         EvalService, admission::SubmissionPrincipal, settlement::EvalSettlementRecorder,
         store::EvalStore,
     };
     use crate::gateway::observability::decision::PendingEvalDecision;
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
     use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     use crate::gateway::observability::settlement::PolicySettlementRecorder;
     use crate::gateway::routing::workflow::ir::RouteProjection;
     use crate::metering::MeteringSettlementEvent;
@@ -359,7 +359,7 @@ mod tests {
         TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, canonical_digest,
     };
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     fn notify(publisher: TrajectoryOutboxPublisher) -> Option<Arc<dyn Fn() + Send + Sync>> {
         Some(Arc::new(move || publisher.kick()))
     }
@@ -722,7 +722,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn independent_observation_settles_and_publishes_one_episode_without_guard_intent()
     -> anyhow::Result<()> {
@@ -844,7 +844,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn eval_recorder_uses_exactly_one_owner_and_preserves_pending_on_storage_failure()
     -> anyhow::Result<()> {
@@ -936,7 +936,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn settlement_and_typed_outbox_survive_restart_and_publish() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -988,7 +988,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn publisher_records_the_successful_admission_time_not_outbox_creation_time()
     -> anyhow::Result<()> {
@@ -1096,16 +1096,16 @@ mod tests {
         crate::db::run_migrations(&db).await?;
         let store = TrajectoryStore::new(db.clone());
         begin_guarded(&store, &request_id, "episode-1").await?;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             EvalStore::new(db.clone()),
             EvalConfig::default(),
             10,
         )?;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let outbox_notify = notify(publisher.clone());
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let outbox_notify = None;
         let recorder =
             TrajectorySettlementRecorder::new(store.clone(), outbox_notify, identity_key.clone());
@@ -1115,10 +1115,10 @@ mod tests {
             recorder.record_if_tracked(&first, None).await?,
             TrajectorySettlementDisposition::Persisted
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         publisher.wait_for_idle().await;
         drop(recorder);
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         drop(publisher);
         drop(store);
         drop(db);
@@ -1126,16 +1126,16 @@ mod tests {
         let restarted_db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&restarted_db).await?;
         let restarted_store = TrajectoryStore::new(restarted_db.clone());
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let restarted_publisher = TrajectoryOutboxPublisher::new(
             restarted_store.clone(),
             EvalStore::new(restarted_db.clone()),
             EvalConfig::default(),
             10,
         )?;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let restarted_notify = notify(restarted_publisher);
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let restarted_notify = None;
         let restarted_recorder = TrajectorySettlementRecorder::new(
             restarted_store.clone(),
@@ -1355,39 +1355,39 @@ mod tests {
         ))
         .await?;
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let eval_store = EvalStore::new(db);
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             eval_store.clone(),
             EvalConfig::default(),
             10,
         )?;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let outbox_notify = notify(publisher.clone());
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let outbox_notify = None;
         let recorder = TrajectorySettlementRecorder::new(store, outbox_notify, identity_key);
         let mut retry = context("external-request-current");
         retry.emit(routing_failure_metering("external-request-current", 175));
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let baseline_subjects = eval_store.list_subjects_for_owner("owner-a").await?.len();
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let baseline_admissions = eval_store
             .latest_admissions_for_owner("owner-a")
             .await?
             .len();
 
         let result = recorder.record_if_tracked(&retry, None).await;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         publisher.wait_for_idle().await;
 
         assert!(
             result.is_err(),
             "terminal retry must reject another episode's valid evaluation envelope"
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         {
             assert_eq!(
                 eval_store.list_subjects_for_owner("owner-a").await?.len(),
@@ -1610,18 +1610,18 @@ mod tests {
             correlated.evidence.native_parent_id.as_deref(),
             Some(first.request_id.as_str())
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let eval_store = EvalStore::new(db.clone());
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             eval_store.clone(),
             EvalConfig::default(),
             10,
         )?;
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         let outbox_notify = notify(publisher.clone());
-        #[cfg(not(feature = "core"))]
+        #[cfg(not(feature = "eval-publication"))]
         let outbox_notify = None;
         let recorder =
             TrajectorySettlementRecorder::new(store.clone(), outbox_notify, identity_key);
@@ -1633,7 +1633,7 @@ mod tests {
                 .await?,
             TrajectorySettlementDisposition::Persisted
         );
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         publisher.wait_for_idle().await;
 
         let mut surfaces = Vec::new();
@@ -1687,7 +1687,7 @@ mod tests {
             )?);
         }
 
-        #[cfg(feature = "core")]
+        #[cfg(feature = "eval-publication")]
         {
             assert!(publisher.drain_pending().await?.failed == 0);
             surfaces.extend(
@@ -1719,7 +1719,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn poison_outbox_does_not_block_later_item_or_shutdown_drain() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1792,7 +1792,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn retry_after_admission_before_mark_is_idempotent() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1839,7 +1839,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn publisher_batch_is_bounded() -> anyhow::Result<()> {
         let (db, store) = store().await?;
@@ -1864,7 +1864,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "core")]
+    #[cfg(feature = "eval-publication")]
     #[tokio::test]
     async fn burst_kicks_use_one_single_flight_worker_and_converge() -> anyhow::Result<()> {
         let (db, store) = store().await?;

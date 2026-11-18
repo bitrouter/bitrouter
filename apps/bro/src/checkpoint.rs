@@ -2,7 +2,6 @@
 //! A lost worker releases its OS lock. Only a checkpoint with a known next
 //! operation authorizes continuation; releasing the lock says nothing about effects.
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -24,6 +23,12 @@ enum Format {
 pub(crate) struct Thread {
     format: Format,
     pub thread_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m0_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::skills::Selection>,
     pub workspace: PathBuf,
     pub endpoint: String,
     pub model: String,
@@ -40,6 +45,9 @@ pub(crate) struct Turn {
     /// Workspace instructions observed on admission, retained across restarts.
     pub startup_instructions: Option<String>,
     pub request_id: Option<String>,
+    /// Complete, already-settled Chat history verified by the M0 offline reader.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sealed_messages: Vec<ChatMessage>,
     pub steps: Vec<Step>,
     pub outcome: Option<Outcome>,
 }
@@ -143,6 +151,9 @@ impl Thread {
         Self {
             format: Format::Local,
             thread_id: Uuid::new_v4(),
+            parent_id: None,
+            m0_instructions: None,
+            skills: Vec::new(),
             workspace,
             endpoint,
             model,
@@ -165,7 +176,7 @@ impl Thread {
         ensure!(!prompt.trim().is_empty(), "prompt is empty");
         ensure!(prompt.len() <= 512 * 1024, "prompt exceeds context limit");
         ensure!(
-            self.turns.last().is_none_or(Turn::released),
+            self.turns.iter().all(Turn::released),
             "thread already has an active or unresolved turn"
         );
         self.turns.push(Turn {
@@ -173,6 +184,7 @@ impl Thread {
             prompt,
             startup_instructions: crate::gateway::workspace_instructions(&self.workspace)?,
             request_id,
+            sealed_messages: vec![],
             steps: vec![],
             outcome: None,
         });
@@ -258,27 +270,28 @@ impl Turn {
         }
     }
 
+    fn legacy_denial(&self) -> bool {
+        self.steps
+            .last()
+            .is_some_and(|step| matches!(step.state, ModelState::GatewayDenied))
+    }
+
     fn released(&self) -> bool {
         self.outcome.as_ref().is_some_and(|o| o.status.terminal())
     }
 }
 
 pub(crate) struct Home {
+    root: PathBuf,
     dir: PathBuf,
 }
 
 impl Home {
     pub fn open(root: &Path) -> Result<Self> {
         let dir = root.join("threads");
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(&dir)?;
+        crate::durable::create_dirs(&dir, true)?;
         Ok(Self {
+            root: root.canonicalize()?,
             dir: dir.canonicalize()?,
         })
     }
@@ -324,9 +337,19 @@ impl Home {
     pub fn admit(&self, thread: &Thread) -> Result<()> {
         let guard = open_lock(&self.dir.join("admission.lock"))?;
         guard.lock()?;
+        self.check_owner(thread)?;
+        self.save(thread)
+    }
+
+    pub fn check_owner(&self, thread: &Thread) -> Result<()> {
         ensure!(
-            !self.dir.starts_with(&thread.workspace),
+            !overlapping(&self.root, &thread.workspace)?
+                && !overlapping(&self.dir, &thread.workspace)?,
             "BRO data directory must be outside the tool workspace"
+        );
+        ensure!(
+            thread.turns.iter().rev().skip(1).all(Turn::released),
+            "earlier turn has an unresolved dispatch"
         );
         for id in self.ids()? {
             if id == thread.thread_id {
@@ -334,37 +357,40 @@ impl Home {
             }
             let other = self.load(id)?;
             ensure!(
-                other.workspace != thread.workspace
-                    || other.turns.last().is_none_or(Turn::released),
+                other.turns.iter().all(Turn::released)
+                    || !overlapping(&other.workspace, &thread.workspace)?,
                 "workspace is owned by active or unresolved thread {id}"
             );
         }
-        self.save(thread)
+        Ok(())
     }
 
     pub fn save(&self, thread: &Thread) -> Result<()> {
-        let mut temp = tempfile::NamedTempFile::new_in(&self.dir)?;
-        serde_json::to_writer(temp.as_file_mut(), thread)?;
-        temp.flush()?;
-        temp.as_file().sync_all()?;
-        temp.persist(self.path(thread.thread_id))?;
-        #[cfg(unix)]
-        File::open(&self.dir)?.sync_all()?;
+        crate::durable::write_file(
+            &self.path(thread.thread_id),
+            atomicwrites::AllowOverwrite,
+            |file| serde_json::to_writer(file, thread).map_err(std::io::Error::from),
+        )?;
         Ok(())
     }
 
     pub fn load(&self, id: Uuid) -> Result<Thread> {
         let file = File::open(self.path(id)).with_context(|| format!("opening thread {id}"))?;
-        let thread: Thread = serde_json::from_reader(std::io::BufReader::new(file))
+        let mut thread: Thread = serde_json::from_reader(std::io::BufReader::new(file))
             .context("invalid or unsupported local checkpoint")?;
         ensure!(
             thread.thread_id == id,
             "checkpoint thread identity mismatch"
         );
+        crate::skills::validate(&thread.skills)?;
         for (index, turn) in thread.turns.iter().enumerate() {
             ensure!(
-                index + 1 == thread.turns.len() || turn.released(),
+                index + 1 == thread.turns.len() || turn.released() || turn.legacy_denial(),
                 "later turn follows unresolved work"
+            );
+            ensure!(
+                turn.sealed_messages.is_empty() || (turn.steps.is_empty() && turn.released()),
+                "unsettled imported history"
             );
             for (step_index, step) in turn.steps.iter().enumerate() {
                 if step_index + 1 < turn.steps.len() || turn.released() {
@@ -393,8 +419,49 @@ impl Home {
                 }
             }
         }
+        // Older workers treated HTTP 401/403 as proof of no dispatch. Retain
+        // their ledger (including later history), but never release that grant.
+        for turn in &mut thread.turns {
+            if turn.legacy_denial() {
+                let outcome = turn.outcome.get_or_insert_with(|| Outcome {
+                    status: TurnStatus::Failed,
+                    detail: "legacy gateway denial".into(),
+                    final_answer: None,
+                });
+                if outcome.status != TurnStatus::RecoveryRequired {
+                    outcome.status = TurnStatus::RecoveryRequired;
+                    outcome
+                        .detail
+                        .push_str("; gateway dispatch was not ruled out");
+                }
+            }
+        }
         Ok(thread)
     }
+}
+
+// Canonical path spelling can differ for the same directory on case-insensitive
+// filesystems. Compare directory identities as well as saved path components.
+fn overlapping(left: &Path, right: &Path) -> std::io::Result<bool> {
+    if left.starts_with(right) || right.starts_with(left) {
+        return Ok(true);
+    }
+    for (root, candidate) in [(left, right), (right, left)] {
+        let handle = match same_file::Handle::from_path(root) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for ancestor in candidate.ancestors() {
+            match same_file::Handle::from_path(ancestor) {
+                Ok(other) if other == handle => return Ok(true),
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn open_lock(path: &Path) -> Result<File> {

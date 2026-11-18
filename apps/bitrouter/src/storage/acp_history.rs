@@ -76,28 +76,6 @@ mod tests {
 
     use super::is_administrative_update;
 
-    fn baseline(payload: &Value) -> bool {
-        use agent_client_protocol_schema::v1::{SessionNotification, SessionUpdate};
-
-        serde_json::from_value::<SessionNotification>(payload.clone()).is_ok_and(|event| {
-            matches!(
-                event.update,
-                SessionUpdate::AvailableCommandsUpdate(_)
-                    | SessionUpdate::ConfigOptionUpdate(_)
-                    | SessionUpdate::CurrentModeUpdate(_)
-                    | SessionUpdate::SessionInfoUpdate(_)
-            )
-        })
-    }
-
-    fn assert_baseline(payload: &Value) {
-        assert_eq!(
-            is_administrative_update(payload),
-            baseline(payload),
-            "stored ACP classification changed for {payload}"
-        );
-    }
-
     fn updates() -> Vec<Value> {
         vec![
             json!({"sessionUpdate":"available_commands_update", "availableCommands":[
@@ -132,7 +110,6 @@ mod tests {
         for (index, update) in updates().into_iter().enumerate() {
             let payload = json!({"sessionId":"session", "update":update});
             assert_eq!(is_administrative_update(&payload), index < 4);
-            assert_baseline(&payload);
         }
     }
 
@@ -171,11 +148,25 @@ mod tests {
         ] {
             for length in 0..=5 {
                 for value in values() {
+                    // Frozen from the 1.10.2 decoder. The required mode is a
+                    // string. The commands/options payload and metadata are permissive.
+                    let accepted = match kind {
+                        "available_commands_update" | "config_option_update" => {
+                            (1..=2).contains(&length)
+                        }
+                        "current_mode_update" => (1..=2).contains(&length) && value.is_string(),
+                        "session_info_update" => length <= 3,
+                        _ => false,
+                    };
                     let mut fields = vec![json!(kind)];
                     fields.extend(std::iter::repeat_n(value, length));
                     let update = Value::Array(fields);
-                    assert_baseline(&json!({"sessionId":"session", "update":update}));
-                    assert_baseline(&json!(["session", update, null]));
+                    for payload in [
+                        json!({"sessionId":"session", "update":update}),
+                        json!(["session", update, null]),
+                    ] {
+                        assert_eq!(is_administrative_update(&payload), accepted, "{payload}");
+                    }
                 }
             }
         }
@@ -183,18 +174,20 @@ mod tests {
 
     #[test]
     fn stored_notifications_match_the_baseline_decoder() {
-        for update in updates() {
+        for (index, update) in updates().into_iter().enumerate() {
+            let setup = index < 4;
             let payload = json!({"sessionId":"session", "update":update});
-            assert_baseline(&payload);
             for field in ["sessionId", "update", "_meta", "unknown"] {
-                for value in values() {
+                for value in values().into_iter().map(Some).chain([None]) {
+                    let expected = setup
+                        && match field {
+                            "sessionId" => value.as_ref().is_some_and(Value::is_string),
+                            "update" => false,
+                            _ => true,
+                        };
                     let mut changed = payload.clone();
-                    changed[field] = value;
-                    assert_baseline(&changed);
-                }
-                if let Value::Object(mut changed) = payload.clone() {
-                    changed.remove(field);
-                    assert_baseline(&Value::Object(changed));
+                    change(&mut changed, field, value);
+                    assert_eq!(is_administrative_update(&changed), expected, "{changed}");
                 }
             }
             for field in [
@@ -207,26 +200,42 @@ mod tests {
                 "_meta",
                 "unknown",
             ] {
-                for value in values() {
+                for value in values().into_iter().map(Some).chain([None]) {
+                    let expected = setup
+                        && match (index, field) {
+                            (_, "sessionUpdate") => false,
+                            (0, "availableCommands") | (1, "configOptions") => value.is_some(),
+                            (2, "currentModeId") => value.as_ref().is_some_and(Value::is_string),
+                            _ => true,
+                        };
                     let mut changed = payload.clone();
-                    changed["update"][field] = value;
-                    assert_baseline(&changed);
-                }
-                if let Value::Object(mut changed) = update.clone() {
-                    changed.remove(field);
-                    assert_baseline(&json!({"sessionId":"session", "update":changed}));
+                    change(&mut changed["update"], field, value);
+                    assert_eq!(is_administrative_update(&changed), expected, "{changed}");
                 }
             }
             for metadata in values() {
-                assert_baseline(&json!(["session", update, metadata]));
-                assert_baseline(&json!(["session", update, metadata, "extra"]));
+                assert_eq!(
+                    is_administrative_update(&json!(["session", update, metadata])),
+                    setup
+                );
+                assert!(!is_administrative_update(&json!([
+                    "session", update, metadata, "extra"
+                ])));
             }
-            assert_baseline(&json!(["session", update]));
-            assert_baseline(&json!(["session"]));
-            assert_baseline(&json!([null, update]));
+            assert_eq!(is_administrative_update(&json!(["session", update])), setup);
+            assert!(!is_administrative_update(&json!(["session"])));
+            assert!(!is_administrative_update(&json!([null, update])));
         }
         for payload in values() {
-            assert_baseline(&payload);
+            assert!(!is_administrative_update(&payload));
+        }
+    }
+
+    fn change(object: &mut Value, field: &str, value: Option<Value>) {
+        if let Some(value) = value {
+            object[field] = value;
+        } else if let Some(object) = object.as_object_mut() {
+            object.remove(field);
         }
     }
 }

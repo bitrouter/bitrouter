@@ -53,7 +53,6 @@ type Result<T> = std::result::Result<T, ErrorCode>;
 
 pub(super) fn retained_heap_bytes(value: &RetainedExecutionRevision) -> Result<usize> {
     let RetainedExecutionRevision {
-        bro_capture: _,
         installation,
         tenant,
         revision,

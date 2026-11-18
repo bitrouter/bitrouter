@@ -22,32 +22,14 @@ fn selection(manifest: &str, names: &[&str]) -> Result<FeatureSelection, Box<dyn
 }
 
 #[test]
-fn handoff_tracks_only_compiled_session_and_scheduler_sources() -> Result<(), Box<dyn Error>> {
-    for (roots, sessions, scheduler) in [
-        (vec![], false, false),
-        (vec!["multi-instance"], false, false),
-        (vec!["harness"], true, false),
-        (vec!["core"], false, true),
-        (vec!["default"], false, false),
-        (vec!["core", "harness"], true, true),
-    ] {
-        let selected = selection(MANIFEST, &roots)?;
-        let sources: Vec<_> = selected.handoff_sources().collect();
-        assert!(sources.contains(&"src/daemon_handoff.rs"));
-        assert!(sources.contains(&"src/upgrade_preflight.rs"));
-        for path in [
-            "src/client/sessions/mod.rs",
-            "src/client/sessions/wire.rs",
-            "src/harness/supervisor.rs",
-        ] {
-            assert_eq!(sources.contains(&path), sessions);
-        }
-        assert_eq!(
-            sources.contains(&"src/core/evolution/scheduler.rs"),
-            scheduler
+fn handoff_inputs_are_gateway_owned_and_packaged() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for file in build_artifact::HANDOFF_SOURCES {
+        assert!(root.join(file).is_file(), "{file}");
+        assert!(
+            !file.contains("harness") && !file.contains("/core/") && !file.contains("sessions")
         );
     }
-    Ok(())
 }
 
 #[test]
@@ -55,15 +37,15 @@ fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
 -> Result<(), Box<dyn Error>> {
     for (roots, expected) in [
         (vec!["otel"], vec!["otel-http"]),
-        (vec!["harness"], vec!["harness", "mcp"]),
+        (vec!["eval-publication"], vec!["eval-publication"]),
         (vec!["server-tools"], vec!["mcp", "server-tools"]),
         (
             vec!["otel", "otel-http", "otel-grpc"],
             vec!["otel-grpc", "otel-http"],
         ),
         (
-            vec!["harness", "core", "mcp", "harness"],
-            vec!["core", "harness", "mcp"],
+            vec!["eval-publication", "server-tools", "mcp", "mcp"],
+            vec!["eval-publication", "mcp", "server-tools"],
         ),
     ] {
         let selected = selection(MANIFEST, &roots)?;
@@ -182,7 +164,7 @@ fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Resul
     }
     for roots in [
         vec!["db-postgres"],
-        vec!["multi-instance", "core"],
+        vec!["multi-instance", "eval-publication"],
         vec!["multi-instance", "otel"],
         vec!["multi-instance", "db-mysql"],
         vec!["multi-instance", "default"],
@@ -261,8 +243,7 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
     assert!(!identity.target.contains(['/', '\\']));
     assert!(identity.features.windows(2).all(|pair| pair[0] < pair[1]));
     for (name, enabled) in [
-        ("core", cfg!(feature = "core")),
-        ("harness", cfg!(feature = "harness")),
+        ("eval-publication", cfg!(feature = "eval-publication")),
         ("mcp", cfg!(feature = "mcp")),
         ("server-tools", cfg!(feature = "server-tools")),
         ("guardrails", cfg!(feature = "guardrails")),

@@ -333,7 +333,7 @@ async fn explicitly_activates_a_clean_pair_and_rejects_staged_gateway_startup() 
     ensure!(report.dispatch_allowed && report.blockers.is_empty());
     let pair = report.stores.context("missing active pair")?;
     ensure!(
-        pair.dispatch_allowed && fs::read(&path)? == bytes && fs::read(&pair.rollback)? == bytes
+        pair.dispatch_allowed && fs::read(&path)? != bytes && fs::read(&pair.rollback)? == bytes
     );
     ensure!(fs::read(active.join("bro/ACTIVATED"))? == b"m20261118_000004_bro_sqlite\n");
     for _ in 0..2 {
@@ -350,7 +350,15 @@ async fn explicitly_activates_a_clean_pair_and_rejects_staged_gateway_startup() 
         gateway.close().await?;
         mixed_store::verify_owner(&pair.bro, Owner::Bro).await?;
     }
+    ensure!(pair.bitrouter == active.join("bitrouter/bitrouter.db"));
     ensure!(mixed_store::activate(&path, &active).await.is_err());
+    let second = dir.path().join("second-owner");
+    ensure!(mixed_store::activate(&path, &second).await.is_err() && !second.exists());
+    ensure!(
+        db::connect(&format!("sqlite://{}", path.display()))
+            .await
+            .is_err()
+    );
     Ok(())
 }
 
@@ -421,5 +429,26 @@ async fn fresh_gateway_matches_projection_and_rejects_drift_before_wal() -> Resu
             .is_err()
     );
     ensure!(fs::read(&active.bitrouter)? == before);
+    Ok(())
+}
+
+#[path = "mixed_store_migration/sealed.rs"]
+mod sealed;
+
+#[tokio::test]
+async fn malformed_virtual_key_expiry_stops_activation_without_a_tenant_manifest() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (source, db) = fresh(dir.path()).await?;
+    db.execute_unprepared("INSERT INTO users VALUES ('operator','2026-01-01T00:00:00Z'); INSERT INTO api_keys(id,user_id,key_hash,active,expires_at,created_at) VALUES ('fixture','operator','fixture-hash',1,'invalid-date','2026-01-01T00:00:00Z')").await?;
+    ensure!(
+        bitrouter::auth::db::find_key_by_hash(&db, "fixture-hash")
+            .await
+            .is_err()
+    );
+    db.close().await?;
+    let before = fs::read(&source)?;
+    let dest = dir.path().join("denied");
+    ensure!(mixed_store::activate(&source, &dest).await.is_err());
+    ensure!(!dest.exists() && fs::read(&source)? == before);
     Ok(())
 }

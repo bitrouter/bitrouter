@@ -29,7 +29,13 @@ impl WorkspaceTools {
         } else {
             None
         };
-        persist_text(&path, args.content.as_bytes(), original.as_deref(), effect)?;
+        persist_text(
+            &self.root,
+            &path,
+            args.content.as_bytes(),
+            original.as_deref(),
+            effect,
+        )?;
         *effect = EffectStatus::Completed;
         Ok(ToolResultOutput::Json {
             value: serde_json::json!({"path": args.path, "bytes": args.content.len()}),

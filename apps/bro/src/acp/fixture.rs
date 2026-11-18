@@ -1,4 +1,6 @@
 //! Cargo-built ACP adapter for BRO subprocess tests. Inputs are synthetic.
+#[path = "fixture/serve.rs"]
+mod serve;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::io::{BufRead, Read, Write};
@@ -15,7 +17,11 @@ fn main() -> Result<()> {
     let args = std::env::args().collect::<Vec<_>>();
     if args.get(1).is_some_and(|a| a == "--descendant") {
         let dir = std::path::Path::new(args.get(2).context("descendant workspace")?);
-        std::fs::write(dir.join("descendant-ready"), "ready")?;
+        let lifetime = std::net::TcpListener::bind("127.0.0.1:0")?;
+        std::fs::write(
+            dir.join("descendant-ready"),
+            lifetime.local_addr()?.to_string(),
+        )?;
         for _ in 0..500 {
             if dir.join("release").exists() {
                 std::fs::write(dir.join("orphan-effect"), "orphaned")?;
@@ -24,6 +30,9 @@ fn main() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         return Ok(());
+    }
+    if args.iter().any(|a| a == "--serve-compat") {
+        return serve::run();
     }
     let fallback = args.iter().any(|a| a == "--fallback");
     let mismatch = args.iter().any(|a| a == "--mismatch");
@@ -49,6 +58,7 @@ fn main() -> Result<()> {
             std::env::var("ANTHROPIC_AUTH_TOKEN")?,
         )
     };
+    let mismatch = mismatch || base.ends_with("/mismatch/v1");
     // Exercise a noisy adapter without writing real or test credentials to disk.
     eprintln!("adapter echoes brk_synthetic-acp-bound-token");
     ensure!(!args.iter().any(|a| a.contains(&token)));
@@ -64,6 +74,7 @@ fn main() -> Result<()> {
     let mut verified = false;
     let mut workspace = None;
     let mut pending = None;
+    let mut hanging_prompt = None;
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {
         let m: Value = serde_json::from_str(&line?)?;
@@ -120,6 +131,7 @@ fn main() -> Result<()> {
                     continue;
                 }
                 if text == "hang" {
+                    hanging_prompt = Some(id.clone());
                     continue;
                 }
                 if text == "reject" {
@@ -166,7 +178,17 @@ fn main() -> Result<()> {
                 )?;
                 json!({"stopReason":"end_turn"})
             }
-            Some("session/cancel") => return Ok(()),
+            Some("session/cancel") => {
+                ensure!(p["sessionId"] == "fixture-session");
+                if let Some(original) = hanging_prompt.take() {
+                    send(
+                        &mut out,
+                        json!({"jsonrpc":"2.0","id":original,"result":{"stopReason":"cancelled"}}),
+                    )?;
+                    continue;
+                }
+                return Ok(());
+            }
             None if id == "permission" => {
                 let (original, only_allow) = pending.take().context("unexpected reply")?;
                 let response = &m["result"]["outcome"];

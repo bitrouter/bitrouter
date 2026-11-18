@@ -246,8 +246,6 @@ pub(super) fn decode_with_operation(
                     .context("CoreChoice child projection missing")?
                     .clone(),
                 digest: profile.digest()?,
-                #[cfg(all(feature = "core", feature = "harness"))]
-                policy: profile.policy,
             });
         }
         ensure!(
@@ -286,8 +284,6 @@ pub(super) fn decode_with_operation(
         }
     }
     Ok(ValidatedEnvelope {
-        bro_capture: false,
-
         document,
         routes: retained,
     })

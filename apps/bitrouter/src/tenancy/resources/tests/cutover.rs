@@ -233,7 +233,7 @@ async fn mutate_authenticated_route(
     };
     import.validate()?;
     if has_assessment {
-        artifact.envelope = Some(compiler::prepare_bro_capture_route(&import, None)?);
+        artifact.envelope = Some(compiler::prepare_current_route(&import, None)?);
     }
     let record = storage::seal(&resources, &artifact)?;
     let changed = db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
@@ -295,23 +295,6 @@ async fn unreferenced_retired_exploration_refuses_startup_and_v2_restore_without
     );
     ensure!(!destination.exists());
     ensure!(image(&source)? == original);
-    Ok(())
-}
-
-#[cfg(all(feature = "core", feature = "harness"))]
-#[tokio::test]
-#[ignore = "requires explicit BITROUTER_TEST_RECOVERY_KEY; current BRO assessment integrity stays readable"]
-async fn unreferenced_current_bro_assessment_integrity_survives_v2_restore() -> Result<()> {
-    let directory = home()?;
-    let home = directory.path().canonicalize()?;
-    let source = home.join("current-bro.sqlite");
-    let (installation, reference, judge) = current_source(&home, &source).await?;
-    mutate_authenticated_route(&source, &installation, &reference, false, Some(judge)).await?;
-    let original = std::fs::read(&source)?;
-    let destination = home.join("restored.sqlite");
-    restore(&home, &source, &destination, &installation).await?;
-    ensure!(std::fs::read(&source)? == original);
-    ensure!(std::fs::read(&destination)? == original);
     Ok(())
 }
 

@@ -519,14 +519,9 @@ async fn official_cli_uses_shared_host_without_extension_registrations() -> Resu
         .send()
         .await?
         .status();
-    let expected_eval_status = if cfg!(feature = "core") {
-        reqwest::StatusCode::OK
-    } else {
-        reqwest::StatusCode::NOT_FOUND
-    };
     ensure!(
-        eval_status == expected_eval_status,
-        "eval route does not match compiled core capability: {eval_status}"
+        eval_status == reqwest::StatusCode::OK,
+        "gateway host did not expose the Eval ledger: {eval_status}"
     );
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
