@@ -1062,7 +1062,7 @@ jobs:
         - os: windows-latest
           package: bitrouter-bro
           timeout-minutes: 45
-          expected-tests: 21
+          expected-tests: 22
           targets: ''
           filter: (kind(bin) & test(=tools::tests::missing_sandbox_omits_and_refuses_shell)) | binary(=invocation) | binary(=acp_serve)
             | (binary(=managed_native) & (test(=approved_write_reads_and_continues_then_cancels_the_next_approval)
