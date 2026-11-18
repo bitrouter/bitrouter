@@ -107,6 +107,29 @@ this adapter guide does not promise that an arbitrary unknown request field is
 forwarded. The [adapter contracts](../../crates/bitrouter-ai/src/protocol)
 and their consuming tests define the supported conversion shapes.
 
+## Provider model-list check
+
+`bro providers check <provider>` reads one provider already present in
+configuration and requests its model catalog. Local HTTP and online HTTPS use
+that same check. It resolves `api_base`, an account's endpoint override,
+`protocol_endpoints`, and `${VAR}` credential references the way config load
+does. An unresolved endpoint or credential reference fails that connection and
+does not open a socket. A resolved empty credential is allowed; a local
+endpoint may omit a key.
+
+The request is a GET of the selected protocol's model list. Chat Completions,
+Responses, and Messages use `{api_base}/models` and accept `{ "data": [{ "id" }] }`.
+Authentication, static provider headers, and upstream timeouts are the ones the
+gateway uses for that provider. The check does not render a prompt, does not
+enter scheduling, and does not change `active` or write `bitrouter.yaml`.
+Model ids it sees are reported only. `auto_discover` still runs only at startup
+and reload.
+
+`answered` means the endpoint returned that protocol's list. It does not prove
+that every listed model can generate. A provider with accounts is checked once
+per account (`provider/label`); `--account` selects one. The command is local:
+it dials from the operator's machine.
+
 ## MCP adaptation
 
 When configured, the gateway accepts JSON-RPC requests at `POST /mcp/{server}`

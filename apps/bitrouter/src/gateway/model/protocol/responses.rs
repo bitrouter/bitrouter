@@ -3001,6 +3001,14 @@ impl Transport for ResponsesTransport {
         format!("{base}/responses")
     }
 
+    fn model_catalog_url(&self, target: &ModelTarget) -> Option<String> {
+        Some(format!("{}/models", target.api_base.trim_end_matches('/')))
+    }
+
+    fn parse_model_catalog(&self, body: &serde_json::Value) -> Option<Vec<String>> {
+        super::catalog_ids(body)
+    }
+
     async fn authorise(
         &self,
         mut request: reqwest::Request,

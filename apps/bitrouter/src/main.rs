@@ -2,7 +2,7 @@
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
 //! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
-//! `access-policy create` / `providers (list|login|logout)` / `agents` / `run` /
+//! `access-policy create` / `providers (list|check|login|logout)` / `agents` / `run` /
 //! `threads` / `launch` / `cloud` / `skills` / `mcp (list|show|add|edit|remove|check)` / `acp serve`.
 //! Resource configuration administration uses `tenancy` over the HTTP SDK.
 //! Cloud-account sign-in lives under
@@ -1361,6 +1361,25 @@ enum ProviderAction {
         /// Explicit local control socket for the daemon's accepted provider catalog.
         #[arg(long)]
         socket: Option<PathBuf>,
+    },
+    /// Check one configured provider's endpoint and model list.
+    ///
+    /// Resolves the endpoint and credential already written for that provider,
+    /// then requests its model list with the gateway's protocol, authentication,
+    /// and timeouts. Does not send a generation, change routing, or write
+    /// config. Discovered model ids are reported only.
+    Check {
+        /// Provider id from `providers:` in `bitrouter.yaml`.
+        provider: String,
+        /// Account label when the provider has more than one credential.
+        /// Omit it to check every account.
+        #[arg(long)]
+        account: Option<String>,
+        /// Path to `bitrouter.yaml`. When omitted, the binary resolves
+        /// in this order: `./bitrouter.yaml` → `$BITROUTER_HOME/bitrouter.yaml`
+        /// → `~/.bitrouter/bitrouter.yaml` → zero-config in-memory defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Log in to an upstream provider — interactive credential setup.
     ///
@@ -4130,6 +4149,15 @@ async fn administration_providers(
             }
             Ok(())
         }
+        ProviderAction::Check { .. } => {
+            if remote_context.is_some() {
+                return Err(bitrouter::gateway::error::BitrouterError::bad_request(
+                    "`providers check` reads the local configuration and is unavailable for a remote context",
+                )
+                .into());
+            }
+            providers(action, output).await
+        }
         action => {
             if remote_context.is_some() {
                 return Err(bitrouter::gateway::error::BitrouterError::bad_request(
@@ -4719,6 +4747,38 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             output.emit(&legacy_providers_report(&source).await?)?;
             Ok(())
+        }
+        ProviderAction::Check {
+            provider,
+            account,
+            config,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let report = match &source {
+                bitrouter::paths::ConfigSource::File(path) => {
+                    let yaml = tokio::fs::read_to_string(path)
+                        .await
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    bitrouter::providers::check::check_document(
+                        &yaml,
+                        &provider,
+                        account.as_deref(),
+                        bitrouter::config::env_lookup,
+                    )
+                    .await?
+                }
+                bitrouter::paths::ConfigSource::Default { .. } => {
+                    let loaded = bitrouter::paths::load_config(&source).await?;
+                    bitrouter::providers::check::check_loaded(
+                        &loaded,
+                        &provider,
+                        account.as_deref(),
+                    )
+                    .await?
+                }
+            };
+            output.emit(&report)?;
+            exit_with(report.exit_code())
         }
         ProviderAction::Login {
             provider,
@@ -5663,10 +5723,9 @@ async fn run_agent_prompt(
     exit_with(tally.exit_code())
 }
 
-/// Leave with a status a successful command chose for itself — `spawn
-/// --check`'s report and a headless prompt's permission tally both do — or
+/// Leave with a status a successful command chose for itself — `providers
+/// check`, `spawn --check`, and a headless prompt's permission tally — or
 /// return normally for zero.
-#[cfg(any(feature = "harness", feature = "mcp"))]
 fn exit_with(code: i32) -> Result<()> {
     if code == 0 {
         Ok(())

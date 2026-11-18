@@ -193,7 +193,10 @@ Shared gateway deployments explicitly select `gateway_state.mode: shared` and us
 - **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
   accepts the native facets listed by `launch --help`.
 - **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage
-  with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
-- **`bitrouter/<id>` selects a named router** before provider lookup; unknown router names fail. Model Policy retains full admitted context. See `references/cli.md` for details.
+  with `providers list|check|login|logout` and config/reload. Diagnose with
+  `status`, `route`, `models`, and logs.
+- **`bitrouter/<id>` selects a named router** before provider lookup. Unknown
+  router names fail. Model Policy retains full admitted context. See
+  `references/cli.md` for details.
 
 Offline `tenancy offline map` records bounded M0 mapping claims against verified snapshot evidence; it does not backfill or authorize cutover. See `references/cli.md`.

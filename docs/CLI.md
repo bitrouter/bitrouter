@@ -1196,6 +1196,35 @@ no models rather than failing the command). The daemon path does no such probing
 Uses the same app-owned report as CLI and typed remote control, so
 each retained surface preserves one JSON shape.
 
+### `bro providers check <provider>`
+
+```
+bro providers check <provider> [--account <label>] [-c <path>]
+```
+
+Reads one configured provider and requests its model list. Local HTTP and
+online HTTPS use the same check. The command resolves that provider's endpoint
+and credential reference, then GETs the catalog for its existing protocol
+(Chat Completions, Responses, and Messages use `{api_base}/models`) with the
+gateway's authentication, static headers, and upstream timeouts.
+
+The result is one connection, or one per account when the provider has
+accounts. `--account` checks a single label. JSON is the default. Each object
+reports `id`, `endpoint`, `protocol`, `answered`, and the model ids seen.
+`--human` prints those as ID, PROTOCOL, ANSWERED, and MODELS. `answered` is
+true only when the endpoint returned that protocol's list; a list does not
+prove generation.
+An unresolved `${VAR}` fails that connection and does not dial. The command
+does not send a chat, responses, or messages generation, does not change
+`active`, and does not write `bitrouter.yaml`. Discovered ids stay in the
+command output. `auto_discover` is unchanged: it still runs only at startup
+and reload.
+
+The process exits non-zero when any selected connection did not answer. A
+remote context cannot run this command; the dial happens on the machine that
+reads the local configuration. `active` in `providers list` remains the routing
+flag, not the result of this check.
+
 ### `bro providers list`
 
 ```
