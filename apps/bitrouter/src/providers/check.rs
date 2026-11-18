@@ -108,9 +108,9 @@ pub async fn check_document<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    let config = crate::config::parse_with(yaml, |name| {
-        Some(lookup(name).unwrap_or_else(|| unresolved_marker(name)))
-    })?;
+    let document =
+        crate::config::substitute_with_missing(yaml, lookup, |name| Ok(unresolved_marker(name)))?;
+    let config = crate::config::parse_resolved(&document)?;
     check_loaded(&config, provider_id, account).await
 }
 
@@ -253,6 +253,9 @@ async fn probe(
         return failed_row(&slot.id, "", "", "endpoint is not configured");
     }
     let protocol = slot.protocol.as_str();
+    if !probe_endpoint_allowed(&slot.api_base) {
+        return failed_row(&slot.id, "", protocol, "endpoint is not allowed");
+    }
     if let Some(name) = unresolved_reference(&slot.api_key) {
         return failed_row(
             &slot.id,
@@ -272,7 +275,7 @@ async fn probe(
         auth_scheme: AuthScheme::default(),
         compatibility: ModelCompatibility::default(),
     };
-    let client = match ModelClient::new(timeouts) {
+    let client = match ModelClient::for_model_list_probe(timeouts) {
         Ok(client) => client,
         Err(error) => {
             return failed_row(
@@ -302,6 +305,16 @@ async fn probe(
     }
 }
 
+fn probe_endpoint_allowed(endpoint: &str) -> bool {
+    crate::config::url_validator::validate_upstream_url(endpoint).is_ok()
+        && url::Url::parse(endpoint).is_ok_and(|url| {
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+}
+
 fn failed_row(id: &str, endpoint: &str, protocol: &str, error: &str) -> ProviderConnectionCheck {
     ProviderConnectionCheck {
         id: id.to_string(),
@@ -315,6 +328,12 @@ fn failed_row(id: &str, endpoint: &str, protocol: &str, error: &str) -> Provider
 
 fn public_failure(error: &ModelError, api_key: &str) -> String {
     let text = match error {
+        ModelError::HttpResponse {
+            status: status @ (401 | 403),
+            ..
+        } if api_key.is_empty() => format!(
+            "endpoint returned HTTP {status}. Use a configured API key or static authentication header for this check."
+        ),
         ModelError::HttpResponse { status, .. } => format!("endpoint returned HTTP {status}"),
         ModelError::Decode { message } | ModelError::Configuration { message } => message.clone(),
         ModelError::Timeout => "timed out before the endpoint answered".into(),

@@ -1206,7 +1206,9 @@ Reads one configured provider and requests its model list. Local HTTP and
 online HTTPS use the same check. The command resolves that provider's endpoint
 and credential reference, then GETs the catalog for its existing protocol
 (Chat Completions, Responses, and Messages use `{api_base}/models`) with the
-gateway's authentication, static headers, and upstream timeouts.
+configured API key, static headers, and upstream timeouts. Providers that use
+stored login credentials need a configured API key or static authentication
+header for this check. A redirect returns its original HTTP status.
 
 The result is one connection, or one per account when the provider has
 accounts. `--account` checks a single label. JSON is the default. Each object
