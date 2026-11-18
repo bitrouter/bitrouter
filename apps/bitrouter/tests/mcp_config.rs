@@ -6,7 +6,9 @@ use std::process::Stdio;
 use anyhow::{Context, Result, ensure};
 #[cfg(feature = "mcp")]
 use bitrouter::config::mcp::{McpServerConfig, McpTransport};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "mcp")]
+use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
