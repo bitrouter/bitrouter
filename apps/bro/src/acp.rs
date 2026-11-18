@@ -21,7 +21,7 @@ use wire::Peer;
 pub(crate) enum AcpCommand {
     /// Show bundled adapters and whether their headless gateway routing is available.
     List,
-    /// Supervise one ACP adapter for a local manager over stdio.
+    /// Serve the local native worker or a named external ACP adapter over stdio.
     Serve(serve::Options),
     /// Send one prompt to a local adapter. Streams NDJSON and denies tool permission requests.
     Prompt {
@@ -40,12 +40,13 @@ pub(crate) async fn run(
     command: AcpCommand,
     endpoint: Option<&str>,
     token: Option<&str>,
-    workspace: &Path,
+    workspace: Option<std::path::PathBuf>,
+    root: &Path,
 ) -> Result<i32> {
     let mut out = std::io::stdout();
     match command {
         AcpCommand::Serve(options) => {
-            serve::run(options, endpoint, token, workspace).await?;
+            serve::run(options, endpoint, token, workspace, root).await?;
             Ok(0)
         }
         AcpCommand::List => {
@@ -68,7 +69,7 @@ pub(crate) async fn run(
             let harness = catalog::find(&agent)?;
             let token = token.context("a gateway token is required for an ACP prompt")?;
             let plan = Endpoint::new(harness, endpoint.unwrap_or(crate::DEFAULT_ENDPOINT), token)?;
-            let workspace = std::fs::canonicalize(workspace).context("opening ACP workspace")?;
+            let workspace = crate::workspace(workspace).context("opening ACP workspace")?;
             ensure!(workspace.is_dir(), "ACP workspace must be a directory");
             let mut home = tempfile::Builder::new();
             #[cfg(unix)]

@@ -315,7 +315,8 @@ async fn dispatch(cli: Cli) -> Result<i32> {
             command,
             selected_endpoint.as_deref(),
             token()?.as_deref(),
-            &workspace(path)?,
+            path,
+            &root,
         )
         .await;
     }

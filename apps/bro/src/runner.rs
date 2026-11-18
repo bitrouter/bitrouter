@@ -22,6 +22,10 @@ pub(crate) const MAX_TOOL_CALLS: usize = 128;
 
 pub(crate) trait Journal {
     fn save(&self, thread: &Thread) -> Result<()>;
+
+    fn live(&self, thread_id: Uuid, turn_id: Uuid, event: TurnEventPayload) -> Result<()> {
+        crate::emit(&json!({"type":"live","thread_id":thread_id,"turn_id":turn_id,"event":event}))
+    }
 }
 
 impl Journal for Home {
@@ -130,7 +134,7 @@ pub(crate) fn answer(
     home.save(thread)
 }
 
-async fn cancellation(path: PathBuf, token: CancellationToken) {
+pub(crate) async fn cancellation(path: PathBuf, token: CancellationToken) {
     let signal = tokio::signal::ctrl_c();
     tokio::pin!(signal);
     loop {
@@ -398,12 +402,19 @@ async fn run_model(
     let complete = async {
         while let Some(item) = stream.next().await {
             match item? {
-            StreamItem::Event(event) => model.push(event.data, |text| crate::emit(&json!({"type":"live",
-                "thread_id":thread.thread_id,"turn_id":thread.current()?.turn_id,
-                "event":TurnEventPayload::AssistantDelta {item_id:step_id.to_string(),text:text.into()}})))?,
-            StreamItem::End(ProtocolEnd::ChatDone) => return Ok(()),
-            _ => bail!("unexpected gateway stream terminal"),
-        }
+                StreamItem::Event(event) => model.push(event.data, |text| {
+                    home.live(
+                        thread.thread_id,
+                        thread.current()?.turn_id,
+                        TurnEventPayload::AssistantDelta {
+                            item_id: step_id.to_string(),
+                            text: text.into(),
+                        },
+                    )
+                })?,
+                StreamItem::End(ProtocolEnd::ChatDone) => return Ok(()),
+                _ => bail!("unexpected gateway stream terminal"),
+            }
         }
         bail!("gateway stream missing Chat terminal")
     };
@@ -506,7 +517,7 @@ async fn run_tool(
         loop {
             tokio::select! {
                 event = rx.recv() => if let Some(event) = event {
-                    crate::emit(&json!({"type":"live","thread_id":thread_id,"turn_id":turn_id,"event":event}))?;
+                    home.live(thread_id, turn_id, event)?;
                 },
                 result = &mut execution => break result,
             }

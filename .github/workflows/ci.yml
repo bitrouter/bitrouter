@@ -1041,9 +1041,13 @@ jobs:
         - os: windows-latest
           package: bitrouter-bro
           timeout-minutes: 45
-          expected-tests: 12
+          expected-tests: 16
           targets: ''
           filter: (kind(bin) & test(=tools::tests::missing_sandbox_omits_and_refuses_shell)) | binary(=invocation) | binary(=acp_serve)
+            | (binary(=native_acp) & (test(=native_stdio_streams_and_reopens_persisted_history_without_resending)
+            | test(=cold_load_reissues_the_exact_permission_and_cancel_prevents_an_effect)
+            | test(=cancelling_a_paid_stream_keeps_its_receipt_and_blocks_cold_redispatch)
+            | test(=manager_eof_during_stream_preserves_the_complete_message_for_cold_replay)))
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1

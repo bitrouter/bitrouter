@@ -23,7 +23,7 @@ fn parse(bytes: &[u8]) -> Result<Value> {
 
 // Tokio's stdin uses an uncancellable blocking read. A dedicated OS thread
 // lets BRO exit even if the adapter dies while the manager keeps stdin open.
-fn manager_input() -> Result<mpsc::Receiver<Result<Value>>> {
+pub(super) fn manager_input() -> Result<mpsc::Receiver<Result<Value>>> {
     let (sender, receiver) = mpsc::channel(1);
     std::thread::Builder::new()
         .name("acp-manager-stdin".into())
@@ -64,7 +64,7 @@ async fn send(writer: &mut (impl AsyncWrite + Unpin), frame: &Value) -> Result<(
     Ok(())
 }
 
-fn rejection(id: &Value, code: i32, message: &str) -> Value {
+pub(super) fn rejection(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 

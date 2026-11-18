@@ -1,5 +1,6 @@
 //! Manager-facing ACP stdio with one supervised adapter per connection.
 mod handler;
+mod native;
 
 use super::{Endpoint, Process, adapter_command, agent_command, isolated_environment};
 use crate::catalog;
@@ -12,11 +13,17 @@ use tokio::process::Command;
 #[derive(clap::Args)]
 pub(crate) struct Options {
     /// Bundled adapter or entry in the explicit local agent configuration.
-    #[arg(required_unless_present = "agent", conflicts_with = "agent")]
+    #[arg(conflicts_with = "agent")]
     name: Option<String>,
     /// Alternative spelling for the positional adapter name.
     #[arg(long)]
     agent: Option<String>,
+    /// Model selector for the local BRO worker.
+    #[arg(long, conflicts_with_all = ["name", "agent"])]
+    model: Option<String>,
+    /// Expose only read-only workspace tools in the native session.
+    #[arg(long, conflicts_with_all = ["name", "agent"])]
+    read_only: bool,
     /// Launch using the adapter's own configuration and explicit environment.
     #[arg(long)]
     direct: bool,
@@ -54,12 +61,26 @@ pub(super) async fn run(
     options: Options,
     endpoint: Option<&str>,
     token: Option<&str>,
-    workspace: &Path,
+    workspace: Option<PathBuf>,
+    root: &Path,
 ) -> Result<()> {
-    let name = options
-        .agent
-        .or(options.name)
-        .context("ACP agent required")?;
+    let restricted = workspace.is_some();
+    let workspace = crate::workspace(workspace)?;
+    let Some(name) = options.agent.or(options.name) else {
+        ensure!(
+            !options.direct && options.config.is_none(),
+            "--direct and --config require an external adapter name"
+        );
+        return native::run(
+            root,
+            restricted.then_some(workspace.as_path()),
+            endpoint.unwrap_or(crate::DEFAULT_ENDPOINT),
+            token,
+            options.model.as_deref().unwrap_or("bitrouter/auto"),
+            options.read_only,
+        )
+        .await;
+    };
     let mut config = match options.config {
         None => Config::default(),
         Some(path) => serde_saphyr::from_str(
