@@ -39,7 +39,7 @@ impl PolicySettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for PolicySettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> Result<()> {
-        if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
+        if crate::gateway::metering::replay::unadmitted(context) {
             return Ok(());
         }
         let invocation = context.get_event::<EvalInvocation>().cloned();

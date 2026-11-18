@@ -56,6 +56,16 @@ beta.7 is unchanged. Configuration and this API advance to beta.5. Historical
 PolicyLock, paid-recovery, offline conversion/backfill and dual-reader contracts
 are retired for this cutover. Current-format recovery remains mandatory.
 
+### Ordinary gateway request identity
+
+An ordinary HTTP client can send `X-BitRouter-Request-Id` to correlate a
+model call. The gateway reserves a client-chosen ID before sending the request
+upstream. The billing ledger uses one ID across principals and controllers.
+A repeated or already billed ID is rejected, including while its original call
+is in flight. Only the owning principal can read its admission. An early
+authentication rejection cannot settle against that admission. Treat request
+IDs as opaque. The prefix `brg_` is reserved for gateway-generated IDs.
+
 ## Control API
 
 ### Scope and discovery

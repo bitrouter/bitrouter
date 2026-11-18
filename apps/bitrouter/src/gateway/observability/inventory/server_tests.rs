@@ -39,11 +39,11 @@ async fn parallel_admission(scheme: &str) -> Result<()> {
     let first = GatewayInventory::new(db.clone());
     let second = GatewayInventory::new(db.clone());
     let store = first.service_store()?;
-    let key = digest(&(&id, &id))?;
+    let key = digest(&id)?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let (one, two) = tokio::join!(
             first.begin(&id, "first", &id),
-            second.begin(&id, "second", &id)
+            second.begin("other-authenticated-principal", "second", &id)
         );
         let winner = match (one?, two?) {
             (BeginResult::Tracked(row), BeginResult::Duplicate)
@@ -51,7 +51,7 @@ async fn parallel_admission(scheme: &str) -> Result<()> {
             _ => anyhow::bail!("expected exactly one admitted attempt"),
         };
         let saved = GatewayInventory::new(db.clone())
-            .request(&id, &id)
+            .request(&winner.route_scope_id, &id)
             .await?
             .context("no stored admission")?;
         ensure!(saved.attempt_id == winner.attempt_id && saved.binding.is_none());
@@ -93,7 +93,7 @@ mod mysql_tests {
         let inventory = GatewayInventory::new(db.clone());
         let id = uuid::Uuid::new_v4().to_string();
         let store = inventory.service_store()?;
-        let key = digest(&(&id, &id))?;
+        let key = digest(&id)?;
         let result = tokio::time::timeout(Duration::from_secs(30), async {
             for initial in [None, Some(0)] {
                 let reader = db

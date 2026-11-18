@@ -19,7 +19,6 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
-use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
@@ -1400,58 +1399,67 @@ impl MeteringStore {
             error: Set(record.error),
             created_at: Set(Utc::now().to_rfc3339()),
         };
-        // `ON CONFLICT(request_id) DO UPDATE` so a retried / streamed-then-
-        // finalised write doesn't reset `created_at`; only mutable columns
-        // refresh.
-        // This path has no previously loaded row. Charge the prepared insert
-        // payload; the shared budget adds its journal/index/replacement margin.
         let mut charge = self.reserve_write(&row, 0)?;
-        let insert = requests::Entity::insert(row).on_conflict(
-            OnConflict::column(requests::Column::RequestId)
-                .update_columns([
-                    requests::Column::UserId,
-                    requests::Column::ApiKeyId,
-                    requests::Column::LaunchId,
-                    requests::Column::AgentHarness,
-                    requests::Column::ControllerInstanceId,
-                    requests::Column::AcpSessionId,
-                    requests::Column::NativeRootSessionId,
-                    requests::Column::NativeAgentThreadId,
-                    requests::Column::NativeParentAgentThreadId,
-                    requests::Column::NativeTurnId,
-                    requests::Column::RouteLeaseId,
-                    requests::Column::SessionIdentityJson,
-                    requests::Column::RouterId,
-                    requests::Column::BindingDigest,
-                    requests::Column::OriginalSelector,
-                    requests::Column::ModelId,
-                    requests::Column::ProviderId,
-                    requests::Column::PromptTokens,
-                    requests::Column::CompletionTokens,
-                    requests::Column::ReasoningTokens,
-                    requests::Column::CacheReadTokens,
-                    requests::Column::CacheWriteTokens,
-                    requests::Column::UncachedInputTokens,
-                    requests::Column::OutputTokens,
-                    requests::Column::UsageOrigin,
-                    requests::Column::RawUsageJson,
-                    requests::Column::ChargeStatus,
-                    requests::Column::ChargeEvidenceJson,
-                    requests::Column::EstimatedChargeMicroUsd,
-                    requests::Column::Streamed,
-                    requests::Column::LatencyMs,
-                    requests::Column::GenerationTimeMs,
-                    requests::Column::Error,
-                ])
-                .to_owned(),
-        );
         if let Some(charge) = &mut charge {
             charge.start();
         }
-        insert
-            .exec(&self.db)
-            .await
-            .map_err(|_| BitrouterError::internal("record_request write failed"))?;
+        match requests::Entity::insert(row.clone()).exec(&self.db).await {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.sql_err(),
+                    Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+                ) =>
+            {
+                // A delivery can refresh its mutable accounting fields. All
+                // historical and current rows keep the original owner and
+                // reconciliation evidence, including on a concurrent insert.
+                let mut update = row;
+                let id = update.request_id.take().expect("prepared request ID");
+                let user = update.user_id.take().expect("prepared user ID");
+                let key = update.api_key_id.take().expect("prepared API key ID");
+                let scope = update.route_scope_id.take().expect("prepared route scope");
+                let scope = match scope {
+                    Some(scope) => requests::Column::RouteScopeId.eq(scope),
+                    None => requests::Column::RouteScopeId.is_null(),
+                };
+                let owner = Condition::all()
+                    .add(requests::Column::RequestId.eq(id))
+                    .add(requests::Column::UserId.eq(user))
+                    .add(requests::Column::ApiKeyId.eq(key))
+                    .add(scope);
+                update.created_at = sea_orm::NotSet;
+                update.reconciliation_status = sea_orm::NotSet;
+                update.reconciliation_attempts = sea_orm::NotSet;
+                update.reconciliation_last_error = sea_orm::NotSet;
+                update.reconciliation_last_attempt_at = sea_orm::NotSet;
+                update.authoritative_settled_at = sea_orm::NotSet;
+                update.authoritative_receipt_json = sea_orm::NotSet;
+                let result = requests::Entity::update_many()
+                    .set(update)
+                    .filter(owner.clone())
+                    .exec(&self.db)
+                    .await
+                    .map_err(|_| BitrouterError::internal("record_request refresh failed"))?;
+                // MySQL may report zero changed rows for an identical refresh.
+                if result.rows_affected == 0
+                    && requests::Entity::find()
+                        .filter(owner)
+                        .count(&self.db)
+                        .await
+                        .map_err(|_| {
+                            BitrouterError::internal("record_request ownership check failed")
+                        })?
+                        == 0
+                {
+                    storage::complete(charge)?;
+                    return Err(BitrouterError::bad_request(
+                        "request ID belongs to a different ledger owner",
+                    ));
+                }
+            }
+            Err(_) => return Err(BitrouterError::internal("record_request write failed")),
+        }
         storage::complete(charge)?;
         Ok(())
     }

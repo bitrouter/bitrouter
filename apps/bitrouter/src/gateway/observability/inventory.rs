@@ -102,7 +102,7 @@ impl GatewayInventory {
     }
 
     // A single service storage scope lets the historical lookup range over only
-    // old ownership scopes. Principal and request ID together name the CAS row.
+    // old ownership scopes. Metering and admission share a global request ID.
     fn service_store(&self) -> Result<EvolutionStore> {
         EvolutionStore::new(self.db.clone(), "gateway-request-admission-v2")
             .map(|store| store.with_storage_budget(self.storage_budget.clone()))
@@ -115,19 +115,20 @@ impl GatewayInventory {
         principal: &str,
         request_id: &str,
     ) -> Result<Option<GatewayRequest>> {
-        let key = digest(&(principal, request_id))?;
+        let key = digest(&request_id)?;
         let row = self
             .service_store()?
             .get::<GatewayRequest>(INVENTORY_KIND, &key)
             .await?;
-        row.map(|(_, request)| {
-            ensure!(
-                request.route_scope_id == principal && request.request_id == request_id,
-                "gateway request identity mismatch"
-            );
-            Ok(request)
-        })
-        .transpose()
+        row.filter(|(_, request)| request.route_scope_id == principal)
+            .map(|(_, request)| {
+                ensure!(
+                    request.route_scope_id == principal && request.request_id == request_id,
+                    "gateway request identity mismatch"
+                );
+                Ok(request)
+            })
+            .transpose()
     }
 
     /// M0 inventory and execution records have hashed keys under controller
@@ -137,7 +138,6 @@ impl GatewayInventory {
         &self,
         tx: &DatabaseTransaction,
         service: &EvolutionStore,
-        principal: &str,
         id: &str,
     ) -> Result<bool> {
         let scopes = records::Entity::find()
@@ -191,7 +191,7 @@ impl GatewayInventory {
                 .filter(records::Column::RecordId.is_in(request_ids))
                 .all(tx)
                 .await?;
-            for row in prior {
+            if let Some(row) = prior.first() {
                 let request: GatewayRequest = serde_json::from_str(&row.body)?;
                 let original = Self::store_for(
                     self.db.clone(),
@@ -202,9 +202,7 @@ impl GatewayInventory {
                     request.request_id == id && original.scope_id == row.scope_id,
                     "invalid imported request identity"
                 );
-                if request.route_scope_id == principal {
-                    return Ok(true);
-                }
+                return Ok(true);
             }
         }
         Ok(false)
@@ -223,7 +221,7 @@ impl GatewayInventory {
             "gateway request namespace is empty"
         );
         let store = self.service_store()?;
-        let key = digest(&(principal, request_id))?;
+        let key = digest(&request_id)?;
         let candidate = GatewayRequest {
             request_id: request_id.into(),
             attempt_id: uuid::Uuid::new_v4().to_string(),
@@ -257,7 +255,7 @@ impl GatewayInventory {
                 .one(&tx)
                 .await?
                 .is_some()
-                || self.imported_id(&tx, &store, principal, request_id).await?
+                || self.imported_id(&tx, &store, request_id).await?
             {
                 return Err(PriorRequest.into());
             }
@@ -297,12 +295,13 @@ impl GatewayInventory {
         let (mut write, tx) = Write::begin(&self.db, &self.storage_budget, true).await?;
         let result = async {
             let store = self.service_store()?;
-            let key = digest(&(&observed.route_scope_id, &observed.request_id))?;
+            let key = digest(&observed.request_id)?;
             let (row, mut request): (_, GatewayRequest) = store
                 .lock_charged(&mut write, &tx, INVENTORY_KIND, &key)
                 .await?;
             ensure!(
-                request.attempt_id == observed.attempt_id,
+                request.attempt_id == observed.attempt_id
+                    && request.route_scope_id == observed.route_scope_id,
                 "gateway request attempt changed"
             );
             let previous = serde_json::to_string(&request.settlement)?;

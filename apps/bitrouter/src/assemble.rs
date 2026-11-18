@@ -1430,7 +1430,10 @@ async fn assemble_app(
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             if !is_shared {
-                lm.router_preparation_hook(gateway_requests_for_hooks.clone());
+                lm.router_preparation_hook_for(
+                    gateway_requests_for_hooks.clone(),
+                    OperationScope::Both,
+                );
             }
             if let Some(binding) = canonical_binding {
                 lm.router_preparation_hook(binding);
@@ -1451,7 +1454,7 @@ async fn assemble_app(
             }
             lm.observe_hook(response_observer);
             if !is_shared {
-                lm.observe_hook(gateway_requests_for_hooks.clone());
+                lm.observe_hook_for(gateway_requests_for_hooks.clone(), OperationScope::Both);
             }
             if let Some(costs) = &judge_costs {
                 lm.observe_hook(costs.clone());
@@ -1461,7 +1464,7 @@ async fn assemble_app(
                 lm.settlement_recorder_for(recorder, OperationScope::Both);
             }
             if !is_shared {
-                lm.settlement_recorder(gateway_requests_for_hooks);
+                lm.settlement_recorder_for(gateway_requests_for_hooks, OperationScope::Both);
             }
             if let Some(costs) = judge_costs {
                 lm.settlement_recorder(costs);

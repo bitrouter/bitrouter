@@ -2,7 +2,7 @@ use super::*;
 use crate::storage::evolution::EvolutionStore;
 use crate::storage::execution::{EXECUTION_KIND, ExecutionRecord};
 use crate::storage::session_identity::SessionIdentity;
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::json;
@@ -37,12 +37,17 @@ impl PreRequestHook for NormalizedScope {
         &self,
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<HookDecision> {
+        let scope = if ctx.caller().api_key_id() == "key" {
+            "scope"
+        } else {
+            "other-scope"
+        };
         ctx.emit(ApiPrincipalEstablished {
-            route_scope_id: "scope".into(),
+            route_scope_id: scope.into(),
         });
         ctx.insert_extension(Arc::new(RequestSessionContext {
             origin: RequestOrigin::AcpHarnessRequest,
-            api_principal_id: "scope".into(),
+            api_principal_id: scope.into(),
             claimed_controller_instance_id: ctx
                 .headers()
                 .get("x-bitrouter-controller-id")
@@ -95,6 +100,7 @@ enum Failure {
     Upstream,
     Route,
     Change(binding::Change),
+    Hold(HoldWinner),
 }
 
 struct Fixture {
@@ -198,6 +204,9 @@ models:
         }
         Failure::Route => {
             builder.route_hook(RejectRequest);
+        }
+        Failure::Hold(hold) => {
+            builder.pre_request_hook(hold);
         }
         Failure::Change(change) => {
             builder.pre_request_hook(binding::ChangeAfterAdmission {
@@ -681,16 +690,88 @@ async fn tagged_admission_excludes_marked_and_unrelated_imports_before_decoding(
         inventory
             .begin("other-scope", "controller", "marked")
             .await?,
-        BeginResult::Tracked(_)
+        BeginResult::Duplicate
     ));
-    let a = inventory
-        .request("scope", "marked")
+    ensure!(inventory.request("scope", "marked").await?.is_some());
+    ensure!(inventory.request("other-scope", "marked").await?.is_none());
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct HoldWinner {
+    admitted: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl PreRequestHook for HoldWinner {
+    async fn check(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
+        if ctx.caller().api_key_id() == "key" {
+            self.admitted.notify_one();
+            self.release.notified().await;
+        }
+        Ok(HookDecision::Allow)
+    }
+}
+
+#[tokio::test]
+async fn global_claim_excludes_foreign_billed_requests_before_settlement() -> Result<()> {
+    let hold = HoldWinner::default();
+    let fixture = fixture(Failure::Hold(hold.clone())).await?;
+    let check = async {
+        hold.admitted.notified().await;
+        let mut other = request("in-flight", true)?;
+        other.caller = CallerContext::new("second-key", "second-user");
+        // Ordinary HTTP and controller-tagged clients share the same ledger.
+        other.headers.remove("x-bitrouter-controller-id");
+        other
+            .extensions
+            .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+        ensure!(fixture.pipeline.execute(other).await.is_err());
+        ensure!(
+            fixture
+                .tracker
+                .inventory()
+                .request("other-scope", "in-flight")
+                .await?
+                .is_none()
+        );
+        ensure!(
+            crate::metering::entities::requests::Entity::find_by_id("in-flight")
+                .one(&fixture.db)
+                .await?
+                .is_none()
+        );
+        hold.release.notify_one();
+        Ok::<_, anyhow::Error>(())
+    };
+    let winner = fixture.pipeline.execute(request("in-flight", true)?);
+    let (winner, checked) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(winner, check)
+    })
+    .await?;
+    winner?;
+    checked?;
+    fixture
+        .pipeline
+        .drain_required_pending_settlements()
+        .await?;
+    let row = crate::metering::entities::requests::Entity::find_by_id("in-flight")
+        .one(&fixture.db)
         .await?
-        .context("first reservation")?;
-    let b = inventory
-        .request("other-scope", "marked")
-        .await?
-        .context("second reservation")?;
-    assert_ne!(a.attempt_id, b.attempt_id);
+        .context("missing charge")?;
+    ensure!(row.user_id == "caller" && row.api_key_id == "key");
+    ensure!(
+        fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("provider observation")?
+            .len()
+            == 1
+    );
     Ok(())
 }

@@ -189,7 +189,7 @@ impl SettlementRecorder for EvalSettlementRecorder {
                 caller.user_id()
             }
         };
-        if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
+        if crate::gateway::metering::replay::unadmitted(context) {
             if let Some(guard) = guard {
                 guard.skip()?;
             }

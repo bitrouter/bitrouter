@@ -37,10 +37,7 @@ impl PreRequestHook for ChangeAfterAdmission {
                         .get_event::<GatewayRequestObserved>()
                         .context("missing observation")?
                         .request;
-                    let key = crate::storage::evolution::digest(&(
-                        &observed.route_scope_id,
-                        &observed.request_id,
-                    ))?;
+                    let key = crate::storage::evolution::digest(&observed.request_id)?;
                     let store =
                         EvolutionStore::new(self.db.clone(), "gateway-request-admission-v2")?;
                     ensure!(

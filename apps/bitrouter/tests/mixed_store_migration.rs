@@ -17,6 +17,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "../src/db/mixed_store/activation/transfer/codec.rs"]
+mod codec;
+
 const CAPTURE: &[u8] = include_bytes!("fixtures/baseline-runtime-v7/database.sqlite.zst");
 const THREAD: &str = "1149fbda-eb06-43b7-8d0e-108e857d9c2d";
 
@@ -200,23 +203,20 @@ async fn publishes_both_owners_and_preserves_recovery_facts_on_reopen() -> Resul
             confirmed == 1,
             "confirmed M0 read must survive exactly once"
         );
-        #[cfg(feature = "harness")]
-        {
-            use bitrouter::{
-                agent_store::DatabaseExecutionStore, harness::storage::ExecutionStore,
-            };
-            let history = DatabaseExecutionStore::new(bro.clone())
-                .load(THREAD)
-                .await
-                .map_err(anyhow::Error::msg)?
-                .context("missing retained journal")?;
-            let expected = zstd::stream::decode_all(
-                &include_bytes!("fixtures/baseline-runtime-v7/journal.json.zst")[..],
-            )?;
-            ensure!(
-                serde_json::to_value(&history.records)?
-                    == serde_json::from_slice::<serde_json::Value>(&expected)?
-            );
+        let expected: Vec<serde_json::Value> = serde_json::from_slice(&zstd::bulk::decompress(
+            include_bytes!("fixtures/baseline-runtime-v7/journal.json.zst"),
+            6_452_521,
+        )?)?;
+        let rows = bro.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT sequence,payload FROM bro_execution_records WHERE execution_id=? ORDER BY sequence",
+            [THREAD.into()])).await?;
+        ensure!(rows.len() == expected.len());
+        for (i, (row, original)) in rows.iter().zip(expected).enumerate() {
+            ensure!(row.try_get::<i64>("", "sequence")? == i64::try_from(i + 1)?);
+            let payload: String = row.try_get("", "payload")?;
+            let actual: serde_json::Value =
+                serde_json::from_str(&codec::decode(&payload).map_err(anyhow::Error::msg)?)?;
+            ensure!(actual == original, "projected journal differs at index {i}");
         }
         bro.close().await?;
     }

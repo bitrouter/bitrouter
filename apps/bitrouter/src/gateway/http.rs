@@ -42,6 +42,9 @@ use crate::gateway::observability::metrics::MetricsRenderer;
 use crate::gateway::pipeline::types::{PipelineInput, PipelineRequest};
 use bitrouter_ai::types::ApiProtocol;
 
+// Client-chosen billing identifiers are durably reserved. Locally allocated
+// identifiers use a disjoint namespace and never require a reservation write.
+pub(crate) const GENERATED_REQUEST_PREFIX: &str = "brg_";
 const BITROUTER_REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 const REQUIRED_SHUTDOWN_RETRY_DELAY: Duration = Duration::from_millis(250);
 
@@ -1339,6 +1342,7 @@ async fn handle(
     body: serde_json::Value,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
+    let client_request_id = headers.contains_key(BITROUTER_REQUEST_ID_HEADER);
     let request_id = match add_request_id_hint(&mut headers) {
         Ok(request_id) => request_id,
         Err(error) => return error.into_response(),
@@ -1358,6 +1362,7 @@ async fn handle(
         inbound,
         input,
         request_id,
+        client_request_id,
         #[cfg(feature = "multi-instance")]
         None,
     )
@@ -1405,6 +1410,7 @@ pub(crate) async fn handle_shared(
         inbound,
         input,
         correlation_id,
+        false,
         Some(admission),
     )
     .await
@@ -1416,6 +1422,7 @@ async fn execute_input(
     inbound: ApiProtocol,
     input: PipelineInput,
     request_id: String,
+    client_request_id: bool,
     #[cfg(feature = "multi-instance")] admission: Option<
         Arc<crate::gateway::shared::admitted::SharedAdmission>,
     >,
@@ -1469,6 +1476,10 @@ async fn execute_input(
             PipelineRequest::new_decisions(request.model.clone(), caller, request.clone())
         }
     };
+    if client_request_id {
+        req.extensions
+            .insert(crate::gateway::metering::replay::ClientRequestIdClaim);
+    }
     req.request_id = request_id.clone();
     req.original_model = original_model;
     req.headers = headers;
@@ -1886,6 +1897,11 @@ fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
             .to_str()
             .map_err(|_| BitrouterError::bad_request("request id header is not valid text"))?
             .trim();
+        if request_id.starts_with(GENERATED_REQUEST_PREFIX) {
+            return Err(BitrouterError::bad_request(
+                "request ID uses the gateway-generated namespace",
+            ));
+        }
         if request_id.is_empty() {
             return Err(BitrouterError::bad_request(
                 "request id header must not be empty",
@@ -1894,7 +1910,7 @@ fn add_request_id_hint(headers: &mut HeaderMap) -> Result<String> {
         return Ok(request_id.to_string());
     }
 
-    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_id = format!("{GENERATED_REQUEST_PREFIX}{}", uuid::Uuid::new_v4());
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         headers.insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
@@ -3154,7 +3170,11 @@ mod tests {
 
         let request_id = add_request_id_hint(&mut headers).unwrap();
 
-        assert!(!request_id.is_empty());
+        assert!(request_id.starts_with(GENERATED_REQUEST_PREFIX));
+        assert!(
+            add_request_id_hint(&mut headers).is_err(),
+            "a client cannot claim the server namespace"
+        );
         assert_eq!(
             headers
                 .get("x-bitrouter-request-id")

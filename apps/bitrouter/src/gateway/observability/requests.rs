@@ -64,16 +64,24 @@ impl GatewayRequestTracker {
     }
 
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
-        if !ctx.headers().contains_key("x-bitrouter-controller-id") {
+        let controller_tagged = ctx.headers().contains_key("x-bitrouter-controller-id");
+        if !controller_tagged
+            && !ctx.has_event::<crate::gateway::metering::replay::ClientRequestIdClaim>()
+        {
             return Ok(());
         }
         let session = ctx.extension::<RequestSessionContext>();
-        let Some(controller) = session
-            .as_ref()
-            .and_then(|session| session.claimed_controller_instance_id.as_deref())
-        else {
-            ctx.emit(CanonicalRequestReplayRejected);
-            return Err(BitrouterError::bad_request("invalid gateway controller ID").into());
+        let controller = if controller_tagged {
+            let Some(controller) = session
+                .as_ref()
+                .and_then(|session| session.claimed_controller_instance_id.as_deref())
+            else {
+                ctx.emit(CanonicalRequestReplayRejected);
+                return Err(BitrouterError::bad_request("invalid gateway controller ID").into());
+            };
+            controller
+        } else {
+            "http"
         };
         let principal = if ctx.caller().is_local() {
             "local".to_owned()
@@ -81,7 +89,7 @@ impl GatewayRequestTracker {
             auth.route_scope_id.clone()
         } else {
             ctx.emit(CanonicalRequestReplayRejected);
-            anyhow::bail!("controller-tagged request lacks an authenticated gateway principal");
+            anyhow::bail!("request lacks an authenticated gateway principal");
         };
         let observed = match self
             .inventory
@@ -96,7 +104,10 @@ impl GatewayRequestTracker {
             Ok(BeginResult::Tracked(request)) => *request,
             Ok(BeginResult::Duplicate) => {
                 ctx.emit(CanonicalRequestReplayRejected);
-                anyhow::bail!("gateway request ID already has an execution record");
+                return Err(BitrouterError::bad_request(
+                    "gateway request ID already has an execution record",
+                )
+                .into());
             }
         };
         // Publish the admitted attempt before routing so failures can retain
