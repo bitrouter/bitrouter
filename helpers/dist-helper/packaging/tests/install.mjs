@@ -1,23 +1,22 @@
 // Exercise the actual cargo-dist installers offline, with two tiny Cargo packages
 // and two real versioned releases. Pass the pinned dist executable on PATH.
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync,
   symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { installEnv, tempRoot } from './environment.mjs';
 import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scripts = fileURLToPath(new URL('../', import.meta.url));
-// cargo-dist compares Cargo's canonical workspace root with its starting path.
-// On Windows TEMP can contain a DOS short name for the user profile.
-const root = realpathSync.native(mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'split-install-')));
+const root = tempRoot('split-install-');
 const windows = process.platform === 'win32';
 const ext = windows ? '.exe' : '';
 const names = { bitrouter: 'bitrouter', 'bitrouter-bro': 'bro' };
 const versions = ['1.0.0-beta.1', '1.0.0-beta.2'];
 const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)[1].trim();
-const buildEnv = { ...process.env, BITROUTER_BUILD_REVISION: 'fixture-revision' };
+const buildEnv = { ...process.env, CARGO_TARGET_DIR: join(root, 'target'), BITROUTER_BUILD_REVISION: 'fixture-revision' };
 const dist = process.env.DIST || 'dist';
 const run = (program, args) => execFileSync(program, args, { cwd: root, env: buildEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 function write(path, data) {
@@ -82,22 +81,31 @@ function prefix(label) {
 }
 const receipt = (p, pkg) => join(p.config, pkg, pkg + '-receipt.json');
 const binary = (p, pkg) => join(p.bin, names[pkg] + ext);
-function install(p, pkg, version, refuse) {
+function installer(p, pkg, version, interrupt) {
   const dir = join(root, version);
-  const file = join(dir, pkg + '-installer.' + (windows ? 'ps1' : 'sh'));
-  const env = { ...process.env, CARGO_HOME: join(p.base, 'cargo'), XDG_CONFIG_HOME: p.config,
-    HOME: p.base, INSTALLER_NO_MODIFY_PATH: '1', INSTALLER_DOWNLOAD_URL: pathToFileURL(dir).href };
-  // Run Windows PowerShell 5 with its own system modules when Actions starts
-  // the Node fixture from pwsh 7. The two module directories are incompatible.
-  if (windows) {
-    for (const key of Object.keys(env)) {
-      if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  let file = join(dir, pkg + '-installer.' + (windows ? 'ps1' : 'sh'));
+  if (interrupt) {
+    const script = readFileSync(file, 'utf8');
+    const marker = interrupt === 'before' || interrupt === 'hold'
+      ? (windows ? '  $dest_dir = New-Item -Force -ItemType Directory -Path $dest_dir' : '    say "installing to $_install_dir"')
+      : (windows ? '  # Write the install receipt' : '    # Install the install receipt');
+    assert.equal(script.split(marker).length, 2);
+    file = join(dir, 'interrupt-' + pkg + (windows ? '.ps1' : '.sh'));
+    let hook = windows ? '[Diagnostics.Process]::GetCurrentProcess().Kill()' : 'kill -KILL "$$"';
+    if (interrupt === 'hold') {
+      hook = windows ? `[IO.File]::WriteAllText((Join-Path $env:USERPROFILE 'ready'), '')
+        while (!(Test-Path -LiteralPath (Join-Path $env:USERPROFILE 'resume'))) { Start-Sleep -Milliseconds 50 }`
+        : 'touch "$HOME/ready"; while [ ! -f "$HOME/resume" ]; do sleep 0.1; done';
     }
-    env.PSModulePath = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
+    write(file, script.replace(marker, () => hook + '\n' + marker));
   }
-  const result = windows
-    ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { env, encoding: 'utf8' })
-    : spawnSync('sh', [file], { env, encoding: 'utf8' });
+  const env = { ...installEnv(p.base, join(p.base, 'cargo'), p.config),
+    INSTALLER_DOWNLOAD_URL: pathToFileURL(dir).href };
+  return windows ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { env, encoding: 'utf8' }]
+    : ['sh', [file], { env, encoding: 'utf8' }];
+}
+function install(p, pkg, version, refuse, interrupt) {
+  const result = spawnSync(...installer(p, pkg, version, interrupt));
   const output = result.stdout + result.stderr;
   if (refuse) {
     assert.notEqual(result.status, 0);
@@ -109,7 +117,7 @@ function install(p, pkg, version, refuse) {
     const record = JSON.parse(readFileSync(receipt(p, pkg)));
     assert.equal(record.source.app_name, pkg);
     assert.deepEqual(record.binaries, [names[pkg] + ext]);
-    assert.match(record.binary_sha256, /^[a-f0-9]{64}$/);
+    assert.equal(record.binary_sha256, createHash('sha256').update(readFileSync(binary(p, pkg))).digest('hex'));
   }
 }
 
@@ -167,6 +175,41 @@ function testInstalls() {
   write(receipt(stale, 'bitrouter'), readFileSync(receipt(source, 'bitrouter')));
   install(stale, 'bitrouter', next, /digest mismatch/);
 
+  for (const pkg of Object.keys(names)) {
+    const recover = prefix('recovery-' + pkg);
+    const lock = join(dirname(receipt(recover, pkg)), '.install-lock');
+    const journal = join(lock, 'receipt');
+    const binLock = join(recover.bin, '.' + pkg + '-install-lock');
+    // Kill the generated installer itself, including its cleanup handler.
+    install(recover, pkg, old, /.*/, 'after');
+    assert.ok(!existsSync(receipt(recover, pkg)));
+    assert.equal(JSON.parse(readFileSync(journal)).version, old);
+    install(recover, pkg, old);
+    install(recover, pkg, next, /.*/, 'before');
+    assert.equal(JSON.parse(execFileSync(binary(recover, pkg))).version, old);
+    if (windows) {
+      // The native updater relocates the running EXE. Exercise its missing-image
+      // window with the same retained recovery copy the updater would leave.
+      renameSync(binary(recover, pkg), join(lock, 'previous.exe'));
+    }
+    install(recover, pkg, next);
+    install(recover, pkg, old, /.*/, 'after');
+    assert.equal(JSON.parse(readFileSync(receipt(recover, pkg))).version, next);
+    const valid = readFileSync(journal);
+    const original = readFileSync(binary(recover, pkg));
+    writeFileSync(journal, JSON.stringify({ ...JSON.parse(valid), install_prefix: root }));
+    install(recover, pkg, next, /prefix mismatch|prefix or binary digest mismatch/i);
+    assert.deepEqual(readFileSync(binary(recover, pkg)), original);
+    assert.equal(JSON.parse(readFileSync(journal)).install_prefix, root);
+    writeFileSync(journal, valid);
+    install(recover, pkg, old);
+    assert.ok(!existsSync(lock) && !existsSync(binLock));
+    mkdirSync(binLock); // Unmarked locks could belong to an active older writer.
+    install(recover, pkg, next, /unrecognized installer lock/i);
+    assert.ok(existsSync(binLock));
+    assert.deepEqual(readFileSync(binary(recover, pkg)), original);
+  }
+
   const archive = join(root, next, `bitrouter-${host}.${windows ? 'zip' : 'tar.xz'}`);
   appendFileSync(archive, 'damaged release');
   const receiptBefore = readFileSync(receipt(source, 'bitrouter'));
@@ -175,10 +218,38 @@ function testInstalls() {
   assert.equal(JSON.parse(execFileSync(binary(source, 'bitrouter'))).version, old);
 }
 
+async function testContention() {
+  const p = prefix('held-lock'), other = { ...prefix('other-prefix'), config: p.config };
+  const owner = 'bitrouter-bro';
+  const holder = spawn(...installer(p, owner, versions[0], 'hold'));
+  let diagnostic = '';
+  holder.stdout.on('data', data => { diagnostic += data; });
+  holder.stderr.on('data', data => { diagnostic += data; });
+  const finished = new Promise((resolve, reject) => {
+    holder.on('error', reject);
+    holder.on('close', resolve);
+  });
+  try {
+    const deadline = Date.now() + 60_000;
+    while (!existsSync(join(p.base, 'ready'))) {
+      assert.ok(holder.exitCode === null && Date.now() < deadline, 'installer did not take locks: ' + diagnostic);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    for (const dest of [p, other]) {
+      install(dest, owner, versions[1], /active installer/i);
+      assert.ok(!existsSync(binary(dest, owner)));
+    }
+  } finally {
+    write(join(p.base, 'resume'), '');
+    assert.equal(await finished, 0, diagnostic);
+  }
+}
+
 try {
   buildReleases();
+  await testContention();
   testInstalls();
-  console.log(`Passed release plans, packaged identity, install ownership, upgrade and rollback on ${host}`);
+  console.log(`Passed release plans, packaged identity, install ownership, upgrade, rollback, process termination and lock contention on ${host}`);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

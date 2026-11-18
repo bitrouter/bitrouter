@@ -93,6 +93,8 @@ jobs:
             distribution-plan.json
 
   installer-ownership:
+    permissions:
+      contents: read
     needs: plan
     strategy:
       fail-fast: false
@@ -111,6 +113,8 @@ jobs:
         run: irm https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.ps1 | iex
       - name: Exercise both package installers across two releases
         run: node helpers/dist-helper/packaging/tests/install.mjs
+      - name: Build native BitRouter and BRO archives and run both update commands
+        run: node helpers/dist-helper/packaging/tests/native-updates.mjs
 
   # Build and packages all the platform-specific things
   build-local-artifacts:

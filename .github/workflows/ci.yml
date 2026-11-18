@@ -117,12 +117,11 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
   build-linux:
-    name: build Linux test artifacts
+    name: build Linux service test artifacts
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    # Build the current workspace before archiving.
     timeout-minutes: 120
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
@@ -150,7 +149,7 @@ jobs:
         cache-on-failure: false
         # Keep cache restore without optional PR cache writes after archive upload.
         cache-save-if: ${{ github.event_name != 'pull_request' }}
-        cache-key: complete-v1
+        cache-key: linux-service-v2
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
@@ -178,18 +177,10 @@ jobs:
         trap finish_build EXIT
         trap 'exit 143' TERM
         trap 'exit 130' INT
-        /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
-        /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
-        # Archive without recompiling, including the now-built process fixtures.
-        cargo nextest archive --locked --workspace --all-features --build-jobs 1 --profile ci --archive-file tests.tar.zst
-        cargo nextest list --workspace --all-features --message-format json > ci-evidence/test-inventory.json
-        printf '%s\n' "$GITHUB_SHA" > tests.sha
-        printf '%s\n' "$GITHUB_WORKSPACE" > tests.workspace
-        sha256sum tests.tar.zst > tests.tar.zst.sha256
-        du -sh target tests.tar.zst > ci-evidence/build-size.txt
+        bash .github/actions/test-archive/build.sh service
     - uses: actions/upload-artifact@v4
       with:
-        name: linux-tests-${{ github.sha }}
+        name: linux-tests-service-${{ github.sha }}
         path: |-
           tests.tar.zst
           tests.tar.zst.sha256
@@ -205,10 +196,82 @@ jobs:
         name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
         path: ci-evidence/
         retention-days: 7
+  build-service-process:
+    name: build gateway database and process regressions
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '1'
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: linux-service-process-v2
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: bash .github/actions/test-archive/build.sh service-process
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux-tests-service-process-${{ github.sha }}
+        path: |-
+          tests.tar.zst
+          tests.tar.zst.sha256
+          tests.sha
+          tests.workspace
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+  build-bro:
+    name: build Linux BRO test artifacts
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: linux-bro-v2
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: bash .github/actions/test-archive/build.sh bro
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux-tests-bro-${{ github.sha }}
+        path: |-
+          tests.tar.zst
+          tests.tar.zst.sha256
+          tests.sha
+          tests.workspace
+        compression-level: 0
+        retention-days: 2
+        overwrite: true
+  test-bro:
+    name: test (Linux, BRO)
+    needs: build-bro
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/test-archive
+      with:
+        product: bro
+    - run: bash .github/scripts/ci-test.sh bro --test-threads 2
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bro-${{ github.run_attempt }}-evidence
+        path: ci-evidence/
   test-linux:
     name: test (Linux, ${{ matrix.suite }})
-    needs:
-    - build-linux
+    needs: build-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -237,6 +300,85 @@ jobs:
         - suite: integration
           threads: 2
           filter: kind(test)
+  test-product-process:
+    name: test (BRO through BitRouter)
+    needs: [build-service-process, build-bro]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/test-archive
+      with:
+        product: service-process
+        companion: 'true'
+    - name: Run the two executable approval regression
+      run: bash .github/scripts/ci-test.sh gateway-bro --test-threads 1 --run-ignored only -E 'binary(=product_process) & test(=gateway_routes_the_approved_bro_tool_continuation)'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: product-process-${{ github.run_attempt }}-evidence
+        path: ci-evidence/
+  test-service-profile:
+    name: test (gateway ${{ matrix.profile }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - profile: minimal
+          flags: --no-default-features
+        - profile: default
+          flags: ''
+        - profile: shared
+          flags: --no-default-features --features multi-instance,http2
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/service-${{ matrix.profile }}
+      CARGO_BUILD_JOBS: '1'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: service-${{ matrix.profile }}
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Exercise the native service package
+      env:
+        FLAGS: ${{ matrix.flags }}
+      run: |
+        read -r -a features <<< "$FLAGS"
+        cargo build --locked -p bitrouter "${features[@]}" --bin bitrouter --examples
+        export BITROUTER_TEST_GATEWAY_BINARY="$CARGO_TARGET_DIR/debug/bitrouter"
+        export BITROUTER_TEST_EXAMPLES_DIR="$CARGO_TARGET_DIR/debug/examples"
+        export BITROUTER_TEST_PREBUILT_ONLY=1
+        cargo nextest run --locked -p bitrouter "${features[@]}" --profile ci \
+          --test-threads 2 --retries 0 --no-fail-fast --no-tests fail
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: service-${{ matrix.profile }}-${{ github.run_attempt }}-evidence
+        path: target/service-${{ matrix.profile }}/nextest/ci/junit.xml
+  test-libraries:
+    name: test (contracts, SDK, registry and helpers)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-key: libraries
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - run: |
+        cargo nextest run --locked --workspace --exclude bitrouter --exclude bitrouter-bro \
+          --all-features --retries 0 --no-fail-fast --no-tests fail
   test-capacity:
     name: test (Linux, capacity ${{ matrix.suite }})
     needs:
@@ -295,6 +437,22 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
+    - name: verify actual archive, restart and refusal
+      timeout-minutes: 45
+      shell: bash
+      env:
+        BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
+      run: |
+        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+        for case in \
+          actual_cli_verifies_fresh_static_provisioning_and_rejects_changed_evidence \
+          actual_cli_refuses_unreadable_operation_context_and_timestamp \
+          actual_cli_refuses_definition_substitution_and_copied_old_credential \
+          abandoned_recovery_waiter_keeps_actual_file_owner_until_read_rollback_and_close \
+          selected_files::actual_cli_refuses_changed_linked_or_nonprivate_selected_files \
+          selected_files::selected_file_change_during_actual_read_prevents_publication_after_worker_close ; do
+          bash .github/scripts/ci-test.sh "offline-${case//::/-}" --test-threads 1 --run-ignored only -E "test(=offline::recovery::tests::$case)"
+        done
     - name: verify native child and file ownership under cleanup faults
       env:
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
@@ -415,22 +573,6 @@ jobs:
           tenancy::tests::execution::native::capture::block::pricing::real_cached_usage_requires_the_effective_retained_tariff; do
           bash .github/scripts/ci-test.sh block --test-threads 1 --run-ignored only -E "test(=$case)"
         done
-    - name: verify actual archive, restart and refusal
-      timeout-minutes: 45
-      shell: bash
-      env:
-        BITROUTER_TEST_GATEWAY_BINARY: ${{ github.workspace }}/target/debug/bitrouter
-      run: |
-        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
-        for case in \
-          actual_cli_verifies_fresh_static_provisioning_and_rejects_changed_evidence \
-          actual_cli_refuses_unreadable_operation_context_and_timestamp \
-          actual_cli_refuses_definition_substitution_and_copied_old_credential \
-          abandoned_recovery_waiter_keeps_actual_file_owner_until_read_rollback_and_close \
-          selected_files::actual_cli_refuses_changed_linked_or_nonprivate_selected_files \
-          selected_files::selected_file_change_during_actual_read_prevents_publication_after_worker_close ; do
-          bash .github/scripts/ci-test.sh "offline-${case//::/-}" --test-threads 1 --run-ignored only -E "test(=offline::recovery::tests::$case)"
-        done
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -473,6 +615,8 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
+      with:
+        product: service-process
     - name: provision isolated MySQL baseline test databases
       if: matrix.backend == 'mysql'
       run: |
@@ -486,21 +630,6 @@ jobs:
         BACKEND: ${{ matrix.backend }}
       run: |
         bash .github/scripts/ci-test.sh db-baseline --test-threads 1 --run-ignored only -E "(kind(lib)) & test(=db::migration::baseline::server_tests::${BACKEND}_current_baseline_catalog_and_refusal)"
-    - name: exercise migrations and gateway persistence on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored only -E '(binary(=database_backends))'
-    - name: exercise retained capture records on the selected backend
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        BACKEND: ${{ matrix.backend }}
-      run: |
-        filter='binary(=database_capture) & test(=server_database_capture)'
-        if [[ "$BACKEND" == mysql ]]; then
-          filter='binary(=database_capture) & (test(=server_database_capture) | test(mysql_snapshot_races::))'
-        fi
-        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored only -E "$filter"
     - name: verify tenant eval conflicts preserve the transaction and creator
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -537,6 +666,51 @@ jobs:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
         bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect)'
+    - name: verify MySQL transaction snapshot boundaries
+      if: matrix.backend == 'mysql'
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+      run: |
+        bash .github/scripts/ci-test.sh db-20 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(mysql_tests)'
+    - name: verify admission and stream pressure across official gateway processes
+      if: matrix.backend == 'postgres'
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+      run: |
+        export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bitrouter"
+        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::store::tests::postgres_)'
+        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_http2_tenant_and_account_concurrency_cross_replicas)'
+        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_concurrent_static_)'
+        # Keep the real-socket stream regression in PR coverage even though
+        # the complete packaged-process campaign runs separately.
+        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_stalled_response_reader_releases_local_capacity_without_provider_success)'
+    - name: verify PostgreSQL credential and transaction regressions
+      if: matrix.backend == 'postgres'
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+      run: |
+        bash .github/scripts/ci-test.sh db-gateway-inventory --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=gateway::observability::inventory::server_tests::postgres_competing_gateway_controllers_share_one_durable_reservation)'
+        bash .github/scripts/ci-test.sh db-shared-schema --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::schema::current_validation::tests::)'
+        bash .github/scripts/ci-test.sh db-shared-subjects --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=gateway::shared::tests::evaluation::preflight::postgres_shared_eval_subject_prejoin)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
+        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::contract_tests::)'
+    - name: exercise migrations and gateway persistence on the selected backend
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+      run: |
+        bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored only -E '(binary(=database_backends))'
+    - name: exercise retained capture records on the selected backend
+      env:
+        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        BACKEND: ${{ matrix.backend }}
+      run: |
+        filter='binary(=database_capture) & test(=server_database_capture)'
+        if [[ "$BACKEND" == mysql ]]; then
+          filter='binary(=database_capture) & (test(=server_database_capture) | test(mysql_snapshot_races::))'
+        fi
+        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored only -E "$filter"
     - name: verify native harness consumers on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -563,35 +737,6 @@ jobs:
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
       run: |
         bash .github/scripts/ci-test.sh db-19 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::native::capture::server::server_capture03_actor_facade_namespace_replay_and_reconnect)'
-    - name: verify MySQL transaction snapshot boundaries
-      if: matrix.backend == 'mysql'
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-20 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(mysql_tests)'
-    - name: verify admission and stream pressure across official gateway processes
-      if: matrix.backend == 'postgres'
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bitrouter"
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::store::tests::postgres_)'
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_http2_tenant_and_account_concurrency_cross_replicas)'
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_concurrent_static_)'
-        # Keep the real-socket stream regression in PR coverage even though
-        # the complete packaged-process campaign runs separately.
-        bash .github/scripts/ci-test.sh db-21 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(official_stalled_response_reader_releases_local_capacity_without_provider_success)'
-    - name: verify PostgreSQL credential and transaction regressions
-      if: matrix.backend == 'postgres'
-      env:
-        BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-      run: |
-        bash .github/scripts/ci-test.sh db-shared-schema --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::schema::current_validation::tests::)'
-        bash .github/scripts/ci-test.sh db-shared-subjects --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=gateway::shared::tests::evaluation::preflight::postgres_shared_eval_subject_prejoin)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::authentication::concurrency_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::admission::contention_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::attempts::contention_tests::)'
-        bash .github/scripts/ci-test.sh db-22 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(gateway::shared::engine::contract_tests::)'
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -600,7 +745,7 @@ jobs:
         path: ci-evidence/
         retention-days: 7
     needs:
-    - build-linux
+    - build-service-process
   application-features:
     name: feature compile
     runs-on: ubuntu-latest
@@ -614,7 +759,7 @@ jobs:
     - name: Check isolated production feature closures
       shell: bash
       env:
-        FEATURES: '["", "http2", "core", "harness", "core,harness", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc", "harness,otel-http",
+        FEATURES: '["", "http2", "eval-publication", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc",
           "db-postgres", "multi-instance", "multi-instance,http2", "db-mysql", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
       run: |
         while IFS= read -r PROFILE_FEATURES; do
@@ -632,25 +777,16 @@ jobs:
         if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
                echo '::error::headless profile pulled terminal dependencies'; exit 1
         fi
+        if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
+          echo '::error::service feature pulled ACP'; exit 1
+        fi
+        cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+          -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
+        if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
+          echo '::error::unexpected service schema validator owner'; exit 1
+        fi
         case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
-               echo '::error::profile without harness pulled ACP runtime'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,harness,*) ;;
-          *)
-             # Registry admission validates its wire schema in every profile.
-             # The application must still keep harness result validation optional.
-             cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
-               -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
-             if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
-               echo '::error::profile without harness pulled schema validation outside registry'; exit 1
-             fi ;;
-        esac
-        case ",$PROFILE_FEATURES," in
-          *,mcp,*|*,server-tools,*|*,harness,*) ;;
+          *,mcp,*|*,server-tools,*) ;;
           *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
                echo '::error::profile without MCP pulled its transport runtime'; exit 1
              fi ;;
@@ -693,9 +829,21 @@ jobs:
     - uses: actions-rust-lang/setup-rust-toolchain@v1
     - name: verify final workspace membership
       run: |
-        cargo metadata --no-deps --format-version 1 | jq -e '
-          [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+        cargo metadata --locked --no-deps --format-version 1 | jq -e '
+          (.workspace_members | length == 10) and (([.packages[].name] | sort) ==
+          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "bitrouter-skills", "bitrouter-update", "dist-helper"])'
+    - name: Inspect native build and test dependency boundaries
+      run: |
+        for flags in '' '--no-default-features' '--no-default-features --features multi-instance,http2' '--all-features'; do
+          cargo tree --locked -p bitrouter $flags -e normal,build,dev --prefix none > service-tree.txt
+          if grep -E '^(bitrouter-bro|agent-client-protocol[^ ]*) v' service-tree.txt; then
+            echo '::error::The service test or build closure includes BRO/ACP'; exit 1
+          fi
+        done
+        cargo tree --locked -p bitrouter-bro --all-features -e normal,build,dev --prefix none > bro-tree.txt
+        if grep -E '^(bitrouter|bitrouter-registry|bitrouter-guardrails|sea-orm(-[^ ]*)?|sqlx-(postgres|mysql)|axum|rmcp) v' bro-tree.txt; then
+          echo '::error::BRO builds gateway implementation dependencies'; exit 1
+        fi
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.
@@ -721,11 +869,11 @@ jobs:
           if [[ "$flags" != '--all-features' ]] && grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
             echo '::error::default AI contracts pulled HTTP framework dependencies'; exit 1
           fi
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if grep -Eq '^(bitrouter(-sdk|-bro|-build|-update)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+          if grep -Eq '^(bitrouter(-bro|-build|-update)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
             echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
           fi
         done
@@ -735,7 +883,7 @@ jobs:
         fi
         cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
-          echo '::error::default bro links the optional matcher'; exit 1
+          echo '::error::default service links the optional matcher'; exit 1
         fi
     needs:
     - changes
@@ -945,7 +1093,7 @@ jobs:
     - changes
     if: needs.changes.outputs.code == 'true'
   test-platform:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.package }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     strategy:
@@ -953,26 +1101,33 @@ jobs:
       matrix:
         include:
         - os: macos-latest
+          package: bitrouter
           timeout-minutes: 45
           expected-tests: 16
           targets: --test daemon --test host_lifecycle --test mcp_config_pty --test onboarding_pty
           filter: (binary(=daemon) & (test(=status_route_and_stop_roundtrip_over_the_control_socket) | test(=concurrent_clients_are_all_served) | test(=socket_file_has_owner_only_permissions)))
             | (binary(=host_lifecycle) & test(=sigterm_control_error_drains_inflight_inference_before_nonzero_exit)) | binary(=mcp_config_pty) | binary(=onboarding_pty)
         - os: windows-latest
+          package: bitrouter
           # Leave time for the test suite after the all-features MSVC build.
           timeout-minutes: 60
-          expected-tests: 20
+          expected-tests: 13
           targets: --lib --test daemon --test invocation
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
-            | test(harness::tools::tests::powershell_) | test(=harness::tools::tests::dropped_powershell_future_stops_descendants) | test(=status_route_and_stop_roundtrip_over_the_control_socket)
+            | test(=status_route_and_stop_roundtrip_over_the_control_socket)
             | test(=concurrent_clients_are_all_served) | test(=probe_status_reports_none_when_nothing_listens) | test(=client_fails_clearly_when_no_daemon_is_listening)
-            | test(=update::tests::official_basename_is_required_even_in_the_same_install_prefix)
-            | test(=update::tests::reduced_profiles_delegate_for_every_install_method_and_channel)
+            | (binary(=invocation) & test(=gateway_update_delegates_for_the_installed_profile_and_channel))
             | test(=daemon_locator::tests::config_identity_survives_file_deletion_and_recreation)
             | test(=policy_lock::files_tests::current_source_history_cas_and_exact_rollback)
             | test(=db::tests::relative_sqlite_urls_anchor_to_config_home_and_preserve_queries)
-            | (binary(=invocation) & (test(=canonical_help_is_bro_and_has_no_alias_warning) | test(=alias_preserves_help_and_structured_stdout)))
+            | (binary(=invocation) & test(=gateway_help_and_status_use_the_service_identity))
+        - os: windows-latest
+          package: bitrouter-bro
+          timeout-minutes: 45
+          expected-tests: 12
+          targets: ''
+          filter: (kind(bin) & test(=tools::tests::missing_sandbox_omits_and_refuses_shell)) | binary(=invocation) | binary(=acp_serve)
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -986,9 +1141,13 @@ jobs:
     - name: Build platform fixtures
       if: runner.os == 'macOS'
       run: cargo build --locked -p bitrouter --all-features --example onboarding_fixture --jobs 2
+    - name: Build BRO ACP adapter
+      if: matrix.package == 'bitrouter-bro'
+      run: cargo build --locked -p bitrouter-bro --example bro_acp_fixture --jobs 2
     - name: Verify platform behavior
       shell: bash
       env:
+        PACKAGE: ${{ matrix.package }}
         TARGETS: ${{ matrix.targets }}
         FILTER: ${{ matrix.filter }}
         EXPECTED_TESTS: ${{ matrix.expected-tests }}
@@ -996,7 +1155,7 @@ jobs:
       run: |
         read -r -a targets <<< "$TARGETS"
         mkdir -p ci-evidence
-        cargo nextest list --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
+        cargo nextest list --locked -p "$PACKAGE" --all-features "${targets[@]}" --build-jobs 2 \
           --profile ci -E "$FILTER" --message-format json > ci-evidence/platform-selection.json
         # Require the entire platform allowlist, not merely one surviving match.
         # https://nexte.st/docs/machine-readable/list/
@@ -1004,8 +1163,12 @@ jobs:
           [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
           | length == $expected and all(.ignored == false)
         ' ci-evidence/platform-selection.json
-        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
-          --profile ci --test-threads 2 --retries 0 --no-fail-fast --no-tests fail -E "$FILTER"
+        selection=(-E "$FILTER")
+        # The BRO inventory includes the real ACP job-object cleanup regression.
+        # Exercise the complete native BRO package after checking its required cases.
+        if [[ "$PACKAGE" == bitrouter-bro ]]; then selection=(); fi
+        cargo nextest run --locked -p "$PACKAGE" --all-features "${targets[@]}" --build-jobs 2 \
+          --profile ci --test-threads 2 --retries 0 --no-fail-fast --no-tests fail "${selection[@]}"
     - name: Upload platform evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -1046,6 +1209,12 @@ jobs:
     - build-linux
     - test-linux
     - test-process
+    - test-product-process
+    - build-service-process
+    - build-bro
+    - test-bro
+    - test-service-profile
+    - test-libraries
     - test-capacity
     - database-backends
     - application-features

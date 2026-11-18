@@ -64,10 +64,31 @@ ${install}`);
   ps = replaceOnce(ps, downloaded, downloaded + `
   $expectedHash = ($wc.DownloadString("$url.sha256").Trim() -split '\\s+')[0]
   if ((Get-FileHash -LiteralPath $dir_path -Algorithm SHA256).Hash -ne $expectedHash) {
-    throw "Archive checksum mismatch for $artifact_name"
+    throw [System.IO.InvalidDataException]::new("Archive checksum mismatch for $artifact_name")
   }`);
+  // Integrity failures are terminal. cargo-dist's mirror retry is for transfer
+  // failures and otherwise hides the reason that a damaged archive was refused.
+  const retry = '    } catch {\n      Write-Information "failed to download from $url"';
+  ps = replaceOnce(ps, retry, '    } catch [System.IO.InvalidDataException] {\n      throw\n' + retry);
   const mkdir = '  $dest_dir = New-Item -Force -ItemType Directory -Path $dest_dir';
-  ps = replaceOnce(ps, mkdir, psGuard + '\n' + mkdir);
+  // Format cargo-dist's receipt while the archive still lives in staging.
+  const start = ps.indexOf('  $formatted_bins =');
+  const finish = ps.indexOf('  # Write the install receipt', start);
+  assert.ok(start > 0 && finish > start);
+  const formatReceipt = ps.slice(start, finish);
+  ps = replaceOnce(ps, formatReceipt, '');
+  ps = replaceOnce(ps, mkdir, psGuard + '\n' + formatReceipt + `
+  if ($install_updater) {
+    $finalReceipt = $receipt | ConvertFrom-Json -ErrorAction Stop
+    $hash = (Get-FileHash -LiteralPath $artifacts.bin_paths[0] -Algorithm SHA256).Hash.ToLowerInvariant()
+    $finalReceipt | Add-Member -NotePropertyName binary_sha256 -NotePropertyValue $hash
+    $staged = Join-Path $receipt_home ([IO.Path]::GetRandomFileName())
+    try {
+      [IO.File]::WriteAllText($staged, ($finalReceipt | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding $false))
+      [IO.File]::Move($staged, $pending)
+    } finally { if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) } }
+  }
+` + mkdir);
   // Replace by rename on the destination volume, including Windows rollback.
   ps = replaceOnce(ps, '    Copy-Item "$bin_path" -Destination "$dest_dir" -ErrorAction Stop', `
     $staged = Join-Path $dest_dir ([IO.Path]::GetRandomFileName())
@@ -79,21 +100,12 @@ ${install}`);
       if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
     }`);
   ps = replaceOnce(ps, `[IO.File]::WriteAllLines("$receipt_home/${pkg}-receipt.json", "$receipt", $Utf8NoBomEncoding)`, `
-    $finalReceipt = $receipt | ConvertFrom-Json -ErrorAction Stop
-    $finalReceipt | Add-Member -NotePropertyName binary_sha256 -NotePropertyValue $binaryHash
-    $staged = Join-Path $receipt_home ([IO.Path]::GetRandomFileName())
-    try {
-      [IO.File]::WriteAllText($staged, ($finalReceipt | ConvertTo-Json -Depth 5), $Utf8NoBomEncoding)
-      if ($record) { [IO.File]::Replace($staged, $receiptFile, [Management.Automation.Language.NullString]::Value) }
-      else { [IO.File]::Move($staged, $receiptFile) }
-    } finally {
-      if ([IO.File]::Exists($staged)) { [IO.File]::Delete($staged) }
-    }`);
+    if ($record) { [IO.File]::Replace($pending, $receiptFile, [Management.Automation.Language.NullString]::Value) }
+    else { [IO.File]::Move($pending, $receiptFile) }`);
   const end = '\n}\n\n# Attempt to do CI-specific rituals';
   ps = replaceOnce(ps, end, `
   } finally {
-    if ($receiptLock) { [IO.Directory]::Delete($receiptLock.FullName) }
-    [IO.Directory]::Delete($binLock)
+    try { Exit-InstallerLock $receiptLock $receiptLease } finally { Exit-InstallerLock $binLock $binLease }
   }` + end);
   writeFileSync(psFile, ps);
 }

@@ -438,7 +438,7 @@ jobs:
       run: |
         cargo metadata --no-deps --format-version 1 | jq -e '
           [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "bitrouter-skills", "bitrouter-update", "dist-helper"]'
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.

@@ -1,5 +1,12 @@
 name: Restore Linux test artifacts
 description: Restore the exact build for this revision without running Cargo.
+inputs:
+  product:
+    description: Product owning the nextest metadata (service, service-process or bro)
+    default: service
+  companion:
+    description: Restore the BRO executable and ACP adapter alongside the service suite
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -22,28 +29,51 @@ runs:
         tool: nextest@0.9.114
     - uses: actions/download-artifact@v4
       with:
-        name: linux-tests-${{ github.sha }}
+        name: linux-tests-${{ inputs.product }}-${{ github.sha }}
         path: .ci-archive
+    - uses: actions/download-artifact@v4
+      if: inputs.companion == 'true'
+      with:
+        name: linux-tests-bro-${{ github.sha }}
+        path: .ci-bro
     - name: Verify and extract the test build
+      env:
+        PRODUCT: ${{ inputs.product }}
+        COMPANION: ${{ inputs.companion }}
       shell: bash
       run: |
         set -euo pipefail
-        test "$(cat .ci-archive/tests.sha)" = "$GITHUB_SHA"
-        # Some existing tests embed Cargo paths. Keep the same checkout path and
-        # runner ABI until those tests support arbitrary workspace relocation.
-        test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
-        (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
-        # nextest archives contain target/ and preserve executable permissions.
-        # https://nexte.st/docs/ci-features/archiving/
+        verify() {
+          test "$(cat "$1/tests.sha")" = "$GITHUB_SHA"
+          test "$(cat "$1/tests.workspace")" = "$GITHUB_WORKSPACE"
+          (cd "$1" && sha256sum -c tests.tar.zst.sha256)
+        }
+        verify .ci-archive
         mkdir -p ci-evidence
         /usr/bin/time -v -o ci-evidence/extract.txt tar --zstd -xf .ci-archive/tests.tar.zst
-        test -x target/debug/bitrouter
-        test -x target/debug/examples/owned_capture_fixture
-        printf '%s\n' \
-          "BITROUTER_TEST_PREBUILT_ONLY=1" \
-          "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
-          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bitrouter" \
-          "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
+        case "$PRODUCT" in
+          service|service-process)
+            target/debug/bitrouter build-info | jq -e --arg sha "$GITHUB_SHA" '
+              .product == "bitrouter" and .source_revision == $sha'
+            echo "BITROUTER_TEST_GATEWAY_BINARY=$PWD/target/debug/bitrouter" >> "$GITHUB_ENV"
+            ;;
+          bro) ;;
+          *) exit 1 ;;
+        esac
+        if [[ "$COMPANION" == true ]]; then
+          [[ "$PRODUCT" == service || "$PRODUCT" == service-process ]]
+          verify .ci-bro
+          # Retain the service nextest metadata when joining independent builds.
+          tar --zstd -xf .ci-bro/tests.tar.zst target/debug/bro target/debug/examples/bro_acp_fixture
+        fi
+        if [[ "$PRODUCT" == bro || "$COMPANION" == true ]]; then
+          target/debug/bro build-info | jq -e --arg sha "$GITHUB_SHA" '
+            .product == "bitrouter-bro" and .source_revision == $sha'
+          test -x target/debug/examples/bro_acp_fixture
+          echo "BITROUTER_TEST_BRO=$PWD/target/debug/bro" >> "$GITHUB_ENV"
+        fi
+        printf '%s\n' "BITROUTER_TEST_PREBUILT_ONLY=1" \
+          "BITROUTER_TEST_EXAMPLES_DIR=$PWD/target/debug/examples" >> "$GITHUB_ENV"
         # A consumer must never silently turn a missing artifact into a rebuild.
         # Keep rustc available: the coding judge verifies tiny temporary Rust
         # programs as its behavior, without building any workspace crate.

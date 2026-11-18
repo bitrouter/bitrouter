@@ -37,8 +37,8 @@ for (const release of manifest.releases) {
       assert.equal(info.version, release.app_version);
       assert.equal(info.target, target);
       assert.equal(info.source_revision, revision);
-      if (pkg === 'bitrouter-bro') assert.equal(info.product, pkg);
-      else assert.equal(info.profile, 'full');
+      assert.equal(info.product, pkg);
+      if (pkg === 'bitrouter') assert.equal(info.profile, 'full');
       const version = execFileSync(binary, ['--version'], { cwd: root, encoding: 'utf8' }).trim();
       assert.equal(version.split(/\s+/).at(-1), release.app_version);
       execFileSync(binary, ['--help'], { cwd: root });
