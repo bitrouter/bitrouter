@@ -56,7 +56,7 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-mod continuation;
+pub(super) mod continuation;
 pub(in crate::tenancy) mod counting;
 mod lifetime;
 mod limits;

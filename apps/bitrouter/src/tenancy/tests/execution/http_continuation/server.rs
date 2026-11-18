@@ -11,6 +11,22 @@ use sea_orm::{
 mod database;
 
 #[tokio::test]
+#[ignore = "requires a dedicated PG/MySQL BITROUTER_TEST_DATABASE_URL with CREATE/DROP privileges"]
+async fn server_native_continuation_rotation_restart_and_foreign_principal() -> Result<()> {
+    let mut database = database::Fixture::create().await?;
+    let result = async {
+        let db = database.connect().await?;
+        let fixture = Fixture::with_database(db, &mut |service| database.retain(service)).await?;
+        super::super::native::continuation::rotation_after_restart(fixture, &mut |service| {
+            database.retain(service)
+        })
+        .await
+    }
+    .await;
+    database.finish(result).await
+}
+
+#[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PG/MySQL CREATE/DROP DATABASE privileges"]
 async fn server_http034_consumer_exact_cas_absence_race_and_restart() -> Result<()> {
     let mut database = database::Fixture::create().await?;

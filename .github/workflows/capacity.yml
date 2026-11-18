@@ -269,16 +269,13 @@ jobs:
           --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
         export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
         cargo-nextest nextest run "${metadata[@]}" --test-threads 1 --run-ignored only --retries 0 --no-tests fail -E 'test(=offline::recovery::tests::saturation::actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history)'
-        # PR capacity jobs retain the full-tree and long-loop parity requirements.
-        # Run the independently built BRO through its actual restart and unknown-effect cases here.
-        for selector in approval_restart_keeps_confirmed_results_and_continuity \
-          truncated_paid_stream_refuses_any_replay lost_worker_with_tool_intent_blocks_even_after_cancel \
-          cancelling_waiting_approval_settles_without_effects; do
-          cargo nextest run --locked -p bitrouter-bro --bin bro --cargo-profile ci-capacity \
-            --test-threads 1 --retries 0 --no-tests fail -E "test(=runner_tests::$selector)"
+        export CI_CARGO_METADATA="$PWD/ci-evidence/cargo-metadata.json"
+        export CI_BINARIES_METADATA="$PWD/ci-evidence/bro-binaries-metadata.json"
+        cargo nextest list --locked -p bitrouter-bro --all-features --cargo-profile ci-capacity \
+          --build-jobs 1 --list-type binaries-only --message-format json > "$CI_BINARIES_METADATA"
+        for suite in core-tree checkpoints bro-process; do
+          bash .github/scripts/bro-boundary-tests.sh "$suite"
         done
-        cargo-nextest nextest run "${metadata[@]}" --test-threads 1 --run-ignored all --retries 0 --no-tests fail \
-          -E 'test(tenancy::tests::execution::native::session::choice::headroom::)'
     - name: Record final qualification storage
       if: ${{ always() && inputs.qualification }}
       timeout-minutes: 5

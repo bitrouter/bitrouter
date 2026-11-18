@@ -6,6 +6,8 @@ mod cases;
 #[cfg(feature = "db-mysql")]
 mod mysql;
 mod offline;
+#[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
+mod server;
 
 use std::sync::Arc;
 
