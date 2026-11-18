@@ -351,3 +351,51 @@ fn directory_sync_failure_blocks_replay_before_and_after_file_publication() -> R
     }
     Ok(())
 }
+
+#[test]
+fn approval_is_bound_to_directory_identity_across_processes() -> Result<()> {
+    for missing_id in [false, true] {
+        let fixture = tempfile::tempdir()?;
+        let work = fixture.path().join("work");
+        let home = fixture.path().join("bro");
+        fs::create_dir(&work)?;
+        let mock = Mock::start(vec![tool_reply(
+            "write",
+            json!({"path":"note","content":"approved"}),
+            "w",
+        )])?;
+        let pending = event(&bro(
+            &home,
+            &work,
+            &mock.endpoint,
+            &["task", "run", "write note"],
+        )?)?;
+        let id = pending["thread_id"].as_str().context("thread ID")?;
+        let checkpoint = home.join("threads").join(format!("{id}.json"));
+        if missing_id {
+            let mut old: Value = serde_json::from_slice(&fs::read(&checkpoint)?)?;
+            old.as_object_mut()
+                .context("checkpoint object")?
+                .remove("workspace_id");
+            fs::write(&checkpoint, serde_json::to_vec(&old)?)?;
+        } else {
+            fs::rename(&work, fixture.path().join("original"))?;
+            fs::create_dir(&work)?;
+        }
+        let before = fs::read(&checkpoint)?;
+        let denied = approve(&home, &work, &mock.endpoint, &pending)?;
+        ensure!(
+            !denied.status.success()
+                && String::from_utf8_lossy(&denied.stderr).contains("workspace")
+        );
+        assert_eq!(fs::read(checkpoint)?, before);
+        assert!(!work.join("note").exists());
+        assert!(
+            bro(&home, &work, &mock.endpoint, &["thread", "history", id])?
+                .status
+                .success()
+        );
+        assert_eq!(mock.join()?.len(), 1);
+    }
+    Ok(())
+}

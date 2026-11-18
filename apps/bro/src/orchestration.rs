@@ -64,6 +64,7 @@ pub(super) async fn run(home: &Home, action: AgentCommand, endpoint: Option<&str
             if home.ids()?.contains(&child) {
                 return inspect(&child_thread(home, parent, child)?, None, false);
             }
+            p.verify_workspace()?;
             let mut t = Thread::new(
                 p.workspace,
                 p.endpoint,
@@ -71,6 +72,10 @@ pub(super) async fn run(home: &Home, action: AgentCommand, endpoint: Option<&str
                 p.effort,
                 p.max_output_tokens,
                 p.tool_mode,
+            )?;
+            ensure!(
+                t.workspace_id == p.workspace_id,
+                "delegated workspace changed"
             );
             t.m0_instructions = p.m0_instructions;
             t.thread_id = child;

@@ -191,6 +191,7 @@ pub(super) async fn dispatch(
             let workspace = workspace.canonicalize()?;
             crate::tools::WorkspaceTools::new(&workspace, thread.tool_mode)?;
             if thread.endpoint.is_empty() {
+                thread.workspace_id = Some(crate::workspace::WorkspaceId::read(&workspace)?);
                 thread.workspace = workspace;
                 thread.endpoint = endpoint.to_owned();
                 home.admit(&thread)?;
@@ -199,6 +200,7 @@ pub(super) async fn dispatch(
                     thread.workspace == workspace && thread.endpoint == endpoint,
                     "thread already bound to another workspace or endpoint"
                 );
+                thread.verify_workspace()?;
             }
             crate::inspect(&thread, None, false)?;
             return Ok(true);

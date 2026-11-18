@@ -13,6 +13,7 @@ mod skills;
 mod tools;
 mod tree;
 mod update;
+mod workspace;
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -233,7 +234,6 @@ fn create(options: ThreadOptions, endpoint: String) -> Result<Thread> {
     };
     let root = workspace(options.workspace)?;
     tools::WorkspaceTools::new(&root, mode)?;
-    let selections = skills::select(&root, &options.skills)?;
     let mut thread = Thread::new(
         root,
         endpoint,
@@ -241,8 +241,8 @@ fn create(options: ThreadOptions, endpoint: String) -> Result<Thread> {
         options.effort,
         options.max_output_tokens,
         mode,
-    );
-    thread.skills = selections;
+    )?;
+    thread.skills = skills::select(&thread.workspace, &options.skills)?;
     if options.managed {
         thread.enable_managed();
     }

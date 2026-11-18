@@ -33,6 +33,8 @@ pub(crate) struct Thread {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<crate::skills::Selection>,
     pub workspace: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<crate::workspace::WorkspaceId>,
     pub endpoint: String,
     pub model: String,
     pub effort: Option<ReasoningEffort>,
@@ -153,8 +155,10 @@ impl Thread {
         effort: Option<ReasoningEffort>,
         max_output_tokens: Option<u32>,
         tool_mode: ToolMode,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let workspace_id = Some(crate::workspace::WorkspaceId::read(&workspace)?);
+        Ok(Self {
+            workspace_id,
             format: Format::Local,
             thread_id: Uuid::new_v4(),
             parent_id: None,
@@ -167,7 +171,20 @@ impl Thread {
             max_output_tokens,
             tool_mode,
             turns: Vec::new(),
-        }
+        })
+    }
+
+    pub fn verify_workspace(&self) -> Result<()> {
+        let expected = self
+            .workspace_id
+            .as_ref()
+            .context("saved workspace grant has no filesystem identity; a new grant is required")?;
+        ensure!(
+            self.workspace.canonicalize()? == self.workspace
+                && &crate::workspace::WorkspaceId::read(&self.workspace)? == expected,
+            "workspace directory changed since admission"
+        );
+        Ok(())
     }
 
     pub fn managed(&self) -> bool {
@@ -205,6 +222,7 @@ impl Thread {
     }
 
     pub fn start(&mut self, prompt: String, request_id: Option<String>) -> Result<()> {
+        self.verify_workspace()?;
         ensure!(!prompt.trim().is_empty(), "prompt is empty");
         ensure!(prompt.len() <= 512 * 1024, "prompt exceeds context limit");
         ensure!(
@@ -389,6 +407,7 @@ impl Home {
     }
 
     pub fn check_owner(&self, thread: &Thread) -> Result<()> {
+        thread.verify_workspace()?;
         ensure!(
             !overlapping(&self.root, &thread.workspace)?
                 && !overlapping(&self.dir, &thread.workspace)?,
@@ -403,9 +422,15 @@ impl Home {
                 continue;
             }
             let other = self.load(id)?;
+            if other.turns.iter().all(Turn::released) {
+                continue;
+            }
+            // If its directory moved, the remaining path cannot establish disjoint ownership.
+            other
+                .verify_workspace()
+                .with_context(|| format!("unresolved workspace grant of thread {id}"))?;
             ensure!(
-                other.turns.iter().all(Turn::released)
-                    || !overlapping(&other.workspace, &thread.workspace)?,
+                !overlapping(&other.workspace, &thread.workspace)?,
                 "workspace is owned by active or unresolved thread {id}"
             );
         }

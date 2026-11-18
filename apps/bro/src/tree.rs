@@ -217,6 +217,10 @@ impl Scheduler {
                         parent.effort,
                         parent.max_output_tokens,
                         ToolMode::ReadOnly,
+                    )?;
+                    ensure!(
+                        child.workspace_id == parent.workspace_id,
+                        "delegated workspace changed"
                     );
                     child.thread_id = id;
                     child.parent_id = Some(parent.thread_id);
@@ -365,6 +369,7 @@ fn validate_turn(parent: &Thread, turn: &Turn, seen: &mut HashSet<Uuid>, depth: 
                     && child.thread_id == inv.item_id
                     && child.parent_id == Some(parent.thread_id)
                     && child.tool_mode == ToolMode::ReadOnly
+                    && child.workspace_id == parent.workspace_id
                     && child.workspace == parent.workspace
                     && child.endpoint == parent.endpoint
                     && child.model == parent.model

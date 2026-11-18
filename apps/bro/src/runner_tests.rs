@@ -52,7 +52,7 @@ impl Work {
             None,
             None,
             ToolMode::Coding,
-        );
+        )?;
         thread.start("Inspect and write".into(), None)?;
         home.admit(&thread)?;
         let client = GatewayClient::new(endpoint, Some("scoped-test-key"))?;

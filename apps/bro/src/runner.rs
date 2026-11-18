@@ -102,6 +102,7 @@ pub(crate) fn answer(
     request_id: &str,
     approved: bool,
 ) -> Result<()> {
+    thread.verify_workspace()?;
     let pending = thread
         .current()?
         .pending()
@@ -207,6 +208,9 @@ pub(crate) async fn drive(
             if tree.fenced.get() && matches!(next, Next::Tool(_) | Next::Model) {
                 return Ok(());
             }
+        }
+        if matches!(next, Next::Model | Next::Tool(_) | Next::Complete) {
+            thread.verify_workspace()?;
         }
         match next {
             Next::Settled | Next::Waiting => return Ok(()),

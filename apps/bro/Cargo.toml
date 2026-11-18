@@ -52,6 +52,9 @@ uuid.workspace = true
 libc = "0.2"
 rustix = { workspace = true, features = ["process"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [build-dependencies]
 serde_json.workspace = true
 bitrouter-build.workspace = true
