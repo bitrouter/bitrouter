@@ -328,7 +328,8 @@ jobs:
       if: matrix.product == 'service-process'
       run: |
         bash .github/scripts/ci-test.sh gateway-bro --exact-tests 'binary(=product_process)' ignored gateway_routes_the_approved_bro_tool_continuation
-        bash .github/scripts/ci-test.sh transferred-history --exact-tests 'binary(=mixed_store_migration)' ignored sealed::accounting::restarted_products_preserve_paid_history_and_refuse_historical_request_replay
+        bash .github/scripts/ci-test.sh transferred-history --exact-tests 'binary(=mixed_store_migration)' ignored sealed::accounting::restarted_products_preserve_paid_history_and_refuse_historical_request_replay \
+          sealed::acp::cold_restore_replays_the_captured_transcript_once
     - name: Open staged and activated gateway directories with BRO
       if: matrix.product == 'bro'
       run: bash .github/scripts/ci-test.sh gateway-home --exact-tests 'binary(=home_owner)' ignored real_staged_and_activated_gateway_halves_reject_bro
@@ -1072,7 +1073,8 @@ jobs:
             | (binary(=native_acp) & (test(=native_stdio_streams_and_reopens_persisted_history_without_resending)
             | test(=cold_load_reissues_the_exact_permission_and_cancel_prevents_an_effect)
             | test(=cancelling_a_paid_stream_keeps_its_receipt_and_blocks_cold_redispatch)
-            | test(=manager_eof_during_stream_preserves_the_complete_message_for_cold_replay)))
+            | test(=manager_eof_during_stream_preserves_the_complete_message_for_cold_replay)
+            | test(=permission_callback_cancel_and_error_settle_once_on_a_connected_manager)))
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1

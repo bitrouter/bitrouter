@@ -238,17 +238,20 @@ async fn handle(
     let params = &frame["params"];
     let Some(method) = frame["method"].as_str() else {
         if let Some(id) = frame["id"].as_str()
-            && frame.get("error").is_none()
-            && frame
-                .pointer("/result/outcome/outcome")
-                .and_then(Value::as_str)
-                == Some("selected")
-            && let Some(option @ ("allow_once" | "reject_once")) = frame
-                .pointer("/result/outcome/optionId")
-                .and_then(Value::as_str)
             && let Some(answer) = c.permissions.borrow_mut().remove(id)
         {
-            let _ = answer.send(option == "allow_once");
+            // Every reply settles this callback. Only an explicit selection can
+            // grant the tool, including when a buggy manager sends both fields.
+            let approved = frame.get("error").is_none()
+                && frame
+                    .pointer("/result/outcome/outcome")
+                    .and_then(Value::as_str)
+                    == Some("selected")
+                && frame
+                    .pointer("/result/outcome/optionId")
+                    .and_then(Value::as_str)
+                    == Some("allow_once");
+            let _ = answer.send(approved);
         }
         return Ok(());
     };

@@ -552,3 +552,70 @@ async fn manager_eof_during_stream_preserves_the_complete_message_for_cold_repla
     );
     peer.close().await
 }
+
+#[tokio::test]
+async fn permission_callback_cancel_and_error_settle_once_on_a_connected_manager() -> Result<()> {
+    let model = Model::start(|messages| {
+        let last = messages.last().context("model input")?;
+        if last["role"] == "tool" {
+            ensure!(
+                last["content"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("approval denied"))
+            );
+            return Ok(answer("permission denied"));
+        }
+        Ok(calls(vec![(
+            "write-once".into(),
+            "write",
+            json!({"path":"effect","content":"unauthorized"}),
+        )]))
+    })?;
+    for version in [1, 2] {
+        let home = tempfile::tempdir()?;
+        let work = tempfile::tempdir()?;
+        let mut peer = Peer::start(home.path(), &model.endpoint, version).await?;
+        peer.rpc(2, "session/new", json!({"cwd":work.path(),"mcpServers":[]}))
+            .await?;
+        let session = peer.response(2).await?["result"]["sessionId"].clone();
+        for (id, reply) in [
+            (3, json!({"result":{"outcome":{"outcome":"cancelled"}}})),
+            (
+                4,
+                json!({"error":{"code":-32603,"message":"permission UI unavailable"}}),
+            ),
+        ] {
+            peer.rpc(
+                id,
+                "session/prompt",
+                prompt(&session, "write the file", &format!("turn-{id}")),
+            )
+            .await?;
+            if version == 2 {
+                ensure!(peer.response(id).await?["result"]["messageId"].is_string());
+            }
+            let callback = peer.permission().await?;
+            let mut frame = reply;
+            frame["jsonrpc"] = json!("2.0");
+            frame["id"] = callback["id"].clone();
+            peer.send(frame).await?;
+            if version == 1 {
+                ensure!(peer.response(id).await?["result"]["stopReason"] == "end_turn");
+            } else {
+                loop {
+                    if peer.read().await?["params"]["update"]["stopReason"] == "end_turn" {
+                        break;
+                    }
+                }
+            }
+            // A delayed or duplicated affirmative response cannot change the first decision.
+            peer.send(json!({"jsonrpc":"2.0","id":callback["id"],"result":{"outcome":{"outcome":"selected","optionId":"allow_once"}}})).await?;
+            ensure!(!work.path().join("effect").exists());
+        }
+        peer.rpc(5, "session/list", json!({})).await?;
+        ensure!(peer.response(5).await?["result"]["sessions"][0]["sessionId"] == session);
+        peer.close().await?;
+    }
+    ensure!(model.finish()?.len() == 8);
+    Ok(())
+}

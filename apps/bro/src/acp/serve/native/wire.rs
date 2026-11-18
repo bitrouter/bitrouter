@@ -73,7 +73,13 @@ pub(super) fn state(turn: &Turn) -> Value {
     frame
 }
 
-pub(super) fn message(version: u64, who: &str, id: Uuid, text: &str, complete: bool) -> Value {
+pub(super) fn message(
+    version: u64,
+    who: &str,
+    id: impl serde::Serialize,
+    text: &str,
+    complete: bool,
+) -> Value {
     if version == 2 && complete {
         json!({"sessionUpdate":format!("{who}_message"),"messageId":id,"content":[{"type":"text","text":text}]})
     } else {
@@ -133,12 +139,76 @@ pub(super) fn tool(
     value
 }
 
+async fn replay(c: &Connection, session: Uuid, update: Value) -> Result<()> {
+    c.output.send(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":update}})).await?;
+    Ok(())
+}
+
+async fn sealed_history(c: &Connection, version: u64, session: Uuid, turn: &Turn) -> Result<()> {
+    // The immutable Chat prefix contains its own user prompt and tool pairs.
+    // The stored ordinal identifies assistant messages across processes and wire versions.
+    for (index, entry) in turn.sealed_messages.iter().enumerate() {
+        match entry.role.as_str() {
+            "user" | "assistant" => {
+                if let Some(content) = &entry.content {
+                    let text = content
+                        .as_str()
+                        .context("invalid transferred message text")?;
+                    let item = if index == 0 && entry.role == "user" {
+                        turn.turn_id.to_string()
+                    } else {
+                        format!("{}:sealed:{index}", turn.turn_id)
+                    };
+                    let who = if entry.role == "user" {
+                        "user"
+                    } else {
+                        "agent"
+                    };
+                    replay(c, session, message(version, who, item, text, true)).await?;
+                }
+                for call in &entry.tool_calls {
+                    let kind = if version == 1 {
+                        "tool_call"
+                    } else {
+                        "tool_call_update"
+                    };
+                    let args = serde_json::from_str::<Value>(&call.function.arguments)
+                        .unwrap_or_else(|_| Value::String(call.function.arguments.clone()));
+                    replay(
+                        c,
+                        session,
+                        json!({"sessionUpdate":kind,"toolCallId":call.id,
+                        "title":call.function.name,"status":"pending","rawInput":args}),
+                    )
+                    .await?;
+                }
+            }
+            "tool" => {
+                let id = entry
+                    .tool_call_id
+                    .as_deref()
+                    .context("missing transferred tool ID")?;
+                let output = entry
+                    .content
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .context("missing transferred tool evidence")?;
+                replay(c, session, json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed","rawOutput":output})).await?;
+            }
+            _ => anyhow::bail!("unsupported transferred message role"),
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn history(c: &Connection, version: u64, thread: &Thread) -> Result<()> {
-    let publish = |update: Value| {
-        c.output.send(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":thread.thread_id,"update":update}}))
-    };
+    let publish = |update| replay(c, thread.thread_id, update);
     for turn in &thread.turns {
-        publish(message(version, "user", turn.turn_id, &turn.prompt, true)).await?;
+        if turn.sealed_messages.is_empty() {
+            publish(message(version, "user", turn.turn_id, &turn.prompt, true)).await?;
+        } else {
+            sealed_history(c, version, thread.thread_id, turn).await?;
+        }
         for step in &turn.steps {
             if let ModelState::ModelResponse { response } = &step.state {
                 if let Some(text) = response.message.content.as_ref().and_then(Value::as_str) {

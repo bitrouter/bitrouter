@@ -3,6 +3,8 @@ use bitrouter as product;
 use serde_json::Value;
 #[path = "accounting.rs"]
 mod accounting;
+#[path = "acp.rs"]
+mod acp;
 #[path = "capture.rs"]
 mod capture;
 

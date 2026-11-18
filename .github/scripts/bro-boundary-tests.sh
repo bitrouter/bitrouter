@@ -27,7 +27,8 @@ case "$suite" in
     exact native_acp native_stdio_streams_and_reopens_persisted_history_without_resending \
       cold_load_reissues_the_exact_permission_and_cancel_prevents_an_effect \
       cancelling_a_paid_stream_keeps_its_receipt_and_blocks_cold_redispatch \
-      manager_eof_during_stream_preserves_the_complete_message_for_cold_replay
+      manager_eof_during_stream_preserves_the_complete_message_for_cold_replay \
+      permission_callback_cancel_and_error_settle_once_on_a_connected_manager
     exact acp_serve routed_serve_gates_provider_methods_and_forwards_manager_permissions \
       manager_eof_reaps_adapter_descendant_during_unanswered_prompt \
       adapter_disconnect_exits_with_manager_stdin_still_open \
