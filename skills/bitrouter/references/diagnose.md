@@ -10,6 +10,7 @@ Real diagnostic flow against the v1 binary. There is no `bro doctor` — diagnos
 bro --version                           # 1. installed?
 bro status                              # 2. daemon running?
 bro providers list                      # 3. providers configured + active?
+bro providers check <id>                # 3b. endpoint answers its model list?
 bro models                              # 4. routing table populated?
 bro route openai/gpt-4o                 # 5. one specific model resolves?
 tail -n 80 ~/.bitrouter/bitrouter.log         # 6. recent daemon output

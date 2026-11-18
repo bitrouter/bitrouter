@@ -448,7 +448,7 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `strategy: conditional` with `prompt_tokens` rules — not parsed.
 - `strategy: least_cost` — not parsed.
 - `safety_settings`, `features.computer_use`, `features.json_mode` provider blocks — not parsed.
-- `bro providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers login`, and `providers logout`.
+- `bro providers add/remove/use/test/stats/export/import` subcommands — use `providers list`, `providers check`, `providers login`, and `providers logout`. `providers check` only reads a configured endpoint's model list.
 - `bro config reload/show` — `config validate` exists for CI-safe validation; use `bro reload` for the daemon.
 
 

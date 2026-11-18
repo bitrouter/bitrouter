@@ -204,7 +204,7 @@ See [shared gateway configuration](references/shared-gateway.md).
 - **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
   accepts the native facets listed by `launch --help`.
 - **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage
-  with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
+  with `providers list|check|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
 - **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and
   `fusion` retain compatibility behavior. See `references/cli.md` for details.
 
