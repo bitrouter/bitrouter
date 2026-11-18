@@ -282,6 +282,7 @@ async fn probe_reads_after_wait(first: &Store, second: &Store) -> Result<()> {
     let owner = body["owner"].as_str().context("owner missing")?.to_owned();
     let id = uuid::Uuid::new_v4().to_string();
     body["view"]["execution_id"] = Value::String(id.clone());
+    body["projection"]["execution_id"] = Value::String(id.clone());
     // Only the probe's SQL snapshot is under test. This synthetic row is never
     // dispatched or finalized and does not pretend to own a tenant reservation.
     let tx = second.begin().await?;
