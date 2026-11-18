@@ -11,6 +11,10 @@ const scripts = fileURLToPath(new URL('../', import.meta.url));
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
 const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)[1].trim();
+if (process.argv[2]) assert.equal(host, process.argv[2], 'fixture runner has the wrong native Rust target');
+if (process.env.BITROUTER_BUILD_REVISION) {
+  assert.equal(revision, process.env.BITROUTER_BUILD_REVISION, 'fixture checkout differs from the requested release revision');
+}
 const root = tempRoot('updater-ci-'), work = join(root, 'src');
 const versions = ['1.0.0-beta.901', '1.0.0-beta.902'];
 const env = { ...process.env, BITROUTER_BUILD_REVISION: revision, CARGO_TARGET_DIR: join(work, 'target'),
