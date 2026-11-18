@@ -198,9 +198,16 @@ pub(crate) fn physical_path(path: &Path) -> std::io::Result<PathBuf> {
     {
         use std::os::unix::ffi::OsStringExt;
         use std::os::unix::fs::OpenOptionsExt;
+        // A searchable directory can permit creation without enumeration.
+        // Preserve those permissions until the publisher attempts its fsync.
+        let access = if fs::metadata(path)?.is_dir() {
+            libc::O_SEARCH
+        } else {
+            libc::O_EVTONLY | libc::O_NONBLOCK
+        };
         let file = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_EVTONLY | libc::O_NONBLOCK)
+            .custom_flags(access)
             .open(path)?;
         let name = rustix::fs::getpath(&file)?;
         Ok(std::ffi::OsString::from_vec(name.into_bytes()).into())
