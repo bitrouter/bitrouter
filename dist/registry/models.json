@@ -1501,6 +1501,23 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.018,
+              "no_cache": 0.051
+            },
+            "output_tokens": {
+              "text": 0.567
+            }
+          },
+          "provider": "deepseek",
+          "provider_model_id": "deepseek-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.006,
               "no_cache": 0.3
             },
