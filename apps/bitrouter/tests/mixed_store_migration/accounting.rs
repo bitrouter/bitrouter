@@ -1,7 +1,6 @@
 //! Real sealed read, two authoritative paid bills, and independent historical
 //! service reservations. Only a newly admitted turn may call the gateway.
 use super::*;
-use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
 use bitrouter::metering::{entities::requests, store::MeteringStore};
 use bitrouter::storage::evolution::{EvolutionStore, digest, records};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -10,20 +9,12 @@ use serde_json::json;
 const UNKNOWN: &str = "ordinary-terminal-unknown";
 const CONTROLLER: &str = "old-controller";
 
-async fn reservation(db: &DatabaseConnection, id: &str, cost: Option<i64>) -> Result<()> {
-    let owner = digest(&("gateway-request-inventory-v1", "local", CONTROLLER))?;
-    let store = EvolutionStore::new(db.clone(), &format!("gateway:{owner}"))?;
-    let body = json!({"request_id":id,"attempt_id":uuid::Uuid::new_v4(),"route_scope_id":"local","controller_instance_id":CONTROLLER,"runtime_epoch":uuid::Uuid::new_v4(),
-        "admitted_at":"2026-10-01T00:00:00Z","anchors":{},"binding":null,"coverage_ready":true,
-        "settlement":{"settled_at":"2026-10-01T00:00:01Z","outcome":"completed","hops":[{"provider":"mock","model":"test-model","account":null,"protocol":"chat_completions","status":"completed","error_code":null}],
-        "final_model":"test-model","final_provider":"mock","error_code":null,"duration_ms":1000,"final_metered_cost_micro_usd":cost,"total_cost_micro_usd":cost}});
-    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,"INSERT INTO checkpoint_evolution(record_id,scope_id,kind,revision,body) VALUES(?,?,'gateway_request',2,?)",[store.id("gateway_request",id)?.into(),store.scope_id.into(),body.to_string().into()])).await?;
-    db.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "UPDATE requests SET route_scope_id='local', controller_instance_id=? WHERE request_id=?",
-        [CONTROLLER.into(), id.into()],
-    ))
-    .await?;
+const FROZEN: &[u8] = include_bytes!("../fixtures/m0-gateway-settlement/reconciled.sqlite.zst");
+const DISPATCH: &[u8] = include_bytes!("../fixtures/m0-gateway-settlement/dispatch.sqlite.zst");
+
+fn original(path: &Path, bytes: &[u8]) -> Result<()> {
+    fs::write(path, zstd::stream::decode_all(bytes)?)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 
@@ -31,23 +22,26 @@ async fn combined(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
     let (path, db) = captured(dir).await?;
     capture::settle(&db, REQUESTS[0], 173).await?;
     capture::settle(&db, REQUESTS[1], 259).await?;
-    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,"INSERT INTO requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,created_at,charge_status,reconciliation_status) VALUES(?,'local','local','test-model','mock',7,4,0,'2026-10-01T00:00:01Z','unknown','pending')",[UNKNOWN.into()])).await?;
-    MeteringStore::new(db.clone())
-        .apply_authoritative_receipt_charge(&SettlementReceipt {
-            request_id: UNKNOWN.into(),
-            state: SettlementState::Unknown,
-            model_id: Some("test-model".into()),
-            provider_id: Some("mock".into()),
-            final_charge_micro_usd: None,
-            usage: SettlementUsage {
-                uncached_input_tokens: 7,
-                cache_read_tokens: 0,
-                cache_write_tokens: 0,
-                output_tokens: 4,
-                reasoning_tokens: 0,
-            },
-        })
+    let journal = dir.join("gateway-journal.sqlite");
+    original(&journal, FROZEN)?;
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "ATTACH ? AS original",
+        [journal.to_str().context("journal path")?.into()],
+    ))
+    .await?;
+    for table in [
+        "requests",
+        "checkpoint_evolution",
+        "acp_capture_connections",
+        "acp_capture_events",
+    ] {
+        db.execute_unprepared(&format!(
+            "INSERT INTO main.{table} SELECT * FROM original.{table}"
+        ))
         .await?;
+    }
+    db.execute_unprepared("DETACH DATABASE original").await?;
     // Also keep an ordinary locally metered request for which M0 had no price.
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
@@ -60,14 +54,12 @@ async fn combined(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
     .await?;
     db.execute_unprepared("INSERT INTO main.requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at) SELECT 'ordinary-local-unknown',user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at FROM past.requests ORDER BY request_id LIMIT 1").await?;
     db.execute_unprepared("DETACH DATABASE past").await?;
-    reservation(&db, REQUESTS[0], Some(173)).await?;
-    reservation(&db, UNKNOWN, None).await?;
     Ok((path, db))
 }
 
 async fn evidence(db: &DatabaseConnection) -> Result<(Vec<requests::Model>, Vec<records::Model>)> {
     let bills = requests::Entity::find()
-        .filter(requests::Column::ProviderId.eq("mock"))
+        .filter(requests::Column::ProviderId.is_in(["mock", "bitrouter"]))
         .order_by_asc(requests::Column::RequestId)
         .all(db)
         .await?;
@@ -80,7 +72,7 @@ async fn evidence(db: &DatabaseConnection) -> Result<(Vec<requests::Model>, Vec<
         .all(db)
         .await?;
     ensure!(
-        bills.len() == 4 && reservations.len() == 2,
+        bills.len() == 6 && reservations.len() == 3,
         "incomplete historical ledger"
     );
     Ok((bills, reservations))
@@ -99,7 +91,7 @@ async fn paid_native_and_terminal_unknown_survive_ordinary_restart() -> Result<(
     for _ in 0..2 {
         let service = db::connect(&format!("sqlite://{}", projected.bitrouter.display())).await?;
         ensure!(evidence(&service).await? == before);
-        ensure!(scalar(&service,"SELECT sum(estimated_charge_micro_usd) FROM requests WHERE reconciliation_status='computed'").await?==432);
+        ensure!(scalar(&service,"SELECT sum(estimated_charge_micro_usd) FROM requests WHERE provider_id='mock' AND reconciliation_status='computed'").await?==432);
         ensure!(scalar(&service,"SELECT count(*) FROM requests WHERE reconciliation_status='unknown' AND json_extract(authoritative_receipt_json,'$.state')='unknown' AND json_extract(authoritative_receipt_json,'$.final_charge_micro_usd') IS NULL").await?==1);
         service.close().await?;
     }
@@ -174,11 +166,116 @@ async fn local_price_and_exhausted_receipt_retain_their_distinct_bases() -> Resu
 }
 
 #[tokio::test]
+async fn frozen_gateway_journal_keeps_dispatch_costs_separate_from_later_bills() -> Result<()> {
+    use bitrouter::gateway::{
+        caller::CallerContext,
+        pipeline::native_accounting::{NativeCostBasis, NativeCostSource},
+    };
+    let dir = tempfile::tempdir()?;
+    let source = dir.path().join("reconciled.sqlite");
+    let pending = dir.path().join("dispatch.sqlite");
+    original(&source, FROZEN)?;
+    original(&pending, DISPATCH)?;
+    ensure!(
+        !mixed_store::activate(&pending, &dir.path().join("too-early"))
+            .await?
+            .dispatch_allowed
+    );
+    let before = connection(&pending, true).await?;
+    let result = mixed_store::activate(&source, &dir.path().join("ready")).await?;
+    let active = result
+        .stores
+        .with_context(|| format!("{:?}", result.blockers))?;
+    let owner = digest(&("gateway-request-inventory-v1", "local", CONTROLLER))?;
+    let scope = EvolutionStore::new(before.clone(), &format!("gateway:{owner}"))?.scope_id;
+    for _ in 0..2 {
+        let service = db::connect(&format!("sqlite://{}", active.bitrouter.display())).await?;
+        let historical = |db: DatabaseConnection| {
+            let scope = scope.clone();
+            async move {
+                records::Entity::find()
+                    .filter(records::Column::ScopeId.eq(scope))
+                    .order_by_asc(records::Column::RecordId)
+                    .all(&db)
+                    .await
+            }
+        };
+        let journal = historical(service.clone()).await?;
+        ensure!(journal.len() == 3 && journal == historical(before.clone()).await?);
+        for row in journal {
+            let request: Value = serde_json::from_str(&row.body)?;
+            let id = request["request_id"].as_str().context("request id")?;
+            let settlement = &request["settlement"];
+            let (hops, amount) = match id {
+                "m0-single-paid" => (1, Some(47)),
+                "m0-fallback-paid" => (2, Some(61)),
+                UNKNOWN => (1, None),
+                _ => anyhow::bail!("unexpected historical request"),
+            };
+            ensure!(settlement["hops"].as_array().context("hops")?.len() == hops);
+            ensure!(
+                settlement["final_metered_cost_micro_usd"] == 30
+                    && settlement["total_cost_micro_usd"]
+                        == if hops == 1 { json!(30) } else { Value::Null }
+            );
+            let original = requests::Entity::find_by_id(id)
+                .one(&before)
+                .await?
+                .context("original metering")?;
+            ensure!(
+                original.estimated_charge_micro_usd == 30
+                    && original.reconciliation_status == "pending"
+            );
+            let dispatch = MeteringStore::new(before.clone())
+                .read(&CallerContext::local(), &[id.to_owned()])
+                .await?;
+            let [provisional] = dispatch.as_slice() else {
+                anyhow::bail!("missing dispatch evidence");
+            };
+            ensure!(
+                provisional.unknown_reason.is_some()
+                    && provisional
+                        .claims
+                        .iter()
+                        .all(|claim| claim.basis == NativeCostBasis::Estimated)
+            );
+            let observations = MeteringStore::new(service.clone())
+                .read(&CallerContext::local(), &[id.to_owned()])
+                .await?;
+            let [observed] = observations.as_slice() else {
+                anyhow::bail!("missing observation")
+            };
+            let reconciled: Vec<_> = observed
+                .claims
+                .iter()
+                .filter(|c| c.basis == NativeCostBasis::Reconciled)
+                .map(|c| c.micro_usd)
+                .collect();
+            ensure!(
+                reconciled == amount.into_iter().collect::<Vec<_>>()
+                    && observed.unknown_reason.is_some() == amount.is_none()
+            );
+        }
+        service.close().await?;
+    }
+    before.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn refuses_in_transit_unbacked_and_conflicting_gateway_facts() -> Result<()> {
     for damage in [
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement',NULL) WHERE kind='gateway_request'",
         "UPDATE checkpoint_evolution SET record_id='wrong' WHERE json_extract(body,'$.request_id')='ordinary-terminal-unknown'",
         "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.total_cost_micro_usd',999) WHERE kind='gateway_request'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.hops[0].status','completed') WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.total_cost_micro_usd',30) WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.settlement.hops[1].provider','first') WHERE json_extract(body,'$.request_id')='m0-fallback-paid'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.anchors',json('{}')) WHERE json_extract(body,'$.request_id')='m0-single-paid'",
+        "UPDATE checkpoint_evolution SET revision=revision-1 WHERE kind='gateway_coverage'",
+        "UPDATE checkpoint_evolution SET body=json_set(body,'$.runtime_epoch','ffffffff-ffff-4fff-8fff-ffffffffffff') WHERE kind='gateway_request'",
+        "UPDATE requests SET session_identity_json=json_set(session_identity_json,'$.router_request_id','different') WHERE request_id='m0-fallback-paid'",
+        "UPDATE acp_capture_connections SET state='recording'",
         "DELETE FROM requests WHERE request_id='ordinary-terminal-unknown'",
         "UPDATE requests SET reconciliation_status='pending' WHERE request_id='ordinary-terminal-unknown'",
         "UPDATE requests SET authoritative_receipt_json=NULL WHERE request_id='ordinary-terminal-unknown'",
@@ -187,8 +284,10 @@ async fn refuses_in_transit_unbacked_and_conflicting_gateway_facts() -> Result<(
         "UPDATE requests SET charge_evidence_json=json_set(charge_evidence_json,'$.normalized_usage.output_tokens',777) WHERE charge_status='computed'",
     ] {
         let dir = tempfile::tempdir()?;
-        let (source, db) = combined(dir.path()).await?;
-        db.execute_unprepared(damage).await?;
+        let source = dir.path().join("contradiction.sqlite");
+        original(&source, FROZEN)?;
+        let db = connection(&source, false).await?;
+        ensure!(db.execute_unprepared(damage).await?.rows_affected() > 0);
         db.close().await?;
         let dest = dir.path().join("active");
         let result = mixed_store::activate(&source, &dest).await?;
@@ -304,7 +403,7 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
             }
         })
         .await??;
-        for old in [REQUESTS[0], UNKNOWN] {
+        for old in [REQUESTS[0], "m0-single-paid", "m0-fallback-paid", UNKNOWN] {
             let response=client.post(format!("{endpoint}/v1/chat/completions")).header("x-bitrouter-request-id",old).header("x-bitrouter-controller-id","different-controller")
                 .json(&json!({"model":"test-model","messages":[{"role":"user","content":"must never dispatch"}]})).send().await?;
             ensure!(

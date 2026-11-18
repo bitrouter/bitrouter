@@ -9,7 +9,10 @@ use anyhow::{Context, Result, bail, ensure};
 use futures::TryStreamExt;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
+mod captures;
+
 pub(super) async fn verify(db: &DatabaseConnection) -> Result<()> {
+    let mut captures = captures::load(db).await?;
     let mut rows = requests::Entity::find().stream(db).await?;
     while let Some(row) = rows.try_next().await? {
         meter(&row).with_context(|| {
@@ -37,11 +40,15 @@ pub(super) async fn verify(db: &DatabaseConnection) -> Result<()> {
         }
         for row in batch {
             after = Some(row.record_id.clone());
-            inventory(db, &row)
+            inventory(db, &row, &mut captures)
                 .await
                 .context("unsupported gateway request history")?;
         }
     }
+    ensure!(
+        captures::complete(&captures),
+        "gateway coverage has missing request history"
+    );
     Ok(())
 }
 
@@ -288,7 +295,11 @@ fn verify_price(row: &requests::Model, evidence: &ChargeEvidence) -> Result<()> 
     Ok(())
 }
 
-async fn inventory(db: &DatabaseConnection, row: &records::Model) -> Result<()> {
+async fn inventory(
+    db: &DatabaseConnection,
+    row: &records::Model,
+    captures: &mut std::collections::BTreeMap<String, captures::Capture>,
+) -> Result<()> {
     let request: GatewayRequest = serde_json::from_str(&row.body)?;
     ensure!(
         serde_json::to_value(&request)? == serde_json::from_str::<serde_json::Value>(&row.body)?,
@@ -306,7 +317,6 @@ async fn inventory(db: &DatabaseConnection, row: &records::Model) -> Result<()> 
             && request.coverage_ready
             && row.session_key.is_none()
             && request.binding.is_none()
-            && request.anchors.is_empty()
             && !request.controller_instance_id.is_empty()
             && !request.route_scope_id.is_empty()
             && !request.request_id.is_empty(),
@@ -314,6 +324,7 @@ async fn inventory(db: &DatabaseConnection, row: &records::Model) -> Result<()> 
     );
     uuid::Uuid::parse_str(&request.attempt_id)?;
     uuid::Uuid::parse_str(&request.runtime_epoch)?;
+    captures::admit(captures, &request)?;
     let settlement = request.settlement.context("request still in transit")?;
     let bill = requests::Entity::find_by_id(&request.request_id)
         .one(db)
@@ -327,44 +338,110 @@ async fn inventory(db: &DatabaseConnection, row: &records::Model) -> Result<()> 
             && stamp(&settlement.settled_at)? >= stamp(&request.admitted_at)?,
         "settlement owner, route or time mismatch"
     );
-    let [hop] = settlement.hops.as_slice() else {
-        bail!("unsupported multi-hop or unobserved dispatch")
-    };
+    let observed: serde_json::Value = serde_json::from_str(
+        bill.session_identity_json
+            .as_deref()
+            .context("missing metering identity evidence")?,
+    )?;
     ensure!(
-        matches!(
-            hop.protocol.as_str(),
-            "chat_completions" | "responses" | "messages" | "decisions"
-        ) && hop.model == bill.model_id
-            && hop.provider == bill.provider_id
-            && hop.error_code == settlement.error_code,
-        "conflicting settled hop"
+        (request.route_scope_id != "local"
+            || (bill.api_key_id == "local" && bill.user_id == "local"))
+            && observed["origin"] == "acp_harness_request"
+            && observed["conflicts"] == serde_json::json!([])
+            && observed["router_request_id"] == request.request_id
+            && observed["api_principal_id"] == bill.api_key_id
+            && observed["claimed_controller_instance_id"] == request.controller_instance_id,
+        "gateway request identity conflicts with the metering observation"
+    );
+    let (hop, failed) = settlement
+        .hops
+        .split_last()
+        .context("unobserved dispatch")?;
+    for hop in &settlement.hops {
+        ensure!(
+            !hop.model.trim().is_empty()
+                && !hop.provider.trim().is_empty()
+                && hop.account.as_ref().is_none_or(|a| !a.trim().is_empty())
+                && matches!(
+                    hop.protocol.as_str(),
+                    "chat_completions" | "responses" | "messages" | "decisions"
+                ),
+            "unidentified gateway hop"
+        );
+    }
+    for prior in failed {
+        ensure!(
+            prior.status == "failed"
+                && matches!(
+                    prior.error_code.as_deref(),
+                    Some(
+                        "upstream_bad_gateway"
+                            | "upstream_timeout"
+                            | "upstream_rate_limited"
+                            | "upstream_unavailable"
+                            | "payment_required"
+                            | "upstream_payment_required"
+                            | "upstream_invalid_response"
+                    )
+                ),
+            "unconfirmed fallback predecessor"
+        );
+    }
+    ensure!(
+        hop.model == settlement.final_model
+            && hop.provider == settlement.final_provider
+            && bill.error == settlement.error_code,
+        "conflicting final gateway hop"
     );
     use crate::storage::execution::ExecutionOutcome;
     match settlement.outcome.context("no terminal gateway outcome")? {
         ExecutionOutcome::Completed => ensure!(
-            hop.status == "completed" && settlement.error_code.is_none() && bill.error.is_none(),
+            hop.status == "completed"
+                && hop.error_code.is_none()
+                && settlement.error_code.is_none(),
             "conflicting completed settlement"
         ),
         ExecutionOutcome::Failed => ensure!(
-            hop.status == "failed" && settlement.error_code.is_some() && bill.error.is_some(),
-            "conflicting failed settlement"
+            hop.status == "failed"
+                && hop.error_code.is_some()
+                && hop.error_code == settlement.error_code,
+            "unclassified failed settlement"
         ),
         ExecutionOutcome::ClientDisconnected => ensure!(
-            hop.status == "incomplete" && settlement.total_cost_micro_usd.is_none(),
+            hop.status == "incomplete"
+                && hop.error_code.is_none()
+                && settlement.error_code.is_none()
+                && settlement.total_cost_micro_usd.is_none(),
             "conflicting disconnect settlement"
         ),
     }
-    if let Some(amount) = settlement.total_cost_micro_usd {
+    // M0's request tracker froze the MeteringSettlementEvent before reconciliation.
+    // Multiple physical sends never had a known aggregate, even with a priced final hop.
+    let observed = settlement.final_metered_cost_micro_usd;
+    ensure!(
+        observed.is_none_or(|v| i64::try_from(v).is_ok())
+            && settlement
+                .total_cost_micro_usd
+                .is_none_or(|total| failed.is_empty() && Some(total) == observed),
+        "conflicting original dispatch total"
+    );
+    if bill.reconciliation_status == "not_applicable" {
+        if let Some(amount) = observed {
+            ensure!(
+                bill.usage_origin != "unknown"
+                    && bill.charge_status == "computed"
+                    && i64::try_from(amount)? == bill.estimated_charge_micro_usd,
+                "dispatch observation conflicts with unmodified local metering"
+            );
+        }
+        let total = if failed.is_empty() && bill.usage_origin == "provider_reported" {
+            observed
+        } else {
+            None
+        };
         ensure!(
-            Some(amount) == settlement.final_metered_cost_micro_usd,
-            "inconsistent single-hop total"
-        );
-    }
-    if let Some(amount) = settlement.final_metered_cost_micro_usd {
-        ensure!(
-            bill.charge_status == "computed"
-                && i64::try_from(amount)? == bill.estimated_charge_micro_usd,
-            "unbacked historical gateway charge"
+            settlement.total_cost_micro_usd == total,
+            "dispatch total conflicts with local usage"
         );
     }
     Ok(())

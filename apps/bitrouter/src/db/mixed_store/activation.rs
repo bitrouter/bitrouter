@@ -83,8 +83,12 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
             }
         }
     }
-    if let Err(error) = accounting::verify(db).await {
-        blockers.push(format!("request accounting: {error:#}"));
+    match accounting::verify(db).await {
+        Ok(()) => {
+            retained.remove("acp_capture_connections");
+            retained.remove("acp_capture_events");
+        }
+        Err(error) => blockers.push(format!("request accounting: {error:#}")),
     }
     // A historical Unknown is a durable service obligation. Only the service's
     // canonical audit can establish its complete source and accounting coverage.
