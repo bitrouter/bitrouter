@@ -53,7 +53,7 @@ impl Model {
                         reply.clone(),
                     );
                     handles.push(thread::spawn(move || -> Result<()> {
-                        let request = read_request(&conn)?;
+                        let (request, correlation) = read_request(&conn)?;
                         let messages = request["messages"].as_array().context("messages")?;
                         let number = {
                             let mut seen = requests.lock().map_err(|_| anyhow::anyhow!("request log"))?;
@@ -61,7 +61,7 @@ impl Model {
                             seen.len()
                         };
                         peak.fetch_max(active.fetch_add(1,Ordering::SeqCst)+1,Ordering::SeqCst);
-                        write!(conn,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-BitRouter-Execution-Id: exec-{number}\r\nX-BitRouter-Request-Id: req-{number}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
+                        write!(conn,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-BitRouter-Execution-Id: exec-{number}\r\nX-BitRouter-Request-Id: {correlation}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
                         conn.flush()?;
                         let delta = reply(messages).inspect_err(|error| eprintln!("model request {number}: {error:#}"))?;
                         active.fetch_sub(1,Ordering::SeqCst);
@@ -111,7 +111,7 @@ impl Drop for Model {
     }
 }
 
-fn read_request(conn: &TcpStream) -> Result<Value> {
+fn read_request(conn: &TcpStream) -> Result<(Value, String)> {
     conn.set_nonblocking(false)?;
     conn.set_read_timeout(Some(Duration::from_secs(15)))?;
     let mut input = BufReader::new(conn);
@@ -136,7 +136,11 @@ fn read_request(conn: &TcpStream) -> Result<Value> {
     ensure!(size <= 512 * 1024, "live context over budget");
     let mut body = vec![0; size];
     input.read_exact(&mut body)?;
-    Ok(serde_json::from_slice(&body)?)
+    let id = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("x-bitrouter-request-id: "))
+        .context("missing caller correlation")?;
+    Ok((serde_json::from_slice(&body)?, id.to_owned()))
 }
 
 pub fn calls(items: Vec<(String, &str, Value)>) -> Value {

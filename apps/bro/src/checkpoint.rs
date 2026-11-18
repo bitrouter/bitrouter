@@ -69,6 +69,9 @@ pub(crate) struct Outcome {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Step {
     pub step_id: Uuid,
+    /// Caller identity committed before the request. The response IDs below are independent evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_request_id: Option<Uuid>,
     pub request_id: Option<String>,
     pub execution_id: Option<String>,
     /// Incomplete display text is never used to build inference history.

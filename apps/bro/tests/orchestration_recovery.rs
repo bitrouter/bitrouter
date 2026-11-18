@@ -60,11 +60,17 @@ fn gateway() -> Result<(String, thread::JoinHandle<Result<Value>>)> {
         let mut reader = BufReader::new(&stream);
         let mut line = String::new();
         let mut len = None;
+        let mut correlation = None;
         loop {
             line.clear();
             ensure!(reader.read_line(&mut line)? > 0, "incomplete HTTP request");
             if line == "\r\n" {
                 break;
+            }
+            if let Some((key, val)) = line.split_once(':')
+                && key.eq_ignore_ascii_case("x-bitrouter-request-id")
+            {
+                correlation = Some(val.trim().to_owned());
             }
             if let Some((key, val)) = line.split_once(':')
                 && key.eq_ignore_ascii_case("content-length")
@@ -78,9 +84,10 @@ fn gateway() -> Result<(String, thread::JoinHandle<Result<Value>>)> {
             "data: {}\n\ndata: [DONE]\n\n",
             json!({"object":"chat.completion.chunk","id":"new","model":"fixture","choices":[{"index":0,"delta":{"role":"assistant","content":"new answer"},"finish_reason":"stop"}]})
         );
+        let correlation = correlation.context("missing caller correlation")?;
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 200 OK\r\nX-BitRouter-Request-Id: {correlation}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )?;
         Ok(serde_json::from_slice(&bytes)?)

@@ -373,3 +373,81 @@ async fn confirmed_child_and_terminal_recover_on_either_side_of_a_lost_ack() -> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn pre_header_disconnect_keeps_the_already_durable_wire_correlation() -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let Work {
+        _dir,
+        home,
+        mut thread,
+        client,
+    } = Work::new(&endpoint)?;
+    let checkpoint = _dir
+        .path()
+        .join("bro/threads")
+        .join(format!("{}.json", thread.thread_id));
+    let peer = std::thread::spawn(move || -> Result<_> {
+        let (socket, _) = listener.accept()?;
+        socket.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut input = BufReader::new(socket);
+        let mut headers = String::new();
+        while !headers.ends_with("\r\n\r\n") {
+            ensure!(input.read_line(&mut headers)? != 0);
+        }
+        let headers = headers.to_ascii_lowercase();
+        let id = headers
+            .lines()
+            .find_map(|s| s.strip_prefix("x-bitrouter-request-id: "))
+            .context("missing wire correlation")?;
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(checkpoint)?)?;
+        assert_eq!(saved["turns"][0]["steps"][0]["caller_request_id"], id);
+        assert_eq!(
+            saved["turns"][0]["steps"][0]["state"]["record"],
+            "model_request"
+        );
+        Ok(uuid::Uuid::parse_str(id)?)
+        // Drop the socket before sending response headers.
+    });
+    assert!(runner::run(&home, &mut thread, &client).await.is_err());
+    let wire_id = peer
+        .join()
+        .map_err(|_| anyhow::anyhow!("gateway fixture failed"))??;
+    let mut loaded = home.load(thread.thread_id)?;
+    let step = &loaded.current()?.steps[0];
+    assert_eq!(step.caller_request_id, Some(wire_id));
+    assert!(step.request_id.is_none() && step.execution_id.is_none());
+    assert_eq!(
+        loaded.current()?.status(false),
+        TurnStatus::RecoveryRequired
+    );
+    assert!(runner::run(&home, &mut loaded, &client).await.is_err());
+    assert_eq!(loaded.current()?.steps.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_or_conflicting_success_echo_cannot_authorize_model_output() -> Result<()> {
+    for echo in ["", "X-BitRouter-Request-Id: different\r\n"] {
+        let reply = call_stream(true).replace("X-BitRouter-Request-Id: <caller-id>\r\n", echo);
+        let mock = Mock::start(vec![reply])?;
+        let Work {
+            _dir,
+            home,
+            mut thread,
+            client,
+        } = Work::new(&mock.endpoint)?;
+        assert!(runner::run(&home, &mut thread, &client).await.is_err());
+        let loaded = home.load(thread.thread_id)?;
+        assert_eq!(
+            loaded.current()?.status(false),
+            TurnStatus::RecoveryRequired
+        );
+        assert!(loaded.current()?.pending().is_none());
+        assert!(loaded.current()?.steps[0].caller_request_id.is_some());
+        assert_eq!(mock.join()?.len(), 1);
+    }
+    Ok(())
+}

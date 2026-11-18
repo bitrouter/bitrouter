@@ -313,6 +313,7 @@ async fn run_model(
     let step_id = Uuid::new_v4();
     thread.current_mut()?.steps.push(Step {
         step_id,
+        caller_request_id: Some(step_id),
         request_id: None,
         execution_id: None,
         partial: None,
@@ -322,7 +323,7 @@ async fn run_model(
     let reply = tokio::select! {
         biased;
         _ = cancel.cancelled() => return cancel_turn(home,thread),
-        reply = client.chat_reply(&request) => reply,
+        reply = client.chat_reply_with_correlation(&request, step_id) => reply,
     };
     let reply = match reply {
         Ok(reply) => reply,

@@ -57,6 +57,11 @@ impl Mock {
                 let mut bytes = vec![0; length];
                 reader.read_exact(&mut bytes)?;
                 requests.push(serde_json::from_slice(&bytes)?);
+                let correlation = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("x-bitrouter-request-id: "))
+                    .context("caller correlation missing")?;
+                let reply = reply.replace("<caller-id>", correlation);
                 write!(socket, "{reply}")?;
             }
             Ok(requests)
@@ -80,7 +85,7 @@ pub fn chunk(delta: Value, finish: Option<&str>) -> String {
 }
 pub fn stream(body: String) -> String {
     format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+        "HTTP/1.1 200 OK\r\nX-BitRouter-Request-Id: <caller-id>\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     )
 }

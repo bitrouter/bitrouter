@@ -286,6 +286,34 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         .await
         .context("provider history")?;
     ensure!(received.len() == 2);
+    let history = bro(
+        &binary,
+        client.path(),
+        &endpoint,
+        credential,
+        &["thread", "history", thread],
+        None,
+    )
+    .await?;
+    let steps = history["turns"][0]["steps"]
+        .as_array()
+        .context("BRO step ledger")?;
+    ensure!(steps.len() == received.len());
+    for (step, upstream) in steps.iter().zip(&received) {
+        let caller = step["caller_request_id"]
+            .as_str()
+            .context("durable caller ID")?;
+        ensure!(
+            upstream
+                .headers
+                .get("x-bitrouter-request-id")
+                .context("upstream correlation")?
+                .to_str()?
+                == caller
+        );
+        ensure!(step["request_id"] == caller);
+    }
+    ensure!(steps[0]["caller_request_id"] != steps[1]["caller_request_id"]);
     let first: Value = received[0].body_json()?;
     ensure!(
         first["messages"]
