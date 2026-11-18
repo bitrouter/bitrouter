@@ -46,7 +46,7 @@ name = "${binary}"
 path = "src/main.rs"
 `);
       const info = { version, target: host, source_revision: buildEnv.BITROUTER_BUILD_REVISION,
-        ...(pkg === 'bitrouter' ? { profile: 'full' } : { product: pkg }) };
+        product: pkg, ...(pkg === 'bitrouter' ? { profile: 'full' } : {}) };
       write(join(root, pkg, 'src/main.rs'), `fn main() {
   if std::env::args().nth(1).as_deref() == Some("--version") { println!("${binary} ${version}"); }
   else { println!("{}", r#"${JSON.stringify(info)}"#); }
@@ -87,6 +87,14 @@ function install(p, pkg, version, refuse) {
   const file = join(dir, pkg + '-installer.' + (windows ? 'ps1' : 'sh'));
   const env = { ...process.env, CARGO_HOME: join(p.base, 'cargo'), XDG_CONFIG_HOME: p.config,
     HOME: p.base, INSTALLER_NO_MODIFY_PATH: '1', INSTALLER_DOWNLOAD_URL: pathToFileURL(dir).href };
+  // Run Windows PowerShell 5 with its own system modules when Actions starts
+  // the Node fixture from pwsh 7. The two module directories are incompatible.
+  if (windows) {
+    for (const key of Object.keys(env)) {
+      if (key.toLowerCase() === 'psmodulepath') delete env[key];
+    }
+    env.PSModulePath = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules');
+  }
   const result = windows
     ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { env, encoding: 'utf8' })
     : spawnSync('sh', [file], { env, encoding: 'utf8' });
