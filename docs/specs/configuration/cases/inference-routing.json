@@ -296,5 +296,25 @@
     },
     "schema_valid": false,
     "runtime_valid": false
+  },
+  {
+    "name": "proposed engine field is rejected",
+    "value": {
+      "enabled": false,
+      "destinations": [
+        {
+          "id": "vllm-a",
+          "provider": "vllm",
+          "model": "local-model",
+          "endpoint": "http://127.0.0.1:8000/v1",
+          "max_active": 1,
+          "engine": {
+            "kind": "vllm"
+          }
+        }
+      ]
+    },
+    "schema_valid": false,
+    "runtime_valid": false
   }
 ]
