@@ -1,7 +1,8 @@
 //! The foreground worker checkpoints before dispatch and after each confirmed result.
 //! A lost worker releases its OS lock. Only a checkpoint with a known next
 //! operation authorizes continuation; releasing the lock says nothing about effects.
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -13,13 +14,15 @@ use bitrouter_ai::types::{ReasoningEffort, ToolResultOutput};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 enum Format {
     #[serde(rename = "bro-local/1")]
     Local,
+    #[serde(rename = "bro-local/2")]
+    Managed,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Thread {
     format: Format,
     pub thread_id: Uuid,
@@ -38,7 +41,7 @@ pub(crate) struct Thread {
     pub turns: Vec<Turn>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Turn {
     pub turn_id: Uuid,
     pub prompt: String,
@@ -48,18 +51,20 @@ pub(crate) struct Turn {
     /// Complete, already-settled Chat history verified by the M0 offline reader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sealed_messages: Vec<ChatMessage>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub children: std::collections::BTreeMap<Uuid, Thread>,
     pub steps: Vec<Step>,
     pub outcome: Option<Outcome>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Outcome {
     pub status: TurnStatus,
     pub detail: String,
     pub final_answer: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Step {
     pub step_id: Uuid,
     pub request_id: Option<String>,
@@ -69,7 +74,7 @@ pub(crate) struct Step {
     pub state: ModelState,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub(crate) enum ModelState {
     ModelRequest,
@@ -77,7 +82,7 @@ pub(crate) enum ModelState {
     ModelResponse { response: Box<Assistant> },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Assistant {
     pub completion_id: String,
     pub model: String,
@@ -87,24 +92,25 @@ pub(crate) struct Assistant {
     pub calls: Vec<Invocation>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Invocation {
     pub item_id: Uuid,
     pub approval: Option<Approval>,
     pub state: ToolState,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Approval {
     pub request: InputRequest,
     pub approved: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub(crate) enum ToolState {
     Proposed,
     ToolIntent,
+    Child,
     ToolResult {
         output: ToolResultOutput,
         effect: EffectStatus,
@@ -164,12 +170,38 @@ impl Thread {
         }
     }
 
+    pub fn managed(&self) -> bool {
+        matches!(self.format, Format::Managed)
+    }
+
+    pub fn enable_managed(&mut self) {
+        self.format = Format::Managed;
+    }
+
     pub fn current(&self) -> Result<&Turn> {
         self.turns.last().context("thread has no turn")
     }
 
     pub fn current_mut(&mut self) -> Result<&mut Turn> {
         self.turns.last_mut().context("thread has no turn")
+    }
+
+    pub fn accepted_request(&self, key: &str, prompt: &str) -> Result<Option<Uuid>> {
+        ensure!(
+            !key.is_empty() && key.len() <= 128 && !key.chars().any(char::is_control),
+            "invalid request ID"
+        );
+        let prior = self
+            .turns
+            .iter()
+            .find(|turn| turn.request_id.as_deref() == Some(key));
+        if let Some(turn) = prior {
+            ensure!(
+                turn.prompt == prompt,
+                "request ID already accepted with different input"
+            );
+        }
+        Ok(prior.map(|turn| turn.turn_id))
     }
 
     pub fn start(&mut self, prompt: String, request_id: Option<String>) -> Result<()> {
@@ -185,6 +217,7 @@ impl Thread {
             startup_instructions: crate::gateway::workspace_instructions(&self.workspace)?,
             request_id,
             sealed_messages: vec![],
+            children: Default::default(),
             steps: vec![],
             outcome: None,
         });
@@ -240,7 +273,7 @@ impl Turn {
                 {
                     return Next::Waiting;
                 }
-                ToolState::Proposed => return Next::Tool(index),
+                ToolState::Child | ToolState::Proposed => return Next::Tool(index),
             }
         }
         Next::Model
@@ -262,6 +295,9 @@ impl Turn {
     pub fn status(&self, running: bool) -> TurnStatus {
         if let Some(outcome) = &self.outcome {
             return outcome.status;
+        }
+        if !running && self.children.values().any(crate::tree::unresolved) {
+            return TurnStatus::RecoveryRequired;
         }
         match self.next() {
             Next::Blocked if !running => TurnStatus::RecoveryRequired,
@@ -306,6 +342,17 @@ impl Home {
 
     pub fn lock_file(&self, thread: Uuid) -> Result<File> {
         open_lock(&self.dir.join(format!("{thread}.lock")))
+    }
+
+    /// A contended worker can still be observed through its atomic checkpoint.
+    pub fn observe_worker(&self, thread: Uuid) -> Result<(File, bool)> {
+        let file = self.lock_file(thread)?;
+        let running = match file.try_lock() {
+            Ok(()) => false,
+            Err(TryLockError::WouldBlock) => true,
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        };
+        Ok((file, running))
     }
 
     pub fn worker(&self, thread: Uuid) -> Result<File> {
@@ -369,7 +416,11 @@ impl Home {
         crate::durable::write_file(
             &self.path(thread.thread_id),
             atomicwrites::AllowOverwrite,
-            |file| serde_json::to_writer(file, thread).map_err(std::io::Error::from),
+            |file| {
+                let mut writer = BufWriter::new(file);
+                serde_json::to_writer(&mut writer, thread)?;
+                writer.flush()
+            },
         )?;
         Ok(())
     }
@@ -382,6 +433,12 @@ impl Home {
             thread.thread_id == id,
             "checkpoint thread identity mismatch"
         );
+        Self::validate(&mut thread)?;
+        crate::tree::validate(&thread)?;
+        Ok(thread)
+    }
+
+    fn validate(thread: &mut Thread) -> Result<()> {
         crate::skills::validate(&thread.skills)?;
         for (index, turn) in thread.turns.iter().enumerate() {
             ensure!(
@@ -436,7 +493,12 @@ impl Home {
                 }
             }
         }
-        Ok(thread)
+        for turn in &mut thread.turns {
+            for child in turn.children.values_mut() {
+                Self::validate(child)?;
+            }
+        }
+        Ok(())
     }
 }
 

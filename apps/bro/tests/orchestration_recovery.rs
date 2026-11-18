@@ -1,4 +1,7 @@
 //! Every operation below starts a fresh process. The mock sees only new turns.
+#[path = "support/binary.rs"]
+mod binary;
+
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -12,7 +15,7 @@ use std::{
 };
 
 fn bro(home: &Path, args: &[&str]) -> Result<Output> {
-    Ok(Command::new(env!("CARGO_BIN_EXE_bro"))
+    Ok(Command::new(binary::bro())
         .arg("--data-dir")
         .arg(home)
         .args(args)
@@ -266,6 +269,14 @@ fn transferred_prefix_and_call_pair_are_checked_before_binding() -> Result<()> {
         "--workspace",
         workspace.to_str().context("workspace")?,
     ];
+    let mut escalated = origin.clone();
+    escalated["format"] = json!("bro-local/2");
+    fs::write(&path, serde_json::to_vec(&escalated)?)?;
+    let denied = bro(&home, &restore)?;
+    ensure!(
+        !denied.status.success()
+            && String::from_utf8_lossy(&denied.stderr).contains("sealed M0 history")
+    );
     let mut stale = origin.clone();
     stale["turns"][0]["sealed_messages"][2]["content"] = json!("stale result");
     fs::write(&path, serde_json::to_vec(&stale)?)?;

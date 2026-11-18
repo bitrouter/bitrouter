@@ -271,3 +271,105 @@ async fn malformed_success_preserves_each_unambiguous_receipt_independently() ->
     }
     Ok(())
 }
+
+/// Lose the store acknowledgement at the parent join or at terminal settlement,
+/// on either side of the atomic rename. Each paid send must occur exactly once.
+#[tokio::test]
+async fn confirmed_child_and_terminal_recover_on_either_side_of_a_lost_ack() -> Result<()> {
+    struct Fault<'a> {
+        home: &'a Home,
+        committed: bool,
+        terminal: bool,
+    }
+    impl runner::Journal for Fault<'_> {
+        fn save(&self, thread: &Thread) -> Result<()> {
+            let turn = thread.current()?;
+            let joining = !turn.children.is_empty()
+                && turn.response().is_some_and(|r| {
+                    r.calls
+                        .iter()
+                        .any(|i| matches!(i.state, ToolState::ToolResult { .. }))
+                });
+            let inject = if self.terminal {
+                turn.outcome.is_some()
+            } else {
+                joining
+            };
+            if !inject || self.committed {
+                self.home.save(thread)?;
+            }
+            ensure!(!inject, "injected lost acknowledgement");
+            Ok(())
+        }
+    }
+    for (terminal, committed) in [(false, false), (false, true), (true, false), (true, true)] {
+        let reply = |delta, finish| stream(chunk(delta, Some(finish)) + "data: [DONE]\n\n");
+        let model = Mock::start(vec![
+            reply(
+                json!({"role":"assistant","tool_calls":[{"index":0,"type":"function","id":"spawn","function":{
+                "name":"spawn_agent","arguments":json!({"task":{"text":"inspect"}}).to_string()}}]}),
+                "tool_calls",
+            ),
+            reply(
+                json!({"role":"assistant","content":"child evidence"}),
+                "stop",
+            ),
+            reply(
+                json!({"role":"assistant","content":"parent consumed evidence"}),
+                "stop",
+            ),
+        ])?;
+        let Work {
+            _dir,
+            home,
+            mut thread,
+            client,
+        } = Work::new(&model.endpoint)?;
+        thread.enable_managed();
+        home.save(&thread)?;
+        let tree = crate::tree::Scheduler::restore(&thread)?;
+        let result = runner::drive(
+            &Fault {
+                home: &home,
+                committed,
+                terminal,
+            },
+            &mut thread,
+            &client,
+            &tokio_util::sync::CancellationToken::new(),
+            Some(&tree),
+            0,
+        )
+        .await;
+        ensure!(result.is_err_and(|e| e.to_string().contains("lost acknowledgement")));
+        let mut restored = home.load(thread.thread_id)?;
+        let child = restored
+            .current()?
+            .children
+            .values()
+            .next()
+            .context("child")?;
+        ensure!(
+            child.current()?.steps.len() == 1
+                && child.current()?.status(false) == TurnStatus::Completed
+        );
+        runner::run(&home, &mut restored, &client).await?;
+        runner::run(&home, &mut restored, &client).await?;
+        let requests = model.join()?;
+        ensure!(requests.len() == 3);
+        let delivered: Vec<_> = requests[2]["messages"]
+            .as_array()
+            .context("messages")?
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .collect();
+        ensure!(
+            delivered.len() == 1
+                && delivered[0]["tool_call_id"] == "spawn"
+                && delivered[0]["content"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("child evidence"))
+        );
+    }
+    Ok(())
+}

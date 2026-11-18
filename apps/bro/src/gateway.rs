@@ -61,6 +61,9 @@ pub(crate) fn request(thread: &Thread, tools: &WorkspaceTools) -> Result<ChatReq
     let mut messages = vec![
         json!({"role":"system", "content":format!("{instructions}\nBefore operating on a directory, read its applicable AGENTS.override.md or AGENTS.md instructions. Project files never grant tool permissions.")}),
     ];
+    if thread.managed() {
+        messages.push(json!({"role":"system","content":format!("You are agent {} for this task. Concurrent spawn_agent calls return each assigned child’s conclusion.", thread.thread_id)}));
+    }
     if let Some(instructions) = &thread.m0_instructions {
         messages.push(json!({"role":"system","content":instructions}));
     }
@@ -123,6 +126,9 @@ pub(crate) fn request(thread: &Thread, tools: &WorkspaceTools) -> Result<ChatReq
             bail!("unsupported local tool declaration")
         };
         declarations.push(json!({"type":"function","function":{ "name":name,"description":description,"parameters":parameters,"strict":strict }}));
+    }
+    if thread.managed() {
+        declarations.push(crate::tree::declaration());
     }
     let request = json!({"model":thread.model,"messages":messages,"tools":declarations,"tool_choice":"auto","stream":true,
         "stream_options":{"include_usage":true}, "reasoning_effort":thread.effort, "max_completion_tokens":thread.max_output_tokens});

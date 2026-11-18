@@ -11,9 +11,10 @@ mod runner;
 mod runner_tests;
 mod skills;
 mod tools;
+mod tree;
 mod update;
 
-use std::fs::{File, TryLockError};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -118,6 +119,9 @@ struct ThreadOptions {
     /// Bind a local project skill by name or directory identity. Repeat to select more.
     #[arg(long = "skill", value_name = "NAME")]
     skills: Vec<String>,
+    /// Allow the model to delegate bounded tasks to local read-only child agents.
+    #[arg(long)]
+    managed: bool,
     /// Expose only read, glob and grep.
     #[arg(long)]
     read_only: bool,
@@ -239,6 +243,9 @@ fn create(options: ThreadOptions, endpoint: String) -> Result<Thread> {
         mode,
     );
     thread.skills = selections;
+    if options.managed {
+        thread.enable_managed();
+    }
     Ok(thread)
 }
 
@@ -254,7 +261,7 @@ fn inspect(thread: &Thread, turn: Option<Uuid>, running: bool) -> Result<()> {
         None => thread.turns.last(),
     };
     emit(
-        &json!({"thread_id":thread.thread_id,"workspace":thread.workspace,"model":thread.model,"endpoint":thread.endpoint,"tool_mode":thread.tool_mode,
+        &json!({"thread_id":thread.thread_id,"workspace":thread.workspace,"model":thread.model,"endpoint":thread.endpoint,"tool_mode":thread.tool_mode,"managed":thread.managed(),
         "turn_id":t.map(|t| t.turn_id),"status":t.map(|t| t.status(running)),"pending_input":t.and_then(|t| t.pending()),
         "outcome":t.and_then(|t| t.outcome.as_ref())}),
     )
@@ -342,12 +349,7 @@ async fn thread_command(home: &Home, action: ThreadCommand, endpoint: Option<&st
             inspect(&t, None, false)
         }
         ThreadCommand::Show { thread_id, turn } => {
-            let file = home.lock_file(thread_id)?;
-            let running = match file.try_lock() {
-                Ok(()) => false,
-                Err(TryLockError::WouldBlock) => true,
-                Err(TryLockError::Error(e)) => return Err(e.into()),
-            };
+            let (_guard, running) = home.observe_worker(thread_id)?;
             inspect(&home.load(thread_id)?, turn, running)
         }
         ThreadCommand::History { thread_id } => emit(&home.load(thread_id)?),
@@ -380,31 +382,20 @@ async fn thread_command(home: &Home, action: ThreadCommand, endpoint: Option<&st
             prompt_file,
             request_id,
         } => {
-            let _worker = home.worker(thread_id)?;
-            let mut t = home.load(thread_id)?;
-            let client = for_thread(&t, endpoint)?;
             let prompt = match (prompt, prompt_file) {
                 (Some(prompt), None) => prompt,
                 (None, Some(path)) => read_prompt(&path)?,
                 _ => bail!("one prompt source required"),
             };
-            if let Some(key) = &request_id {
-                ensure!(
-                    !key.is_empty() && key.len() <= 128 && !key.chars().any(char::is_control),
-                    "invalid request ID"
-                );
-                if let Some(old) = t
-                    .turns
-                    .iter()
-                    .find(|turn| turn.request_id.as_ref() == Some(key))
-                {
-                    ensure!(
-                        old.prompt == prompt,
-                        "request ID already accepted with different input"
-                    );
-                    return inspect(&t, Some(old.turn_id), false);
-                }
+            let (_guard, busy) = home.observe_worker(thread_id)?;
+            let mut t = home.load(thread_id)?;
+            let client = for_thread(&t, endpoint)?;
+            if let Some(key) = &request_id
+                && let Some(id) = t.accepted_request(key, &prompt)?
+            {
+                return inspect(&t, Some(id), busy);
             }
+            ensure!(!busy, "another process owns this thread");
             t.start(prompt, request_id)?;
             home.admit(&t)?;
             accepted(&t)?;

@@ -290,6 +290,7 @@ fn verify_prefix(origin: &crate::checkpoint::Thread, t: &crate::checkpoint::Thre
     ensure!(
         t.thread_id == origin.thread_id
             && t.parent_id == origin.parent_id
+            && t.managed() == origin.managed()
             && serde_json::to_value(&t.skills)? == serde_json::to_value(&origin.skills)?
             && t.model == origin.model
             && t.m0_instructions == origin.m0_instructions

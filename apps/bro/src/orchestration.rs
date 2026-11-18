@@ -84,25 +84,12 @@ pub(super) async fn run(home: &Home, action: AgentCommand, endpoint: Option<&str
             request_id,
             prompt,
         } => {
-            let _guard = home.worker(child)?;
+            let (_guard, busy) = home.observe_worker(child)?;
             let mut t = child_thread(home, parent, child)?;
-            ensure!(
-                !request_id.is_empty()
-                    && request_id.len() <= 128
-                    && !request_id.chars().any(char::is_control),
-                "invalid request ID"
-            );
-            if let Some(old) = t
-                .turns
-                .iter()
-                .find(|turn| turn.request_id.as_ref() == Some(&request_id))
-            {
-                ensure!(
-                    old.prompt == prompt,
-                    "request ID already accepted with different input"
-                );
-                return inspect(&t, Some(old.turn_id), false);
+            if let Some(id) = t.accepted_request(&request_id, &prompt)? {
+                return inspect(&t, Some(id), busy);
             }
+            ensure!(!busy, "another process owns this thread");
             t.start(prompt, Some(request_id))?;
             home.admit(&t)?;
             crate::accepted(&t)

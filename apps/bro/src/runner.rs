@@ -18,35 +18,71 @@ use crate::checkpoint::{Approval, Home, ModelState, Next, Outcome, Step, Thread,
 use crate::gateway::{Accumulator, request};
 use crate::tools::WorkspaceTools;
 
-pub(crate) fn cancel_turn(home: &Home, thread: &mut Thread) -> Result<()> {
-    if thread.current()?.outcome.is_some() {
-        return Ok(());
-    }
-    if thread.current()?.next() == Next::Blocked {
-        settle(
-            home,
-            thread,
-            TurnStatus::RecoveryRequired,
-            "cancelled with an unresolved model request or tool effect",
-            None,
-        )
-    } else {
-        if let Ok(response) = thread.response_mut() {
-            for call in &mut response.calls {
-                if matches!(call.state, ToolState::Proposed) {
-                    call.state = ToolState::ToolResult {
-                        output: denied("cancelled before dispatch"),
-                        effect: EffectStatus::NotExecuted,
-                    };
-                }
-            }
-        }
-        settle(home, thread, TurnStatus::Cancelled, "cancelled", None)
+pub(crate) trait Journal {
+    fn save(&self, thread: &Thread) -> Result<()>;
+}
+
+impl Journal for Home {
+    fn save(&self, thread: &Thread) -> Result<()> {
+        Home::save(self, thread)
     }
 }
 
-fn settle(
-    home: &Home,
+pub(crate) fn cancel_turn(home: &dyn Journal, thread: &mut Thread) -> Result<()> {
+    cancel_known(thread)?;
+    home.save(thread)
+}
+
+fn cancel_known(thread: &mut Thread) -> Result<()> {
+    if thread.current()?.outcome.is_some() {
+        return Ok(());
+    }
+    for child in thread.current_mut()?.children.values_mut() {
+        cancel_known(child)?;
+    }
+    crate::tree::collect_conclusions(thread)?;
+    let unknown = thread.current()?.next() == Next::Blocked
+        || thread.current()?.response().is_some_and(|response| {
+            response.calls.iter().any(|call| {
+                matches!(
+                    call.state,
+                    ToolState::Child
+                        | ToolState::ToolIntent
+                        | ToolState::ToolResult {
+                            effect: EffectStatus::Unknown,
+                            ..
+                        }
+                )
+            })
+        });
+    if let Ok(response) = thread.response_mut() {
+        for call in &mut response.calls {
+            if matches!(call.state, ToolState::Proposed) {
+                call.state = ToolState::ToolResult {
+                    output: denied("cancelled before dispatch"),
+                    effect: EffectStatus::NotExecuted,
+                };
+            }
+        }
+    }
+    let (status, detail) = if unknown {
+        (
+            TurnStatus::RecoveryRequired,
+            "cancelled with an unresolved model request or tool effect",
+        )
+    } else {
+        (TurnStatus::Cancelled, "cancelled")
+    };
+    thread.current_mut()?.outcome = Some(Outcome {
+        status,
+        detail: detail.into(),
+        final_answer: None,
+    });
+    Ok(())
+}
+
+pub(crate) fn settle(
+    home: &dyn Journal,
     thread: &mut Thread,
     status: TurnStatus,
     detail: &str,
@@ -107,8 +143,15 @@ pub(crate) async fn run(home: &Home, thread: &mut Thread, client: &GatewayClient
     if path.try_exists()? {
         cancel.cancel();
     }
+    if matches!(thread.current()?.next(), Next::Model | Next::Tool(_)) {
+        home.check_owner(thread)?;
+    }
+    let scheduler = thread
+        .managed()
+        .then(|| crate::tree::Scheduler::restore(thread))
+        .transpose()?;
     let watch = tokio::spawn(cancellation(path, cancel.clone()));
-    let result = drive(home, thread, client, &cancel).await;
+    let result = drive(home, thread, client, &cancel, scheduler.as_ref(), 0).await;
     watch.abort();
     result?;
     report(thread)?;
@@ -133,15 +176,14 @@ pub(crate) fn report(thread: &Thread) -> Result<()> {
     )
 }
 
-async fn drive(
-    home: &Home,
+pub(crate) async fn drive(
+    home: &dyn Journal,
     thread: &mut Thread,
     client: &GatewayClient,
     cancel: &CancellationToken,
+    scheduler: Option<&crate::tree::Scheduler>,
+    depth: u32,
 ) -> Result<()> {
-    if matches!(thread.current()?.next(), Next::Model | Next::Tool(_)) {
-        home.check_owner(thread)?;
-    }
     let tools = WorkspaceTools::new(&thread.workspace, thread.tool_mode)?;
     ensure!(
         tools.root() == thread.workspace,
@@ -151,7 +193,22 @@ async fn drive(
         if cancel.is_cancelled() {
             return cancel_turn(home, thread);
         }
-        match thread.current()?.next() {
+        let turn = thread.current()?;
+        let next = turn.next();
+        if let Some(tree) = scheduler {
+            if next == Next::Blocked
+                || turn
+                    .outcome
+                    .as_ref()
+                    .is_some_and(|o| o.status == TurnStatus::RecoveryRequired)
+            {
+                tree.fenced.set(true);
+            }
+            if tree.fenced.get() && matches!(next, Next::Tool(_) | Next::Model) {
+                return Ok(());
+            }
+        }
+        match next {
             Next::Settled | Next::Waiting => return Ok(()),
             Next::Blocked => {
                 settle(
@@ -186,18 +243,42 @@ async fn drive(
                     settle(home, thread, TurnStatus::Failed, &reason, final_answer)?;
                 }
             }
-            Next::Tool(index) => run_tool(home, thread, &tools, index, cancel).await?,
-            Next::Model => run_model(home, thread, client, &tools, cancel).await?,
+            Next::Tool(index) => {
+                if let Some(tree) = scheduler
+                    && crate::tree::is_spawn(thread, index)?
+                {
+                    tree.children(home, thread, client, cancel, depth, index)
+                        .await?;
+                } else {
+                    let _slot = match scheduler {
+                        Some(tree) => Some(tree.tools.acquire().await?),
+                        None => None,
+                    };
+                    if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                        run_tool(home, thread, &tools, index, cancel).await?;
+                    }
+                }
+            }
+            Next::Model => {
+                let _slot = match scheduler {
+                    Some(tree) => Some(tree.models.acquire().await?),
+                    None => None,
+                };
+                if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                    run_model(home, thread, client, &tools, cancel, scheduler).await?;
+                }
+            }
         }
     }
 }
 
 async fn run_model(
-    home: &Home,
+    home: &dyn Journal,
     thread: &mut Thread,
     client: &GatewayClient,
     tools: &WorkspaceTools,
     cancel: &CancellationToken,
+    scheduler: Option<&crate::tree::Scheduler>,
 ) -> Result<()> {
     if thread.current()?.steps.len() >= 32 {
         settle(
@@ -216,6 +297,15 @@ async fn run_model(
             return Ok(());
         }
     };
+    if scheduler.is_some_and(|tree| !tree.admit_model()) {
+        return settle(
+            home,
+            thread,
+            TurnStatus::Failed,
+            "tree model attempt limit exceeded",
+            None,
+        );
+    }
     let step_id = Uuid::new_v4();
     thread.current_mut()?.steps.push(Step {
         step_id,
@@ -340,7 +430,7 @@ fn denied(reason: &str) -> ToolResultOutput {
 }
 
 async fn run_tool(
-    home: &Home,
+    home: &dyn Journal,
     thread: &mut Thread,
     tools: &WorkspaceTools,
     index: usize,

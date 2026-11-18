@@ -44,6 +44,10 @@ bro thread cancel THREAD_ID --turn TURN_ID
 
 Use the IDs returned in the event stream. Start a new turn on an idle thread with `bro thread start THREAD_ID 'next instruction'`. If recovery reports an unresolved model request or tool effect, inspect the journal before taking further action. A lost client connection can leave inference usage unknown.
 
+Create a child with `bro agent create PARENT_UUID CHILD_UUID`. Choose the child UUID once and reuse it on retry. Queue a turn with `bro agent delegate PARENT_UUID CHILD_UUID --request-id KEY 'task'`. Use the returned turn ID with `bro agent wake PARENT_UUID CHILD_UUID TURN_ID`, `bro agent wait PARENT_UUID CHILD_UUID TURN_ID` or `bro agent cancel PARENT_UUID CHILD_UUID TURN_ID`. Wake runs the local worker in the foreground. Child turns use the parent's workspace permissions and the ordinary workspace admission fence.
+
+For model-directed delegation, create a thread with `bro thread create --managed` or run `bro task run PROMPT --managed`. Each `spawn_agent` call assigns a fresh read-only child to the current workspace. Calls in one batch run concurrently. The parent receives each conclusion through its tool call. The root checkpoint retains child histories, including gateway receipts. A tree admits 32 agents including the root, four levels of children, four concurrent model requests and 128 model attempts per turn.
+
 ## Prompt an ACP adapter
 
 ```sh

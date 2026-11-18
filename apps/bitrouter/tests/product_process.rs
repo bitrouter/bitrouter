@@ -29,12 +29,14 @@ async fn bro(
     binary: &Path,
     home: &Path,
     endpoint: &str,
+    credential: &str,
     args: &[&str],
     input: Option<&str>,
 ) -> Result<Value> {
     let mut child = Command::new(binary)
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
+        .env("BITROUTER_API_KEY", credential)
         .env("HOME", home)
         .env("BRO_HOME", home.join("bro"))
         .current_dir(home)
@@ -124,7 +126,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
     std::fs::write(
         &config,
         format!(
-            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: true}}\ndatabase: {{url: 'sqlite://service.db?mode=rwc'}}\nproviders:\n  fixture:\n    api_base: '{}'\n    api_key: fixture-provider-key\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
+            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: false}}\ndatabase: {{url: 'sqlite://service.db?mode=rwc'}}\nproviders:\n  fixture:\n    api_base: '{}'\n    api_key: fixture-provider-key\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
             provider.uri()
         ),
     )?;
@@ -132,7 +134,33 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
     let executable = std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY")
         .or_else(|| std::env::var_os("CARGO_BIN_EXE_bitrouter"))
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_bitrouter").into());
-    let mut gateway = Command::new(executable)
+    let issuer = Command::new(&executable)
+        .current_dir(service.path())
+        .env_clear()
+        .env("HOME", service.path())
+        .env("BITROUTER_HOME", service.path())
+        .args([
+            "--json",
+            "key",
+            "sign",
+            "--user",
+            "bro-client",
+            "--db",
+            "sqlite://service.db?mode=rwc",
+        ])
+        .output()
+        .await?;
+    ensure!(
+        issuer.status.success(),
+        "gateway key issuance failed: {}",
+        String::from_utf8_lossy(&issuer.stderr)
+    );
+    let issued: Value = serde_json::from_slice(&issuer.stdout)?;
+    let credential = issued["secret"]
+        .as_str()
+        .context("missing client credential")?;
+
+    let mut gateway = Command::new(&executable)
         .args(["serve", "--config"])
         .arg(&config)
         .current_dir(service.path())
@@ -149,7 +177,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
                 "gateway exited before readiness"
             );
             if http
-                .get(format!("{endpoint}/v1/models"))
+                .get(format!("{endpoint}/health"))
                 .send()
                 .await
                 .is_ok_and(|r| r.status().is_success())
@@ -161,13 +189,36 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
     })
     .await
     .context("waiting for gateway readiness")??;
+    for token in [None, Some("brvk_invalid_fixture")] {
+        let mut attempt = http
+            .post(format!("{endpoint}/v1/chat/completions"))
+            .json(&json!({"model":"test-model","messages":[{"role":"user","content":"denied"}]}));
+        if let Some(token) = token {
+            attempt = attempt.bearer_auth(token);
+        }
+        let response = attempt.send().await?;
+        ensure!(
+            response.status() == reqwest::StatusCode::UNAUTHORIZED,
+            "unauthorized request returned {}",
+            response.status()
+        );
+    }
+    ensure!(
+        provider
+            .received_requests()
+            .await
+            .context("provider history")?
+            .is_empty()
+    );
     let created = bro(
         &binary,
         client.path(),
         &endpoint,
+        credential,
         &[
             "thread",
             "create",
+            "--managed",
             "--model",
             "test-model",
             "--workspace",
@@ -181,6 +232,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         &binary,
         client.path(),
         &endpoint,
+        credential,
         &["thread", "start", thread, "--prompt-file", "-"],
         Some("write the note\n"),
     )
@@ -195,6 +247,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         &binary,
         client.path(),
         &endpoint,
+        credential,
         &[
             "thread",
             "answer",
@@ -219,6 +272,7 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
         &binary,
         client.path(),
         &endpoint,
+        credential,
         &["thread", "resume", thread, "--turn", turn],
         None,
     )
@@ -240,6 +294,128 @@ async fn gateway_routes_the_approved_bro_tool_continuation() -> Result<()> {
             .iter()
             .any(|m| m["role"] == "user" && m["content"].to_string().contains("write the note")),
         "piped input missing from upstream request"
+    );
+    // Continue the same native thread through a separately running gateway.
+    // The child's actual read must see the post-completion edit.
+    let function = |id: &str, name: &str, args: Value| {
+        json!({"role":"assistant","tool_calls":[
+        {"index":0,"type":"function","id":id,"function":{"name":name,"arguments":args.to_string()}}]})
+    };
+    for (role, needle, delta, finish) in [
+        (
+            "user",
+            "verify saved note",
+            function(
+                "child-1",
+                "spawn_agent",
+                json!({"task":{"text":"inspect note independently"}}),
+            ),
+            "tool_calls",
+        ),
+        (
+            "user",
+            "inspect note independently",
+            function("read-1", "read", json!({"path":"note"})),
+            "tool_calls",
+        ),
+        (
+            "tool",
+            "after completion",
+            json!({"role":"assistant","content":"verified current note"}),
+            "stop",
+        ),
+        (
+            "tool",
+            "verified current note",
+            json!({"role":"assistant","content":"independent read complete"}),
+            "stop",
+        ),
+        (
+            "user",
+            "propose another edit",
+            function(
+                "write-2",
+                "write",
+                json!({"path":"note","content":"must be cancelled"}),
+            ),
+            "tool_calls",
+        ),
+    ] {
+        model_call()
+            .and(move |r: &wiremock::Request| {
+                r.body_json::<Value>().is_ok_and(|v| {
+                    v["messages"]
+                        .as_array()
+                        .and_then(|m| m.last())
+                        .is_some_and(|m| {
+                            m["role"] == role
+                                && m["content"]
+                                    .as_str()
+                                    .is_some_and(|text| text.contains(needle))
+                        })
+                })
+            })
+            .respond_with(stream(delta, finish))
+            .up_to_n_times(1)
+            .mount(&provider)
+            .await;
+    }
+    let continued = bro(
+        &binary,
+        client.path(),
+        &endpoint,
+        credential,
+        &[
+            "thread",
+            "start",
+            thread,
+            "verify saved note",
+            "--request-id",
+            "next",
+        ],
+        None,
+    )
+    .await?;
+    ensure!(
+        continued["final_answer"] == "independent read complete",
+        "{continued}"
+    );
+    let pending = bro(
+        &binary,
+        client.path(),
+        &endpoint,
+        credential,
+        &["thread", "start", thread, "propose another edit"],
+        None,
+    )
+    .await?;
+    ensure!(pending["status"] == "waiting_for_input");
+    let cancelled = bro(
+        &binary,
+        client.path(),
+        &endpoint,
+        credential,
+        &[
+            "thread",
+            "cancel",
+            thread,
+            "--turn",
+            pending["turn_id"].as_str().context("turn")?,
+        ],
+        None,
+    )
+    .await?;
+    ensure!(
+        cancelled["status"] == "cancelled"
+            && std::fs::read_to_string(workspace.join("note"))? == "after completion"
+    );
+    ensure!(
+        provider
+            .received_requests()
+            .await
+            .context("provider history")?
+            .len()
+            == 7
     );
     gateway.kill().await?;
     Ok(())
