@@ -1,6 +1,7 @@
 use super::*;
 use sea_orm::sqlx::{ConnectOptions, Connection};
 
+mod accounting;
 mod managed;
 mod transfer;
 
@@ -34,10 +35,6 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
             "SELECT 1 FROM tenancy_oauth_slots WHERE state<>'ready' OR pending_execution_id IS NOT NULL OR pending_tenant_id IS NOT NULL",
         ),
         (
-            "unsettled model charge",
-            "SELECT 1 FROM requests WHERE charge_status NOT IN ('computed','not_charged') OR reconciliation_status NOT IN ('computed','not_charged','not_applicable')",
-        ),
-        (
             "unpublished provider continuation",
             "SELECT 1 FROM provider_continuations WHERE publication_state<>'active'",
         ),
@@ -50,8 +47,12 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
             "SELECT 1 FROM trajectory_requests WHERE settlement_event_id IS NULL",
         ),
         (
+            "unsupported owned gateway request history",
+            "SELECT 1 FROM checkpoint_evolution WHERE kind='gateway_request' AND (installation_id IS NOT NULL OR tenant_id IS NOT NULL OR creator_principal_id IS NOT NULL)",
+        ),
+        (
             "gateway execution history requires independent settlement review",
-            "SELECT 1 FROM checkpoint_evolution WHERE kind IN ('gateway_request','execution','judge_attempt','judge_request_owner')",
+            "SELECT 1 FROM checkpoint_evolution WHERE kind IN ('execution','judge_attempt','judge_request_owner')",
         ),
     ] {
         if db
@@ -82,6 +83,9 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
             }
         }
     }
+    if let Err(error) = accounting::verify(db).await {
+        blockers.push(format!("request accounting: {error:#}"));
+    }
     // A historical Unknown is a durable service obligation. Only the service's
     // canonical audit can establish its complete source and accounting coverage.
     if db.query_one(sql("SELECT 1 FROM tenancy_unknown_obligations UNION ALL SELECT 1 FROM tenancy_execution_receipts WHERE unknown_outcome<>0 UNION ALL SELECT 1 FROM tenancy_receipt_auxiliary WHERE unknown_outcome<>0 LIMIT 1")).await?.is_some()
@@ -90,8 +94,9 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
         blockers.push(format!("inconsistent execution obligations: {error:#}"));
     }
     let mut threads = Threads::new();
+    let mut claimed_requests = std::collections::BTreeSet::new();
     if retained.contains("bro_executions") {
-        match transfer::threads(db).await {
+        match transfer::threads(db, &mut claimed_requests).await {
             Ok(checked) => {
                 threads.extend(checked);
                 for table in [
@@ -109,7 +114,7 @@ pub(super) async fn blockers(db: &DatabaseConnection) -> Result<(Vec<String>, Th
         }
     }
     if retained.contains("bro_managed_sessions") {
-        match managed::threads(db).await {
+        match managed::threads(db, &mut claimed_requests).await {
             Ok(checked) if checked.keys().all(|id| !threads.contains_key(id)) => {
                 threads.extend(checked);
                 retained.remove("bro_managed_sessions");

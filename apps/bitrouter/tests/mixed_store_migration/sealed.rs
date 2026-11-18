@@ -1,6 +1,8 @@
 use super::*;
 use bitrouter as product;
 use serde_json::Value;
+#[path = "accounting.rs"]
+mod accounting;
 #[path = "capture.rs"]
 mod capture;
 
@@ -31,7 +33,7 @@ async fn transfers_sealed_read_once_only_after_both_zero_cost_receipts() -> Resu
             && report
                 .blockers
                 .iter()
-                .any(|b| b.contains("unreconciled or paid")),
+                .any(|b| b.contains("unreconciled native")),
         "{:?}",
         report.blockers
     );
@@ -54,13 +56,15 @@ async fn transfers_sealed_read_once_only_after_both_zero_cost_receipts() -> Resu
 }
 
 #[tokio::test]
-async fn refuses_paid_or_conflicting_released_history() -> Result<()> {
+async fn refuses_conflicting_receipt_amount_or_released_history() -> Result<()> {
     for paid in [false, true] {
         let dir = tempfile::tempdir()?;
         let (path, db) = captured(dir.path()).await?;
         capture::settle(&db, REQUESTS[0], i64::from(paid)).await?;
         capture::settle(&db, REQUESTS[1], 0).await?;
-        if !paid {
+        if paid {
+            db.execute_unprepared("UPDATE requests SET estimated_charge_micro_usd=7 WHERE estimated_charge_micro_usd=1").await?;
+        } else {
             db.execute_unprepared("UPDATE bro_execution_records SET payload=replace(payload,'baseline persisted payload','different settled content') WHERE sequence=283").await?;
         }
         db.close().await?;
@@ -74,6 +78,9 @@ async fn refuses_paid_or_conflicting_released_history() -> Result<()> {
 // Construct the unscoped managed writer's release envelope around the recorded
 // completed run. This fixture uses a harness without optional context views.
 fn managed_journal() -> Result<Value> {
+    managed_journal_with(|_| Ok(()))
+}
+fn managed_journal_with(edit: impl FnOnce(&mut Value) -> Result<()>) -> Result<Value> {
     use bitrouter::storage::checkpoint::{CheckpointBatchExt, sha256};
     use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch};
     use bitrouter_ai::core::protocol::Limits;
@@ -133,6 +140,7 @@ fn managed_journal() -> Result<Value> {
             .context("missing invocation")?;
         starts[id] = json!({"command":inv["dispatch"],"started":true,"result":inv["result"]});
     }
+    edit(state)?;
     let batch = CheckpointBatch::encode(&p, &limits).map_err(|e| anyhow::anyhow!(e.message))?;
     let ack = CheckpointAck {
         batch_id: batch.identity.batch_id.clone(),

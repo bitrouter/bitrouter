@@ -22,7 +22,10 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-pub(super) async fn threads(db: &DatabaseConnection) -> Result<BTreeMap<Uuid, Value>> {
+pub(super) async fn threads(
+    db: &DatabaseConnection,
+    claimed_requests: &mut BTreeSet<String>,
+) -> Result<BTreeMap<Uuid, Value>> {
     let owners=db.query_all(sql("SELECT generation,server_instance_id,stopped_at_ms FROM bro_runtime_owners ORDER BY generation LIMIT 100001")).await?;
     ensure!(
         !owners.is_empty() && owners.len() <= 100000,
@@ -62,7 +65,7 @@ pub(super) async fn threads(db: &DatabaseConnection) -> Result<BTreeMap<Uuid, Va
         );
         let uuid = id.parse::<Uuid>()?;
         ensure!(uuid.to_string() == id, "noncanonical M0 identity");
-        let thread = project(db, &id, head)
+        let thread = project(db, &id, head, claimed_requests)
             .await
             .with_context(|| format!("thread {id}"))?;
         result.insert(uuid, thread);
@@ -70,7 +73,12 @@ pub(super) async fn threads(db: &DatabaseConnection) -> Result<BTreeMap<Uuid, Va
     Ok(result)
 }
 
-async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> {
+async fn project(
+    db: &DatabaseConnection,
+    id: &str,
+    head: u64,
+    claimed_requests: &mut BTreeSet<String>,
+) -> Result<Value> {
     use futures::TryStreamExt;
     use sea_orm::sqlx;
     let rows=sqlx::query_as::<_,(i64,Option<String>)>("SELECT sequence,CASE WHEN length(CAST(payload AS BLOB)) BETWEEN 1 AND 4194304 THEN payload END FROM bro_execution_records WHERE execution_id=? ORDER BY sequence")
@@ -227,7 +235,12 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
                                         .is_some_and(|new| run
                                             .work
                                             .keys()
-                                            .all(|k| new.work.contains_key(k)))),
+                                            .all(|k| new.work.contains_key(k))
+                                            && run
+                                                .charges
+                                                .iter()
+                                                .all(|(key, claim)| new.charges.get(key)
+                                                    == Some(claim)))),
                                 "native run or cost history was discarded"
                             );
                         }
@@ -242,7 +255,6 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
                     ),
                     Some("model_response") if settled.is_none() => ensure!(
                         requests.contains_key(field(f, "step_id")?)
-                            && f["estimated_spend_microusd"] == 0
                             && f["item_id"] == f["step_id"]
                             && responses
                                 .insert(
@@ -275,8 +287,14 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
                         "unsupported dispatch"
                     ),
                     Some("run_checkpoint") if settled.is_none() => ensure!(
-                        f["estimated_spend_microusd"] == 0,
-                        "charged intermediate checkpoint"
+                        f["estimated_spend_microusd"].as_u64()
+                            == Some(
+                                core.as_ref()
+                                    .map(|(_, s)| projected_spend(s))
+                                    .transpose()?
+                                    .unwrap_or(0)
+                            ),
+                        "intermediate estimate differs from recorded work"
                     ),
                     Some("harness_inventory") if settled.is_none() => {
                         let inventory = &f["inventory"];
@@ -385,7 +403,7 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
     let (turn, prompt) = queued.context("missing admitted turn")?;
     let key = key.context("missing historical start key")?;
     let (_, state) = core.context("missing final native checkpoint")?;
-    verify_settled(db, &state, config.tool_mode).await?;
+    verify_settled(db, &state, config.tool_mode, claimed_requests).await?;
     let run = state.run.as_ref().context("missing root run")?;
     let root = state.agents.get(&state.agent_id).context("missing root")?;
     let native = root.turn.as_ref().context("missing root turn")?;
@@ -406,7 +424,7 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
                     .context("missing model step")?
                     .manifest
                     .workspace_id
-            && settled["estimated_spend_microusd"] == 0
+            && settled["estimated_spend_microusd"].as_u64() == Some(projected_spend(&state)?)
             && settled["model_steps"] == native.steps.len()
             && settled["tool_calls"] == native.invocations.len()
             && run.input.text == prompt
@@ -426,7 +444,10 @@ async fn project(db: &DatabaseConnection, id: &str, head: u64) -> Result<Value> 
                     .is_some_and(
                         |f| r.report.result.as_ref().is_some_and(|reply| f["message"]
                             == json!({"role":"assistant","content":reply.content})
-                            && f["requested_model"] == config.model)
+                            && f["requested_model"] == config.model
+                            && f["usage"] == json!(reply.usage)
+                            && f["estimated_spend_microusd"].as_u64()
+                                == Some(r.report.token_cost.estimated_micro_usd().unwrap_or(0)))
                     )))
             && native.invocations.len() == intents.len()
             && intents.len() == results.len(),
@@ -505,10 +526,33 @@ pub(super) fn decode_snapshot(
     Ok(state)
 }
 
+// The M0 native budget sums configured token estimates for completed generation
+// work. An unavailable estimate contributes zero to this display field only.
+fn projected_spend(state: &SessionSnapshot) -> Result<u64> {
+    state
+        .run
+        .as_ref()
+        .and_then(|run| state.cost_work.get(&run.run_id))
+        .into_iter()
+        .flat_map(|ledger| ledger.work.values())
+        .filter(|w| {
+            w.kind == CostWorkKind::ProviderAttempt
+                && w.state == CostWorkState::OutcomeRecorded
+                && w.generation_usage.is_some()
+        })
+        .filter_map(|w| w.token_estimate.as_ref()?.estimated_micro_usd())
+        .try_fold(0u64, |total, n| {
+            total
+                .checked_add(n)
+                .context("native estimated spend overflow")
+        })
+}
+
 pub(super) async fn verify_settled(
     db: &DatabaseConnection,
     state: &SessionSnapshot,
     mode: ToolMode,
+    claimed_requests: &mut BTreeSet<String>,
 ) -> Result<()> {
     let names: BTreeSet<_> = state
         .manifest
@@ -565,7 +609,6 @@ pub(super) async fn verify_settled(
             && run.input.acceptance_criteria.is_empty()
             && run.resource_error.is_none()
             && run.cancellation.is_none()
-            && accounting.known_subtotal_micro_usd == Some(0)
             && accounting
                 .known_attempts
                 .checked_add(accounting.unknown_attempts)
@@ -679,6 +722,9 @@ pub(super) async fn verify_settled(
     );
     let metering = MeteringStore::new(db.clone());
     let mut ids = BTreeSet::new();
+    let mut claims = BTreeMap::new();
+    let mut known = 0u32;
+    let mut subtotal = 0u64;
     for step in &turn.steps {
         ensure!(
             step.settled && !step.interrupted && !step.attempts.is_empty(),
@@ -693,7 +739,8 @@ pub(super) async fn verify_settled(
             ensure!(
                 r.error.is_none()
                     && r.result.as_ref().is_some_and(|r| r.usage.is_some())
-                    && ids.insert(r.request_id.clone()),
+                    && ids.insert(r.request_id.clone())
+                    && claimed_requests.insert(r.request_id.clone()),
                 "unknown or duplicate native attempt"
             );
             use bitrouter_ai::core::evidence::{
@@ -713,21 +760,63 @@ pub(super) async fn verify_settled(
             let observations = metering
                 .read(&CallerContext::local(), std::slice::from_ref(&r.request_id))
                 .await?;
+            let [observation] = observations.as_slice() else {
+                bail!("missing native settlement observation")
+            };
             ensure!(
-                observations
-                    .first()
-                    .is_some_and(|o| o.unknown_reason.is_none()
-                        && o.claims
-                            .iter()
-                            .any(|c| c.basis == NativeCostBasis::Reconciled
-                                && c.micro_usd == 0
-                                && Some(&c.model) == r.actual_model.as_ref()
-                                && Some(&c.provider) == r.actual_provider.as_ref())),
-                "unreconciled or paid native model request {}",
+                observation.request_id == r.request_id
+                    && observation.unknown_reason.is_none()
+                    && observation
+                        .claims
+                        .iter()
+                        .any(|c| c.basis == NativeCostBasis::Reconciled
+                            && c.request_id == r.request_id
+                            && Some(&c.model) == r.actual_model.as_ref()
+                            && Some(&c.provider) == r.actual_provider.as_ref()),
+                "unreconciled native model request {}",
                 r.request_id
             );
+            use sea_orm::EntityTrait;
+            let row = crate::metering::entities::requests::Entity::find_by_id(&r.request_id)
+                .one(db)
+                .await?
+                .context("missing native bill")?;
+            let usage = r
+                .result
+                .as_ref()
+                .and_then(|v| v.usage.as_ref())
+                .context("missing native usage")?;
+            ensure!(
+                u64::try_from(row.prompt_tokens)? == usage.prompt_tokens
+                    && u64::try_from(row.completion_tokens)? == usage.completion_tokens
+                    && u64::try_from(row.reasoning_tokens)? == usage.reasoning_tokens
+                    && u64::try_from(row.cache_read_tokens)? == usage.cache_read_tokens
+                    && u64::try_from(row.cache_write_tokens)? == usage.cache_write_tokens,
+                "native usage conflicts with the reconciled bill"
+            );
+            for claim in &observation.claims {
+                let key = crate::storage::checkpoint::sha256(&serde_json::to_vec(&(
+                    &claim.source,
+                    &claim.bill_id,
+                    claim.basis,
+                ))?);
+                ensure!(
+                    claims.insert(key, claim.clone()).is_none(),
+                    "duplicate native bill"
+                );
+            }
+            if let Some(amount) = r.token_cost.estimated_micro_usd() {
+                known += 1;
+                subtotal = subtotal
+                    .checked_add(amount)
+                    .context("native token estimate overflow")?;
+            }
         }
     }
+    ensure!(
+        accounting.known_attempts == known && accounting.known_subtotal_micro_usd == Some(subtotal),
+        "native token estimates do not match attempt evidence"
+    );
     let cost = state
         .cost_work
         .get(&run.run_id)
@@ -737,8 +826,8 @@ pub(super) async fn verify_settled(
             && cost.charge_unknown.keys().all(|id| ids.contains(id))
             && cost
                 .charges
-                .values()
-                .all(|c| ids.contains(&c.request_id) && c.micro_usd == 0)
+                .iter()
+                .all(|(key, c)| claims.get(key) == Some(c))
             && cost
                 .work
                 .values()

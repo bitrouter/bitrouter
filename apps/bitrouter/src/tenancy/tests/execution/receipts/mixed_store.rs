@@ -125,11 +125,11 @@ async fn mixed_restart(bro: Option<&std::path::Path>) -> Result<()> {
     }
     db.execute_unprepared("UPDATE seaql_migrations SET version='m20261118_000001_model_policy_store'; INSERT OR IGNORE INTO bro_runtime_ownership(id,generation) VALUES(1,0)").await?;
     capture::install(dir.path(), &db).await?;
-    for request in [
-        "2ad653eb-9a51-4999-b59f-3c4b1d65174c",
-        "55caad5a-b17a-47cb-93c0-32d22e203796",
+    for (request, charge) in [
+        ("2ad653eb-9a51-4999-b59f-3c4b1d65174c", 173),
+        ("55caad5a-b17a-47cb-93c0-32d22e203796", 259),
     ] {
-        capture::settle(&db, request, 0).await?;
+        capture::settle(&db, request, charge).await?;
     }
     let before = evidence(&db).await?;
     ensure!(
@@ -222,10 +222,12 @@ async fn continue_bro(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let endpoint = format!("http://{}", listener.local_addr()?);
     let (send, mut received) = tokio::sync::mpsc::unbounded_channel();
-    let router = axum::Router::new().route("/v1/chat/completions", axum::routing::post(move |axum::Json(request):axum::Json<Value>| async move {
+    let router = axum::Router::new().route("/v1/chat/completions", axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(request):axum::Json<Value>| async move {
+        let correlation=headers.get("x-bitrouter-request-id").and_then(|id|id.to_str().ok()).ok_or(StatusCode::BAD_REQUEST)?;
+        uuid::Uuid::parse_str(correlation).map_err(|_|StatusCode::BAD_REQUEST)?;
         send.send(request).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
         let chunk=json!({"object":"chat.completion.chunk","id":"next","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"continued"},"finish_reason":"stop"}]});
-        Ok::<_,StatusCode>(([("content-type","text/event-stream")],format!("data: {chunk}\n\ndata: [DONE]\n\n")))
+        Ok::<_,StatusCode>(([("content-type","text/event-stream".to_owned()),("x-bitrouter-request-id",correlation.to_owned()),("x-bitrouter-execution-id","new-execution".to_owned())],format!("data: {chunk}\n\ndata: [DONE]\n\n")))
     }));
     let server = tokio::spawn(async move { axum::serve(listener, router).await });
     async fn run(bin: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Result<Value> {
@@ -239,8 +241,9 @@ async fn continue_bro(
             .await?;
         ensure!(
             out.status.success(),
-            "BRO command failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "BRO command failed: {} {}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
         );
         Ok(serde_json::from_slice(
             out.stdout

@@ -40,7 +40,10 @@ struct Start {
     result: ToolResult,
 }
 
-pub(super) async fn threads(db: &DatabaseConnection) -> Result<Threads> {
+pub(super) async fn threads(
+    db: &DatabaseConnection,
+    claimed_requests: &mut std::collections::BTreeSet<String>,
+) -> Result<Threads> {
     let mut threads = Threads::new();
     // Reject scoped rows even if only part of the ownership envelope survives.
     let names = db
@@ -58,7 +61,14 @@ pub(super) async fn threads(db: &DatabaseConnection) -> Result<Threads> {
             "SELECT revision, CASE WHEN installation_id IS NULL AND tenant_id IS NULL AND creator_principal_id IS NULL AND session_principal_id IS NULL AND logical_name IS NULL AND harness_id IS NULL AND session_id IS NULL AND execution_revision IS NULL AND payload_bytes BETWEEN 1 AND 134217728 AND payload_bytes=length(CAST(payload AS BLOB)) THEN payload END AS payload FROM bro_managed_sessions WHERE id=?",
             [name.clone().into()])).await?.context("missing managed row")?;
         let j: Journal = serde_json::from_str(&row.try_get::<String>("", "payload")?)?;
-        let (id, thread) = checked(db, &j, &name, row.try_get("", "revision")?).await?;
+        let (id, thread) = checked(
+            db,
+            claimed_requests,
+            &j,
+            &name,
+            row.try_get("", "revision")?,
+        )
+        .await?;
         ensure!(
             threads.insert(id, thread).is_none(),
             "duplicate managed session identity"
@@ -69,6 +79,7 @@ pub(super) async fn threads(db: &DatabaseConnection) -> Result<Threads> {
 
 async fn checked(
     db: &DatabaseConnection,
+    claimed_requests: &mut std::collections::BTreeSet<String>,
     j: &Journal,
     name: &str,
     revision: i64,
@@ -147,7 +158,7 @@ async fn checked(
             && event.payload == json!(receipt),
         "managed release receipt mismatch"
     );
-    transfer::verify_settled(db, &state, j.mode).await?;
+    transfer::verify_settled(db, &state, j.mode, claimed_requests).await?;
     let root = state
         .agents
         .get(&state.agent_id)
