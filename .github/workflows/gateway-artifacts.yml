@@ -113,7 +113,10 @@ jobs:
             '.profile == $profile and .target == $target and .source_revision == $revision and .features == $features' \
             "$PACKAGE_OUTPUT/build-info.json"
           jq -e --slurpfile actual "$PACKAGE_OUTPUT/build-info.json" \
-            --arg binary "bitrouter$suffix" '.package == "bitrouter" and .identity == $actual[0] and .binary.path == $binary' "$root/manifest.json"
+            --arg binary "bitrouter$suffix" '
+              .package == "bitrouter" and .package == $actual[0].product and
+              .identity == ($actual[0] | del(.product)) and .binary.path == $binary
+            ' "$root/manifest.json"
           # Hash binary stdin to avoid escaped Windows filenames. Compare in jq
           # so native Windows CRLF output cannot decorate the expected digest.
           # https://www.gnu.org/software/coreutils/manual/html_node/cksum-output-modes.html
@@ -212,7 +215,10 @@ jobs:
           "$candidate" --json build-info > build-info.json
           jq -e --slurpfile actual build-info.json \
             --arg revision "$BITROUTER_BUILD_REVISION" \
-            '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and .identity.source_revision == $revision' \
+            '.package == "bitrouter" and .package == $actual[0].product and
+             .identity == ($actual[0] | del(.product)) and
+             .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and
+             .identity.source_revision == $revision' \
             unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/manifest.json
           printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$candidate" >> "$GITHUB_ENV"
       - name: Validate shared distribution contracts and updater boundaries
