@@ -1,6 +1,6 @@
 # Updating BitRouter and BRO
 
-Use `bitrouter update` for the service and `bro update` for the local harness. Each product’s cargo-dist installer places its own executable in the configured Cargo bin directory and writes a separate receipt for that product. Run both installers to install both executables. Check `bitrouter --json build-info` or `bro --json build-info` for the product, version, target and source revision.
+Use `bitrouter update` for the service and `bro update` for the local harness. By default, each product’s cargo-dist installer places its own executable in the configured Cargo bin directory and writes its own receipt. Run both installers to install both products. An unmanaged installer run writes no receipt. Check `bitrouter --json build-info` or `bro --json build-info` for the product, version, target and source revision.
 
 - `--check` resolves the release inventory and reports availability.
 - The default channel includes prereleases. Use `--stable` to select stable releases.
