@@ -82,6 +82,22 @@ impl MigrationTrait for Migration {
             ));
         }
         service_tables(manager).await?;
+        if manager.get_database_backend() == DatabaseBackend::MySql {
+            // This path only constructs a fresh gateway. Historical fixtures
+            // retain the column comparisons inherited from their database.
+            let mut alter = Table::alter();
+            alter.table(Alias::new("requests"));
+            for &name in super::MYSQL_METERING_IDENTITIES {
+                let nullable = !matches!(name, "request_id" | "user_id" | "api_key_id");
+                alter.modify_column(super::m20240101_000028_resource_tenancy::identity(
+                    DatabaseBackend::MySql,
+                    name,
+                    255,
+                    nullable,
+                ));
+            }
+            manager.alter_table(alter).await?;
+        }
         super::m20240101_000020_create_checkpoint_evolution::scope(manager).await?;
         validate_tables(manager.get_connection()).await
     }

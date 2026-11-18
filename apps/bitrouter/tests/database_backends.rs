@@ -478,11 +478,12 @@ async fn write_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
         updated.created_at == initial.created_at,
         "metering upsert reset created_at"
     );
+    // These IDs differ from the first settlement only by case or accent.
     store
-        .record_request(fixture.metric("a", "request-a2", 20, 0)?)
+        .record_request(fixture.metric("a", "REQUEST-a1", 20, 0)?)
         .await?;
     store
-        .record_request(fixture.metric("b", "request-b1", 50, 5)?)
+        .record_request(fixture.metric("b", "réquest-a1", 50, 5)?)
         .await?;
     Ok(())
 }
@@ -492,6 +493,12 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     for (owner, count, spend, prompt, completion) in [("a", 2, 120, 35, 5), ("b", 1, 150, 50, 5)] {
         let key = fixture.key(owner);
         ensure!(store.get_request_count(&key.id, fixture.window).await? == count);
+        ensure!(
+            store
+                .get_request_count(&key.id.to_ascii_uppercase(), fixture.window)
+                .await?
+                == 0
+        );
         ensure!(store.get_spend(&key.id, fixture.window).await? == spend);
         ensure!(store.get_enforceable_spend(&key.id, fixture.window).await? == Some(spend));
         ensure!(
@@ -520,7 +527,7 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     }
     let unknown = store
         .spend_summary_for_acp_session(
-            &fixture.id("missing-principal"),
+            &fixture.key("a").id.to_ascii_uppercase(),
             &fixture.id("controller"),
             &fixture.id("session"),
             fixture.window,
@@ -536,14 +543,15 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     );
     for (owner, request, prompt, completion) in [
         ("a", "request-a1", 15, 5),
-        ("a", "request-a2", 20, 0),
-        ("b", "request-b1", 50, 5),
+        ("a", "REQUEST-a1", 20, 0),
+        ("b", "réquest-a1", 50, 5),
     ] {
         let metric = fixture.metric(owner, request, prompt, completion)?;
         let row = requests::Entity::find_by_id(&metric.request_id)
             .one(connection)
             .await?
             .context("persisted metering request missing")?;
+        ensure!(row.request_id == metric.request_id);
         ensure!(row.user_id == metric.user_id && row.api_key_id == metric.api_key_id);
         ensure!(
             row.prompt_tokens == i64::try_from(prompt)?

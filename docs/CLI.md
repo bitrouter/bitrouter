@@ -1392,6 +1392,18 @@ refuses to serve an existing mixed server database. The offline split command
 accepts stopped SQLite files. PostgreSQL shared deployments retain their separate
 shared migration ledger alongside the ordinary gateway schema.
 
+An existing MySQL **gateway** with a case-insensitive or space-padding metering
+identity column fails its startup catalog check. Stop writers and take a verified
+backup. On a copy, set these `requests` columns to `VARCHAR(255) CHARACTER SET
+utf8mb4 COLLATE utf8mb4_0900_bin`. Keep their existing keys and nullability.
+
+- `request_id`, `user_id`, and `api_key_id` are required.
+- `route_scope_id`, `launch_id`, `controller_instance_id`, `acp_session_id`,
+  `native_root_session_id`, and `native_agent_thread_id` are nullable.
+
+Verify the retained settlements and restart the gateway on the corrected copy
+before directing traffic to it. Keep its existing gateway migration ledger.
+
 ## Offline DB evidence (Unix SQLite only)
 
 `bitrouter tenancy offline` operates on explicitly supplied local paths. It does not

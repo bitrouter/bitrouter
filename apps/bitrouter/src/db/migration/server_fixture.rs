@@ -34,7 +34,7 @@ impl OwnedServer {
         let create = match backend {
             DatabaseBackend::Postgres => format!("CREATE DATABASE {name}"),
             DatabaseBackend::MySql => {
-                format!("CREATE DATABASE {name} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin")
+                format!("CREATE DATABASE {name} CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci")
             }
             _ => anyhow::bail!("server campaign backend"),
         };

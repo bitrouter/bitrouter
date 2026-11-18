@@ -56,6 +56,9 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
                 .is_some()
             );
         }
+        if backend == DatabaseBackend::MySql {
+            mysql_metering_restart(&fixture).await?;
+        }
         let drop_index = match backend {
             DatabaseBackend::Postgres => "DROP INDEX idx_requests_user_created",
             _ => "DROP INDEX idx_requests_user_created ON requests",
@@ -83,6 +86,12 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
     let checked = async {
         let db = &fixture.database;
         super::super::m0_fixture::install(db).await?;
+        if backend == DatabaseBackend::MySql {
+            let original = db.query_one(Statement::from_string(backend,
+                "SELECT COLLATION_NAME AS comparison FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='requests' AND COLUMN_NAME='request_id'"))
+                .await?.context("missing M0 request ID")?;
+            ensure!(original.try_get::<String>("", "comparison")? == "utf8mb4_0900_ai_ci");
+        }
         db.execute_unprepared("INSERT INTO users(id,created_at) VALUES ('historical-user','2026-11-18T00:00:00Z')").await?;
         let before = super::super::Migrator::get_migration_models(db).await?;
         ensure!(before.len()==1 && before[0].version==store_format::BASELINE);
@@ -255,4 +264,46 @@ async fn postgres_authority_snapshot(db: &DatabaseConnection) -> Result<String> 
     .context("authority snapshot")?
     .try_get("", "authority")
     .map_err(Into::into)
+}
+
+/// Earlier gateways could inherit case/accent folding or PAD SPACE semantics.
+/// Refusal must preserve the real settlement and the already-issued marker.
+async fn mysql_metering_restart(fixture: &OwnedServer) -> Result<()> {
+    let db = &fixture.database;
+    db.execute_unprepared("INSERT INTO requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,estimated_charge_micro_usd,created_at) VALUES('Paid-A','Owner','Key','model','provider',11,3,0,17,'2026-11-18T00:00:00Z')").await?;
+    let original = super::super::Migrator::get_migration_models(db).await?;
+    for (name, comparison) in [
+        ("request_id", "utf8mb4_0900_ai_ci"),
+        ("api_key_id", "utf8mb4_bin"),
+    ] {
+        db.execute_unprepared(&format!("ALTER TABLE requests MODIFY {name} VARCHAR(255) CHARACTER SET utf8mb4 COLLATE {comparison} NOT NULL")).await?;
+        let error = crate::db::connect(&fixture.url)
+            .await
+            .err()
+            .context("gateway opened incompatible metering catalog")?;
+        ensure!(
+            error
+                .to_string()
+                .contains(&format!("requests.{name} requires utf8mb4_0900_bin")),
+            "{error}"
+        );
+        ensure!(crate::db::run_migrations(db).await.is_err());
+        ensure!(super::super::Migrator::get_migration_models(db).await? == original);
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::MySql,
+                "SELECT request_id,user_id,api_key_id,estimated_charge_micro_usd FROM requests",
+            ))
+            .await?
+            .context("settlement missing after refusal")?;
+        ensure!(
+            row.try_get::<String>("", "request_id")? == "Paid-A"
+                && row.try_get::<String>("", "user_id")? == "Owner"
+                && row.try_get::<String>("", "api_key_id")? == "Key"
+                && row.try_get::<i64>("", "estimated_charge_micro_usd")? == 17
+        );
+        db.execute_unprepared(&format!("ALTER TABLE requests MODIFY {name} VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL")).await?;
+    }
+    crate::db::connect(&fixture.url).await?.close().await?;
+    Ok(())
 }

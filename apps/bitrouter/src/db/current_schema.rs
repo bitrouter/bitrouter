@@ -194,6 +194,16 @@ async fn validate_inner(db: &impl ConnectionTrait) -> Result<()> {
             table.name
         );
         for (column, row) in table.columns.iter().zip(&observed) {
+            if backend == DatabaseBackend::MySql
+                && table.name == "requests"
+                && super::migration::MYSQL_METERING_IDENTITIES.contains(&column.name.as_str())
+            {
+                ensure!(
+                    row.try_get::<String>("", "binary_value")? == "yes",
+                    "requests.{} requires utf8mb4_0900_bin; stop writers and correct the metering identity collations on a verified backup before restart",
+                    column.name
+                );
+            }
             validate_column(backend, column, row)
                 .with_context(|| format!("column {}.{}", table.name, column.name))?;
         }

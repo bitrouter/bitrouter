@@ -4,6 +4,20 @@
 //! must carry its exact marker and pass the current catalog validators before
 //! startup. Component builders do not participate in a historical ledger.
 
+// Metering compares these persisted identifiers for deduplication, ownership
+// and scoped spend. The MySQL gateway must compare every byte in each lookup.
+pub(super) const MYSQL_METERING_IDENTITIES: &[&str] = &[
+    "request_id",
+    "user_id",
+    "api_key_id",
+    "route_scope_id",
+    "launch_id",
+    "controller_instance_id",
+    "acp_session_id",
+    "native_root_session_id",
+    "native_agent_thread_id",
+];
+
 mod m20240101_000001_create_auth_tables;
 mod m20240101_000002_create_metering_tables;
 
