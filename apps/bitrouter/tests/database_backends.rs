@@ -127,8 +127,8 @@ async fn exercise(database_url: &str) -> Result<()> {
         db::run_migrations(&connection).await?;
         let ledger = Migrator::get_migration_models(&connection).await?;
         let expected = match connection.get_database_backend() {
-            DatabaseBackend::Sqlite => "m20261118_000003_gateway_sqlite",
-            DatabaseBackend::Postgres | DatabaseBackend::MySql => "m20261118_000005_gateway_server",
+            DatabaseBackend::Sqlite => "m20261118_000006_gateway_sqlite",
+            DatabaseBackend::Postgres | DatabaseBackend::MySql => "m20261118_000007_gateway_server",
         };
         ensure!(
             ledger.len() == 1 && ledger[0].version == expected,

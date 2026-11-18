@@ -39,7 +39,7 @@ impl Owner {
     }
     pub(crate) const fn marker(self) -> &'static str {
         match self {
-            Self::BitRouter => "m20261118_000003_gateway_sqlite",
+            Self::BitRouter => "m20261118_000006_gateway_sqlite",
             Self::Bro => "m20261118_000004_bro_sqlite",
         }
     }

@@ -6,7 +6,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 /// Frozen mixed M0 marker. Only stopped historical readers may select it.
 pub(crate) const BASELINE: &str = "m20261118_000001_model_policy_store";
 
-pub(crate) const GATEWAY_SERVER: &str = "m20261118_000005_gateway_server";
+pub(crate) const GATEWAY_SERVER: &str = "m20261118_000007_gateway_server";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
@@ -215,6 +215,35 @@ mod tests {
                 .await?
         );
         db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn refuses_development_gateway_with_principal_keyed_request_admission() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        super::super::run_migrations(&db).await?;
+        ensure!(inspect(&db).await? == State::Current);
+        let old = "m20261118_000003_gateway_sqlite";
+        let result = db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE seaql_migrations SET version = ? WHERE version = ?",
+                [
+                    old.into(),
+                    super::super::mixed_store::Owner::BitRouter.marker().into(),
+                ],
+            ))
+            .await?;
+        ensure!(result.rows_affected() == 1);
+        ensure!(inspect(&db).await.is_err());
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT version FROM seaql_migrations",
+            ))
+            .await?
+            .context("missing version after rejection")?;
+        ensure!(row.try_get::<String>("", "version")? == old);
         Ok(())
     }
 
