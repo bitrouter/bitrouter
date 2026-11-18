@@ -65,7 +65,7 @@ providers:
   anthropic: {}     # uses ANTHROPIC_API_KEY
   google: {}        # uses GEMINI_API_KEY
   openrouter: {}    # uses OPENROUTER_API_KEY
-  # github-copilot needs `bro providers login github-copilot` first:
+  # github-copilot needs `bitrouter providers login github-copilot` first:
   # github-copilot: {}
   # A provider can hold multiple accounts — e.g. two subscriptions to
   # the same upstream. `account_strategy` is `failover` (try the first,
@@ -256,7 +256,7 @@ pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>
         .collect())
 }
 
-/// One provider entry for `bro providers list`.
+/// One provider entry for `bitrouter providers list`.
 pub struct ProviderListing {
     /// Provider id.
     pub id: String,
@@ -268,7 +268,7 @@ pub struct ProviderListing {
     pub model_count: usize,
 }
 
-/// `bro providers list` — list every configured provider.
+/// `bitrouter providers list` — list every configured provider.
 /// Applies built-in catalog defaults first so a zero-config or
 /// minimally-declared provider (`openai: {}`) shows its real `api_base`
 /// and `active` state instead of empty placeholders.
@@ -469,7 +469,7 @@ async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<
         .context("no authentication method selected")
 }
 
-/// `bro providers login <provider> [--label <name>]` — interactive
+/// `bitrouter providers login <provider> [--label <name>]` — interactive
 /// credential setup.
 ///
 /// Resolves which auth methods are wired for `provider_id` (subscription
@@ -688,7 +688,7 @@ async fn choose_auth_method(
 /// bitrouter's own store, so bitrouter and Claude Code share one credential and
 /// can't refresh-rotate each other out (RFC 6749 §6). `login_provider` stores
 /// this marker under the `provider_id` it was invoked with, so
-/// `bro providers login claude-code` lands it under `claude-code`.
+/// `bitrouter providers login claude-code` lands it under `claude-code`.
 ///
 /// # Why this names a login command, when the ACP path may not
 ///
@@ -742,7 +742,7 @@ async fn run_claude_code_session()
         anyhow::bail!(
             "not signed in to Claude Code. Run `claude auth login` (install the CLI first with \
              `curl -fsSL https://claude.ai/install.sh | bash`), then re-run \
-             `bro providers login claude-code`."
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -784,7 +784,7 @@ async fn run_claude_code_session()
             "`claude auth login` exited without completing the sign-in ({status}). \
              If a browser opened, the flow may still need the code from it pasted \
              into that prompt. Check with `claude auth status`, then re-run \
-             `bro providers login claude-code`."
+             `bitrouter providers login claude-code`."
         );
     }
 
@@ -957,7 +957,7 @@ pub(crate) async fn read_api_key(display_name: &str) -> Result<String> {
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
-/// `bro providers login` CLI; library tests provide their own scripted
+/// `bitrouter providers login` CLI; library tests provide their own scripted
 /// UX.
 struct StderrLoginUx;
 
@@ -1003,7 +1003,7 @@ impl crate::gateway::providers::auth::login::LoginUx for StderrLoginUx {
     }
 }
 
-/// `bro providers logout <provider>` — drop every stored credential for
+/// `bitrouter providers logout <provider>` — drop every stored credential for
 /// the provider (subscription OAuth or pasted API key), if any.
 pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     let mut store =

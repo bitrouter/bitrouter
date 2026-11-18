@@ -3,28 +3,14 @@
 //! Set BITROUTER_TEST_FULL_BINARY and BITROUTER_TEST_GATEWAY_BINARY to absolute
 //! paths before explicitly selecting this ignored test. The latter must have
 //! no application features. This test never builds or substitutes an artifact.
-//! The current-data transition and historical-dataset refusal tests also require
-//! BITROUTER_TEST_HARNESS_BINARY built with --no-default-features --features harness.
-//! Gateway transitions use a core-enabled test harness for publication fixtures
-//! and the original judge dispatch. Serving and replay HTTP requests use only
-//! the two supplied executables.
 
 #![cfg(unix)]
 
 #[path = "artifact_profiles/persistence.rs"]
 mod persistence;
 
-#[cfg(feature = "core")]
 #[path = "artifact_profiles/gateway_state.rs"]
 mod gateway_state;
-
-// Reuse the storage-only capture fixture without enabling a recorder or
-// widening a production API just to prepare persisted compatibility data.
-#[cfg(feature = "core")]
-use bitrouter::storage;
-#[cfg(feature = "core")]
-#[path = "../src/acp_trajectory/fixtures.rs"]
-mod capture_fixture;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -575,9 +561,9 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         "gateway must have no application features: {gateway:?}"
     );
     ensure!(
-        full.features.iter().any(|feature| feature == "core")
-            && full.features.iter().any(|feature| feature == "harness"),
-        "full native blocker requires core+harness: {full:?}"
+        full.features
+            .iter()
+            .any(|feature| feature == "eval-publication")
     );
     for artifact in [&full, &gateway] {
         ensure!(
@@ -622,13 +608,31 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
     let full_instance = fixture.hello(&full)?;
     let report = fixture.status(gateway_binary, &gateway, &full, full_pid)?;
     fixture.health(&report)?;
-    ensure!(
-        report
+    // Hold a real invocation inside HTTP body admission. A partial request
+    // remains in flight until we close the socket, independently of timing.
+    let listen = report.listen.as_deref().context("HTTP listen address")?;
+    let mut pending = std::net::TcpStream::connect(listen)?;
+    use std::io::Write;
+    write!(
+        pending,
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: {listen}\r\nContent-Type: application/json\r\nContent-Length: 256\r\n\r\n{{"
+    )?;
+    pending.flush()?;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let observed = fixture.status(gateway_binary, &gateway, &full, full_pid)?;
+        if observed
             .handoff_activity
-            .as_ref()
-            .is_some_and(|activity| activity.operations > 0),
-        "full must retain its native lifetime admission: {report:?}"
-    );
+            .is_some_and(|activity| activity.operations > 0)
+        {
+            break;
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "inference did not enter daemon admission"
+        );
+        std::thread::sleep(POLL);
+    }
 
     let mut command = fixture.selected_command(gateway_binary, "__daemon-handoff");
     command.arg("--socket").arg(&fixture.socket);
@@ -649,11 +653,11 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, gateway_binary: &Path) ->
         "busy restart replaced full"
     );
 
+    drop(pending);
     let trace = fixture.directory.path().join("must-not-create.jsonl");
     let mut command = fixture.selected_command(gateway_binary, "restart");
     command.env("BITROUTER_WORKFLOW_TRACE_JSONL", &trace);
     let rejected = fixture.run(command)?;
-    rejected.rejected("core feature")?;
     rejected.rejected("BITROUTER_WORKFLOW_TRACE_JSONL")?;
     fixture.status(gateway_binary, &gateway, &full, full_pid)?;
     ensure!(

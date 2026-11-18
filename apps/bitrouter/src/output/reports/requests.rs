@@ -1,4 +1,4 @@
-//! `bro status --requests` — what the router has actually done.
+//! `bitrouter status --requests` — what the router has actually done.
 //!
 //! # Why this is a report and not a printer
 //!
@@ -742,7 +742,7 @@ mod tests {
         let fresh = report(None, Vec::new());
         assert_eq!(fresh.mode, Mode::Empty);
         assert!(
-            fresh.headline().contains("bro serve"),
+            fresh.headline().contains("bitrouter serve"),
             "an empty view must say what to do, not just show nothing"
         );
     }

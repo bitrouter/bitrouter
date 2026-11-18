@@ -20,7 +20,7 @@ pub(crate) struct Options {
     /// Launch using the adapter's own configuration and explicit environment.
     #[arg(long)]
     direct: bool,
-    /// Local YAML containing agents.<name>.transport (stdio command, args and env).
+    /// Local YAML containing `agents.<name>.transport` (stdio command, args and env).
     #[arg(long)]
     config: Option<PathBuf>,
 }

@@ -342,6 +342,6 @@ async fn publish(
         activation: Some(ConfigActivation::SavedOnly),
         running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
         restart_required: Some(true),
-        hint: "Saved only. Use bro status for target-owned state; explicitly restart after active work finishes. Route reload does not update native MCP bindings.",
+        hint: "Saved only. Use bitrouter status for target-owned state; explicitly restart after active work finishes. Route reload does not update native MCP bindings.",
     })
 }

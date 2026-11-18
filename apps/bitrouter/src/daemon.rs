@@ -1,6 +1,6 @@
 //! Daemon control over a local IPC channel.
 //!
-//! A running `bro serve` listens on a control endpoint alongside the
+//! A running `bitrouter serve` listens on a control endpoint alongside the
 //! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
@@ -142,7 +142,7 @@ pub enum DaemonCommand {
     HandoffStop { token: String },
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
-    /// `export OPENAI_API_KEY=…; bro reload` propagates the new
+    /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
     /// value into the running daemon without requiring a restart.
     /// `env` is `#[serde(default)]` for wire-compat with the
     /// historical unit variant — older clients sending `{"cmd":"reload"}`
@@ -331,7 +331,7 @@ pub enum DaemonResponse {
         /// Current activity. Missing on a legacy daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_activity: Option<HandoffActivity>,
-        /// Whether the detached `bro start` launcher owns this process.
+        /// Whether the detached `bitrouter start` launcher owns this process.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cli_owned: Option<bool>,
         /// The HTTP listen address.
@@ -604,7 +604,7 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 /// The daemon's self-reported readiness snapshot, returned by
 /// [`probe_status`]. A successful probe means the control socket is bound
 /// and the app is assembled (the model count is populated), which is exactly
-/// the signal `bro status` reports.
+/// the signal `bitrouter status` reports.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
     /// The daemon's process id.
@@ -1784,7 +1784,7 @@ pub enum DaemonStartOutcome {
     },
 }
 
-/// Spawn `bro serve` as a detached background process writing to
+/// Spawn `bitrouter serve` as a detached background process writing to
 /// `log_path` (append). Returns the child handle and the log's pre-spawn byte
 /// length so the caller can quote only this run's output on early death.
 ///
@@ -1877,7 +1877,7 @@ pub fn eprint_failure_log(log_path: &Path, content: &str) {
     eprintln!();
 }
 
-/// Launch a detached `bro serve` and poll the control socket until it
+/// Launch a detached `bitrouter serve` and poll the control socket until it
 /// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
 /// running regardless of the outcome — this only reports what the launcher
 /// observed. `socket` is the control-socket path to poll; pass `None` when it
@@ -1947,7 +1947,7 @@ pub async fn start_and_wait(
         if let Some(info) = probe_status(socket).await? {
             anyhow::ensure!(
                 existing_pid == Some(info.pid),
-                "control endpoint {} is already ready (pid {}), but cannot verify it belongs to the selected configuration; inspect bro status --socket. No daemon was started or changed",
+                "control endpoint {} is already ready (pid {}), but cannot verify it belongs to the selected configuration; inspect bitrouter status --socket. No daemon was started or changed",
                 socket.display(),
                 info.pid
             );
@@ -1959,7 +1959,7 @@ pub async fn start_and_wait(
                 .filter(|pid| process_is_alive(*pid))
         {
             anyhow::bail!(
-                "process {pid} is still starting at {}; readiness and selected configuration ownership are unverified; inspect bro status before retrying",
+                "process {pid} is still starting at {}; readiness and selected configuration ownership are unverified; inspect bitrouter status before retrying",
                 socket.display()
             );
         }
@@ -2084,7 +2084,7 @@ pub async fn ensure_started(
             Ok(report)
         }
         DaemonStartOutcome::NotReadyInTime { pid } => anyhow::bail!(
-            "daemon (pid {pid}) did not become ready within {}s; it may still be starting; inspect bro status and {}. No replacement was started",
+            "daemon (pid {pid}) did not become ready within {}s; it may still be starting; inspect bitrouter status and {}. No replacement was started",
             DAEMON_READY_TIMEOUT.as_secs(),
             log.display()
         ),

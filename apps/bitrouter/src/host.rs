@@ -132,7 +132,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 ///
 /// This is the one path with a config in hand, so it is where
 /// `server.log_level` takes effect. Resolution happens once here — a later
-/// `bro reload` re-reads the config but cannot re-install the
+/// `bitrouter reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 pub(crate) fn init_serve_tracing_subscriber(
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] exporter: Option<
@@ -188,7 +188,7 @@ pub async fn serve_with_extensions(
     serve_with_options(source, false, register, selected).await
 }
 
-/// Run the bundled CLI host. Only a child launched by `bro start` may be
+/// Run the bundled CLI host. Only a child launched by `bitrouter start` may be
 /// replaced automatically by `bro update`.
 pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
     let selected = crate::config::shared_process::select(source).await?;
@@ -576,10 +576,10 @@ async fn serve_with_options(
         };
 
         // SIGHUP triggers a config reload — reload should be available via either
-        // `bro reload` (the control endpoint) *or* a HUP signal. Same fan-out
+        // `bitrouter reload` (the control endpoint) *or* a HUP signal. Same fan-out
         // as the Reload command — every reloadable subsystem. SIGHUP is Unix-only;
         // on Windows there is no equivalent, so the HUP future stays pending and
-        // reload is reached exclusively through `bro reload`.
+        // reload is reached exclusively through `bitrouter reload`.
         let hup_reloader = reloader.clone();
         let hup_gate = handoff_gate.clone();
         let hup = async move {
@@ -614,7 +614,7 @@ async fn serve_with_options(
             }
         };
 
-        // Termination signals end the loop the same way `bro stop` does — so
+        // Termination signals end the loop the same way `bitrouter stop` does — so
         // the shutdown path below (observe flush, pid-file cleanup) runs in every
         // graceful termination mode. On Unix that's SIGINT (ctrl-C) and SIGTERM
         // (systemd / `kill`); on Windows it's the console control events

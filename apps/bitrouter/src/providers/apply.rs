@@ -16,7 +16,7 @@ use crate::providers::builtin;
 use crate::providers::entry::ProtocolMapping;
 
 /// Build the in-memory **zero-config** [`Config`] used when the user
-/// runs `bro serve` with no `bitrouter.yaml` anywhere on the
+/// runs `bitrouter serve` with no `bitrouter.yaml` anywhere on the
 /// resolution chain. Every env-var-based built-in provider whose
 /// credential is set in the environment lands in `config.providers` as
 /// an empty entry — [`apply_builtin_defaults`] then fills it from the
@@ -50,7 +50,7 @@ pub fn zero_config() -> Config {
             continue;
         };
         // Go through `crate::config::env_lookup` so a daemon-
-        // side override map (installed by the CLI's `bro reload`)
+        // side override map (installed by the CLI's `bitrouter reload`)
         // takes precedence over `std::env::var`. This is what
         // lets a newly-exported API key flow into the running daemon's
         // auto-enabled provider list without a full restart.

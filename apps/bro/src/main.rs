@@ -34,6 +34,7 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4356";
 #[derive(Parser)]
 #[command(
     name = "bro",
+    bin_name = "bro",
     version,
     about = "Local single-user BRO harness for a BitRouter gateway"
 )]

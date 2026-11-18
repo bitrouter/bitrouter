@@ -90,7 +90,7 @@ pub struct ConfigRoutingTable {
     generation: AtomicU64,
     /// The path the config was loaded from, for `reload()`.
     path: Option<std::path::PathBuf>,
-    /// Serialises `reload()` against itself. SIGHUP + `bro reload`
+    /// Serialises `reload()` against itself. SIGHUP + `bitrouter reload`
     /// arriving close together used to race: each call did its own
     /// `load + discover_models` then wrote the result, last writer wins.
     /// Now we hold this mutex for the full reload sequence.

@@ -51,7 +51,7 @@ impl CliReport for PolicyCreateReport {
     }
 }
 
-/// Result of `bro providers login <provider>`.
+/// Result of `bitrouter providers login <provider>`.
 #[derive(Serialize)]
 pub struct ProviderLoginReport {
     pub provider: String,
@@ -70,7 +70,7 @@ impl CliReport for ProviderLoginReport {
     }
 }
 
-/// Result of `bro providers logout <provider>`.
+/// Result of `bitrouter providers logout <provider>`.
 #[derive(Serialize)]
 pub struct ProviderLogoutReport {
     pub provider: String,

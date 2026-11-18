@@ -105,7 +105,7 @@ impl CliReport for DaemonActionReport {
                     h.field("running configuration", format!("{:?}", state.running))?;
                     if state.running != bitrouter_ai::control::reload::RunningConfigState::InSync {
                         h.note(
-                            "Inspect bro status; no automatic reload or restart was performed.",
+                            "Inspect bitrouter status; no automatic reload or restart was performed.",
                         )?;
                     }
                 }
@@ -116,12 +116,12 @@ impl CliReport for DaemonActionReport {
     }
 }
 
-/// The human view of `bro status`. Exit code stays 0 whether running or
+/// The human view of `bitrouter status`. Exit code stays 0 whether running or
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
 /// [`bitrouter_ai::control::status::StatusReport`]: the `status`
-/// tool returns the same type, so `bro status --json` and the tool's
+/// tool returns the same type, so `bitrouter status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
 impl CliReport for StatusReport {
@@ -198,7 +198,7 @@ impl CliReport for StatusReport {
                 h.field("active work", "unknown")?;
             }
             match compatibility.as_str() {
-                "legacy_unknown" => h.note("Finish active work, then run `bro restart`; this daemon cannot prove it is idle.")?,
+                "legacy_unknown" => h.note("Finish active work, then run `bitrouter restart`; this daemon cannot prove it is idle.")?,
                 "externally_managed" => h.note("Restart this daemon with its service manager after active work finishes.")?,
                 "handoff_required" => h.note("The next supervised command attempts a safe handoff if idle and the database preflight passes.")?,
                 "daemon_newer" => h.note("Install a matching or newer bro binary before using this daemon.")?,

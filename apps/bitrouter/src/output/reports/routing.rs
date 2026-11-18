@@ -64,7 +64,7 @@ pub struct ProviderRow {
     pub api_base: String,
 }
 
-/// Result of `bro providers list`.
+/// Result of `bitrouter providers list`.
 #[derive(Serialize)]
 pub struct ProvidersReport {
     pub providers: Vec<ProviderRow>,

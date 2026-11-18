@@ -98,14 +98,14 @@ fn decode_hello(reply: DaemonResponse) -> Result<Hello> {
             if message.contains("unknown variant") && message.contains("handoff_hello") =>
         {
             bail!(
-                "the running daemon cannot prove it is idle (legacy handoff protocol); use `bro restart` when its agent runs and requests are finished"
+                "the running daemon cannot prove it is idle (legacy handoff protocol); use `bitrouter restart` when its agent runs and requests are finished"
             )
         }
         DaemonResponse::Error { message } => {
             bail!("daemon handoff handshake failed: {message}")
         }
         _ => bail!(
-            "the running daemon has an incompatible handoff protocol; use `bro restart` after its work finishes"
+            "the running daemon has an incompatible handoff protocol; use `bitrouter restart` after its work finishes"
         ),
     }
 }
@@ -187,7 +187,7 @@ async fn ensure_compatible_inner(
     ensure!(
         explicit_profile_log.is_some()
             || same_capabilities(&crate::artifact::current(), &first.artifact),
-        "daemon distribution differs from this executable (daemon {} [{}], installed {} [{}]); common inspection remains available; use the matching executable for execution or explicitly run `bro restart` after active work finishes",
+        "daemon distribution differs from this executable (daemon {} [{}], installed {} [{}]); common inspection remains available; use the matching executable for execution or explicitly run `bitrouter restart` after active work finishes",
         first.artifact.profile.as_str(),
         first.artifact.features.join(","),
         crate::artifact::current().profile.as_str(),
@@ -206,7 +206,7 @@ async fn ensure_compatible_inner(
     );
     ensure!(
         !no_start,
-        "daemon {} requires a safe handoff to bro {}, but --no-start forbids restart; use `bro restart` after its work finishes",
+        "daemon {} requires a safe handoff to bitrouter {}, but --no-start forbids restart; use `bitrouter restart` after its work finishes",
         first.version,
         crate::VERSION
     );
@@ -234,7 +234,7 @@ async fn ensure_compatible_inner(
         "daemon changed while waiting for the handoff lock; retry"
     );
     let located = crate::daemon_locator::locate_source(source).await?
-        .context("daemon ownership could not be verified; use its service manager or explicit `bro restart`")?;
+        .context("daemon ownership could not be verified; use its service manager or explicit `bitrouter restart`")?;
     ensure!(
         located.socket() == socket,
         "selected daemon endpoint changed during handoff"

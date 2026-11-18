@@ -33,10 +33,10 @@ shell names. The current registry uses the same six names on supported Unix and
 Windows servers.  A clearer interface is the motivation; better accuracy, latency
 or token cost is not established by the controlled acceptance tasks.
 
-Source: [tools](../../apps/bitrouter/src/harness/tools.rs),
-[agent](../../apps/bitrouter/src/harness/agent.rs),
-[service](../../apps/bitrouter/src/harness/service.rs) and
-[storage](../../apps/bitrouter/src/harness/storage.rs).
+Source: [tools](../../apps/bro/src/tools.rs),
+[agent](../../apps/bro/src/runner.rs),
+[service](../../apps/bro/src/orchestration.rs) and
+[storage](../../apps/bro/src/checkpoint.rs).
 
 ## Tool interfaces and permissions
 

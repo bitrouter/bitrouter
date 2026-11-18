@@ -120,7 +120,7 @@ pub struct Assembled {
     pub db: DatabaseConnection,
     pub(crate) tenancy: Option<crate::tenancy::Service>,
     /// The policy store wired into the language_model pipeline. Held by the
-    /// caller (the daemon) so `bro reload` / SIGHUP can call
+    /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
@@ -509,7 +509,7 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 
 /// The `plugins.*` keys in `config` that this binary does not read, sorted.
 ///
-/// Pure so `bro config validate` can report the same set the daemon
+/// Pure so `bitrouter config validate` can report the same set the daemon
 /// warns about, without building an `App`.
 pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
@@ -525,11 +525,11 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
 /// Collected in [`build_app_with_path`] so it covers every daemon start rather
-/// than only `bro config validate` — validation is opt-in and the daemon
+/// than only `bitrouter config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bro config validate` reports the same set from a
+/// Public because `bitrouter config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
 pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
@@ -551,7 +551,7 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 
 /// [`ignored_config_file_warnings`] plus the environment ones.
 ///
-/// The split is what `bro config validate` needs: it validates a *file*,
+/// The split is what `bitrouter config validate` needs: it validates a *file*,
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
@@ -593,7 +593,7 @@ pub async fn build_app(config: &Config) -> Result<Assembled> {
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
-/// table's `reload()` (driven by `bro reload` / `SIGHUP`) can re-read it.
+/// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
 pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,

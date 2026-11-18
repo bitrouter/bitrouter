@@ -912,7 +912,7 @@ pub struct ServerConfig {
     ///
     /// `RUST_LOG` overrides this when set, following the Rust convention. The
     /// filter is resolved once at startup, so changing it needs a restart —
-    /// `bro reload` will not pick it up. Applies to `bro serve`
+    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
     /// (and therefore `start`); other subcommands install their subscriber
     /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
@@ -1698,7 +1698,7 @@ where
 /// Replace every `${VAR}` occurrence with the value of environment variable
 /// `VAR`. An undefined variable is an error. Used by the config loader.
 /// Reads via [`env_lookup`] so daemon-side overrides (installed by the
-/// CLI's `bro reload`) take precedence over the live process env.
+/// CLI's `bitrouter reload`) take precedence over the live process env.
 pub fn substitute_env(input: &str) -> Result<String> {
     substitute_with(input, env_lookup)
 }
@@ -2042,7 +2042,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// of generic discovery, including when a provider is withheld or unsupported.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
-/// unreachable provider can't stall a `bro reload` for the OS-level
+/// unreachable provider can't stall a `bitrouter reload` for the OS-level
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {

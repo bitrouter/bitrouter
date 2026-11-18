@@ -448,7 +448,7 @@ mod v1_tests {
 
 /// Resolve `${VAR}` / `${VAR:-default}` references in a registry `api_base`
 /// against the environment (via [`env_lookup`], so the env overrides a
-/// `bro reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
+/// `bitrouter reload` installs on the daemon apply). Returns `None` when a referenced variable is unset and
 /// carries no default — the provider then can't form a valid base URL. Used
 /// for the parameterised big-cloud bases (Bedrock `${AWS_REGION}`, Azure
 /// `${AZURE_OPENAI_RESOURCE}`); a fixed base has no `${...}` and passes through
@@ -538,7 +538,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
     }
 
     // Not in the config. OAuth / native providers are never auto-added (they
-    // need a local `bro providers login`); an env-keyed provider is
+    // need a local `bitrouter providers login`); an env-keyed provider is
     // auto-added only when its credential is present (principle #5).
     let Some(var) = provider.env_credential_var() else {
         return;

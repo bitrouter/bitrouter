@@ -556,7 +556,7 @@ async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
         );
 
         // Stop via the packaged CLI's explicit private socket, after proving
-        // readiness belongs to our child. Drop cleanup never calls `bro stop`.
+        // readiness belongs to our child. Drop cleanup never calls `bitrouter stop`.
         ensure!(
             server.child.try_wait()?.is_none(),
             "gateway exited before graceful stop"

@@ -2966,7 +2966,7 @@ policies:
         }
     }
 
-    /// `bro reload` used to return `{"status":"reloaded"}` while the
+    /// `bitrouter reload` used to return `{"status":"reloaded"}` while the
     /// daemon kept serving the tiers it started with — only `restart` applied
     /// a `policy_table:` edit. The transform is baked into the built `App` and
     /// cannot be re-registered, so nothing swapped its spec.

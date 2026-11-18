@@ -83,7 +83,7 @@ impl HandoffGate {
         Some(Admission(self.clone()))
     }
 
-    /// Passive, point-in-time observation for `bro status`.
+    /// Passive, point-in-time observation for `bitrouter status`.
     pub fn observed_activity(&self) -> (usize, bool) {
         let state = self.state();
         let held = state

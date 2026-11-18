@@ -34,25 +34,27 @@
   {
     "name": "evolution",
     "paths": [
-      "apps/bitrouter/src/core/evolution",
-      "apps/bitrouter/src/storage/evolution.rs"
+      "apps/bitrouter/src/tenancy/learning",
+      "apps/bitrouter/src/storage/evolution.rs",
+      "apps/bitrouter/src/db/mixed_store/catalog.rs"
     ],
-    "existing": "owner-derived scope hash",
-    "target": "tenant-scoped store + principal provenance",
-    "obligations": "Worker restore, publication, checkpoints, cache invalidation",
-    "exclusions": "No second scheduler; existing owner worker is adapted."
+    "existing": "Tenant policy publication and Eval records; historical experimental evidence in the mixed store",
+    "target": "Tenant-scoped service policy and Eval with principal provenance",
+    "obligations": "Publication, cache invalidation, and explicit ownership of historical rows at offline cutover",
+    "exclusions": "Experimental adaptation and scheduling run locally in BRO."
   },
   {
     "name": "sessions",
     "paths": [
-      "apps/bitrouter/src/core/session",
-      "apps/bitrouter/src/core/workflow_state",
-      "apps/bitrouter/src/storage/session_identity.rs"
+      "apps/bro/src/orchestration.rs",
+      "apps/bro/src/checkpoint.rs",
+      "apps/bro/src/migrated.rs",
+      "apps/bitrouter/src/gateway/observability/inventory.rs"
     ],
-    "existing": "owner/source/native-session tuple",
-    "target": "tenant + principal + owned run references",
-    "obligations": "Parent/child wake, restore, admission; harness keeps full transcript authority",
-    "exclusions": "Harness transcripts remain harness-owned."
+    "existing": "Local BRO thread and execution identifiers; authenticated gateway request identities",
+    "target": "Local checkpoint ownership and principal-scoped gateway admission",
+    "obligations": "Parent/child recovery and immutable effects in BRO; repeat admission and settlement in BitRouter",
+    "exclusions": "A caller-supplied session or controller ID cannot bind a gateway request to local execution state."
   },
   {
     "name": "trajectory",

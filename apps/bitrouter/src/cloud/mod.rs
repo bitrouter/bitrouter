@@ -48,7 +48,7 @@ const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 /// No-op when the credentials file is absent — `crate::providers::apply::zero_config`
 /// already handles the `$BITROUTER_API_KEY` env-var path. Together the two
 /// paths give a signed-in user the cloud provider on every fresh
-/// `bro serve` regardless of which credential source they chose.
+/// `bitrouter serve` regardless of which credential source they chose.
 pub fn enable_in_zero_config(config: &mut Config) {
     let Ok(path) = default_credentials_path() else {
         return;
