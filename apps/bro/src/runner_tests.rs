@@ -451,3 +451,96 @@ async fn missing_or_conflicting_success_echo_cannot_authorize_model_output() -> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn verification_result_publication_never_repeats_the_shell() -> Result<()> {
+    use crate::verification::{Check, State};
+    struct LoseResult<'a> {
+        home: &'a Home,
+        published: bool,
+    }
+    impl runner::Journal for LoseResult<'_> {
+        fn save(&self, thread: &Thread) -> Result<()> {
+            let result = thread.current()?.evidence().is_some();
+            if !result || self.published {
+                self.home.save(thread)?;
+            }
+            ensure!(!result, "lost result acknowledgement");
+            Ok(())
+        }
+    }
+    for published in [false, true] {
+        let reply = stream(chunk(json!({"content":"Ready."}), Some("stop")) + "data: [DONE]\n\n");
+        let mock = Mock::start(vec![reply])?;
+        let Work {
+            _dir,
+            home,
+            mut thread,
+            client,
+        } = Work::new(&mock.endpoint)?;
+        let command = "printf x >> marker";
+        thread.configure_check(command.into());
+        let mut check = Check::new(command)?;
+        check.approval.approved = Some(true);
+        thread.current_mut()?.check = Some(check);
+        home.save(&thread)?;
+        let result = runner::drive(
+            &LoseResult {
+                home: &home,
+                published,
+            },
+            &mut thread,
+            &client,
+            &tokio_util::sync::CancellationToken::new(),
+            None,
+            0,
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("lost result acknowledgement")
+        );
+        if !thread.workspace.join("marker").exists() {
+            // This platform refused the check before dispatch, so no intent was written.
+            ensure!(
+                thread
+                    .current()?
+                    .evidence()
+                    .and_then(|e| e.error.as_deref())
+                    .is_some_and(|s| s.contains("sandbox unavailable")),
+                "missing verification side effect"
+            );
+            assert_eq!(mock.join()?.len(), 1);
+            continue;
+        }
+        let mut recovered = home.load(thread.thread_id)?;
+        let check = recovered.current()?.check.as_ref().context("check")?;
+        if published {
+            assert!(matches!(check.state, State::Result { .. }));
+        } else {
+            assert!(matches!(check.state, State::Intent));
+        }
+        for _ in 0..2 {
+            let result = runner::run(&home, &mut recovered, &client).await;
+            assert_eq!(result.is_ok(), published);
+            assert_eq!(fs::read_to_string(recovered.workspace.join("marker"))?, "x");
+            assert_eq!(
+                recovered.current()?.status(false),
+                if published {
+                    TurnStatus::Completed
+                } else {
+                    TurnStatus::RecoveryRequired
+                }
+            );
+            recovered = home.load(thread.thread_id)?;
+        }
+        if !published {
+            runner::cancel_turn(&home, &mut recovered)?;
+            assert!(recovered.start("new".into(), None).is_err());
+        }
+        assert_eq!(mock.join()?.len(), 1);
+    }
+    Ok(())
+}

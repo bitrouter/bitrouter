@@ -368,6 +368,8 @@ fn validate_turn(parent: &Thread, turn: &Turn, seen: &mut HashSet<Uuid>, depth: 
                     && call.function.name == "spawn_agent"
                     && child.thread_id == inv.item_id
                     && child.parent_id == Some(parent.thread_id)
+                    && child.verification_command.is_none()
+                    && child.current()?.check.is_none()
                     && child.tool_mode == ToolMode::ReadOnly
                     && child.workspace_id == parent.workspace_id
                     && child.workspace == parent.workspace

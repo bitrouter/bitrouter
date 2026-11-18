@@ -103,6 +103,7 @@ workspace and gateway at creation.
 
 ```sh
 bro task run 'Summarize this project' --workspace . --read-only
+bro task run 'Update the example' --workspace . --check './verify.sh'
 bro thread list
 bro thread history THREAD_ID
 bro thread pending THREAD_ID
@@ -110,6 +111,13 @@ bro thread answer THREAD_ID --turn TURN_ID --request REQUEST_ID allow
 bro thread resume THREAD_ID --turn TURN_ID
 bro thread cancel THREAD_ID --turn TURN_ID
 ```
+
+`--check COMMAND` authorizes one sandboxed invocation after the model finishes.
+The terminal event includes the verification verdict, exit status, bounded stdout
+and stderr, interpreter, and timeout evidence. An interrupted check with unknown
+effects requires recovery. Resume reuses a saved result. Starting a later turn
+on the same thread requests fresh approval for its check. Verification requires
+a coding workspace and a supported shell sandbox.
 
 Use the IDs emitted by BRO. Native task output is NDJSON. An exact approval
 authorizes a single recorded call. When an operation may have reached a model

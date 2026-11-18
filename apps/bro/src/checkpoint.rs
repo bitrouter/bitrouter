@@ -20,6 +20,11 @@ enum Format {
     Local,
     #[serde(rename = "bro-local/2")]
     Managed,
+    // Older workers must refuse checkpoints whose completion requires a check.
+    #[serde(rename = "bro-local/3")]
+    Checked,
+    #[serde(rename = "bro-local/3-managed")]
+    ManagedChecked,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,6 +45,8 @@ pub(crate) struct Thread {
     pub effort: Option<ReasoningEffort>,
     pub max_output_tokens: Option<u32>,
     pub tool_mode: ToolMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_command: Option<String>,
     pub turns: Vec<Turn>,
 }
 
@@ -56,6 +63,8 @@ pub(crate) struct Turn {
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub children: std::collections::BTreeMap<Uuid, Thread>,
     pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<crate::verification::Check>,
     pub outcome: Option<Outcome>,
 }
 
@@ -126,6 +135,7 @@ pub(crate) enum ToolState {
 pub(crate) enum Next {
     Model,
     Tool(usize),
+    Verify,
     Waiting,
     Complete,
     Blocked,
@@ -173,6 +183,7 @@ impl Thread {
             effort,
             max_output_tokens,
             tool_mode,
+            verification_command: None,
             turns: Vec::new(),
         })
     }
@@ -191,11 +202,24 @@ impl Thread {
     }
 
     pub fn managed(&self) -> bool {
-        matches!(self.format, Format::Managed)
+        matches!(self.format, Format::Managed | Format::ManagedChecked)
     }
 
     pub fn enable_managed(&mut self) {
-        self.format = Format::Managed;
+        self.format = if self.verification_command.is_some() {
+            Format::ManagedChecked
+        } else {
+            Format::Managed
+        };
+    }
+
+    pub fn configure_check(&mut self, command: String) {
+        self.format = if self.managed() {
+            Format::ManagedChecked
+        } else {
+            Format::Checked
+        };
+        self.verification_command = Some(command);
     }
 
     pub fn current(&self) -> Result<&Turn> {
@@ -239,6 +263,11 @@ impl Thread {
             request_id,
             sealed_messages: vec![],
             children: Default::default(),
+            check: self
+                .verification_command
+                .as_deref()
+                .map(crate::verification::Check::new)
+                .transpose()?,
             steps: vec![],
             outcome: None,
         });
@@ -261,6 +290,19 @@ impl Thread {
 }
 
 impl Turn {
+    pub fn final_answer(&self) -> Option<String> {
+        let response = self.response()?;
+        if !response.calls.is_empty() {
+            return None;
+        }
+        response
+            .message
+            .content
+            .as_ref()?
+            .as_str()
+            .map(str::to_owned)
+    }
+
     pub fn response(&self) -> Option<&Assistant> {
         match &self.steps.last()?.state {
             ModelState::ModelResponse { response } => Some(response),
@@ -279,6 +321,11 @@ impl Turn {
             return Next::Blocked;
         };
         if response.calls.is_empty() {
+            if response.finish_reason == "stop"
+                && let Some(check) = &self.check
+            {
+                return check.next();
+            }
             return Next::Complete;
         }
         for (index, call) in response.calls.iter().enumerate() {
@@ -300,7 +347,26 @@ impl Turn {
         Next::Model
     }
 
+    pub fn tool_calls(&self) -> usize {
+        self.steps
+            .iter()
+            .filter_map(|step| match &step.state {
+                ModelState::ModelResponse { response } => Some(response.calls.len()),
+                _ => None,
+            })
+            .sum()
+    }
+
     pub fn pending(&self) -> Option<&InputRequest> {
+        if self.outcome.is_none()
+            && self
+                .response()
+                .is_some_and(|r| r.finish_reason == "stop" && r.calls.is_empty())
+            && let Some(check) = &self.check
+            && check.next() == Next::Waiting
+        {
+            return Some(&check.approval.request);
+        }
         self.response()?
             .calls
             .iter()
@@ -468,8 +534,14 @@ impl Home {
     }
 
     fn validate(thread: &mut Thread) -> Result<()> {
+        ensure!(
+            matches!(thread.format, Format::Checked | Format::ManagedChecked)
+                == thread.verification_command.is_some(),
+            "verification binding differs from checkpoint format"
+        );
         crate::skills::validate(&thread.skills)?;
         for (index, turn) in thread.turns.iter().enumerate() {
+            crate::verification::validate(thread, turn)?;
             ensure!(
                 index + 1 == thread.turns.len() || turn.released() || turn.legacy_denial(),
                 "later turn follows unresolved work"

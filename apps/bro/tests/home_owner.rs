@@ -1,7 +1,9 @@
 //! Both published halves are produced by the real offline importer.
 #[path = "support/binary.rs"]
 mod binary;
-use anyhow::{Context, Result, ensure};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{Result, ensure};
 use std::{fs, path::Path, process::Command};
 
 fn reject(home: &Path) -> Result<()> {

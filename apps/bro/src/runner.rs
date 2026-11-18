@@ -18,6 +18,8 @@ use crate::checkpoint::{Approval, Home, ModelState, Next, Outcome, Step, Thread,
 use crate::gateway::{Accumulator, request};
 use crate::tools::WorkspaceTools;
 
+pub(crate) const MAX_TOOL_CALLS: usize = 128;
+
 pub(crate) trait Journal {
     fn save(&self, thread: &Thread) -> Result<()>;
 }
@@ -76,7 +78,7 @@ fn cancel_known(thread: &mut Thread) -> Result<()> {
     thread.current_mut()?.outcome = Some(Outcome {
         status,
         detail: detail.into(),
-        final_answer: None,
+        final_answer: thread.current()?.final_answer(),
     });
     Ok(())
 }
@@ -111,6 +113,12 @@ pub(crate) fn answer(
         pending.request_id == request_id,
         "pending approval request ID mismatch"
     );
+    if let Some(check) = &mut thread.current_mut()?.check
+        && check.approval.request.request_id == request_id
+    {
+        check.approval.approved = Some(approved);
+        return home.save(thread);
+    }
     let approval = thread
         .response_mut()?
         .calls
@@ -144,7 +152,10 @@ pub(crate) async fn run(home: &Home, thread: &mut Thread, client: &GatewayClient
     if path.try_exists()? {
         cancel.cancel();
     }
-    if matches!(thread.current()?.next(), Next::Model | Next::Tool(_)) {
+    if matches!(
+        thread.current()?.next(),
+        Next::Verify | Next::Model | Next::Tool(_)
+    ) {
         home.check_owner(thread)?;
     }
     let scheduler = thread
@@ -173,6 +184,7 @@ pub(crate) fn report(thread: &Thread) -> Result<()> {
     crate::emit(
         &json!({"type":kind,"thread_id":thread.thread_id,"turn_id":turn.turn_id,
         "status":status,"workspace":thread.workspace,"pending_input":turn.pending(),
+        "verification":turn.verification(),"verification_evidence":turn.evidence(),"unknown_effect":status == TurnStatus::RecoveryRequired,
         "detail":turn.outcome.as_ref().map(|o| &o.detail),"final_answer":turn.outcome.as_ref().and_then(|o| o.final_answer.as_ref())}),
     )
 }
@@ -205,22 +217,26 @@ pub(crate) async fn drive(
             {
                 tree.fenced.set(true);
             }
-            if tree.fenced.get() && matches!(next, Next::Tool(_) | Next::Model) {
+            if tree.fenced.get() && matches!(next, Next::Verify | Next::Tool(_) | Next::Model) {
                 return Ok(());
             }
         }
-        if matches!(next, Next::Model | Next::Tool(_) | Next::Complete) {
+        if matches!(
+            next,
+            Next::Verify | Next::Model | Next::Tool(_) | Next::Complete
+        ) {
             thread.verify_workspace()?;
         }
         match next {
             Next::Settled | Next::Waiting => return Ok(()),
             Next::Blocked => {
+                let answer = turn.final_answer();
                 settle(
                     home,
                     thread,
                     TurnStatus::RecoveryRequired,
                     "unresolved model request or tool effect; refusing replay",
-                    None,
+                    answer,
                 )?;
             }
             Next::Complete => {
@@ -228,23 +244,40 @@ pub(crate) async fn drive(
                     .current()?
                     .response()
                     .context("missing final response")?;
-                let final_answer = response
-                    .message
-                    .content
-                    .as_ref()
-                    .and_then(|v| v.as_str())
-                    .map(str::to_owned);
+                let final_answer = turn.final_answer();
                 if response.finish_reason == "stop" {
+                    let passed = matches!(
+                        turn.verification(),
+                        bitrouter_ai::harness::turn::VerificationStatus::Passed
+                            | bitrouter_ai::harness::turn::VerificationStatus::NotRequested
+                    );
                     settle(
                         home,
                         thread,
-                        TurnStatus::Completed,
-                        "completed",
+                        if passed {
+                            TurnStatus::Completed
+                        } else {
+                            TurnStatus::Failed
+                        },
+                        if passed {
+                            "completed"
+                        } else {
+                            "verification did not pass"
+                        },
                         final_answer,
                     )?;
                 } else {
                     let reason = format!("gateway finished with {}", response.finish_reason);
                     settle(home, thread, TurnStatus::Failed, &reason, final_answer)?;
+                }
+            }
+            Next::Verify => {
+                let _slot = match scheduler {
+                    Some(tree) => Some(tree.tools.acquire().await?),
+                    None => None,
+                };
+                if !cancel.is_cancelled() && !scheduler.is_some_and(|tree| tree.fenced.get()) {
+                    crate::verification::run(home, thread, &tools, cancel).await?;
                 }
             }
             Next::Tool(index) => {
@@ -386,16 +419,7 @@ async fn run_model(
     }
     match result {
         Ok(response) => {
-            let count: usize = thread
-                .current()?
-                .steps
-                .iter()
-                .filter_map(|s| match &s.state {
-                    ModelState::ModelResponse { response } => Some(response.calls.len()),
-                    _ => None,
-                })
-                .sum();
-            let over_limit = count + response.calls.len() > 128;
+            let over_limit = thread.current()?.tool_calls() + response.calls.len() > MAX_TOOL_CALLS;
             thread.step_mut()?.state = ModelState::ModelResponse {
                 response: Box::new(response),
             };

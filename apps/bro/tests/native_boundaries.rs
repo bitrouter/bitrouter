@@ -399,3 +399,236 @@ fn approval_is_bound_to_directory_identity_across_processes() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn operator_check_reports_durable_evidence_and_requires_fresh_approval() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("work");
+    let home = fixture.path().join("bro");
+    fs::create_dir(&work)?;
+    let final_reply = stream(chunk(json!({"content":"Ready."}), Some("stop")) + "data: [DONE]\n\n");
+    let mock = Mock::start(vec![final_reply.clone(), final_reply])?;
+    let run = |args: &[&str]| bro(&home, &work, &mock.endpoint, args);
+    let script = "printf x >> runs; printf checked; printf detail >&2";
+    for args in [
+        vec!["task", "run", "hello", "--check", script, "--read-only"],
+        vec!["task", "run", "hello", "--check", " "],
+    ] {
+        assert!(!run(&args)?.status.success());
+    }
+    let initial = run(&["task", "run", "hello", "--check", script])?;
+    let result = event(&initial)?;
+    let thread = result["thread_id"].as_str().context("thread")?;
+    let turn = result["turn_id"].as_str().context("turn")?;
+    assert_eq!(result["final_answer"], "Ready.");
+    let evidence = &result["verification_evidence"];
+    assert_eq!(evidence["command"], script);
+    let available = result["verification"] == "passed";
+    if available {
+        assert!(initial.status.success());
+        assert_eq!(result["status"], "completed");
+        assert_eq!(evidence["stdout"], "checked");
+        assert_eq!(evidence["stderr"], "detail");
+        assert_eq!(evidence["exit_status"], 0);
+        assert_eq!(evidence["timed_out"], false);
+        assert_eq!(evidence["stdout_truncated"], false);
+        assert!(evidence["interpreter"]["sandbox"].is_string());
+    } else {
+        assert!(!initial.status.success());
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["verification"], "unavailable");
+        assert!(
+            evidence["error"]
+                .as_str()
+                .context("refusal")?
+                .contains("sandbox unavailable")
+        );
+    }
+    #[cfg(target_os = "macos")]
+    assert!(available);
+    #[cfg(windows)]
+    assert!(!available);
+    let resumed = event(&run(&["thread", "resume", thread, "--turn", turn])?)?;
+    assert_eq!(resumed, result);
+    let observed = event(&run(&["thread", "show", thread])?)?;
+    assert_eq!(&observed["verification_evidence"], evidence);
+
+    let next = event(&run(&["thread", "start", thread, "another turn"])?)?;
+    assert_eq!(next["status"], "waiting_for_input");
+    let turn = next["turn_id"].as_str().context("second turn")?;
+    let pending = &next["pending_input"];
+    assert_eq!(pending["tool_name"], "shell");
+    assert_eq!(
+        serde_json::from_str::<Value>(pending["arguments"].as_str().context("args")?)?,
+        json!({"command":script})
+    );
+    let req = pending["request_id"].as_str().context("approval")?;
+    assert!(
+        !run(&[
+            "thread",
+            "answer",
+            thread,
+            "--turn",
+            turn,
+            "--request",
+            "stale",
+            "allow"
+        ])?
+        .status
+        .success()
+    );
+    let denied = run(&[
+        "thread",
+        "answer",
+        thread,
+        "--turn",
+        turn,
+        "--request",
+        req,
+        "deny",
+    ])?;
+    assert!(!denied.status.success());
+    let denied = event(&denied)?;
+    assert_eq!(denied["verification"], "denied");
+    assert_eq!(denied["status"], "failed");
+    assert!(denied["verification_evidence"]["exit_status"].is_null());
+    if available {
+        assert_eq!(fs::read_to_string(work.join("runs"))?, "x");
+    } else {
+        assert!(!work.join("runs").exists());
+    }
+    let checkpoint = home.join("threads").join(format!("{thread}.json"));
+    let mut downgraded: Value = serde_json::from_slice(&fs::read(&checkpoint)?)?;
+    assert_eq!(downgraded["format"], "bro-local/3");
+    downgraded["format"] = json!("bro-local/1");
+    fs::write(&checkpoint, serde_json::to_vec(&downgraded)?)?;
+    let refused = run(&["thread", "resume", thread, "--turn", turn])?;
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("verification binding"));
+    let requests = mock.join()?;
+    assert_eq!(requests.len(), 2);
+    assert!(!serde_json::to_string(&requests)?.contains(script));
+    Ok(())
+}
+
+#[test]
+fn operator_check_exit_failure_preserves_bounded_stderr_and_answer() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("work");
+    let home = fixture.path().join("bro");
+    fs::create_dir(&work)?;
+    let reply = stream(chunk(json!({"content":"Finished."}), Some("stop")) + "data: [DONE]\n\n");
+    let mock = Mock::start(vec![reply])?;
+    let out = bro(
+        &home,
+        &work,
+        &mock.endpoint,
+        &[
+            "task",
+            "run",
+            "verify",
+            "--check",
+            "printf out; i=0; while [ $i -lt 5000 ]; do printf 1234567890123456 >&2; i=$((i+1)); done; exit 7",
+        ],
+    )?;
+    assert!(!out.status.success());
+    let result = event(&out)?;
+    let requests = mock.join()?;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(result["unknown_effect"], false);
+    assert_eq!(result["status"], "failed");
+    assert_eq!(result["final_answer"], "Finished.");
+    if requests[0]["tools"]
+        .as_array()
+        .context("tools")?
+        .iter()
+        .any(|t| t["function"]["name"] == "shell")
+    {
+        assert_eq!(result["verification"], "failed");
+        let ev = &result["verification_evidence"];
+        assert_eq!(ev["exit_status"], 7);
+        assert_eq!(ev["stdout"], "out");
+        assert_eq!(ev["stderr_truncated"], true);
+        assert!(ev["stderr"].as_str().context("stderr")?.len() < 80000);
+    } else {
+        assert_eq!(result["verification"], "unavailable");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn timed_out_operator_check_retains_unknown_effect_and_fences_resume() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("work");
+    let home = fixture.path().join("bro");
+    fs::create_dir(&work)?;
+    let reply = stream(chunk(json!({"content":"Ready."}), Some("stop")) + "data: [DONE]\n\n");
+    let mock = Mock::start(vec![reply])?;
+    let run = |args: &[&str]| bro(&home, &work, &mock.endpoint, args);
+    let result = run(&[
+        "task",
+        "run",
+        "verify",
+        "--check",
+        "printf x >> marker; printf started; sleep 90",
+    ])?;
+    assert!(!result.status.success());
+    let terminal = event(&result)?;
+    if terminal["verification"] == "unavailable" {
+        assert!(
+            terminal["verification_evidence"]["error"]
+                .as_str()
+                .context("unavailable")?
+                .contains("sandbox unavailable")
+        );
+        assert!(!work.join("marker").exists());
+    } else {
+        assert_eq!(terminal["status"], "recovery_required");
+        assert_eq!(terminal["unknown_effect"], true);
+        assert_eq!(terminal["final_answer"], "Ready.");
+        assert_eq!(terminal["verification"], "failed");
+        assert_eq!(terminal["verification_evidence"]["timed_out"], true);
+        assert_eq!(terminal["verification_evidence"]["stdout"], "started");
+        let thread = terminal["thread_id"].as_str().context("thread")?;
+        let turn = terminal["turn_id"].as_str().context("turn")?;
+        assert_eq!(
+            event(&run(&["thread", "resume", thread, "--turn", turn])?)?,
+            terminal
+        );
+        assert!(
+            !run(&["thread", "start", thread, "continue"])?
+                .status
+                .success()
+        );
+        assert!(!run(&["thread", "create"])?.status.success());
+        assert_eq!(fs::read_to_string(work.join("marker"))?, "x");
+    }
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn incomplete_model_answer_does_not_launch_operator_check() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("work");
+    fs::create_dir(&work)?;
+    let mock = Mock::start(vec![stream(
+        chunk(json!({"content":"Partial"}), Some("length")) + "data: [DONE]\n\n",
+    )])?;
+    let out = bro(
+        &fixture.path().join("bro"),
+        &work,
+        &mock.endpoint,
+        &["task", "run", "verify", "--check", "printf x > marker"],
+    )?;
+    assert!(!out.status.success());
+    let result = event(&out)?;
+    assert_eq!(result["status"], "failed");
+    assert_eq!(result["verification"], "unavailable");
+    assert!(result["verification_evidence"].is_null());
+    assert_eq!(result["final_answer"], "Partial");
+    assert!(!work.join("marker").exists());
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}

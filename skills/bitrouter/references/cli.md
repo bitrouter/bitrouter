@@ -9,6 +9,7 @@ Use `bitrouter build-info` or `bro build-info` to identify the installed build.
 | Configure and start a gateway | `bitrouter init`, `bitrouter serve` |
 | Inspect providers, routes, requests and service status | `bitrouter providers`, `bitrouter route`, `bitrouter requests`, `bitrouter status` |
 | Manage model Policy, Eval and tenant configuration | `bitrouter policy`, `bitrouter eval`, `bitrouter tenancy` |
+| Verify a native task after model completion | `bro task run PROMPT --workspace PATH --check COMMAND` |
 | Run a native local task | `bro task run PROMPT --workspace PATH` |
 | Inspect and operate a local thread | `bro thread list`, `bro thread history ID`, `bro thread pending ID`, `bro thread resume ID --turn TURN` |
 | Run an external ACP prompt | `bro acp list`, `bro acp --workspace PATH prompt --agent AGENT PROMPT` |

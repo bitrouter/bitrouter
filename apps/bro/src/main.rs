@@ -13,6 +13,7 @@ mod skills;
 mod tools;
 mod tree;
 mod update;
+mod verification;
 mod workspace;
 
 use std::fs::File;
@@ -101,6 +102,9 @@ enum TaskAction {
     /// Create a Thread and run until terminal status or an exact tool approval.
     Run {
         prompt: String,
+        /// Run this bounded project verification in the workspace sandbox after model completion.
+        #[arg(long, conflicts_with = "read_only", value_name = "COMMAND")]
+        check: Option<String>,
         #[command(flatten)]
         options: ThreadOptions,
     },
@@ -263,6 +267,7 @@ fn inspect(thread: &Thread, turn: Option<Uuid>, running: bool) -> Result<()> {
     emit(
         &json!({"thread_id":thread.thread_id,"workspace":thread.workspace,"model":thread.model,"endpoint":thread.endpoint,"tool_mode":thread.tool_mode,"managed":thread.managed(),
         "turn_id":t.map(|t| t.turn_id),"status":t.map(|t| t.status(running)),"pending_input":t.and_then(|t| t.pending()),
+        "verification":t.map(|t| t.verification()), "verification_evidence":t.and_then(|t| t.evidence()),
         "outcome":t.and_then(|t| t.outcome.as_ref())}),
     )
 }
@@ -317,12 +322,23 @@ async fn dispatch(cli: Cli) -> Result<i32> {
     let home = Home::open(&root)?;
     match cli.command {
         Command::Task {
-            action: TaskAction::Run { prompt, options },
+            action:
+                TaskAction::Run {
+                    prompt,
+                    check,
+                    options,
+                },
         } => {
             let mut t = create(options, endpoint.into())?;
+            if let Some(command) = check {
+                t.configure_check(command);
+            }
             let _worker = home.worker(t.thread_id)?;
             let client = client(endpoint)?;
             t.start(prompt, None)?;
+            if let Some(check) = &mut t.current_mut()?.check {
+                check.approval.approved = Some(true);
+            }
             home.admit(&t)?;
             accepted(&t)?;
             runner::run(&home, &mut t, &client).await?;
