@@ -382,6 +382,7 @@ impl OrderedHarness {
                 endpoint: api_base.clone(),
                 account: None,
                 max_active: 1,
+                engine: None,
             });
             providers.insert(provider.clone(), json!({"api_base":api_base, "api_protocol":[{"*":"chat_completions"}], "models":[{"id":model}]}));
             endpoints.push(json!({"provider":provider, "service_id":model}));

@@ -314,6 +314,7 @@ pub(super) fn settings(endpoint: &str, capacity: u32) -> InferenceRoutingConfig 
         endpoint: endpoint.into(),
         account: None,
         max_active: capacity,
+        engine: None,
     });
     config
 }
@@ -531,5 +532,103 @@ async fn samples_are_success_only_shape_scoped_fresh_and_bounded() -> Result<()>
     tokio::time::advance(Duration::from_secs(301)).await;
     ensure!(scheduler.inspect(shape)[0].mean_success_millis.is_none());
     scheduler.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_credit_release_does_not_match_a_sending_attempt() -> Result<()> {
+    let target = target("https://fixture.invalid")?;
+    let scheduler = Scheduler::new(&settings(&target.api_base, 1), 7)?;
+    let candidate = scheduler.candidate(&target, 0)?;
+    let (shape, work) = Shape::from_prompt(&prompt(false)?)?;
+    let reservation = scheduler.book(
+        candidate,
+        &target,
+        work,
+        shape,
+        Instant::now() + Duration::from_secs(10),
+    )?;
+    reservation.observer().begin_send(&target)?;
+    ensure!(scheduler.held_unknown().is_empty());
+    ensure!(scheduler.release_unknown(7, "fixture", 1).is_err());
+    drop(reservation);
+    let held = scheduler.held_unknown();
+    ensure!(held.len() == 1);
+    let (destination, attempt, generation) = &held[0];
+    ensure!(destination == "fixture" && *generation == 7);
+    scheduler.release_unknown(*generation, destination, *attempt)?;
+    ensure!(scheduler.held_unknown().is_empty());
+    ensure!(scheduler.inner.lock().destinations[0].uncertain == 0);
+    ensure!(
+        scheduler
+            .release_unknown(*generation, destination, *attempt)
+            .is_err()
+    );
+    scheduler.shutdown().await?;
+    Ok(())
+}
+
+#[test]
+fn engine_ceilings_count_occupancy_before_grant() -> Result<()> {
+    let engine = serde_json::from_value::<crate::config::inference_routing::EngineConfig>(
+        serde_json::json!({
+            "module": "vllm",
+            "metrics_url": "http://127.0.0.1:8000/metrics",
+            "max_metric_age_ms": 1000,
+            "max_running": 1,
+            "max_waiting": 0,
+            "max_kv_usage": 0.8
+        }),
+    )?;
+    let mut config = settings("http://127.0.0.1:8000/v1", 4);
+    config.destinations[0].engine = Some(engine);
+    let now = Instant::now();
+    let mut destination = super::Destination {
+        config: config.destinations.remove(0),
+        reserved: 0,
+        sending: 0,
+        uncertain: 0,
+        work: 0,
+        counters: super::observation::Counters::default(),
+        samples: std::collections::VecDeque::new(),
+        engine_sample: None,
+    };
+    ensure!(!super::engine_admits(&destination, now));
+    destination.engine_sample = Some(super::engine::EngineSample {
+        running: 0,
+        waiting: 0,
+        kv_millis: 800,
+        at: now,
+    });
+    ensure!(super::engine_admits(&destination, now));
+    destination.engine_sample = Some(super::engine::EngineSample {
+        running: 1,
+        waiting: 0,
+        kv_millis: 800,
+        at: now,
+    });
+    ensure!(!super::engine_admits(&destination, now));
+    destination.engine_sample = Some(super::engine::EngineSample {
+        running: 0,
+        waiting: 0,
+        kv_millis: 801,
+        at: now,
+    });
+    ensure!(!super::engine_admits(&destination, now));
+    destination.engine_sample = Some(super::engine::EngineSample {
+        running: 0,
+        waiting: 0,
+        kv_millis: 100,
+        at: now - Duration::from_millis(1001),
+    });
+    ensure!(!super::engine_admits(&destination, now));
+    destination.reserved = 1;
+    destination.engine_sample = Some(super::engine::EngineSample {
+        running: 0,
+        waiting: 0,
+        kv_millis: 100,
+        at: now,
+    });
+    ensure!(!super::engine_admits(&destination, now));
     Ok(())
 }

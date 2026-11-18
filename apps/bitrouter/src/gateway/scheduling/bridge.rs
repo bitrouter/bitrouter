@@ -18,6 +18,12 @@ use crate::gateway::{
     },
 };
 
+pub(crate) enum ScheduledReservation {
+    Ready(usize, Option<Reservation>),
+    /// This destination is engine-ineligible. The caller continues the fallback loop.
+    Skip,
+}
+
 pub(crate) struct Prepared {
     pub(super) policy: crate::config::inference_routing::Policy,
     pub(super) candidates: Vec<CandidateId>,
@@ -159,23 +165,18 @@ impl Pipeline {
         &self,
         ctx: &PipelineContext,
         position: usize,
-    ) -> Result<(usize, bool)> {
+    ) -> Result<Option<(usize, bool)>> {
         if ctx.extension::<Scheduler>().is_none() {
-            return Ok((position, false));
+            return Ok(Some((position, false)));
         }
         let prepared = ctx.extension::<Prepared>().ok_or_else(super::unavailable)?;
-        let ordinal = prepared
-            .order
-            .get()
-            .and_then(|order| order.get(position))
-            .copied()
-            .unwrap_or(position);
-        Ok((
-            ordinal,
-            prepared.adaptive
-                && prepared.order.get().is_none()
-                && prepared.eligible.iter().any(|&eligible| eligible),
-        ))
+        if let Some(order) = prepared.order.get() {
+            return Ok(order.get(position).copied().map(|ordinal| (ordinal, false)));
+        }
+        Ok(Some((
+            position,
+            prepared.adaptive && prepared.eligible.iter().any(|&eligible| eligible),
+        )))
     }
     pub(crate) async fn reserve_scheduled(
         &self,
@@ -183,19 +184,20 @@ impl Pipeline {
         position: usize,
         chain: &[RoutingTarget],
         errors: &mut [BitrouterError],
-    ) -> Result<(usize, Option<Reservation>)> {
+    ) -> Result<ScheduledReservation> {
         let Some(scheduler) = ctx.extension::<Scheduler>() else {
-            return Ok((position, None));
+            return Ok(ScheduledReservation::Ready(position, None));
         };
         let prepared = ctx
             .extension::<Prepared>()
             .ok_or_else(|| BitrouterError::internal("scheduling membership was not frozen"))?;
-        let ordinal = prepared
-            .order
-            .get()
-            .and_then(|order| order.get(position))
-            .copied()
-            .unwrap_or(position);
+        let ordinal = match prepared.order.get() {
+            Some(order) => match order.get(position).copied() {
+                Some(ordinal) => ordinal,
+                None => return Ok(ScheduledReservation::Skip),
+            },
+            None => position,
+        };
         let target = chain.get(ordinal).ok_or_else(super::unavailable)?;
         let candidate = *prepared
             .candidates
@@ -232,6 +234,10 @@ impl Pipeline {
                 "private approximate prefix evidence; no digest export"
             );
         }
+        let pinned = prepared.order.get().is_some() || !prepared.adaptive;
+        if pinned && !scheduler.engine_allows(target) {
+            return Ok(ScheduledReservation::Skip);
+        }
         let waiting = scheduler.enqueue(
             identity,
             target,
@@ -258,17 +264,38 @@ impl Pipeline {
             tracing::trace!(queued = view.queued, bytes = view.bytes, flows = view.flows, lanes = view.lanes,
                 waiting_capacity = view.waiting_capacity, waiting_credit = view.waiting_credit, totals = ?view.totals, rounds = view.rounds, "local scheduling queue");
         }
-        let reservation = waiting.receive(cancellation).await?;
+        let reservation = match waiting.receive(cancellation).await {
+            Ok(reservation) => reservation,
+            Err(error) if super::is_engine_skip(&error) => {
+                return Ok(ScheduledReservation::Skip);
+            }
+            Err(error) => return Err(error),
+        };
         let ordinal = reservation.observer().candidate.ordinal;
-        if !reservation
-            .observer()
-            .candidate
-            .matches(chain.get(ordinal).ok_or_else(super::unavailable)?)
-        {
+        let Some(selected) = chain.get(ordinal) else {
+            return Err(super::unavailable());
+        };
+        if !reservation.observer().candidate.matches(selected) {
             return Err(super::unavailable());
         }
+        if let (Some(client), Some(engine), Some(prompt)) = (
+            scheduler.count_client.as_ref(),
+            scheduler.engine_for(selected),
+            ctx.generation_prompt(),
+        ) {
+            // Returned with `?` by every caller, so a failed count does not fall back.
+            super::engine::admit_count(
+                client,
+                &engine,
+                selected.effective_api_base(),
+                super::engine::credential(selected),
+                prompt,
+                reservation.deadline(),
+            )
+            .await?;
+        }
         ctx.set_scheduling_attempt(reservation.observer());
-        Ok((ordinal, Some(reservation)))
+        Ok(ScheduledReservation::Ready(ordinal, Some(reservation)))
     }
 }
 

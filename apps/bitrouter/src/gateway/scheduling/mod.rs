@@ -3,6 +3,7 @@
 //! Only the concrete gateway executor can attest send and terminal evidence.
 
 pub(crate) mod bridge;
+mod engine;
 pub(crate) mod observation;
 pub(crate) mod payload;
 pub(crate) mod prefix;
@@ -71,6 +72,7 @@ struct Destination {
     counters: Counters,
     // At most 32 total samples, hence at most 32 for any destination/shape.
     samples: VecDeque<Sample>,
+    engine_sample: Option<engine::EngineSample>,
 }
 
 struct Record {
@@ -122,6 +124,7 @@ pub(crate) struct Scheduler {
     generation: u64,
     policy: crate::config::inference_routing::Policy,
     weights: BTreeMap<String, u32>,
+    count_client: Option<reqwest::Client>,
 }
 
 struct Workers {
@@ -160,6 +163,11 @@ impl Scheduler {
             return Err(unavailable());
         }
         let (bytes, entries) = Self::capacity(config)?;
+        let engine_client = if config.destinations.iter().any(|d| d.engine.is_some()) {
+            Some(engine::client()?)
+        } else {
+            None
+        };
         let inner = Arc::new(Inner {
             instance: uuid::Uuid::new_v4(),
             limits: config.limits.clone(),
@@ -182,6 +190,7 @@ impl Scheduler {
                         work: 0,
                         counters: Counters::default(),
                         samples: VecDeque::new(),
+                        engine_sample: None,
                     })
                     .collect(),
                 records: BTreeMap::new(),
@@ -197,6 +206,10 @@ impl Scheduler {
         });
         let tracker = TaskTracker::new();
         tracker.spawn(queue::run(inner.clone()));
+        let count_client = engine_client.clone();
+        if let Some(client) = engine_client {
+            tracker.spawn(engine::run(inner.clone(), client));
+        }
         let workers = Arc::new(Workers {
             tracker,
             stop: inner.stop.clone(),
@@ -214,6 +227,7 @@ impl Scheduler {
             generation,
             policy: config.policy,
             weights: config.tenant_weights.clone(),
+            count_client,
         }))
     }
 
@@ -229,14 +243,24 @@ impl Scheduler {
                         .map(|name| name.len() as u64 + 112)
                         .sum::<u64>(),
                 |sum, d| {
-                    sum.checked_add(
-                        DESTINATION_BYTES
-                            + d.id.len() as u64
-                            + d.provider.len() as u64
-                            + d.model.len() as u64
-                            + d.endpoint.len() as u64
-                            + d.account.as_ref().map_or(0, |s| s.len() as u64),
-                    )
+                    sum.checked_add(DESTINATION_BYTES)
+                        .and_then(|sum| sum.checked_add(d.id.len() as u64))
+                        .and_then(|sum| sum.checked_add(d.provider.len() as u64))
+                        .and_then(|sum| sum.checked_add(d.model.len() as u64))
+                        .and_then(|sum| sum.checked_add(d.endpoint.len() as u64))
+                        .and_then(|sum| {
+                            sum.checked_add(d.account.as_ref().map_or(0, |s| s.len() as u64))
+                        })
+                        .and_then(|sum| {
+                            sum.checked_add(d.engine.as_ref().map_or(0, |engine| {
+                                engine.metrics_url.len() as u64
+                                    + engine
+                                        .metrics_bearer_env
+                                        .as_ref()
+                                        .map_or(0, |name| name.len() as u64)
+                                    + 64
+                            }))
+                        })
                 },
             )
             .ok_or_else(unavailable)?;
@@ -282,7 +306,115 @@ impl Scheduler {
             policy: config.policy,
             weights: config.tenant_weights.clone(),
             projector,
+            count_client: self.count_client.clone(),
         })
+    }
+
+    pub(crate) fn engine_for(
+        &self,
+        target: &RoutingTarget,
+    ) -> Option<crate::config::inference_routing::EngineConfig> {
+        self.inner
+            .lock()
+            .destinations
+            .iter()
+            .find(|destination| maps(&destination.config, target))
+            .and_then(|destination| destination.config.engine.clone())
+    }
+
+    pub(crate) fn engine_allows(&self, target: &RoutingTarget) -> bool {
+        let state = self.inner.lock();
+        state
+            .destinations
+            .iter()
+            .find(|destination| maps(&destination.config, target))
+            .is_some_and(|destination| engine_admits(destination, Instant::now()))
+    }
+
+    /// Early expiry of one Unknown credit. Sending and reserved attempts do not match.
+    /// The operator route is not mounted; tests cover the mutation until it is.
+    #[cfg(test)]
+    pub(crate) fn release_unknown(
+        &self,
+        generation: u64,
+        destination_id: &str,
+        attempt_id: u64,
+    ) -> Result<()> {
+        let mut state = self.inner.lock();
+        let Some(record) = state.records.remove(&attempt_id) else {
+            return Err(BitrouterError::bad_request("scheduler custody conflict"));
+        };
+        let matched = record.candidate.generation == generation
+            && record.witness.load(Ordering::Acquire) == UNKNOWN
+            && state
+                .destinations
+                .get(record.candidate.destination)
+                .is_some_and(|destination| destination.config.id == destination_id);
+        if !matched {
+            state.records.insert(attempt_id, record);
+            return Err(BitrouterError::bad_request("scheduler custody conflict"));
+        }
+        let prefix_bytes = record
+            .prefix
+            .as_ref()
+            .map_or(0, prefix::Binding::retained_bytes);
+        let destination_index = record.candidate.destination;
+        let work = record.work;
+        let fits = state
+            .destinations
+            .get(destination_index)
+            .is_some_and(|destination| destination.uncertain > 0 && destination.work >= work)
+            && state.outstanding > 0
+            && state.entries > 0
+            && state.bytes >= ATTEMPT_BYTES + prefix_bytes;
+        if !fits {
+            state.records.insert(attempt_id, record);
+            return Err(BitrouterError::bad_request("scheduler custody conflict"));
+        }
+        let now = Instant::now();
+        if let (Some(index), Some(binding)) = (&mut state.prefix, &record.prefix) {
+            index.observe(attempt_id, binding, prefix::Event::Unknown, now);
+        }
+        {
+            let destination = &mut state.destinations[destination_index];
+            destination.uncertain -= 1;
+            destination.work -= work;
+            destination.counters.expired = destination.counters.expired.saturating_add(1);
+        }
+        record.witness.store(EXPIRED, Ordering::Release);
+        state.outstanding -= 1;
+        state.entries -= 1;
+        state.bytes -= ATTEMPT_BYTES + prefix_bytes;
+        drop(state);
+        self.inner.changed.notify_one();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held_unknown(&self) -> Vec<(String, u64, u64)> {
+        let state = self.inner.lock();
+        let records: Vec<_> = state
+            .records
+            .iter()
+            .map(|(id, record)| {
+                (
+                    *id,
+                    record.candidate.destination,
+                    record.candidate.generation,
+                    record.witness.load(Ordering::Acquire),
+                )
+            })
+            .collect();
+        records
+            .into_iter()
+            .filter(|(_, _, _, witness)| *witness == UNKNOWN)
+            .filter_map(|(id, destination, generation, _)| {
+                state
+                    .destinations
+                    .get(destination)
+                    .map(|destination| (destination.config.id.clone(), id, generation))
+            })
+            .collect()
     }
 
     pub(crate) fn candidate(&self, target: &RoutingTarget, ordinal: usize) -> Result<CandidateId> {
@@ -832,6 +964,9 @@ fn reserve(
     if d.reserved + d.sending + d.uncertain >= d.config.max_active {
         return Err(saturated());
     }
+    if !engine_admits(d, now) {
+        return Err(engine_skip());
+    }
     let work_sum = d.work.checked_add(work).ok_or_else(unavailable)?;
     if state
         .entries
@@ -907,6 +1042,44 @@ fn protocol(target: &RoutingTarget) -> Option<u8> {
         ApiProtocol::Responses => Some(2),
         _ => None,
     }
+}
+
+const ENGINE_INELIGIBLE: &str = "engine destination is ineligible";
+
+fn engine_admits(destination: &Destination, now: Instant) -> bool {
+    let Some(engine) = &destination.config.engine else {
+        return true;
+    };
+    let Some(sample) = destination.engine_sample else {
+        return false;
+    };
+    if now.saturating_duration_since(sample.at)
+        > Duration::from_millis(u64::from(engine.max_metric_age_ms))
+        || sample.running > u64::from(engine.max_running)
+        || sample.waiting > u64::from(engine.max_waiting)
+        || sample.kv_millis > engine.max_kv_usage.millis()
+    {
+        return false;
+    }
+    let Some(occupied) = u64::from(destination.reserved)
+        .checked_add(u64::from(destination.sending))
+        .and_then(|sum| sum.checked_add(u64::from(destination.uncertain)))
+        .and_then(|sum| sum.checked_add(1))
+    else {
+        return false;
+    };
+    sample
+        .running
+        .checked_add(occupied)
+        .is_some_and(|total| total <= u64::from(engine.max_running))
+}
+
+fn engine_skip() -> BitrouterError {
+    BitrouterError::bad_request(ENGINE_INELIGIBLE)
+}
+
+fn is_engine_skip(error: &BitrouterError) -> bool {
+    matches!(error, BitrouterError::BadRequest { message } if message == ENGINE_INELIGIBLE)
 }
 
 fn unavailable() -> BitrouterError {

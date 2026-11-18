@@ -3035,7 +3035,10 @@ impl Pipeline {
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for position in 0..chain.len() {
             #[cfg(feature = "inference-routing")]
-            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            let (attempt_index, adaptive) = match self.scheduling_position(ctx, position)? {
+                Some(position) => position,
+                None => break,
+            };
             #[cfg(not(feature = "inference-routing"))]
             let (attempt_index, adaptive) = (position, false);
             let target = &chain[attempt_index];
@@ -3061,7 +3064,16 @@ impl Pipeline {
             self.wait_before_fallback(errors.len(), ctx).await?;
             #[cfg(feature = "inference-routing")]
             let (attempt_index, scheduling) =
-                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+                match Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await? {
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Ready(
+                        index,
+                        reservation,
+                    ) => (index, reservation),
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Skip => {
+                        errors.push(BitrouterError::UpstreamUnavailable);
+                        continue;
+                    }
+                };
             #[cfg(feature = "inference-routing")]
             let target = &chain[attempt_index];
             if adaptive {
@@ -3192,7 +3204,10 @@ impl Pipeline {
         let mut dispatched = 0;
         for position in 0..chain.len() {
             #[cfg(feature = "inference-routing")]
-            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            let (attempt_index, adaptive) = match self.scheduling_position(ctx, position)? {
+                Some(position) => position,
+                None => break,
+            };
             #[cfg(not(feature = "inference-routing"))]
             let (attempt_index, adaptive) = (position, false);
             let target = &chain[attempt_index];
@@ -3244,7 +3259,16 @@ impl Pipeline {
             self.wait_before_fallback(dispatched, ctx).await?;
             #[cfg(feature = "inference-routing")]
             let (attempt_index, scheduling) =
-                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+                match Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await? {
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Ready(
+                        index,
+                        reservation,
+                    ) => (index, reservation),
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Skip => {
+                        errors.push(BitrouterError::UpstreamUnavailable);
+                        continue;
+                    }
+                };
             #[cfg(feature = "inference-routing")]
             let target = &chain[attempt_index];
             if adaptive
@@ -3550,7 +3574,10 @@ impl Pipeline {
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for position in 0..chain.len() {
             #[cfg(feature = "inference-routing")]
-            let (attempt_index, adaptive) = self.scheduling_position(ctx, position)?;
+            let (attempt_index, adaptive) = match self.scheduling_position(ctx, position)? {
+                Some(position) => position,
+                None => break,
+            };
             #[cfg(not(feature = "inference-routing"))]
             let (attempt_index, adaptive) = (position, false);
             let target = &chain[attempt_index];
@@ -3570,7 +3597,16 @@ impl Pipeline {
             self.wait_before_fallback(errors.len(), ctx).await?;
             #[cfg(feature = "inference-routing")]
             let (attempt_index, mut scheduling) =
-                Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await?;
+                match Box::pin(self.reserve_scheduled(ctx, position, chain, &mut errors)).await? {
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Ready(
+                        index,
+                        reservation,
+                    ) => (index, reservation),
+                    crate::gateway::scheduling::bridge::ScheduledReservation::Skip => {
+                        errors.push(BitrouterError::UpstreamUnavailable);
+                        continue;
+                    }
+                };
             #[cfg(feature = "inference-routing")]
             let target = &chain[attempt_index];
             if adaptive

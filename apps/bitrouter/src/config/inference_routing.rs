@@ -142,6 +142,110 @@ pub struct DestinationConfig {
     #[serde(default = "destination_capacity")]
     #[schemars(range(min = 1, max = u32::MAX))]
     pub max_active: u32,
+    /// Compiled-in engine module. Absent destinations keep beta.4 scheduling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<EngineConfig>,
+}
+
+/// Which compiled-in module normalizes one destination. The scheduler does not
+/// branch on this name beyond selecting that module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineModule {
+    Vllm,
+    Sglang,
+}
+
+/// Router ceilings and the scrape target for one local engine process.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EngineConfig {
+    pub module: EngineModule,
+    #[schemars(length(max = 2048), extend("format" = "uri"))]
+    pub metrics_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 128))]
+    pub metrics_bearer_env: Option<String>,
+    #[schemars(range(min = 1, max = 60_000))]
+    pub max_metric_age_ms: u32,
+    #[schemars(range(min = 0, max = 100_000))]
+    pub max_running: u32,
+    #[schemars(range(min = 0, max = 100_000))]
+    pub max_waiting: u32,
+    pub max_kv_usage: KvUsage,
+    #[serde(default = "count_input_default")]
+    pub count_input: bool,
+}
+
+/// KV ceiling as thousandths of engine capacity, greater than 0 and at most 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KvUsage(u16);
+
+fn count_input_default() -> bool {
+    true
+}
+
+impl KvUsage {
+    pub(crate) fn millis(self) -> u16 {
+        self.0
+    }
+}
+
+impl Serialize for KvUsage {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_f64(f64::from(self.0) / 1000.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for KvUsage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct Visit;
+        impl serde::de::Visitor<'_> for Visit {
+            type Value = KvUsage;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a decimal fraction greater than 0 and at most 1")
+            }
+            fn visit_f64<E: serde::de::Error>(self, value: f64) -> std::result::Result<KvUsage, E> {
+                kv_fraction(value).map_err(E::custom)
+            }
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> std::result::Result<KvUsage, E> {
+                kv_fraction(value as f64).map_err(E::custom)
+            }
+            fn visit_i64<E: serde::de::Error>(self, value: i64) -> std::result::Result<KvUsage, E> {
+                kv_fraction(value as f64).map_err(E::custom)
+            }
+        }
+        deserializer.deserialize_any(Visit)
+    }
+}
+
+impl schemars::JsonSchema for KvUsage {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("KvUsage")
+    }
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1,
+            "multipleOf": 0.001,
+            "description": "Fraction of normalized engine KV capacity. At most three decimal places."
+        })
+    }
+}
+
+fn kv_fraction(value: f64) -> std::result::Result<KvUsage, &'static str> {
+    if !value.is_finite() || value <= 0.0 || value > 1.0 {
+        return Err("max_kv_usage must be greater than 0 and at most 1");
+    }
+    let millis = (value * 1000.0).round();
+    if (millis / 1000.0 - value).abs() > 1e-6 || !(1.0..=1000.0).contains(&millis) {
+        return Err("max_kv_usage keeps at most three decimal places");
+    }
+    Ok(KvUsage(millis as u16))
 }
 
 fn account<'de, D: Deserializer<'de>>(
@@ -331,9 +435,62 @@ impl InferenceRoutingConfig {
                     "destination endpoint requires absolute HTTP(S) without credentials, query or fragment",
                 ));
             }
+            if let Some(engine) = &d.engine {
+                validate_engine(engine, &endpoint)?;
+            }
         }
         Ok(())
     }
+}
+
+fn validate_engine(engine: &EngineConfig, endpoint: &url::Url) -> Result<()> {
+    if !(1..=60_000).contains(&engine.max_metric_age_ms)
+        || engine.max_running > 100_000
+        || engine.max_waiting > 100_000
+        || engine.metrics_url.chars().count() > 2048
+        || engine
+            .metrics_bearer_env
+            .as_ref()
+            .is_some_and(|name| !bearer_env_name(name))
+    {
+        return Err(invalid("invalid engine ceilings or metrics bearer"));
+    }
+    let metrics =
+        url::Url::parse(&engine.metrics_url).map_err(|_| invalid("invalid engine metrics url"))?;
+    if !matches!(metrics.scheme(), "http" | "https")
+        || metrics.host().is_none()
+        || !metrics.username().is_empty()
+        || metrics.password().is_some()
+        || metrics.query().is_some()
+        || metrics.fragment().is_some()
+        || !same_engine_origin(endpoint, &metrics)
+    {
+        return Err(invalid(
+            "engine metrics url must share the destination endpoint scheme, host and port",
+        ));
+    }
+    Ok(())
+}
+
+fn bearer_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_uppercase() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') && name.len() <= 128
+}
+
+fn same_engine_origin(endpoint: &url::Url, metrics: &url::Url) -> bool {
+    endpoint.scheme() == metrics.scheme()
+        && endpoint.port_or_known_default() == metrics.port_or_known_default()
+        && match (endpoint.host(), metrics.host()) {
+            (Some(url::Host::Domain(left)), Some(url::Host::Domain(right))) => {
+                left.eq_ignore_ascii_case(right)
+            }
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
 }
 
 fn bounded(value: &str, max: usize) -> bool {
@@ -342,4 +499,42 @@ fn bounded(value: &str, max: usize) -> bool {
 
 fn invalid(message: &str) -> BitrouterError {
     BitrouterError::bad_request(format!("inference_routing: {message}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InferenceRoutingConfig;
+
+    fn engine(metrics: &str) -> serde_json::Value {
+        serde_json::json!({
+            "module": "vllm",
+            "metrics_url": metrics,
+            "max_metric_age_ms": 1000,
+            "max_running": 0,
+            "max_waiting": 1,
+            "max_kv_usage": 0.5
+        })
+    }
+
+    fn config(metrics: &str) -> serde_json::Result<InferenceRoutingConfig> {
+        serde_json::from_value(serde_json::json!({
+            "enabled": false,
+            "destinations": [{
+                "id": "local-a",
+                "provider": "local",
+                "model": "model",
+                "endpoint": "http://127.0.0.1:8000/v1",
+                "engine": engine(metrics)
+            }]
+        }))
+    }
+
+    #[test]
+    fn metrics_url_must_share_the_endpoint_origin() -> std::result::Result<(), String> {
+        let same = config("http://127.0.0.1:8000/metrics").map_err(|error| error.to_string())?;
+        same.validate().map_err(|error| error.to_string())?;
+        let shifted = config("http://127.0.0.1:9000/metrics").map_err(|error| error.to_string())?;
+        assert!(shifted.validate().is_err());
+        Ok(())
+    }
 }

@@ -118,6 +118,7 @@ impl Harness {
             endpoint: self.provider_base.clone(),
             account: None,
             max_active: 1,
+            engine: None,
         });
         let scheduler = crate::gateway::scheduling::Scheduler::new(&config, 1)?;
         self.fixture

@@ -83,7 +83,7 @@ the operator DTO in the same revision. This document does not add that DTO now.
 
 The read and the mutation exist so an operator can release one held
 uncertainty credit on a local-engine destination specified by the
-[configuration proposal](../configuration/README.md#proposed-local-engine-destinations).
+[local engine destinations](../configuration/README.md#local-engine-destinations).
 They do not dispatch inference and do not add an inference listener. A process
 without the operator listener has no release operation. On that process, the
 existing advisory expiry remains the only automatic release of the credit.
@@ -104,11 +104,12 @@ response is JSON, rejects unknown fields, and sends `Cache-Control: no-store`:
 }
 ```
 
-`held` lists only attempts whose uncertainty credit is still held. It carries
-no prompt, response, credential, or prefix. `generation` is the process
-routing generation those attempt IDs belong to. An empty `held` array is a
-successful read. An inference or legacy-control credential cannot call this
-route. The caller needs the operator `read` grant.
+`held` lists only OutcomeUnknown attempts whose credit is still held. Queued,
+Reserved, and Sending attempts do not appear and do not match. The read carries
+no prompt, response, credential, or prefix. `generation` is the booking
+generation those attempt IDs belong to. An empty `held` array is a successful
+read. An inference or legacy-control credential cannot call this route. The
+caller needs the operator `read` grant.
 
 `POST /operator/v1/mutations` gains the action
 `release_destination_uncertainty`:
@@ -131,14 +132,17 @@ route. The caller needs the operator `read` grant.
 ```
 
 The object rejects unknown fields and null. `confirmed_not_running` MUST be
-true. `evidence_reference` is 1 through 512 printable ASCII characters. The
-server MUST NOT require it to contain a prompt, response, or credential. Every
-identity field MUST match one currently held record in `generation`. A match
-releases that credit only. The stored receipt is `operator_released`. That
-value is not provider success, and the attempt MUST NOT be dispatched again.
-Other destinations and other held attempts stay unchanged. The same actor and
-`operation_id` replay returns the stored receipt and releases nothing again.
-A mismatched generation, attempt, or state is `conflict` and releases nothing.
+true. `expected_state` MUST be `unknown`. `evidence_reference` is 1 through 512
+printable ASCII characters. The server MUST NOT require it to contain a prompt,
+response, or credential. Every identity field MUST match one OutcomeUnknown
+record in `generation`. A match performs that record's expiry subtraction of
+`uncertain` and work once, leaves the witness fallback-blocking, records prefix
+`Unknown`, and writes no success sample. The stored mutation receipt is
+`operator_released` only after that subtraction. It is not a provider receipt,
+and the attempt MUST NOT be dispatched again or fall back. A second release, a
+missing record, or a generation mismatch conflicts and subtracts nothing. The
+same actor and `operation_id` replay returns the stored receipt and releases
+nothing again. A different body with that identity is `conflict`.
 
 The caller needs the new operator grant `release_scheduler_custody`. The
 existing `read` grant covers the custody read only. None of the existing write

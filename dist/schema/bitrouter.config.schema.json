@@ -637,6 +637,17 @@
           "maxLength": 2048,
           "type": "string"
         },
+        "engine": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Compiled-in engine module. Absent destinations keep beta.4 scheduling."
+        },
         "id": {
           "maxLength": 128,
           "minLength": 1,
@@ -668,6 +679,70 @@
         "endpoint"
       ],
       "type": "object"
+    },
+    "EngineConfig": {
+      "additionalProperties": false,
+      "description": "Router ceilings and the scrape target for one local engine process.",
+      "properties": {
+        "count_input": {
+          "default": true,
+          "type": "boolean"
+        },
+        "max_kv_usage": {
+          "$ref": "#/$defs/KvUsage"
+        },
+        "max_metric_age_ms": {
+          "format": "uint32",
+          "maximum": 60000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_running": {
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_waiting": {
+          "format": "uint32",
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metrics_bearer_env": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metrics_url": {
+          "format": "uri",
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "module": {
+          "$ref": "#/$defs/EngineModule"
+        }
+      },
+      "required": [
+        "module",
+        "metrics_url",
+        "max_metric_age_ms",
+        "max_running",
+        "max_waiting",
+        "max_kv_usage"
+      ],
+      "type": "object"
+    },
+    "EngineModule": {
+      "description": "Which compiled-in module normalizes one destination. The scheduler does not\nbranch on this name beyond selecting that module.",
+      "enum": [
+        "vllm",
+        "sglang"
+      ],
+      "type": "string"
     },
     "EvalAuthorityConfig": {
       "description": "Identity and metric scope admitted for one evaluator authority.",
@@ -1106,6 +1181,13 @@
           "type": "string"
         }
       ]
+    },
+    "KvUsage": {
+      "description": "Fraction of normalized engine KV capacity. At most three decimal places.",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "multipleOf": 0.001,
+      "type": "number"
     },
     "LimitConfig": {
       "additionalProperties": false,

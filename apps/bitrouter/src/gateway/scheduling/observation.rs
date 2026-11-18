@@ -8,6 +8,11 @@ use tokio::time::{Duration, Instant};
 use crate::gateway::error::{BitrouterError, Result};
 
 pub(super) const SAMPLE_BYTES: u64 = 64;
+
+/// Output term of the fixed work charge. A later token count does not replace it.
+pub(super) fn output_allowance(max_tokens: Option<u32>) -> u64 {
+    u64::from(max_tokens.unwrap_or(4096).min(32768))
+}
 pub(super) const SAMPLE_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,7 +40,7 @@ impl Shape {
         let mut size = Size(0);
         serde_json::to_writer(&mut size, prompt)
             .map_err(|_| BitrouterError::bad_request("cannot measure scheduling input"))?;
-        let output = u64::from(prompt.params.max_tokens.unwrap_or(4096).min(32768));
+        let output = output_allowance(prompt.params.max_tokens);
         let work = size.0.div_ceil(4).saturating_add(output).clamp(256, 131072);
         Ok((
             Self {

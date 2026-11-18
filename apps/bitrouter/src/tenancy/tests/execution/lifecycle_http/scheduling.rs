@@ -24,6 +24,7 @@ async fn tenant_pipeline_uses_the_shared_owner_and_does_not_close_it() -> Result
         endpoint: upstream.uri(),
         account: None,
         max_active: 1,
+        engine: None,
     });
     let scheduler = Scheduler::new(&config, 1)?;
     let previous_clone = fixture.service.clone();

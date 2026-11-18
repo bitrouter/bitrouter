@@ -43,6 +43,7 @@ fn settings() -> InferenceRoutingConfig {
             endpoint: "https://fixture.invalid".into(),
             account: None,
             max_active: 4,
+            engine: None,
         }],
         ..Default::default()
     }

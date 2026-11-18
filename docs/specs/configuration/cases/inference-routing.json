@@ -298,7 +298,7 @@
     "runtime_valid": false
   },
   {
-    "name": "proposed engine field is rejected",
+    "name": "local vllm engine",
     "value": {
       "enabled": false,
       "destinations": [
@@ -309,7 +309,60 @@
           "endpoint": "http://127.0.0.1:8000/v1",
           "max_active": 1,
           "engine": {
-            "module": "vllm"
+            "module": "vllm",
+            "metrics_url": "http://127.0.0.1:8000/metrics",
+            "max_metric_age_ms": 2000,
+            "max_running": 8,
+            "max_waiting": 4,
+            "max_kv_usage": 0.8
+          }
+        }
+      ]
+    },
+    "schema_valid": true,
+    "runtime_valid": true
+  },
+  {
+    "name": "engine metrics origin must match the endpoint",
+    "value": {
+      "enabled": false,
+      "destinations": [
+        {
+          "id": "local-a",
+          "provider": "local",
+          "model": "local-model",
+          "endpoint": "http://127.0.0.1:8000/v1",
+          "engine": {
+            "module": "sglang",
+            "metrics_url": "http://127.0.0.1:9000/metrics",
+            "max_metric_age_ms": 2000,
+            "max_running": 0,
+            "max_waiting": 0,
+            "max_kv_usage": 1
+          }
+        }
+      ]
+    },
+    "schema_valid": true,
+    "runtime_valid": false
+  },
+  {
+    "name": "unknown engine module is rejected",
+    "value": {
+      "enabled": false,
+      "destinations": [
+        {
+          "id": "local-a",
+          "provider": "local",
+          "model": "local-model",
+          "endpoint": "http://127.0.0.1:8000/v1",
+          "engine": {
+            "module": "trtllm",
+            "metrics_url": "http://127.0.0.1:8000/metrics",
+            "max_metric_age_ms": 2000,
+            "max_running": 1,
+            "max_waiting": 1,
+            "max_kv_usage": 0.5
           }
         }
       ]

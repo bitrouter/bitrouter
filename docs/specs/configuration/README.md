@@ -384,11 +384,12 @@ AI configuration DTO is introduced.
 ### Decoding and validation contract
 
 Rust DTO names are `InferenceRoutingConfig`, `QueueConfig`, `LimitConfig`,
-`PrefixConfig` and `DestinationConfig`; `Policy` has `LoadAware` and
-`PrefixAffinity` variants serialized in snake case. All objects reject unknown
-fields. Integers are checked `u32` values; byte calculations promote to checked
-`u64`/platform size before allocation. Defaults are exactly the schema defaults,
-including recursively defaulted nested objects. Text length bounds count Unicode
+`PrefixConfig`, `DestinationConfig` and `EngineConfig`; `Policy` has `LoadAware`
+and `PrefixAffinity` variants, and `EngineModule` has `vllm` and `sglang`,
+serialized in snake case. All objects reject unknown fields. Integers are
+checked `u32` values; byte calculations promote to checked `u64`/platform size
+before allocation. Defaults are exactly the schema defaults, including
+recursively defaulted nested objects. Text length bounds count Unicode
 scalars, matching JSON Schema; resource budgets count retained UTF-8 bytes.
 The startup validator consumes these DTOs before resource allocation.
 
@@ -396,8 +397,11 @@ Omission of the root field, `{}`, and `{enabled: false}` mean disabled in the
 reader. Null is rejected everywhere, including optional account names;
 omitting `account` means the target has no account label. Zero, fractions,
 negative numbers and values outside the schema bounds are rejected even when
-disabled. Unknown enum variants are errors. NaN/infinity are never scores or
-configuration values; policy weights are bounded integers.
+disabled, except the engine ceilings below: `max_running` and `max_waiting`
+may be zero, and `max_kv_usage` is a finite decimal fraction greater than 0
+and at most 1 with at most three decimal places. Unknown enum variants are
+errors. NaN/infinity are never scores or configuration values; policy weights
+are bounded integers.
 
 Implemented validation checks numeric ranges, relative budgets, destination
 identity uniqueness and endpoint shape even while disabled. The scheduler also
@@ -480,153 +484,115 @@ without `semantic-routing`. Static model/router/check bindings remain supported.
 The Core feature retains its existing policy capability through a dependency on
 `semantic-routing`; neither routing feature enables Core, Harness or transports.
 
-### Proposed local-engine destinations
+### Local engine destinations
 
-This subsection is a proposal. It is not part of revision beta.4. A beta.4
-reader MUST reject an `engine` field anywhere under `inference_routing` as an
-unknown field, including when scheduling is disabled. Omission keeps the beta.4
-scheduler. Adopting the proposal requires a later specification revision that
-updates `config::inference_routing`, the generated schema, the example, and the
-executable cases together. Until that revision, the shapes below are not a
-supported configuration, and this document does not add a DTO.
+`engine` is an optional object on `DestinationConfig`. Omission keeps beta.4
+ranking, the fixed work charge, prefix projection, and uncertainty. The field
+is accepted while scheduling is disabled and is validated before activation.
+A hot reload that adds, removes, or changes `engine` is rejected with the whole
+candidate, and the published generation stays. Startup omission is not a hot
+reload.
 
-The consumers are the operator of one local inference gateway and a user-side
-semantic gateway that forwards ordinary generation to it. Clients continue to
-call Chat Completions, Messages, and Responses on that gateway. The proposal
-adds no inference URL, request body, client credential, or second scheduler.
-
-A destination remains the exact `(provider, model, endpoint, account)` tuple
-and the process-local concurrency pool defined above. It is the placement
-target for that endpoint. It does not name a replica, rank, or prefill/decode
-phase inside the endpoint. Placement across several engine processes is one
-destination per process endpoint.
-
-The scheduler consumes one normalized sample and, when requested, one input
-count. It does not match engine metric names, choose a tokenize URL, or branch
-on an engine protocol. Those details belong to the registered module named by
-`engine.module`. Selecting `sglang` instead of `vllm` changes the module. It
-does not change acquire, reservation, or uncertainty.
-
-`engine` is an optional object on `DestinationConfig`. The adopting reader
-rejects unknown fields and null. Every field below is restart-required. A hot
-reload that adds, removes, or changes `engine` is rejected with the whole
-candidate, and the published generation stays.
+A destination remains the exact `(provider, model, endpoint, account)` tuple.
+It does not name a replica, rank, or prefill/decode phase. One engine process
+is one destination. The scheduler consumes a normalized sample and, when
+counting is enabled, a context-fit result. It does not match metric names or
+choose a tokenize URL. `vllm` and `sglang` are compiled-in modules. There is
+no plugin ABI, dynamic loader, or second scheduler.
 
 | Field | Type and bounds | When `engine` is present |
 | --- | --- | --- |
-| `module` | registered name, initially `vllm` or `sglang` | required |
-| `metrics_url` | absolute HTTP(S) URL with no userinfo, query, or fragment | required |
-| `metrics_bearer_env` | environment-variable name | omitted means the metrics request carries no bearer |
+| `module` | `vllm` or `sglang` | required |
+| `metrics_url` | absolute HTTP(S) URL with no userinfo, query, or fragment | required; same scheme, host, and port as `endpoint` |
+| `metrics_bearer_env` | name matching `[A-Z_][A-Z0-9_]*` | omitted means the metrics request carries no bearer |
 | `max_metric_age_ms` | integer, 1 through 60,000 milliseconds | required |
-| `max_running` | integer, 0 through 100,000 requests | required |
+| `max_running` | integer, 0 through 100,000 requests | required; 0 admits no reservation |
 | `max_waiting` | integer, 0 through 100,000 requests | required |
-| `max_kv_usage` | decimal fraction, greater than 0 and at most 1 | required |
+| `max_kv_usage` | decimal fraction, greater than 0 and at most 1, at most three decimal places | required |
 | `count_input` | boolean | omitted means `true` |
 
-An unregistered `module` is rejected before activation, including while
-scheduling is disabled. `metrics_bearer_env` names a variable that holds the
-bearer sent only to `metrics_url`. The destination's inference credential is
-not reused for metrics unless the operator names that same variable. An empty
-or unset variable makes the sample unavailable. `metrics_url` names the
-metrics endpoint of the same engine as `endpoint`. The reader does not infer
-that relationship from the URLs. `max_kv_usage` is a fraction of engine KV
-capacity after the module has normalized the engine's own gauge.
+`metrics_url` MUST share the destination endpoint's scheme, host, and port.
+Any other origin is rejected before activation. Host comparison is
+case-insensitive for DNS names, and the default port for the scheme counts.
+The scrape is a GET with no body. It uses no proxy, including environment
+proxies, follows no redirect, and is not retried. A 3xx response, a timeout,
+or a body over 1 MiB makes the sample unavailable and sends no bearer. The
+inference credential MUST NOT be sent to `metrics_url`. An omitted bearer name
+sends no `Authorization` header. A missing, empty, or invalid bearer value
+MUST NOT send the metrics request. The value is one printable ASCII line with
+no leading or trailing space and no CR or LF, sent only as
+`Authorization: Bearer`.
 
-When `engine` is absent, ranking, the byte-derived queue charge, prefix
-projection, and uncertainty follow the beta.4 rules.
+A module returns a sample or unavailable. A sample has whole-number `running`
+and `waiting`, `kv_usage` from 0 through 1, and the gateway collection time.
+A failed scrape clears the previous sample. Unavailable is ineligible, not
+zero load. Scrapes run outside the scheduler lock.
 
-A module returns either a sample or unavailable. A sample has whole-number
-`running` and `waiting`, `kv_usage` from 0 through 1, and the gateway
-collection time. Unavailable includes a failed scrape, a stale collection, a
-missing series, and a value the module cannot normalize. The scheduler treats
-unavailable as ineligible. It is not zero load.
+A destination with `engine` is ineligible for a new acquire while any of the
+following is true:
 
-When `engine` is present, a destination is ineligible for a new acquire while
-any of the following is true:
+- the sample is missing, or its collection time is older than `max_metric_age_ms`
+- sampled running exceeds `max_running`, sampled waiting exceeds `max_waiting`,
+  or sampled `kv_usage` exceeds `max_kv_usage`
+- sampled running, plus Reserved, Sending, and Unknown occupancy read before
+  `reserved` increments, plus one for this reservation, exceeds `max_running`
+  or the checked sum overflows
 
-- the module returns unavailable, or the sample's collection time is older
-  than `max_metric_age_ms`
-- sampled running requests exceed `max_running`, sampled waiting requests
-  exceed `max_waiting`, or sampled `kv_usage` exceeds `max_kv_usage`
-- sampled running requests, plus that destination's current Reserved, Sending,
-  and Unknown occupancy, plus the one reservation this acquire would add,
-  exceeds `max_running`
+The scheduler adds its own unfinished occupancy and MUST NOT subtract it from
+the gauge. `Sending` and `Unknown` requests already inside the gauge are
+counted twice on purpose. Expired credits are not added. Queue length is not
+added to sampled waiting. `max_running` is not queue capacity and does not
+change another destination's eligibility. An engine-ineligible destination is
+omitted from the adaptive order and is skipped before `reserve` on a pinned
+order. If none remain, acquire is refused before `begin_send` with the
+existing local unavailable response and no upstream receipt.
 
-A sample cannot prove that a local reservation is already inside the engine
-gauge. The scheduler therefore adds its own unfinished occupancy to the
-sampled running count and MUST NOT subtract its own occupancy from that count.
-The gateway queue length is not added to sampled waiting requests; queue
-bounds remain the beta.4 queue limits. `kv_usage` is compared with the sample
-alone.
+`count_input` runs after the reservation is granted and before `begin_send`.
+It does not change the work charge. Queue deficit, destination work, fallback
+charge, and uncertainty keep
+`clamp(ceil(projected_input_bytes / 4) + output_budget, 256, 131072)` from
+before enqueue. `output_budget` is `max_tokens` capped at 32768, or 4096 when
+`max_tokens` is omitted.
 
-Ineligibility removes that destination from the attempt's remaining sequence.
-It does not change another destination and does not disable the scheduler. If
-no eligible destination remains, acquire is refused before `begin_send`. No
-generation request is sent. The refusal uses the existing local unavailable
-response and creates no upstream receipt. Engine limits do not raise the
-beta.4 active or uncertainty credits.
+For `vllm` with `count_input` true, the only extra request is one POST of the
+destination inference credential and the Chat Completions rendering of the
+frozen prompt to that endpoint's scheme, host, and port with the path exactly
+`/tokenize` and with no query, fragment, proxy, redirect, or retry. `count`
+MUST equal the token-array length, and `max_model_len` is the context limit.
+`input_tokens + output_budget` MUST fit that limit. `sglang` returns no count
+and MUST NOT call `/tokenize`. A module without a count still allows
+`begin_send`. A failed count, a zero count, a missing token array, or a
+context miss releases the reservation unsent, sends no generation request,
+and does not fall back to another destination. `count_input` false skips the
+count; metrics eligibility still applies.
 
-When `count_input` is true, after a reservation is granted and before
-`begin_send`, the scheduler asks that destination's module to count input.
-The module returns one of `counted`, `unsupported`, or `failed`. `counted`
-carries a positive `input_tokens` and `max_context_tokens`. `input_tokens`
-plus the attempt's output bound MUST fit `max_context_tokens`. On that
-success, `input_tokens` replaces `projected_input_bytes / 4` in the attempt's
-work charge before `begin_send`. Deficit already recorded for the queue is not
-rewritten. The active-slot and uncertainty credits remain one per attempt.
-`unsupported` keeps the beta.4 byte-derived charge and still allows
-`begin_send`. `failed`, a zero count, or a context miss releases the
-reservation as unsent, and the scheduler MUST NOT poll the generation
-transport. When `count_input` is false, the scheduler does not ask for a
-count; the byte-derived charge remains, and metrics eligibility still applies.
-
-Prefix affinity stays the beta.4 approximate projection. This proposal does
-not add a KV-block index, another prefix mode, or prefill/decode roles. A
-later prefix observation, if added, must enter through the same module result
-boundary. The scheduler still must not parse an engine event itself.
+Prefix affinity stays the beta.4 approximate projection.
 
 #### Registered engine modules
 
-A module is compiled into the inference-routing build and selected by name.
-This proposal does not add a plugin ABI, a dynamic loader, or a second
-scheduler. The scheduler calls `observe` and, when `count_input` is true,
-`count_input`. It has no other engine operation.
-
-Both initial modules scrape `metrics_url` without a proxy, redirect, or retry.
-A metrics bearer is sent only to that URL. Input counting, when the module
-supports it, uses the destination inference credential and the same no-proxy,
-no-redirect, no-retry rule. The frozen model and messages are the ones
-generation would send.
-
 | Module | `running` | `waiting` | `kv_usage` | `count_input` |
 | --- | --- | --- | --- | --- |
-| `vllm` | `vllm:num_requests_running` | `vllm:num_requests_waiting` | `vllm:kv_cache_usage_perc` divided by 100; a value outside 0 through 100 is unavailable | `POST` to the endpoint origin with the path replaced by `/tokenize`. `count` MUST equal the token-array length. `max_model_len` is `max_context_tokens` |
-| `sglang` | `sglang:num_running_reqs` | `sglang:num_queue_reqs` | `sglang:token_usage` when it is already a fraction from 0 through 1; any other value is unavailable | `unsupported` until this module defines its own count call. It MUST NOT call `/tokenize` |
+| `vllm` | sum of `vllm:num_requests_running` across `engine` series | sum of `vllm:num_requests_waiting` | maximum of `vllm:kv_cache_usage_perc`; the gauge is already 0 through 1 and MUST NOT be divided by 100. A value outside that range is unavailable | POST `/tokenize` as above. The rendered body includes the tools and template fields generation would send |
+| `sglang` | `sglang:num_running_reqs`. When a `priority` label is present, only `priority=""` | `sglang:num_queue_reqs` with the same priority rule. Grammar and prefill/decode bootstrap gauges are not waiting | `sglang:token_usage` with the same priority rule. It is already 0 through 1 and is the maximum of the full, SWA, and Mamba pools | no count. The module does not call `/tokenize` or `/v1/tokenize` |
 
-A missing series or a non-whole running or waiting value makes that module
-return unavailable. The table is the module contract. Copying either row into
-the scheduler is outside this proposal.
+A missing series or a non-whole running or waiting value is unavailable.
+Copying either row into the scheduler is outside this contract.
 
-Uncertainty stays the beta.4 rule. After `begin_send`, an ambiguous outcome
-retains that destination's credit, forbids fallback, and forbids another
-reserved attempt for that work. Expiry releases only the advisory credit. It
-is not proof that the endpoint stopped and it does not authorize retry. One
-destination's unknown occupancy does not make another destination ineligible.
-The proposal does not hold a credit until an operator acts. Early release of
-one held credit is the operator mutation in the
+Uncertainty after `begin_send` stays the beta.4 rule: no fallback, no retry,
+and expiry is not proof that the endpoint stopped. One destination's unknown
+occupancy does not make another destination ineligible. Early release of one
+Unknown credit is the operator mutation in the
 [service API proposal](../service-api/README.md#proposed-destination-uncertainty-release).
-It is not a configuration field.
+It is not a configuration field. The current operator listener does not mount
+that route.
 
 | Reader | Document or outcome | Required behavior |
 | --- | --- | --- |
-| Beta.4 | `engine` present | Reject before activation. This row is the executable case `proposed engine field is rejected` |
-| Adopting reader | `engine` omitted | Beta.4 scheduling |
-| Adopting reader | unavailable, stale, or over-ceiling sample | That destination is ineligible; other destinations stay eligible |
-| Adopting reader | `count_input` returns `failed` | Release the reservation unsent; send no generation request |
-| Adopting reader | `count_input` returns `unsupported` | Keep the byte-derived charge and continue toward `begin_send` |
-| Adopting reader | `module` is not `vllm` or `sglang` | Reject before activation |
-| Adopting reader | unknown after send | No fallback and no retry; other destinations stay eligible |
-| Adopting reader | hot reload changes `engine` | Reject the whole reload and keep the published generation |
-
-The adopting-reader rows become executable cases only in the revision that
-accepts `engine`. They are not current parser acceptance.
+| Any | `engine` omitted | Beta.4 scheduling |
+| Any | `metrics_url` origin differs from `endpoint` | Reject before activation. Case `engine metrics origin must match the endpoint` |
+| Any | `module` is not `vllm` or `sglang` | Reject before activation. Case `unknown engine module is rejected` |
+| Runtime | unavailable, stale, or over-ceiling sample | That destination is ineligible; other destinations stay eligible |
+| Runtime | `vllm` count fails or does not fit | Release the reservation unsent; do not fall back |
+| Runtime | `sglang` count | Keep the byte-derived charge and continue toward `begin_send` |
+| Runtime | unknown after send | No fallback and no retry |
+| Runtime | hot reload adds, removes, or changes `engine` | Reject the whole reload and keep the published generation |

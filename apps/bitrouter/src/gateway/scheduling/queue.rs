@@ -476,7 +476,13 @@ fn rank(
     let signals = plan
         .candidates
         .iter()
-        .filter(|candidate| plan.eligible[candidate.ordinal])
+        .filter(|candidate| {
+            plan.eligible[candidate.ordinal]
+                && state
+                    .destinations
+                    .get(candidate.destination)
+                    .is_some_and(|destination| super::engine_admits(destination, now))
+        })
         .map(|candidate| {
             let d = &state.destinations[candidate.destination];
             let samples: Vec<_> = d
@@ -516,15 +522,21 @@ fn rank(
             }
         })
         .collect::<Vec<_>>();
-    let ranked = crate::gateway::planning::rank(&signals, plan.work, policy)?;
+    let ranked = if signals.is_empty() {
+        Vec::new()
+    } else {
+        crate::gateway::planning::rank(&signals, plan.work, policy)?
+    };
     let mut order = Vec::with_capacity(plan.eligible.len());
     order.extend(ranked);
-    order.extend(
-        plan.eligible
-            .iter()
-            .enumerate()
-            .filter_map(|(ordinal, &eligible)| (!eligible).then_some(ordinal)),
-    );
+    order.extend(plan.candidates.iter().filter_map(|candidate| {
+        let protocol_eligible = plan.eligible[candidate.ordinal];
+        let engine_eligible = state
+            .destinations
+            .get(candidate.destination)
+            .is_some_and(|destination| super::engine_admits(destination, now));
+        (!protocol_eligible && engine_eligible).then_some(candidate.ordinal)
+    }));
     Ok(order)
 }
 

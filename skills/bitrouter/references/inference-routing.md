@@ -18,6 +18,14 @@ inference_routing:
       max_active: 8
 ```
 
+Optional `engine` selects the compiled-in `vllm` or `sglang` module for that
+process. `metrics_url` must use the endpoint's scheme, host and port. The
+scheduler reads normalized running, waiting and KV fraction; it does not match
+engine metric names. `count_input` defaults to true. A failed count does not
+fall back to another destination. SGLang reports no count until its module
+defines one, and the byte-derived work charge stays unchanged. Omit `engine`
+to keep load and prefix scheduling without a scrape.
+
 The provider must already exist under `providers`; this section neither installs
 providers nor supplies credentials. In ordinary mode each declaration must resolve
 at startup. Tenant mode resolves retained membership/credentials per request.
