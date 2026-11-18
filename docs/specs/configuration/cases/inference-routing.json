@@ -303,13 +303,13 @@
       "enabled": false,
       "destinations": [
         {
-          "id": "vllm-a",
-          "provider": "vllm",
+          "id": "local-a",
+          "provider": "local",
           "model": "local-model",
           "endpoint": "http://127.0.0.1:8000/v1",
           "max_active": 1,
           "engine": {
-            "kind": "vllm"
+            "module": "vllm"
           }
         }
       ]

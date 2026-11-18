@@ -498,8 +498,14 @@ adds no inference URL, request body, client credential, or second scheduler.
 A destination remains the exact `(provider, model, endpoint, account)` tuple
 and the process-local concurrency pool defined above. It is the placement
 target for that endpoint. It does not name a replica, rank, or prefill/decode
-phase inside the endpoint. Placement across several vLLM processes is one
+phase inside the endpoint. Placement across several engine processes is one
 destination per process endpoint.
+
+The scheduler consumes one normalized sample and, when requested, one input
+count. It does not match engine metric names, choose a tokenize URL, or branch
+on an engine protocol. Those details belong to the registered module named by
+`engine.module`. Selecting `sglang` instead of `vllm` changes the module. It
+does not change acquire, reservation, or uncertainty.
 
 `engine` is an optional object on `DestinationConfig`. The adopting reader
 rejects unknown fields and null. Every field below is restart-required. A hot
@@ -508,46 +514,50 @@ candidate, and the published generation stays.
 
 | Field | Type and bounds | When `engine` is present |
 | --- | --- | --- |
-| `kind` | the constant `vllm` | required |
+| `module` | registered name, initially `vllm` or `sglang` | required |
 | `metrics_url` | absolute HTTP(S) URL with no userinfo, query, or fragment | required |
 | `metrics_bearer_env` | environment-variable name | omitted means the metrics request carries no bearer |
 | `max_metric_age_ms` | integer, 1 through 60,000 milliseconds | required |
 | `max_running` | integer, 0 through 100,000 requests | required |
 | `max_waiting` | integer, 0 through 100,000 requests | required |
-| `max_kv_cache_usage_percent` | integer, 1 through 100 percent | required |
-| `tokenize` | boolean | omitted means `true` |
+| `max_kv_usage` | decimal fraction, greater than 0 and at most 1 | required |
+| `count_input` | boolean | omitted means `true` |
 
-`metrics_bearer_env` names a variable that holds the bearer sent only to
-`metrics_url`. The destination's inference credential is not reused for metrics
-unless the operator names that same variable. An empty or unset variable makes
-the sample unavailable. `metrics_url` names the metrics endpoint of the same
-engine as `endpoint`. The reader does not infer that relationship from the
-URLs.
+An unregistered `module` is rejected before activation, including while
+scheduling is disabled. `metrics_bearer_env` names a variable that holds the
+bearer sent only to `metrics_url`. The destination's inference credential is
+not reused for metrics unless the operator names that same variable. An empty
+or unset variable makes the sample unavailable. `metrics_url` names the
+metrics endpoint of the same engine as `endpoint`. The reader does not infer
+that relationship from the URLs. `max_kv_usage` is a fraction of engine KV
+capacity after the module has normalized the engine's own gauge.
 
 When `engine` is absent, ranking, the byte-derived queue charge, prefix
 projection, and uncertainty follow the beta.4 rules.
 
+A module returns either a sample or unavailable. A sample has whole-number
+`running` and `waiting`, `kv_usage` from 0 through 1, and the gateway
+collection time. Unavailable includes a failed scrape, a stale collection, a
+missing series, and a value the module cannot normalize. The scheduler treats
+unavailable as ineligible. It is not zero load.
+
 When `engine` is present, a destination is ineligible for a new acquire while
 any of the following is true:
 
-- the metrics sample is missing, its gateway collection time is older than
-  `max_metric_age_ms`, or it lacks any of `vllm:num_requests_running`,
-  `vllm:num_requests_waiting`, and `vllm:kv_cache_usage_perc` as a finite
-  non-negative number; running and waiting must be whole numbers, and KV usage
-  must be from 0 through 100
+- the module returns unavailable, or the sample's collection time is older
+  than `max_metric_age_ms`
 - sampled running requests exceed `max_running`, sampled waiting requests
-  exceed `max_waiting`, or sampled KV usage exceeds
-  `max_kv_cache_usage_percent`
+  exceed `max_waiting`, or sampled `kv_usage` exceeds `max_kv_usage`
 - sampled running requests, plus that destination's current Reserved, Sending,
   and Unknown occupancy, plus the one reservation this acquire would add,
   exceeds `max_running`
 
-A sample cannot prove that a local reservation is already inside the gauge.
-The gateway therefore adds its own unfinished occupancy to the sampled running
-count and MUST NOT subtract its own occupancy from a gauge. A missing or
-invalid sample is ineligible. It is not zero load. The gateway queue length is
-not added to `vllm:num_requests_waiting`; queue bounds remain the beta.4 queue
-limits. KV usage is compared with the sample alone.
+A sample cannot prove that a local reservation is already inside the engine
+gauge. The scheduler therefore adds its own unfinished occupancy to the
+sampled running count and MUST NOT subtract its own occupancy from that count.
+The gateway queue length is not added to sampled waiting requests; queue
+bounds remain the beta.4 queue limits. `kv_usage` is compared with the sample
+alone.
 
 Ineligibility removes that destination from the attempt's remaining sequence.
 It does not change another destination and does not disable the scheduler. If
@@ -556,26 +566,46 @@ generation request is sent. The refusal uses the existing local unavailable
 response and creates no upstream receipt. Engine limits do not raise the
 beta.4 active or uncertainty credits.
 
-When `tokenize` is true, after a reservation is granted and before
-`begin_send`, the gateway makes one POST to the same origin as `endpoint`,
-with the path replaced by `/tokenize`. The endpoint's existing path is not
-appended. The call uses that destination's inference credential, sends no
-proxy request, follows no redirect, and is not retried. It submits the same
-model and messages the generation would send, with the generation prompt added
-and final-message continuation disabled.
-
-The returned `count` MUST equal the length of the returned token array, and
-`count` plus the attempt's output bound MUST fit the returned
-`max_model_len`. A zero count, a missing field, a transport failure, or a
-mismatched body releases the reservation as unsent. The gateway MUST NOT poll
-the generation transport. On success, `count` replaces
-`projected_input_bytes / 4` in that attempt's work charge before `begin_send`.
-Deficit already recorded for the queue is not rewritten. The active-slot and
-uncertainty credits remain one per attempt. When `tokenize` is false, the
-beta.4 byte-derived charge remains, and metrics eligibility still applies.
+When `count_input` is true, after a reservation is granted and before
+`begin_send`, the scheduler asks that destination's module to count input.
+The module returns one of `counted`, `unsupported`, or `failed`. `counted`
+carries a positive `input_tokens` and `max_context_tokens`. `input_tokens`
+plus the attempt's output bound MUST fit `max_context_tokens`. On that
+success, `input_tokens` replaces `projected_input_bytes / 4` in the attempt's
+work charge before `begin_send`. Deficit already recorded for the queue is not
+rewritten. The active-slot and uncertainty credits remain one per attempt.
+`unsupported` keeps the beta.4 byte-derived charge and still allows
+`begin_send`. `failed`, a zero count, or a context miss releases the
+reservation as unsent, and the scheduler MUST NOT poll the generation
+transport. When `count_input` is false, the scheduler does not ask for a
+count; the byte-derived charge remains, and metrics eligibility still applies.
 
 Prefix affinity stays the beta.4 approximate projection. This proposal does
-not add a KV-block index, another prefix mode, or prefill/decode roles.
+not add a KV-block index, another prefix mode, or prefill/decode roles. A
+later prefix observation, if added, must enter through the same module result
+boundary. The scheduler still must not parse an engine event itself.
+
+#### Registered engine modules
+
+A module is compiled into the inference-routing build and selected by name.
+This proposal does not add a plugin ABI, a dynamic loader, or a second
+scheduler. The scheduler calls `observe` and, when `count_input` is true,
+`count_input`. It has no other engine operation.
+
+Both initial modules scrape `metrics_url` without a proxy, redirect, or retry.
+A metrics bearer is sent only to that URL. Input counting, when the module
+supports it, uses the destination inference credential and the same no-proxy,
+no-redirect, no-retry rule. The frozen model and messages are the ones
+generation would send.
+
+| Module | `running` | `waiting` | `kv_usage` | `count_input` |
+| --- | --- | --- | --- | --- |
+| `vllm` | `vllm:num_requests_running` | `vllm:num_requests_waiting` | `vllm:kv_cache_usage_perc` divided by 100; a value outside 0 through 100 is unavailable | `POST` to the endpoint origin with the path replaced by `/tokenize`. `count` MUST equal the token-array length. `max_model_len` is `max_context_tokens` |
+| `sglang` | `sglang:num_running_reqs` | `sglang:num_queue_reqs` | `sglang:token_usage` when it is already a fraction from 0 through 1; any other value is unavailable | `unsupported` until this module defines its own count call. It MUST NOT call `/tokenize` |
+
+A missing series or a non-whole running or waiting value makes that module
+return unavailable. The table is the module contract. Copying either row into
+the scheduler is outside this proposal.
 
 Uncertainty stays the beta.4 rule. After `begin_send`, an ambiguous outcome
 retains that destination's credit, forbids fallback, and forbids another
@@ -591,8 +621,10 @@ It is not a configuration field.
 | --- | --- | --- |
 | Beta.4 | `engine` present | Reject before activation. This row is the executable case `proposed engine field is rejected` |
 | Adopting reader | `engine` omitted | Beta.4 scheduling |
-| Adopting reader | stale, missing, or invalid metrics | That destination is ineligible; other destinations stay eligible |
-| Adopting reader | tokenize failure | Release the reservation unsent; send no generation request |
+| Adopting reader | unavailable, stale, or over-ceiling sample | That destination is ineligible; other destinations stay eligible |
+| Adopting reader | `count_input` returns `failed` | Release the reservation unsent; send no generation request |
+| Adopting reader | `count_input` returns `unsupported` | Keep the byte-derived charge and continue toward `begin_send` |
+| Adopting reader | `module` is not `vllm` or `sglang` | Reject before activation |
 | Adopting reader | unknown after send | No fallback and no retry; other destinations stay eligible |
 | Adopting reader | hot reload changes `engine` | Reject the whole reload and keep the published generation |
 

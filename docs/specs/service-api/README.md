@@ -96,7 +96,7 @@ response is JSON, rejects unknown fields, and sends `Cache-Control: no-store`:
   "generation": "routing-generation",
   "held": [
     {
-      "destination_id": "vllm-a",
+      "destination_id": "local-a",
       "attempt_id": "attempt-1",
       "state": "unknown"
     }
@@ -115,12 +115,12 @@ route. The caller needs the operator `read` grant.
 
 ```json
 {
-  "operation_id": "release-vllm-a-1",
+  "operation_id": "release-local-a-1",
   "command": {
     "action": "release_destination_uncertainty",
     "input": {
       "generation": "routing-generation",
-      "destination_id": "vllm-a",
+      "destination_id": "local-a",
       "attempt_id": "attempt-1",
       "expected_state": "unknown",
       "confirmed_not_running": true,
