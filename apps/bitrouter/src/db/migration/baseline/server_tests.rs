@@ -162,7 +162,9 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         DatabaseBackend::MySql => corruptions.extend([
             "ALTER TABLE tenancy_dispatch_intents DROP PRIMARY KEY".to_owned(),
             "ALTER TABLE tenancy_dispatch_intents MODIFY tenant_id varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL".to_owned(),
-            "ALTER TABLE tenancy_dispatch_intents ENGINE=MyISAM".to_owned(),
+            // The integer primary key fits MyISAM's index limit, so the
+            // catalog validator gets to reject the nontransactional engine.
+            "ALTER TABLE provider_continuation_key_epoch ENGINE=MyISAM".to_owned(),
             "CREATE TRIGGER unexpected_intent_trigger BEFORE INSERT ON tenancy_dispatch_intents FOR EACH ROW SET NEW.byte_count = NEW.byte_count".to_owned(),
         ]),
         _ => anyhow::bail!("server campaign backend"),
@@ -173,7 +175,9 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
             let db = &fixture.database;
             super::super::Migrator::up(db, None).await?;
             let ledger = super::super::Migrator::get_migration_models(db).await?;
-            db.execute_unprepared(&corruption).await?;
+            db.execute_unprepared(&corruption)
+                .await
+                .with_context(|| format!("applying catalog fixture: {corruption}"))?;
             ensure!(
                 super::super::Migrator::up(db, None).await.is_err(),
                 "current catalog accepted {corruption}"
