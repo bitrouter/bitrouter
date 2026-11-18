@@ -333,9 +333,12 @@ fn headless_gateway_setup_needs_no_native_tool_and_refuses_agent_launch_flags() 
     let before = std::fs::read(&config)?;
     assert!(obsolete.finish_stdout(false)?.is_empty());
     assert!(
-        obsolete
-            .transcript
-            .contains("unexpected argument '--harness'"),
+        obsolete.transcript.lines().any(|line| {
+            // Clap colors the option name independently on a color-capable TTY.
+            line.contains("unexpected argument")
+                && line.contains("--harness")
+                && line.contains("found")
+        }),
         "{}",
         obsolete.transcript
     );
