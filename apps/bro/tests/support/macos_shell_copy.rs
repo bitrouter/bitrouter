@@ -61,6 +61,75 @@ fn check_edits_file_without_replacing_its_metadata() -> Result<()> {
 }
 
 #[test]
+fn check_publishes_case_only_renames_on_a_case_insensitive_workspace() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("project");
+    let drafts = work.join("Drafts");
+    fs::create_dir_all(&drafts)?;
+    let directory = fs::metadata(&drafts)?;
+    match fs::metadata(work.join("DRAFTS")) {
+        Ok(alias) => assert_eq!(alias.ino(), directory.ino()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("case-only fixture requires a case-insensitive workspace volume");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    }
+    fs::write(drafts.join("note"), "original")?;
+    let note = fs::metadata(drafts.join("note"))?;
+    fs::write(drafts.join("file-to-tree"), "old file")?;
+    fs::create_dir(drafts.join("tree-to-file"))?;
+    fs::write(drafts.join("tree-to-file/child"), "old tree")?;
+    let mock = Mock::start(vec![reply()])?;
+    let output = bro(
+        &fixture.path().join("home"),
+        &work,
+        &mock.endpoint,
+        &[
+            "task",
+            "run",
+            "verify",
+            "--check",
+            r#"set -e
+mv Drafts holding
+mv holding DRAFTS
+cd DRAFTS
+mv note holding
+mv holding NOTE
+printf ' revised' >> NOTE
+rm file-to-tree
+mkdir -p file-to-tree/nested
+printf new > file-to-tree/nested/file
+rm -r tree-to-file
+printf replacement > tree-to-file"#,
+        ],
+    )?;
+    let terminal = event(&output)?;
+    ensure!(output.status.success(), "{terminal}");
+    assert_eq!(terminal["verification"], "passed");
+    assert_eq!(
+        fs::read_dir(&work)?
+            .next()
+            .context("published directory")??
+            .file_name(),
+        "DRAFTS"
+    );
+    let renamed = work.join("DRAFTS");
+    let names: std::collections::BTreeSet<_> = fs::read_dir(&renamed)?
+        .map(|item| item.map(|item| item.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(names.contains(std::ffi::OsStr::new("NOTE")));
+    assert!(!names.contains(std::ffi::OsStr::new("note")));
+    assert_eq!(fs::metadata(&renamed)?.ino(), directory.ino());
+    assert_eq!(fs::metadata(renamed.join("NOTE"))?.ino(), note.ino());
+    assert_eq!(fs::read(renamed.join("NOTE"))?, b"original revised");
+    assert_eq!(fs::read(renamed.join("file-to-tree/nested/file"))?, b"new");
+    assert_eq!(fs::read(renamed.join("tree-to-file"))?, b"replacement");
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn check_publishes_regular_file_changes_without_importing_linked_peer_data() -> Result<()> {
     let fixture = tempfile::tempdir()?;
     let work = fixture.path().join("project");
@@ -204,6 +273,8 @@ fn partial_publication_keeps_private_recovery_copy_and_refuses_replay() -> Resul
     let home = fixture.path().join("home");
     fs::create_dir(&work)?;
     let locked = work.join("z-original");
+    let edited = work.join("m-updated");
+    fs::write(&edited, "before edit")?;
     fs::write(&locked, "original")?;
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o400))?;
     if fs::OpenOptions::new().write(true).open(&locked).is_ok() {
@@ -216,12 +287,13 @@ fn partial_publication_keeps_private_recovery_copy_and_refuses_replay() -> Resul
         "run",
         "verify",
         "--check",
-        "printf complete > a-first && chmod u+w z-original && printf desired > z-original",
+        "printf complete > a-first && printf edited > m-updated && chmod u+w z-original && printf desired > z-original",
     ])?)?;
     assert_eq!(result["status"], "recovery_required");
     assert_eq!(result["unknown_effect"], true);
     assert_eq!(result["verification_evidence"]["exit_status"], 0);
     assert_eq!(fs::read(work.join("a-first"))?, b"complete");
+    assert_eq!(fs::read(&edited)?, b"edited");
     assert_eq!(fs::read(&locked)?, b"original");
     let error = result["verification_evidence"]["error"]
         .as_str()
@@ -244,6 +316,10 @@ fn partial_publication_keeps_private_recovery_copy_and_refuses_replay() -> Resul
     );
     assert_eq!(fs::metadata(private)?.mode() & 0o777, 0o700);
     assert_eq!(fs::read(copy.join("z-original"))?, b"desired");
+    assert_eq!(
+        fs::read(private.join("original/m-updated"))?,
+        b"before edit"
+    );
     fs::remove_dir_all(private)?;
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o600))?;
     fs::remove_file(work.join("a-first"))?;

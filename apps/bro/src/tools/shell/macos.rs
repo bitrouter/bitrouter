@@ -63,6 +63,66 @@ impl Entry {
 
 type Tree = BTreeMap<PathBuf, Entry>;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopyPurpose {
+    Shell,
+    Recovery,
+    Replacement,
+}
+
+fn write_entries<'a>(
+    destination: &Path,
+    prefix: &Path,
+    entries: impl Iterator<Item = (&'a PathBuf, &'a Entry)>,
+    purpose: CopyPurpose,
+) -> Result<BTreeMap<PathBuf, Id>> {
+    let mut directories = Vec::new();
+    let mut identities = BTreeMap::new();
+    for (path, entry) in entries {
+        let target = destination.join(path.strip_prefix(prefix)?);
+        match &entry.data {
+            Data::Omitted => continue,
+            Data::Directory => {
+                fs::create_dir(&target)?;
+                directories.push((path, target, entry));
+            }
+            Data::File(bytes) => {
+                let mut file = File::create_new(&target)?;
+                file.write_all(bytes)?;
+                file.set_modified(entry.mtime)?;
+                file.set_permissions(Permissions::from_mode(entry.mode))?;
+                if purpose != CopyPurpose::Shell {
+                    file.sync_all()?;
+                }
+                if purpose == CopyPurpose::Replacement {
+                    identities.insert(path.clone(), id(&file.metadata()?)?);
+                }
+            }
+        }
+    }
+    for (path, target, entry) in directories.into_iter().rev() {
+        let dir = File::open(target)?;
+        // Keep the recovery directory structure traversable and removable.
+        // File modes and the live tree's published metadata are independent.
+        let mode = if purpose == CopyPurpose::Recovery {
+            0o700
+        } else {
+            entry.mode
+        };
+        dir.set_permissions(Permissions::from_mode(mode))?;
+        if purpose != CopyPurpose::Shell {
+            dir.sync_all()?;
+        }
+        if purpose == CopyPurpose::Replacement {
+            identities.insert(path.clone(), id(&dir.metadata()?)?);
+        }
+    }
+    if purpose != CopyPurpose::Shell {
+        File::open(destination)?.sync_all()?;
+    }
+    Ok(identities)
+}
+
 fn read_file(file: &mut File, meta: &Metadata, limit: u64) -> Result<Vec<u8>> {
     ensure!(
         meta.is_file() && meta.nlink() == 1 && meta.mode() & 0o6000 == 0,
@@ -208,36 +268,34 @@ impl WorkingCopy {
         }
         let before = Scan::run(root, true)?;
         let mut copy = Self::empty()?;
-        for (name, entry) in &before {
-            let destination = copy.path.join(name);
-            match &entry.data {
-                Data::Omitted => continue,
-                Data::Directory => fs::create_dir(&destination)?,
-                Data::File(bytes) => {
-                    let mut file = File::create_new(destination)?;
-                    file.write_all(bytes)?;
-                    file.set_modified(entry.mtime)?;
-                    file.set_permissions(Permissions::from_mode(entry.mode))?;
-                }
-            }
-        }
-        for (name, entry) in before.iter().rev() {
-            if entry.data == Data::Directory {
-                fs::set_permissions(copy.path.join(name), Permissions::from_mode(entry.mode))?;
-            }
-        }
+        write_entries(&copy.path, Path::new(""), before.iter(), CopyPurpose::Shell)?;
         copy.before = before;
         Ok(copy)
     }
 
     pub(super) fn publish(self, root: &File) -> Result<()> {
+        self.publish_with(root, publish::stage_replacement)
+    }
+
+    fn publish_with(self, root: &File, stage: publish::StageReplacement) -> Result<()> {
         let after = Scan::run(&self.directory, false)?;
         let mut started = false;
-        let result = publish::changes(root, &self.before, &after, &mut started);
+        let result = publish::changes(
+            root,
+            &self.before,
+            &after,
+            self.private.path(),
+            &mut started,
+            stage,
+        );
         if started && let Err(error) = result {
             let recovery = self.private.keep().join("workspace");
             return Err(error).with_context(|| {
-                format!("private recovery copy retained at {}", recovery.display())
+                format!(
+                    "private recovery copy retained at {}: original inputs at {}",
+                    recovery.display(),
+                    recovery.with_file_name("original").display()
+                )
             });
         }
         result
@@ -290,6 +348,53 @@ mod tests {
         let copy = WorkingCopy::prepare(&root)?;
         fs::write(fixture.path().join("input"), "second")?;
         assert!(copy.publish(&root).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_replacement_staging_leaves_the_original_tree_and_recovery() -> Result<()> {
+        fn fail_staging(
+            directory: &Path,
+            path: &Path,
+            after: &Tree,
+        ) -> Result<BTreeMap<PathBuf, Id>> {
+            publish::stage_replacement(directory, path, after)?;
+            anyhow::bail!("injected staging failure")
+        }
+
+        let fixture = tempfile::tempdir()?;
+        let root = File::open(fixture.path())?;
+        let original = fixture.path().join("tree");
+        fs::create_dir(&original)?;
+        fs::write(original.join("note"), "admitted directory contents")?;
+        let identity = id(&fs::metadata(&original)?)?;
+        let copy = WorkingCopy::prepare(&root)?;
+        fs::remove_dir_all(copy.path.join("tree"))?;
+        fs::write(copy.path.join("tree"), "desired replacement")?;
+
+        let retained = copy.private.path().to_owned();
+        let failure = copy.publish_with(&root, fail_staging);
+        let error = failure.err().context("staging should have failed")?;
+        let message = format!("{error:#}");
+        assert!(message.contains("injected staging failure"), "{message}");
+        assert!(
+            message.contains("private recovery copy retained"),
+            "{message}"
+        );
+        assert!(id(&fs::metadata(&original)?)? == identity);
+        assert_eq!(
+            fs::read(original.join("note"))?,
+            b"admitted directory contents"
+        );
+        assert_eq!(
+            fs::read(retained.join("original/tree/note"))?,
+            b"admitted directory contents"
+        );
+        assert_eq!(
+            fs::read(retained.join("workspace/tree"))?,
+            b"desired replacement"
+        );
+        fs::remove_dir_all(retained)?;
         Ok(())
     }
 

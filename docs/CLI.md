@@ -132,10 +132,13 @@ contents, ordinary permission bits and regular-file modification times through
 the original directory handle. Existing files retain their ownership and extended
 attributes when edited. BRO refuses removal or replacement of entries with
 extended ACLs or custom extended attributes, including resource forks.
-A publication conflict records the command's exit
-status and output and requires recovery. Earlier writes may already be durable.
-If publication started, the error also gives the path to the private recovery
-copy. Inspect it before removing it. Resuming the turn shows that evidence without running the shell again.
+On case-insensitive volumes, case-only renames keep the existing file or
+directory identity. BRO stages type replacements before moving the original
+entry aside. A publication conflict records the command's exit status and
+output and requires recovery. Earlier writes may already be durable. If
+publication started, the error gives the paths to the desired working copy and
+the admitted original files. Inspect both before removing them. Resuming the
+turn shows that evidence without running the shell again.
 
 Use the IDs emitted by BRO. Native task output is NDJSON. An exact approval
 authorizes a single recorded call. When an operation may have reached a model
