@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 export const TEXT = 'Synthetic gateway response ☀\n';
 export const STREAM_CHUNKS = 100;
@@ -12,7 +14,8 @@ export const ARGUMENTS = { left: 19, right: 23 };
 export const TOOL_ID = 'call_synthetic_add';
 export const RESULT = '42';
 
-if (process.send) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  assert.equal(typeof process.send, 'function', 'synthetic peer requires an IPC parent');
   const counters = { started: 0, completed: 0, cancelled: 0, failed: 0, active: 0 };
   const server = createServer(async (request, response) => {
     counters.started++;

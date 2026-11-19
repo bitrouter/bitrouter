@@ -9,9 +9,28 @@ const RULES = {
 const quantile = (values, percent) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * percent / 100) - 1];
 const median = values => quantile(values, 50);
 
+export function auditTrial(trial, counts) {
+  const expectedLegs = measuredLegs(counts);
+  assert.equal(trial.rows, expectedLegs);
+  assert.equal(trial.warmups, 24);
+  assert.equal(trial.receipts, trial.lane === 'tenant' ? 105 : 0);
+  assert.deepEqual(trial.observed, {
+    started: expectedLegs + 24, completed: expectedLegs + 24 - counts.cancel, cancelled: counts.cancel, failed: 0,
+  });
+  assert.deepEqual(Object.keys(trial.windows), Object.keys(counts));
+  for (const [scenario, count] of Object.entries(counts)) {
+    const { rows, elapsed } = trial.windows[scenario];
+    const legs = count * (scenario === 'tools' ? 2 : 1);
+    assert.ok(Number.isFinite(elapsed) && elapsed > 0);
+    assert.equal(rows.length, legs);
+    assert.equal(new Set(rows.map(row => row.correlation)).size, legs);
+    assert.ok(rows.every(row => row.scenario === scenario && row.cancel === (scenario === 'cancel') &&
+      row.version === (trial.group === 'http2-h2c' ? '2.0' : '1.1')));
+  }
+}
+
 export function summarize(trials, counts = COUNTS) {
   const metrics = {};
-  const expectedLegs = measuredLegs(counts);
   for (const [group, lanes] of Object.entries(LANES)) {
     for (const lane of lanes) {
       const matches = trials.filter(trial => trial.group === group && trial.lane === lane);
@@ -24,22 +43,13 @@ export function summarize(trials, counts = COUNTS) {
         if (pooled) entry.pooled.push(...pooled);
       };
       for (const trial of matches) {
-        assert.equal(trial.rows, expectedLegs);
-        assert.equal(trial.warmups, 24);
-        assert.equal(trial.receipts, lane === 'tenant' ? 105 : 0);
-        assert.deepEqual(trial.observed, {
-          started: expectedLegs + 24, completed: expectedLegs + 24 - counts.cancel, cancelled: counts.cancel, failed: 0,
-        });
+        auditTrial(trial, counts);
         if (lane !== 'direct') add('process', 'startup_ms', 'startup', trial.startup);
         add('process', 'idle_kib', 'rss', trial.idleKib);
         add('process', 'sampled_peak_kib', 'rss', trial.peakKib);
         for (const [scenario, count] of Object.entries(counts)) {
           const { rows, elapsed } = trial.windows[scenario];
           const legs = count * (scenario === 'tools' ? 2 : 1);
-          assert.equal(rows.length, legs);
-          assert.equal(new Set(rows.map(row => row.correlation)).size, legs);
-          assert.ok(rows.every(row => row.scenario === scenario && row.cancel === (scenario === 'cancel') &&
-            row.version === (group === 'http2-h2c' ? '2.0' : '1.1')));
           const rate = 1000 * legs / elapsed;
           const rateName = scenario === 'cancel' ? 'cancels_per_s' : 'goodput_per_s';
           add(scenario, rateName, 'rate', rate, legs);

@@ -2,10 +2,10 @@
 
 The separate benchmark branch runs four locked, stripped Linux x64 release
 builds in parallel: M0 and candidate, each with minimum and HTTP/2 features.
-The single measurement job starts only after all four complete. It verifies
-the same-attempt handoff, archive hash, embedded build identity, ELF
-architecture, executable hash, lockfile, and equal compiler, linker, libc
-and release settings before launching either binary for measurement.
+The paired job imports all four releases from run 44500284575, attempt 1.
+It checks the producer run and build jobs, pinned archive hashes, embedded
+build identity, ELF architecture, executable hash, lockfile, and equal
+compiler, linker, libc and release settings before sampling.
 
 Run on one fresh standard Ubuntu 24.04 x64 hosted VM. Each timed trial uses a
 fresh Node driver, mock and, when applicable, gateway. Both sides use 1,024
@@ -16,6 +16,9 @@ HTTP legs per trial and 127,680 per side. The same 24 warmup legs and the
 strict tenant's 105 receipt checks per trial still apply: one successful
 receipt per scenario or tool leg, plus every cancellation. Validate all
 HTTP outcomes, provider counts, terminal usage and exact tool content.
+Each driver sends one typed result. The parent audits the assembled trial
+before saving it and the scorer repeats that audit before freezing the
+baseline or comparing the candidate.
 
 Record these counts in the method before the first baseline trial. Run 40 M0
 trials, hash and freeze the new budget, then run 40 candidate trials. The

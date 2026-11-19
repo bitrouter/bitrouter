@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { trial, LANES } from './synthetic-trials.mjs';
-import { summarize, compare } from './synthetic-score.mjs';
+import { auditTrial, summarize, compare } from './synthetic-score.mjs';
 import { CONCURRENCY, COUNTS, LINUX_COUNTS, measuredLegs } from './synthetic-client.mjs';
 import { BASELINE, LINUX_TARGET, ROLES, TARGET, VARIANTS, hash, verifyBuild } from './synthetic-build-identity.mjs';
 import { aggregateCpu, cpuInterval, linuxReadiness, snapshot } from './synthetic-linux-cpu.mjs';
@@ -90,13 +90,16 @@ async function freshTrial(binary, lane, protocol) {
   const timeout = setTimeout(stop, 180_000);
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
-  let aggregate;
-  child.once('message', value => { aggregate = value; });
+  const messages = [];
+  child.on('message', value => { messages.push(value); });
   try {
     const [code] = await once(child, 'close');
     assert.equal(code, 0, 'isolated synthetic trial failed');
-    assert.ok(aggregate);
-    return aggregate;
+    assert.equal(messages.length, 1, 'isolated trial did not send exactly one record');
+    const [message] = messages;
+    assert.equal(message?.kind, 'trial-result', 'isolated trial returned an invalid message');
+    const { startup, idleKib, peakKib, processSamples, observed, warmups, rows, receipts, windows } = message.result;
+    return { startup, idleKib, peakKib, processSamples, observed, warmups, rows, receipts, windows };
   } finally {
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
@@ -125,6 +128,7 @@ async function collect(output, variants, role) {
             Object.assign(record, await freshTrial(binary, lane, protocol));
             record.cpu = cpuInterval(before, await snapshot());
           } else Object.assign(record, await trial(binary, lane, protocol, false));
+          auditTrial(record, counts);
         } catch (error) {
           await save(file, { ...record, failure: String(error.message), finished: new Date().toISOString() });
           throw error;
@@ -159,6 +163,8 @@ export async function main(root, candidate, output) {
     inputs: await inputs(), started: new Date().toISOString(),
   };
   if (linux) {
+    const { run, attempt } = built.minimum.m0.receipt.delivery;
+    method.producerRun = { run, attempt };
     method.readiness = { source: '/proc/stat', idleStrictlyAbovePercent: 80, consecutive: 3,
       sampleMs: 1000, spacingMs: 10_000, waitMinutes: 15, steal: 'recorded, not credited as idle' };
     method.order = '40 M0 trials, aggregate budget freeze, 40 candidate trials; existing lane rotation';
@@ -204,7 +210,7 @@ if (process.argv[1] && resolve(process.argv[1]) === sourcePath) {
   if (first === '--trial') {
     try { await new Promise((resolve, reject) => {
         trial(second, third, fourth, false, counts).then(
-        value => process.send(value, error => error ? reject(error) : resolve()), reject);
+        result => process.send({ kind: 'trial-result', result }, error => error ? reject(error) : resolve()), reject);
     }); }
     catch { process.exitCode = 1; }
     finally { process.disconnect(); }
