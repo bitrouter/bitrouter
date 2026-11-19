@@ -15,6 +15,18 @@ import { aggregateCpu, cpuInterval, linuxReadiness, snapshot } from './synthetic
 const sourcePath = fileURLToPath(import.meta.url);
 const linux = process.platform === 'linux';
 const counts = Object.freeze(linux ? LINUX_COUNTS : COUNTS);
+const focused = linux && process.env.SYNTHETIC_FOCUSED === '1';
+const { json, instant, tools, long } = LINUX_COUNTS;
+const focusMatrix = {
+  'minimum-http1': { direct: { instant, tools }, gateway: { instant, tools }, tenant: { instant, tools } },
+  'http2-http1': {
+    direct: { json, instant, tools, long },
+    gateway: { json, instant, tools, long },
+    tenant: { tools },
+  },
+  'http2-h2c': { gateway: { json, instant, tools, long }, tenant: { tools } },
+};
+const countsFor = (group, lane) => focused ? focusMatrix[group][lane] : counts;
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const SOURCES = ['synthetic-peer.mjs', 'synthetic-client.mjs', 'synthetic-tenant.mjs',
   'synthetic-trials.mjs', 'synthetic-score.mjs', 'synthetic-pair.mjs', 'synthetic-build-identity.mjs',
@@ -78,9 +90,9 @@ async function settle(path) {
   assert.equal(streak, 3, 'runner did not settle before measurement');
 }
 
-async function freshTrial(binary, lane, protocol) {
-  const child = fork(sourcePath, ['--trial', binary, lane, protocol], {
-    env: { PATH: '/usr/bin:/bin' }, execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+async function freshTrial(binary, lane, protocol, planned) {
+  const child = fork(sourcePath, ['--trial', binary, lane, protocol, JSON.stringify(planned)], {
+    env: { PATH: '/usr/bin:/bin' }, execArgv: [], stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
   let escalation;
   const stop = () => {
@@ -108,40 +120,64 @@ async function freshTrial(binary, lane, protocol) {
   }
 }
 
-async function collect(output, variants, role) {
+async function collectTrial(output, source, role, group, repeat, lane) {
+  const protocol = group.split('-')[1];
+  const { binary } = source;
+  const planned = countsFor(group, lane);
+  const file = join(output, [group, repeat, lane].join('-') + '.json');
+  const started = new Date().toISOString();
+  const record = { group, repeat, lane, started, loadBefore: loadavg() };
+  try {
+    if (linux) {
+      const before = await snapshot();
+      Object.assign(record, await freshTrial(binary, lane, protocol, planned));
+      record.cpu = cpuInterval(before, await snapshot());
+    } else Object.assign(record, await trial(binary, lane, protocol, false, planned));
+    auditTrial(record, planned);
+  } catch (error) {
+    await save(file, { ...record, failure: String(error.message), finished: new Date().toISOString() });
+    throw error;
+  }
+  Object.assign(record, { loadAfter: loadavg(), finished: new Date().toISOString() });
+  await save(file, record);
+  console.log(role, group, repeat, lane, 'synthetic correctness passed');
+  return { file, record, sha256: await hash(file) };
+}
+
+async function collect(output, variants, role, sentinelOutput) {
   const records = [];
+  const sentinels = [];
   await mkdir(output);
+  if (sentinelOutput) await mkdir(sentinelOutput);
   await settle(join(output, 'idle.json'));
   for (const [group, lanes] of Object.entries(LANES)) {
-    const [variant, protocol] = group.split('-');
-    const { binary, receipt } = variants[variant][role];
+    const variant = group.split('-')[0];
     for (let repeat = 1; repeat <= 5; repeat++) {
       const offset = (repeat - 1) % lanes.length;
       const order = [...lanes.slice(offset), ...lanes.slice(0, offset)];
-      for (const lane of order) {
-        const file = join(output, [group, repeat, lane].join('-') + '.json');
-        const started = new Date().toISOString();
-        const record = { group, repeat, lane, started, loadBefore: loadavg() };
-        try {
-          if (linux) {
-            const before = await snapshot();
-            Object.assign(record, await freshTrial(binary, lane, protocol));
-            record.cpu = cpuInterval(before, await snapshot());
-          } else Object.assign(record, await trial(binary, lane, protocol, false));
-          auditTrial(record, counts);
-        } catch (error) {
-          await save(file, { ...record, failure: String(error.message), finished: new Date().toISOString() });
-          throw error;
-        }
-        Object.assign(record, { loadAfter: loadavg(), finished: new Date().toISOString() });
-        await save(file, record);
-        records.push({ file, record, sha256: await hash(file) });
-        console.log(role, group, repeat, lane, 'synthetic correctness passed');
+      for (const [index, lane] of order.entries()) {
+        const retestM0 = async () => {
+          sentinels.push(await collectTrial(sentinelOutput, variants[variant].m0, 'sentinel', group, repeat, lane));
+        };
+        const baselineFirst = (repeat + index) % 2 === 0;
+        if (sentinelOutput && baselineFirst) await retestM0();
+        records.push(await collectTrial(output, variants[variant][role], role, group, repeat, lane));
+        if (sentinelOutput && !baselineFirst) await retestM0();
       }
     }
-    assert.equal(await hash(binary), receipt.binary_sha256);
   }
-  return records;
+  for (const variant of Object.values(variants)) {
+    assert.equal(await hash(variant[role].binary), variant[role].receipt.binary_sha256);
+    if (sentinelOutput) assert.equal(await hash(variant.m0.binary), variant.m0.receipt.binary_sha256);
+  }
+  return { records, sentinels };
+}
+
+function longTail(records) {
+  const tail = records.filter(({ record }) => record.group === 'http2-h2c' && record.lane === 'gateway')
+    .flatMap(({ record }) => record.windows.long.rows.map(row => row.first));
+  return { n: tail.length, above125ms: tail.filter(ms => ms > 125).length,
+    largestMs: tail.sort((left, right) => right - left).slice(0, 8) };
 }
 
 export async function main(root, candidate, output) {
@@ -153,7 +189,8 @@ export async function main(root, candidate, output) {
   await mkdir(output);
   const inputs = async () => Object.fromEntries(await Promise.all(SOURCES.map(async file => [file, await hash(join(HERE, file))])));
   const built = await receipts(root, candidate);
-  const method = { name: linux ? 'synthetic-gateway-split-linux-longer-fast-windows-v1' : 'synthetic-gateway-split-v1',
+  const method = { name: focused ? 'synthetic-gateway-split-linux-focused-v1' :
+    linux ? 'synthetic-gateway-split-linux-longer-fast-windows-v1' : 'synthetic-gateway-split-v1',
     baseline: BASELINE, candidate,
     producer: linux ? 'parallel-linux-release-builds' :
       built.minimum.m0.receipt.delivery ? 'verified-split-qualification' : 'same-run-release-builds',
@@ -171,11 +208,19 @@ export async function main(root, candidate, output) {
     method.workload = { conversationsPerTrial: counts, concurrency: CONCURRENCY, repeatsPerPath: 5,
       measuredLegsPerTrial: measuredLegs(counts), warmupLegsPerTrial: 24 };
   }
+  if (focused) {
+    method.order = 'Five M0 repeats per path and freeze before candidate. Five candidate repeats with contemporaneous M0 sentinels, alternating order within each path.';
+    method.workload = { concurrency: CONCURRENCY, repeatsPerPath: 5, matrix: focusMatrix };
+    method.priorRun = '44514233016';
+    method.tailDiagnostic = 'Count first semantic outputs above 125 ms, near the preceding run’s frozen p99 limit.';
+    method.sentinelPurpose = 'Compare M0 at the start and beside each candidate trial to characterize timing drift. The initial frozen budget remains the decision reference.';
+  }
+  const summarizeRecords = samples => summarize(samples.map(entry => entry.record), counts, focused ? focusMatrix : undefined);
   const methodPath = join(output, 'method.json');
   await save(methodPath, method);
-  const base = await collect(join(output, 'baseline'), built, 'm0');
+  const { records: base } = await collect(join(output, 'baseline'), built, 'm0');
   const budgetPath = join(output, 'baseline-budget.json');
-  const baselineMetrics = summarize(base.map(entry => entry.record), counts);
+  const baselineMetrics = summarizeRecords(base);
   await save(budgetPath, { method: await hash(methodPath), frozen: new Date().toISOString(),
     budgets: baselineMetrics, trials: Object.fromEntries(base.map(({ file, sha256 }) => [file.split('/').at(-1), sha256])),
   });
@@ -184,7 +229,8 @@ export async function main(root, candidate, output) {
   await writeFile(join(output, 'baseline-budget.sha256'), frozen + '\n', { flag: 'wx' });
   assert.deepEqual(await inputs(), method.inputs);
   console.log('All baseline cohorts audited and budgets frozen.');
-  const measured = await collect(join(output, 'candidate'), built, 'service');
+  const { records: measured, sentinels } = await collect(join(output, 'candidate'), built, 'service',
+    focused ? join(output, 'sentinels') : undefined);
   assert.equal(await hash(budgetPath), frozen);
   assert.deepEqual(await inputs(), method.inputs);
   for (const entry of base) assert.equal(await hash(entry.file), entry.sha256);
@@ -192,13 +238,23 @@ export async function main(root, candidate, output) {
   assert.equal(checked.method, await hash(methodPath));
   assert.deepEqual(checked.budgets, baselineMetrics);
   assert.ok(measured.every(entry => entry.record.started >= checked.frozen));
-  const comparison = compare(checked.budgets, summarize(measured.map(entry => entry.record), counts));
+  const current = summarizeRecords(measured);
+  const comparison = compare(checked.budgets, current);
+  if (focused) {
+    const contemporary = summarizeRecords(sentinels);
+    await save(join(output, 'sentinel-comparison.json'), {
+      m0Repeat: compare(checked.budgets, contemporary),
+      concurrentComparison: compare(contemporary, current),
+      longFirstOutput: { baseline: longTail(base), candidate: longTail(measured), sentinel: longTail(sentinels) },
+      sentinels: sentinels.map(({ file, record, sha256 }) => ({ name: file.split('/').at(-1), started: record.started, sha256 })),
+    });
+  }
   const unresolved = comparison.filter(row => row.controlDrift || row.status !== 'within-budget');
   await save(join(output, 'comparison.json'), { comparison, unresolved: unresolved.map(row => row.metric),
     ...(linux ? { controlDriftRows: comparison.filter(row => row.controlDrift).map(row => row.metric) } : {}),
   });
   await save(join(output, 'summary.json'), { baseline: BASELINE, candidate, budgetSha256: frozen,
-    trialsPerSide: 40, measuredLegsPerSide: 40 * measuredLegs(counts), unresolved: unresolved.length,
+    trialsPerSide: 40, measuredLegsPerSide: measured.reduce((sum, entry) => sum + entry.record.rows, 0), unresolved: unresolved.length,
     ...(linux ? { runtimeCpu: { baseline: aggregateCpu(base.map(entry => entry.record.cpu)),
       candidate: aggregateCpu(measured.map(entry => entry.record.cpu)) } } : {}),
   });
@@ -206,13 +262,16 @@ export async function main(root, candidate, output) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === sourcePath) {
-  const [first, second, third, fourth] = process.argv.slice(2);
+  const [first, second, third, fourth, fifth] = process.argv.slice(2);
   if (first === '--trial') {
     try { await new Promise((resolve, reject) => {
-        trial(second, third, fourth, false, counts).then(
+        trial(second, third, fourth, false, JSON.parse(fifth)).then(
         result => process.send({ kind: 'trial-result', result }, error => error ? reject(error) : resolve()), reject);
     }); }
-    catch { process.exitCode = 1; }
+    catch (error) {
+      console.error('Synthetic trial failed:', error.name, error.message.split('\n')[0]);
+      process.exitCode = 1;
+    }
     finally { process.disconnect(); }
   } else {
     assert.ok(first && second && third);

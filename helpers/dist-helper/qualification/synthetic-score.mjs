@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { COUNTS, measuredLegs } from './synthetic-client.mjs';
+import { CONCURRENCY, COUNTS, measuredLegs } from './synthetic-client.mjs';
 import { LANES } from './synthetic-trials.mjs';
 
 const RULES = {
@@ -12,10 +12,13 @@ const median = values => quantile(values, 50);
 export function auditTrial(trial, counts) {
   const expectedLegs = measuredLegs(counts);
   assert.equal(trial.rows, expectedLegs);
-  assert.equal(trial.warmups, 24);
-  assert.equal(trial.receipts, trial.lane === 'tenant' ? 105 : 0);
+  const warmups = measuredLegs(Object.fromEntries(Object.keys(counts).map(scenario => [scenario, CONCURRENCY])));
+  const cancelled = counts.cancel ?? 0;
+  const receipts = Object.keys(counts).length + (counts.tools ? 1 : 0) - (cancelled ? 1 : 0) + cancelled;
+  assert.equal(trial.warmups, warmups);
+  assert.equal(trial.receipts, trial.lane === 'tenant' ? receipts : 0);
   assert.deepEqual(trial.observed, {
-    started: expectedLegs + 24, completed: expectedLegs + 24 - counts.cancel, cancelled: counts.cancel, failed: 0,
+    started: expectedLegs + warmups, completed: expectedLegs + warmups - cancelled, cancelled, failed: 0,
   });
   assert.deepEqual(Object.keys(trial.windows), Object.keys(counts));
   for (const [scenario, count] of Object.entries(counts)) {
@@ -29,10 +32,11 @@ export function auditTrial(trial, counts) {
   }
 }
 
-export function summarize(trials, counts = COUNTS) {
+export function summarize(trials, counts = COUNTS, matrix) {
   const metrics = {};
   for (const [group, lanes] of Object.entries(LANES)) {
     for (const lane of lanes) {
+      const planned = matrix ? matrix[group][lane] : counts;
       const matches = trials.filter(trial => trial.group === group && trial.lane === lane);
       assert.deepEqual(matches.map(trial => trial.repeat), [1, 2, 3, 4, 5]);
       const groups = {};
@@ -43,11 +47,11 @@ export function summarize(trials, counts = COUNTS) {
         if (pooled) entry.pooled.push(...pooled);
       };
       for (const trial of matches) {
-        auditTrial(trial, counts);
+        auditTrial(trial, planned);
         if (lane !== 'direct') add('process', 'startup_ms', 'startup', trial.startup);
         add('process', 'idle_kib', 'rss', trial.idleKib);
         add('process', 'sampled_peak_kib', 'rss', trial.peakKib);
-        for (const [scenario, count] of Object.entries(counts)) {
+        for (const [scenario, count] of Object.entries(planned)) {
           const { rows, elapsed } = trial.windows[scenario];
           const legs = count * (scenario === 'tools' ? 2 : 1);
           const rate = 1000 * legs / elapsed;

@@ -1,0 +1,94 @@
+name: Focused split runtime (Linux x64)
+
+on:
+  push:
+    branches: [codex/split-linux-targeted-cd48db41]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: split-synthetic-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SYNTHETIC_FOCUSED: "1"
+  BASELINE: b0d7e2fbeabe39b96692c48787a066e89c04aed0
+  CANDIDATE: cd48db41a76d87ef92670cf59a662870e18e0026
+  PRODUCER_RUN: "44500284575"
+  PRODUCER_ATTEMPT: "1"
+  PRODUCER_HARNESS: a752d62e82558348f50c842f929c8bba1c8e6499
+
+jobs:
+  paired:
+    if: github.repository == 'bitrouter/bitrouter'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.BASELINE }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.CANDIDATE }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+          package-manager-cache: false
+      - name: Verify the pinned Linux producer run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/attempts/$PRODUCER_ATTEMPT"
+          gh api "$api" | jq -e --arg revision "$PRODUCER_HARNESS" --arg branch "codex/split-linux-cd48db41" '
+            .head_sha == $revision and .head_branch == $branch and .event == "push" and .status == "completed"
+            and .path == ".github/workflows/split-synthetic-linux.yml"' >/dev/null
+          gh api "$api/jobs" | jq -e '
+            [.jobs[] | select(.conclusion == "success" and (.name | startswith("Release input ("))) | .name] | sort
+            | . == ["Release input (m0 / http2)", "Release input (m0 / minimum)",
+                    "Release input (service / http2)", "Release input (service / minimum)"]' >/dev/null
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.PRODUCER_RUN }}
+          pattern: synthetic-linux-input-${{ env.PRODUCER_ATTEMPT }}-*
+          path: ${{ runner.temp }}/linux-inputs
+      - name: Verify all exact release inputs before sampling
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-linux-inputs.mjs "$RUNNER_TEMP/linux-inputs" "$RUNNER_TEMP" "$CANDIDATE" "$PRODUCER_RUN" "$PRODUCER_ATTEMPT"
+      - name: Freeze the focused baseline and measure the candidate beside M0 sentinels
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-pair.mjs "$RUNNER_TEMP" "$CANDIDATE" "$RUNNER_TEMP/synthetic-results"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: synthetic-linux-focused-${{ env.CANDIDATE }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/synthetic-builds/m0-minimum.json
+            ${{ runner.temp }}/synthetic-builds/m0-http2.json
+            ${{ runner.temp }}/synthetic-builds/service-minimum.json
+            ${{ runner.temp }}/synthetic-builds/service-http2.json
+            ${{ runner.temp }}/synthetic-results/method.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.sha256
+            ${{ runner.temp }}/synthetic-results/comparison.json
+            ${{ runner.temp }}/synthetic-results/sentinel-comparison.json
+            ${{ runner.temp }}/synthetic-results/summary.json
+          if-no-files-found: warn
+          retention-days: 14
