@@ -512,6 +512,12 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let mut prices = PricingTable::new();
+        let rated_target = target("preferred-provider");
+        prices.configure_endpoint(
+            &rated_target.provider_name,
+            None,
+            rated_target.effective_api_base(),
+        );
         prices.insert(
             "preferred-provider",
             "strong-model",
@@ -572,7 +578,11 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
                 .await?;
             assert_eq!(rows.len(), 1);
             assert_eq!((rows[0].prompt_tokens, rows[0].completion_tokens), (10, 5));
-            assert_eq!(rows[0].estimated_charge_micro_usd, 35);
+            assert_eq!(
+                rows[0].estimated_charge_micro_usd, 35,
+                "{:?}",
+                rows[0].charge_evidence_json
+            );
         } else {
             assert!(result.is_err());
         }
