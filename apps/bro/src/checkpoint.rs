@@ -465,15 +465,22 @@ pub(crate) struct Home {
 impl Home {
     pub fn open(root: &Path) -> Result<Self> {
         crate::migrated::reject_gateway_home(root)?;
+        let dir = root.join("threads");
+        check_threads_directory(&dir)?;
         if !root.join("store.sqlite").try_exists()? {
             crate::home_owner::claim(root)?;
         }
-        let dir = root.join("threads");
         crate::durable::create_dirs(&dir, true)?;
-        Ok(Self {
-            root: root.canonicalize()?,
-            dir: dir.canonicalize()?,
-        })
+        let root = root.canonicalize()?;
+        let dir = root.join("threads");
+        check_threads_directory(&dir)?;
+        let dir = dir.canonicalize()?;
+        ensure!(
+            dir.parent() == Some(root.as_path()),
+            "BRO threads directory must be a direct child of {}",
+            root.display()
+        );
+        Ok(Self { root, dir })
     }
 
     fn path(&self, thread: Uuid) -> PathBuf {
@@ -682,6 +689,28 @@ fn overlapping(left: &Path, right: &Path) -> std::io::Result<bool> {
         }
     }
     Ok(false)
+}
+
+fn check_threads_directory(path: &Path) -> Result<()> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+    };
+    let ordinary = metadata.is_dir() && !metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    let ordinary = {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        ordinary && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    };
+    ensure!(
+        ordinary,
+        "BRO threads directory must be a regular directory: {}",
+        path.display()
+    );
+    Ok(())
 }
 
 fn open_lock(path: &Path) -> Result<File> {

@@ -4,22 +4,23 @@ mod binary;
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{Result, ensure};
-use std::{fs, path::Path, process::Command};
+use std::{ffi::OsString, fs, path::Path, process::Command};
+
+fn entries(path: &Path) -> Result<Option<Vec<OsString>>> {
+    let dir = match fs::read_dir(path) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let mut names = dir
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    names.sort();
+    Ok(Some(names))
+}
 
 fn reject(home: &Path) -> Result<()> {
-    let entries = || -> Result<Option<Vec<_>>> {
-        let dir = match fs::read_dir(home) {
-            Ok(dir) => dir,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let mut names = dir
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<std::io::Result<Vec<_>>>()?;
-        names.sort();
-        Ok(Some(names))
-    };
-    let before = entries()?;
+    let before = entries(home)?;
     let id = "2ad653eb-9a51-4999-b59f-3c4b1d65174c";
     let mut commands = vec![vec!["thread", "create"], vec!["thread", "show", id]];
     if before.is_some() {
@@ -36,7 +37,7 @@ fn reject(home: &Path) -> Result<()> {
             "BRO {args:?} should reject {} as a gateway home: {stderr}",
             home.display()
         );
-        assert_eq!(entries()?, before);
+        assert_eq!(entries(home)?, before);
     }
     assert!(!home.join("threads").exists());
     Ok(())
@@ -81,6 +82,63 @@ fn nested_gateway_home_is_rejected_before_any_bro_writes() -> Result<()> {
         }
         assert!(fs::read_dir(&existing)?.next().is_none());
         assert_eq!(fs::read(file)?, bytes);
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn linked_threads_directory_is_rejected_before_any_bro_writes() -> Result<()> {
+    for claimed in [false, true] {
+        let fixture = tempfile::tempdir()?;
+        let home = fixture.path().join("bro");
+        let gateway = fixture.path().join("gateway");
+        let threads = home.join("threads");
+        let sentinel = gateway.join("sentinel");
+        let gateway_marker = gateway.join(".bitrouter-home-role");
+        fs::create_dir(&home)?;
+        fs::create_dir(&gateway)?;
+        fs::write(&sentinel, b"untouched")?;
+        fs::write(&gateway_marker, b"bitrouter\n")?;
+        let marker = home.join(".bitrouter-home-role");
+        if claimed {
+            fs::write(&marker, b"bro\n")?;
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&gateway, &threads)?;
+        #[cfg(windows)]
+        {
+            let output = Command::new("cmd.exe")
+                .current_dir(fixture.path())
+                .args(["/D", "/C", "mklink", "/J", "bro\\threads"])
+                .arg(&gateway)
+                .output()?;
+            ensure!(
+                output.status.success(),
+                "creating threads junction: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert_eq!(threads.canonicalize()?, gateway.canonicalize()?);
+        let home_before = entries(&home)?;
+        let gateway_before = entries(&gateway)?;
+        let output = Command::new(binary::bro())
+            .env("BRO_HOME", &home)
+            .args(["thread", "show", "2ad653eb-9a51-4999-b59f-3c4b1d65174c"])
+            .output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ensure!(
+            !output.status.success() && stderr.contains("BRO threads directory"),
+            "BRO should refuse the linked threads directory: {stderr}"
+        );
+        assert_eq!(entries(&home)?, home_before);
+        assert_eq!(entries(&gateway)?, gateway_before);
+        assert_eq!(threads.canonicalize()?, gateway.canonicalize()?);
+        assert_eq!(fs::read(sentinel)?, b"untouched");
+        assert_eq!(fs::read(gateway_marker)?, b"bitrouter\n");
+        if claimed {
+            assert_eq!(fs::read(marker)?, b"bro\n");
+        }
     }
     Ok(())
 }
