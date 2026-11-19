@@ -1,7 +1,7 @@
 {
   "name": "bitrouter",
   "displayName": "BitRouter",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "description": "Configure the BitRouter gateway and operate the separate BRO local harness, including tenant routing policies, provider setup, native workspace tasks and ACP prompts.",
   "author": {
     "name": "BitRouterAI"

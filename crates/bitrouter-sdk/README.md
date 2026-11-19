@@ -4,8 +4,8 @@ The HTTP service SDK follows the shared BitRouter beta release line. To adopt
 it, update both Cargo dependencies together.
 
 ```toml
-bitrouter-ai = "1.0.0-beta.1"
-bitrouter-sdk = "1.0.0-beta.1"
+bitrouter-ai = "1.0.0-beta.2"
+bitrouter-sdk = "1.0.0-beta.2"
 ```
 
 Applications that still use the earlier independently versioned HTTP SDK

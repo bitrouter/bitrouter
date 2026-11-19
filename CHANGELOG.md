@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** deliver separate `bitrouter` gateway and `bro` local harness
+  executables in the `1.0.0-beta.2` workspace. Gateway inference and tenant
+  Policy/Eval use the service API. Thread, tool approval, ACP and checkpoint
+  operations run in BRO.
+- Install and update both products independently. Use offline split-store
+  activation for supported stopped M0 SQLite installations.
+
 ## [1.0.0-beta.1]
 
 ### Changed

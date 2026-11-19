@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-ai"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "axum",
  "futures-core",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-bro"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -727,14 +727,14 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-build"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "bitrouter-ai",
  "futures",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-registry"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "chrono",
  "granit-parser",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "async-stream",
  "axum",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-skills"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "anyhow",
  "rustix 1.1.4",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-update"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "anyhow",
  "axotag",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "dist-helper"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 dependencies = [
  "anyhow",
  "bitrouter-ai",

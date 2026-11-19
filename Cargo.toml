@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "extensions/*/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,13 +30,13 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-skills = { path = "helpers/bitrouter-skills", version = "1.0.0-beta.1" }
-bitrouter-update = { path = "helpers/bitrouter-update", version = "1.0.0-beta.1" }
-bitrouter-build = { path = "helpers/bitrouter-build", version = "1.0.0-beta.1" }
-bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-beta.1" }
-bitrouter-registry = { path = "crates/bitrouter-registry", version = "1.0.0-beta.1" }
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-beta.1", default-features = false }
-bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-beta.1" }
+bitrouter-skills = { path = "helpers/bitrouter-skills", version = "1.0.0-beta.2" }
+bitrouter-update = { path = "helpers/bitrouter-update", version = "1.0.0-beta.2" }
+bitrouter-build = { path = "helpers/bitrouter-build", version = "1.0.0-beta.2" }
+bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-beta.2" }
+bitrouter-registry = { path = "crates/bitrouter-registry", version = "1.0.0-beta.2" }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-beta.2", default-features = false }
+bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-beta.2" }
 
 # Safe syscall wrappers. Used by the app's ACP runtime for `killpg(2)` and
 # native runtime process control without requiring unsafe blocks.
