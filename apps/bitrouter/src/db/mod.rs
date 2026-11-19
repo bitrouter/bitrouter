@@ -137,7 +137,7 @@ async fn connect_inner(
         sqlite::connect(&normalized, opts, owner)
             .await
             .map_err(|error| {
-                BitrouterError::internal(format!("connecting to SQLite database: {error}"))
+                BitrouterError::internal(format!("connecting to SQLite database: {error:#}"))
             })?
     } else {
         (

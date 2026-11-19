@@ -177,7 +177,7 @@ fn reject_old(fixture: &mut Fixture, binary: &Path, listen: std::net::SocketAddr
                 stdout: fs::read(&process.stdout)?,
                 diagnostic: process.diagnostic(),
             };
-            return output.rejected("format");
+            return output.rejected("unsupported database role or format");
         }
         ensure!(
             Instant::now() < deadline,
