@@ -88,7 +88,7 @@ async function window(driver, scenario, count, concurrency) {
   return { elapsed: performance.now() - started, rows: groups.flat() };
 }
 
-export async function trial(binary, lane, protocol, smoke) {
+export async function trial(binary, lane, protocol, smoke, counts = COUNTS) {
   const temp = await mkdtemp('/tmp/br-synth-');
   let gateway, provider, driver, timer, sampleError, pendingSample;
   const processSamples = [];
@@ -188,7 +188,7 @@ export async function trial(binary, lane, protocol, smoke) {
     }, 250);
     const windows = {};
     let warmups = 0;
-    for (const [scenario, planned] of Object.entries(COUNTS)) {
+    for (const [scenario, planned] of Object.entries(counts)) {
       const warmed = await window(driver, ['long', 'cancel'].includes(scenario) ? 'json' : scenario,
         smoke ? 1 : CONCURRENCY, CONCURRENCY);
       warmups += warmed.rows.length;

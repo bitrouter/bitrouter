@@ -6,7 +6,11 @@ import { performance } from 'node:perf_hooks';
 import { TEXT, STREAM_CHUNKS, TOOLS, ARGUMENTS, TOOL_ID, RESULT } from './synthetic-peer.mjs';
 
 export const COUNTS = { json: 128, instant: 128, tools: 100, long: 20, cancel: 100 };
+export const LINUX_COUNTS = { ...COUNTS, json: 1024, instant: 1024, tools: 512 };
 export const CONCURRENCY = 4;
+
+export const measuredLegs = counts => Object.entries(counts)
+  .reduce((sum, [scenario, count]) => sum + count * (scenario === 'tools' ? 2 : 1), 0);
 const MESSAGES = [{ role: 'user', content: 'Run the synthetic fixture.' }];
 
 export function client(origin, protocol, headers, prefix = '') {

@@ -1,0 +1,124 @@
+name: Split synthetic runtime (Linux x64)
+
+on:
+  push:
+    branches: [codex/split-linux-cd48db41]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: split-synthetic-linux-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BASELINE: b0d7e2fbeabe39b96692c48787a066e89c04aed0
+  CANDIDATE: cd48db41a76d87ef92670cf59a662870e18e0026
+  RUSTUP_TOOLCHAIN: 1.99.1
+
+jobs:
+  release:
+    if: github.repository == 'bitrouter/bitrouter'
+    name: Release input (${{ matrix.role }} / ${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [m0, service]
+        variant: [minimum, http2]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ matrix.role == 'm0' && env.BASELINE || env.CANDIDATE }}
+          path: product
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+          package-manager-cache: false
+      - name: Build one exact Linux release
+        shell: bash
+        working-directory: product
+        env:
+          ROLE: ${{ matrix.role }}
+          VARIANT: ${{ matrix.variant }}
+          SOURCE_SHA: ${{ matrix.role == 'm0' && env.BASELINE || env.CANDIDATE }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          node ../harness/helpers/dist-helper/qualification/build.mjs runtime-linux
+          built="$RUNNER_TEMP/m5-evidence/$ROLE/$VARIANT"
+          sha256sum "$built/runtime.tar.gz" | cut -d ' ' -f 1 > "$built/runtime.sha256"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: synthetic-linux-input-${{ github.run_attempt }}-${{ matrix.role }}-${{ matrix.variant }}
+          path: |
+            ${{ runner.temp }}/m5-evidence/${{ matrix.role }}/${{ matrix.variant }}/build.json
+            ${{ runner.temp }}/m5-evidence/${{ matrix.role }}/${{ matrix.variant }}/cold-release.json
+            ${{ runner.temp }}/m5-evidence/${{ matrix.role }}/${{ matrix.variant }}/runtime.tar.gz
+            ${{ runner.temp }}/m5-evidence/${{ matrix.role }}/${{ matrix.variant }}/runtime.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  paired:
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.BASELINE }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.CANDIDATE }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+          package-manager-cache: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: synthetic-linux-input-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/linux-inputs
+      - name: Verify all exact release inputs before sampling
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-linux-inputs.mjs "$RUNNER_TEMP/linux-inputs" "$RUNNER_TEMP" "$CANDIDATE"
+      - name: Freeze the Linux baseline and measure both sides serially
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-pair.mjs "$RUNNER_TEMP" "$CANDIDATE" "$RUNNER_TEMP/synthetic-results"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: synthetic-linux-runtime-${{ env.CANDIDATE }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/synthetic-builds/m0-minimum.json
+            ${{ runner.temp }}/synthetic-builds/m0-http2.json
+            ${{ runner.temp }}/synthetic-builds/service-minimum.json
+            ${{ runner.temp }}/synthetic-builds/service-http2.json
+            ${{ runner.temp }}/synthetic-results/method.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.sha256
+            ${{ runner.temp }}/synthetic-results/comparison.json
+            ${{ runner.temp }}/synthetic-results/summary.json
+          if-no-files-found: warn
+          retention-days: 14

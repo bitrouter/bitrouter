@@ -9,7 +9,8 @@ import { join } from 'node:path';
 
 const { SOURCE_SHA: sha, ROLE: role, VARIANT: variant, RUNNER_TEMP: temp } = process.env;
 const mode = process.argv[2];
-assert.ok(['timing', 'runtime'].includes(mode));
+assert.ok(['timing', 'runtime', 'runtime-linux'].includes(mode));
+const runtime = mode !== 'timing';
 assert.ok(['m0', 'service', 'bro'].includes(role) && /^[0-9a-f]{40}$/.test(sha));
 const options = {
   minimum: ['--no-default-features'], default: [],
@@ -61,6 +62,11 @@ const settings = { rustc, cargo: run('cargo', ['-V']), target, jobs: 2, incremen
 if (mode === 'runtime') {
   settings.clang = run('xcrun', ['clang', '--version']);
   settings.sdk = run('xcrun', ['--show-sdk-version']);
+} else if (mode === 'runtime-linux') {
+  assert.equal(process.platform, 'linux');
+  settings.cc = run('cc', ['--version']);
+  settings.linker = run('ld', ['--version']);
+  settings.libc = run('getconf', ['GNU_LIBC_VERSION']);
 }
 const provenance = { sha, product: role, variant, lock_sha256: await digest('Cargo.lock'),
   workflow: process.env.GITHUB_WORKFLOW_REF, run_id: process.env.GITHUB_RUN_ID,
@@ -113,7 +119,7 @@ function identity(revision) {
   if (expected) assert.deepEqual([...info.features].sort(), expected);
   return { exe, info };
 }
-for (const profile of mode === 'runtime' ? ['release'] : ['release', 'test']) {
+for (const profile of runtime ? ['release'] : ['release', 'test']) {
   const targetDir = mkdtempSync(join(temp, 'm5-target-'));
   env.CARGO_TARGET_DIR = targetDir;
   try {
@@ -122,8 +128,8 @@ for (const profile of mode === 'runtime' ? ['release'] : ['release', 'test']) {
     const { exe, info } = identity(sha);
     emit('build.json', { ...provenance, binary, binary_bytes: statSync(exe).size,
       binary_sha256: await digest(exe), build_info: info });
-    if (mode === 'runtime') {
-      run('codesign', ['--verify', '--strict', exe]);
+    if (runtime) {
+      if (mode === 'runtime') run('codesign', ['--verify', '--strict', exe]);
       copyFileSync(exe, join(out, binary));
       run('tar', ['-czf', join(out, 'runtime.tar.gz'), '-C', out, binary, 'build.json']);
       rmSync(join(out, binary));
