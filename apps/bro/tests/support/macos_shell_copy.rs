@@ -7,6 +7,60 @@ fn reply() -> String {
 }
 
 #[test]
+fn check_edits_file_without_replacing_its_metadata() -> Result<()> {
+    let fixture = tempfile::tempdir()?;
+    let work = fixture.path().join("project");
+    fs::create_dir(&work)?;
+    let note = work.join("note");
+    let stamp = work.join("stamp");
+    fs::write(&note, "before")?;
+    fs::File::create(&stamp)?.set_modified(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_650_000_000),
+    )?;
+    let original = fs::metadata(&note)?;
+    let expected_mtime = fs::metadata(&stamp)?.modified()?;
+    ensure!(
+        Command::new("/usr/bin/xattr")
+            .args(["-w", "user.bro-fixture", "annotation"])
+            .arg(&note)
+            .status()?
+            .success(),
+        "could not install fixture xattr"
+    );
+    let mock = Mock::start(vec![reply()])?;
+    let output = bro(
+        &fixture.path().join("home"),
+        &work,
+        &mock.endpoint,
+        &[
+            "task",
+            "run",
+            "verify",
+            "--check",
+            "printf after > note && chmod 640 note && touch -r stamp note",
+        ],
+    )?;
+    let terminal = event(&output)?;
+    ensure!(output.status.success(), "{terminal}");
+    assert_eq!(terminal["verification"], "passed");
+    assert_eq!(fs::read(&note)?, b"after");
+    let published = fs::metadata(&note)?;
+    assert_eq!(published.ino(), original.ino());
+    assert_eq!(published.uid(), original.uid());
+    assert_eq!(published.gid(), original.gid());
+    assert_eq!(published.mode() & 0o777, 0o640);
+    assert_eq!(published.modified()?, expected_mtime);
+    let attr = Command::new("/usr/bin/xattr")
+        .args(["-p", "user.bro-fixture"])
+        .arg(&note)
+        .output()?;
+    assert!(attr.status.success());
+    assert_eq!(attr.stdout, b"annotation\n");
+    assert_eq!(mock.join()?.len(), 1);
+    Ok(())
+}
+
+#[test]
 fn check_publishes_regular_file_changes_without_importing_linked_peer_data() -> Result<()> {
     let fixture = tempfile::tempdir()?;
     let work = fixture.path().join("project");

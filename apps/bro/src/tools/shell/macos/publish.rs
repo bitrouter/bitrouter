@@ -376,7 +376,7 @@ pub(super) fn changes(root: &File, before: &Tree, after: &Tree, started: &mut bo
                     }
                     target.set_modified(new.mtime)?;
                     target.sync_all()?;
-                    published_files.insert(path, old.id);
+                    published_files.insert(path, id(&target.metadata()?)?);
                 } else {
                     published_files.insert(path, create_file(&dir, name, bytes, new)?);
                 }
