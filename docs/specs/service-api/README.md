@@ -1971,6 +1971,11 @@ implicit learner or automatic Policy publication. Authentication follows the con
 credential policy, including explicit development `skip_auth` configuration;
 production clients MUST use the host's configured authentication boundary.
 
+The `eval-publication` feature enables `learning.mode: observe` for tenant
+Policy decisions. Observations record execution evidence for external
+evaluation. This profile requires `max_evaluations: 0` and `learning_jobs: 0`.
+Tenant configuration rejects `learning.mode: explore`.
+
 | Method | Path | Body / response |
 | --- | --- | --- |
 | POST, GET | `/v1/evals/subjects` | `EvalSubject` / insertion report or subject list |

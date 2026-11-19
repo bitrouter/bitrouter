@@ -92,10 +92,9 @@ async fn configured_provider_idle_child() -> Result<()> {
         }
         Ok::<_, anyhow::Error>(bytes)
     });
-    tokio::task::yield_now().await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(3)).await;
-    tokio::time::resume();
+    // Use the real clock for this production-path fixture. Advancing Tokio's
+    // global clock also advances authority and receipt settlement deadlines,
+    // which can expire while the database is still committing the outcome.
     let bytes = tokio::time::timeout(TIMEOUT, reader).await???;
     // Chat Completions also terminates error streams with [DONE]. Require the
     // error frame itself and reject a successful finish reason.
@@ -114,7 +113,8 @@ async fn configured_provider_idle_child() -> Result<()> {
             },
         )
         .await
-        .map_err(failure)?;
+        .map_err(failure)
+        .context("reading committed provider-idle receipt")?;
     let page: ExecutionPage = serde_json::from_slice(&bytes)?;
     ensure!(page.execution_ids.len() == 1 && calls.load(Ordering::SeqCst) == 1);
     let receipt = store::lookup(

@@ -25,6 +25,28 @@ fn empty_document() -> Configuration {
     }
 }
 
+#[test]
+fn gateway_profile_separates_eval_observation_from_scheduled_learning() {
+    use crate::tenancy::configuration::validate_profile;
+
+    let mut document = empty_document();
+    assert!(validate_profile(&document).is_ok());
+    document.learning.mode = LearningMode::Observe;
+    assert_eq!(
+        validate_profile(&document).is_ok(),
+        cfg!(feature = "eval-publication")
+    );
+
+    document.learning.max_evaluations = 1;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+    document.learning.max_evaluations = 0;
+    document.limits.learning_jobs = 1;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+    document.limits.learning_jobs = 0;
+    document.learning.mode = LearningMode::Explore;
+    assert_eq!(validate_profile(&document), Err(ErrorCode::InvalidRequest));
+}
+
 fn retained(value: StoredResponse) -> Result<ConfigurationRevision> {
     match value {
         StoredResponse::Configuration(value) => Ok(value),

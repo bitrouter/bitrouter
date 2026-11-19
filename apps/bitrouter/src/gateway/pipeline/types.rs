@@ -480,6 +480,10 @@ impl AllocatedRequestId {
         }
     }
 
+    pub(crate) fn belongs_to(&self, attempt: u64) -> bool {
+        self.delivery.load(std::sync::atomic::Ordering::Relaxed) == attempt
+    }
+
     /// Cloning a native PipelineRequest shares the allocation. Only its first
     /// delivery may dispatch; repeated phases of that same delivery may proceed.
     pub(crate) fn claim(&self, attempt: u64) -> bool {

@@ -48,6 +48,26 @@ fn allocation(
 pub(crate) struct RequestIdOrigin;
 #[async_trait]
 impl PreRequestHook for RequestIdOrigin {
+    async fn revalidate_context(
+        &self,
+        ctx: &PipelineContext,
+    ) -> crate::gateway::error::Result<HookDecision> {
+        // Context reduction retains the admitted ID and delivery. Reading the
+        // original proof neither consumes another allocation nor writes the ledger.
+        let owned = match allocation(ctx) {
+            Some(origin) => origin.belongs_to(ctx.delivery_attempt_id()),
+            None => ctx
+                .get_event::<GatewayRequestObserved>()
+                .is_some_and(|event| event.request.request_id == ctx.request_id()),
+        };
+        if !owned {
+            return Err(BitrouterError::bad_request(
+                "context has no matching gateway request admission",
+            ));
+        }
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(
         &self,
         ctx: &mut PipelineContext,
