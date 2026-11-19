@@ -854,23 +854,18 @@ async fn rejected_effectful_tools_report_no_mutation() -> Result<(), Box<dyn std
 }
 
 #[test]
-fn persistence_failure_after_temporary_write_retains_uncertainty()
--> Result<(), Box<dyn std::error::Error>> {
+fn stale_content_is_rejected_before_writing() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let path = workspace.path().join("note.txt");
     fs::write(&path, "newer content")?;
     let mut effect = EffectStatus::NotExecuted;
     assert!(
-        persist_text(
-            workspace.path(),
-            &path,
-            b"replacement",
-            Some(b"stale content"),
-            &mut effect
-        )
-        .is_err()
+        WorkspaceTools::new(workspace.path(), ToolMode::Coding)?
+            .destination("note.txt", false, &mut effect)?
+            .publish(b"replacement", Some(b"stale content"), &mut effect)
+            .is_err()
     );
-    assert_eq!(effect, EffectStatus::Unknown);
+    assert_eq!(effect, EffectStatus::NotExecuted);
     assert_eq!(fs::read_to_string(&path)?, "newer content");
     Ok(())
 }

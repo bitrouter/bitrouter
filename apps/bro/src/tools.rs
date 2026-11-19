@@ -1,11 +1,10 @@
+#[cfg(test)]
 use std::fs;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use bitrouter_ai::types::{Tool, ToolResultOutput};
 use globset::Glob;
-use ignore::WalkBuilder;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -16,10 +15,14 @@ use bitrouter_ai::harness::runtime::EffectStatus;
 use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
 
 mod edit;
+#[cfg(test)]
+mod file_tests;
+mod files;
 mod glob;
 mod grep;
 mod read;
 mod shell;
+mod walk;
 mod write;
 
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -425,54 +428,6 @@ impl WorkspaceTools {
             ),
         }
     }
-
-    fn search_path(&self, path: Option<&str>) -> Result<PathBuf, String> {
-        match path {
-            None | Some(".") => Ok(self.root.clone()),
-            Some(path) => self.existing_path(path),
-        }
-    }
-
-    fn existing_path(&self, path: &str) -> Result<PathBuf, String> {
-        let relative = validate_relative(path)?;
-        self.resolved(&self.root.join(relative))
-    }
-
-    fn writable_path(
-        &self,
-        path: &str,
-        create_parents: bool,
-        effect: &mut EffectStatus,
-    ) -> Result<PathBuf, String> {
-        let relative = validate_relative(path)?;
-        let candidate = self.root.join(relative);
-        if let Ok(metadata) = fs::symlink_metadata(&candidate)
-            && (metadata.file_type().is_symlink() || !metadata.is_file())
-        {
-            return Err("target must be a regular file, not a symlink".into());
-        }
-        let parent = candidate.parent().ok_or("path has no parent")?;
-        if create_parents {
-            let mut existing = parent;
-            while !existing.exists() {
-                existing = existing.parent().ok_or("path has no existing ancestor")?;
-            }
-            let pinned = self.resolved(existing)?;
-            if existing != parent {
-                let missing = parent.strip_prefix(existing).map_err(|e| e.to_string())?;
-                *effect = EffectStatus::Unknown;
-                crate::durable::create_dirs(&pinned.join(missing), false)
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        let parent = self.resolved(parent)?;
-        let name = candidate.file_name().ok_or("path has no filename")?;
-        let path = parent.join(name);
-        if !create_parents && !path.is_file() {
-            return Err("file does not exist".into());
-        }
-        Ok(path)
-    }
 }
 
 fn search_limit(requested: Option<usize>, default: usize) -> Result<usize, String> {
@@ -490,74 +445,6 @@ fn append_search_line(output: &mut String, line: &str) -> bool {
     output.push_str(line);
     output.push('\n');
     true
-}
-
-fn workspace_walk(path: &Path) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(path);
-    builder.hidden(false).follow_links(false).require_git(false);
-    builder.filter_entry(|entry| entry.path().file_name().is_none_or(|name| name != ".git"));
-    builder
-}
-
-fn persist_text(
-    workspace: &Path,
-    path: &Path,
-    updated: &[u8],
-    original: Option<&[u8]>,
-    effect: &mut EffectStatus,
-) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|dir| dir.starts_with(workspace))
-        .ok_or("file publication outside workspace")?;
-    let overwrite = if original.is_some() {
-        // Atomic replacement requires directory permission. Also honor the
-        // existing file's write permission before staging replacement contents.
-        let mut options = fs::OpenOptions::new();
-        options.write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        let target = options.open(path).map_err(|e| e.to_string())?;
-        let metadata = target.metadata().map_err(|e| e.to_string())?;
-        if !metadata.is_file() || metadata.permissions().readonly() {
-            return Err("existing target is not a writable regular file".into());
-        }
-        atomicwrites::AllowOverwrite
-    } else {
-        atomicwrites::DisallowOverwrite
-    };
-    *effect = EffectStatus::Unknown;
-    crate::durable::write_file(path, overwrite, |file| {
-        file.write_all(updated)?;
-        if let Some(expected) = original {
-            file.set_permissions(fs::metadata(path)?.permissions())?;
-            if fs::read(path)? != expected {
-                return Err(std::io::Error::other(
-                    "file changed while preparing the edit",
-                ));
-            }
-        }
-        Ok(())
-    })
-    .map_err(|error| error.to_string())?;
-    // The publisher synced the immediate parent. Flush the links to that
-    // directory as well, including directories left by an interrupted mkdir.
-    #[cfg(unix)]
-    for ancestor in parent
-        .ancestors()
-        .skip(1)
-        .take_while(|dir| dir.starts_with(workspace))
-    {
-        fs::File::open(ancestor)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(windows)]
-    let _ = parent; // create_dirs published every new directory with write-through.
-    Ok(())
 }
 
 fn validate_relative(path: &str) -> Result<PathBuf, String> {

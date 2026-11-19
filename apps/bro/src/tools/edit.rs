@@ -1,10 +1,8 @@
 //! Original-text edits with explicit effect evidence.
 
-use std::fs;
-
 use bitrouter_ai::types::ToolResultOutput;
 
-use super::{EditArgs, MAX_FILE_BYTES, WorkspaceTools, persist_text};
+use super::{EditArgs, MAX_FILE_BYTES, WorkspaceTools};
 use bitrouter_ai::harness::runtime::EffectStatus;
 
 impl WorkspaceTools {
@@ -16,11 +14,13 @@ impl WorkspaceTools {
         if args.edits.is_empty() {
             return Err("edits must contain at least one replacement".into());
         }
-        let path = self.writable_path(&args.path, false, effect)?;
-        let original_bytes = fs::read(&path).map_err(|error| error.to_string())?;
-        if original_bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err("file exceeds the 2 MiB edit limit".into());
-        }
+        let mut target = self
+            .destination(&args.path, false, effect)
+            .map_err(|e| e.to_string())?;
+        let original_bytes = target
+            .original()
+            .map_err(|e| e.to_string())?
+            .ok_or("file does not exist")?;
         let original =
             std::str::from_utf8(&original_bytes).map_err(|_| "file is not UTF-8".to_string())?;
         let (bom, searchable) = match original.strip_prefix('\u{feff}') {
@@ -71,13 +71,9 @@ impl WorkspaceTools {
         if updated.len() as u64 > MAX_FILE_BYTES {
             return Err("edited file exceeds the 2 MiB limit".into());
         }
-        persist_text(
-            &self.root,
-            &path,
-            updated.as_bytes(),
-            Some(&original_bytes),
-            effect,
-        )?;
+        target
+            .publish(updated.as_bytes(), Some(&original_bytes), effect)
+            .map_err(|e| e.to_string())?;
         *effect = EffectStatus::Completed;
         let diff = similar::TextDiff::from_lines(original, &updated)
             .unified_diff()

@@ -1,6 +1,8 @@
 //! A saved grant identifies one directory, including across worker restarts.
-#[cfg(target_os = "macos")]
 pub(crate) mod children;
+pub(crate) mod publish;
+#[cfg(windows)]
+mod windows;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};

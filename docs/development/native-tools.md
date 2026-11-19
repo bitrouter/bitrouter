@@ -79,11 +79,19 @@ Use one schema without a model-selected file/directory mode:
 `path` stays required. `"."` explicitly selects the workspace root. Other paths
 use the existing workspace-relative validation and canonical containment check.
 Handle `"."` as a read-specific root case; do not relax write/edit validation.
-Resolve the path and accept only a regular file or a directory. Reject missing
-paths, special files, invalid UTF-8 file content, and paths escaping the root.
+Resolve the path and accept only a singly linked regular file or a directory.
+Reject missing paths, special files, invalid UTF-8 file content, and paths
+escaping the root.
 An explicitly selected symlink may resolve to an in-workspace file/directory;
 an escaping target is rejected. Directory enumeration never follows child links.
+After path resolution, open each child relative to its held parent directory.
 These checks retain the workspace boundary and are not OS sandboxing.
+
+`write` and `edit` verify an existing file and its original bytes before
+writing through the held file handle. They create new files exclusively in
+the held parent directory. An interrupted write can leave partial bytes;
+BRO reports an unknown effect when writing or syncing fails after mutation may
+have begun.
 
 ### File behavior
 

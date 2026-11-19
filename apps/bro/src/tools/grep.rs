@@ -1,7 +1,7 @@
 //! Bounded workspace content search.
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 use bitrouter_ai::types::ToolResultOutput;
@@ -11,8 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     GrepArgs, MAX_FILE_BYTES, MAX_GREP_LINE_CHARS, MAX_GREP_MATCHES, WorkspaceTools,
-    append_search_line, search_limit, workspace_walk,
+    append_search_line, search_limit,
 };
+use crate::workspace::children::{Access, Kind, regular};
 
 impl WorkspaceTools {
     pub(super) fn grep(
@@ -23,7 +24,9 @@ impl WorkspaceTools {
         if args.pattern.is_empty() {
             return Err("pattern must not be empty".into());
         }
-        let path = self.search_path(args.path.as_deref())?;
+        let (path, node) = self
+            .lookup(args.path.as_deref())
+            .map_err(|e| e.to_string())?;
         let limit = search_limit(args.limit, MAX_GREP_MATCHES)?;
         let pattern = if args.literal {
             regex::escape(&args.pattern)
@@ -45,44 +48,22 @@ impl WorkspaceTools {
         let mut output = String::new();
         let mut matches = 0;
         let mut truncated = false;
-        if !path.is_file() && !path.is_dir() {
-            return Err("path is not a file or directory".into());
-        }
-        for entry in workspace_walk(&path).build() {
-            if cancel.is_cancelled() {
-                return Err("grep cancelled".into());
+        let mut search = |relative: &Path, file: File| -> anyhow::Result<bool> {
+            regular(&file)?;
+            if file.metadata()?.len() > MAX_FILE_BYTES {
+                return Ok(true);
             }
-            let entry = entry.map_err(|error| error.to_string())?;
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let relative = entry
-                .path()
-                .strip_prefix(&self.root)
-                .map_err(|error| error.to_string())?;
-            if let Some(glob) = &glob {
-                let file = entry.file_name();
-                if !glob.is_match(relative) && !glob.is_match(Path::new(file)) {
-                    continue;
-                }
-            }
-            let canonical = self.resolved(entry.path())?;
-            if fs::metadata(&canonical)
-                .map_err(|error| error.to_string())?
-                .len()
-                > MAX_FILE_BYTES
+            for (index, line) in BufReader::new(file.take(MAX_FILE_BYTES + 1))
+                .lines()
+                .enumerate()
             {
-                continue;
-            }
-            let file = File::open(canonical).map_err(|error| error.to_string())?;
-            for (index, line) in BufReader::new(file).lines().enumerate() {
                 if cancel.is_cancelled() {
-                    return Err("grep cancelled".into());
+                    anyhow::bail!("grep cancelled");
                 }
                 let line = match line {
                     Ok(line) => line,
-                    Err(error) if error.kind() == std::io::ErrorKind::InvalidData => break,
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) if error.kind() == io::ErrorKind::InvalidData => break,
+                    Err(error) => return Err(error.into()),
                 };
                 if !regex.is_match(&line) {
                     continue;
@@ -104,8 +85,34 @@ impl WorkspaceTools {
                 }
                 matches += 1;
             }
-            if truncated {
-                break;
+            Ok(!truncated)
+        };
+        let matches_glob = |relative: &Path| {
+            glob.as_ref().is_none_or(|g| {
+                g.is_match(relative)
+                    || relative
+                        .file_name()
+                        .is_some_and(|n| g.is_match(Path::new(n)))
+            })
+        };
+        match node {
+            super::files::Node::File(file) => {
+                if matches_glob(&path) {
+                    search(&path, file).map_err(|e| e.to_string())?;
+                }
+            }
+            super::files::Node::Directory(dir) => {
+                super::walk::walk(dir, &path, cancel, |parent, name, relative, kind| {
+                    if kind == Kind::File && matches_glob(relative) {
+                        match parent.open(name, Access::Read) {
+                            Ok(file) => return search(relative, file),
+                            Err(error) if error.kind() == io::ErrorKind::InvalidData => (),
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                    Ok(true)
+                })
+                .map_err(|e| e.to_string())?
             }
         }
         if truncated {
