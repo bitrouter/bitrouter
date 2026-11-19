@@ -181,9 +181,13 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     // Both the Service claim and the final pool clone retain the acquisition.
     // Return only facts so stopped-file readers can acquire a fresh owner.
     drop(fixture);
-    // The tests copy the stopped main file byte-for-byte. Ensure it contains
-    // every committed Eval row even if closing the last writer would leave WAL
-    // frames behind on this runner.
+    finish_fixture_image(db).await?;
+    Ok(seeded)
+}
+
+async fn finish_fixture_image(db: sea_orm::DatabaseConnection) -> Result<()> {
+    // These tests copy and compare the main file directly. Make the stopped
+    // image self-contained before handing it to the next reader.
     let backend = db.get_database_backend();
     let checkpoint = db
         .query_one(Statement::from_string(
@@ -206,7 +210,7 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
         .context("closing retained Eval fixture journal")?;
     ensure!(journal.try_get_by_index::<String>(0)? == "delete");
     db.close().await?;
-    Ok(seeded)
+    Ok(())
 }
 
 fn gateway_router(db: sea_orm::DatabaseConnection) -> Router {
@@ -371,8 +375,7 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
         }
     }
     drop(database);
-    db.close().await?;
-    Ok(())
+    finish_fixture_image(db).await
 }
 
 #[tokio::test]
