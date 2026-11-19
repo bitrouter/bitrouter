@@ -17,8 +17,8 @@ use windows_sys::{
         Foundation::OBJECT_ATTRIBUTES,
         Storage::FileSystem::{
             FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-            FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH,
-            NtCreateFile,
+            FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT,
+            FILE_WRITE_THROUGH, FileRenameInformation, NtCreateFile, NtSetInformationFile,
         },
     },
     Win32::{
@@ -50,7 +50,7 @@ pub(super) fn open(parent: &File, name: &OsStr, access: Access, create: bool) ->
     let mut status = IO_STATUS_BLOCK::default();
     let rights = match access {
         Access::Directory | Access::Read => FILE_GENERIC_READ,
-        Access::ReadWrite => FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+        Access::ReadWrite => FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
     };
     let options = if access == Access::Directory {
         FILE_DIRECTORY_FILE
@@ -76,16 +76,17 @@ pub(super) fn open(parent: &File, name: &OsStr, access: Access, create: bool) ->
             options
                 | FILE_OPEN_REPARSE_POINT
                 | FILE_SYNCHRONOUS_IO_NONALERT
-                | if create { FILE_WRITE_THROUGH } else { 0 },
+                | if create || access == Access::ReadWrite {
+                    FILE_WRITE_THROUGH
+                } else {
+                    0
+                },
             ptr::null(),
             0,
         )
     };
     if result < 0 {
-        // SAFETY: conversion accepts any native status and uses no pointers.
-        return Err(io::Error::from_raw_os_error(
-            unsafe { RtlNtStatusToDosError(result) } as i32,
-        ));
+        return Err(status_error(result));
     }
     // SAFETY: success transferred ownership of one file handle to this caller.
     let file = unsafe { File::from_raw_handle(handle) };
@@ -99,6 +100,61 @@ pub(super) fn open(parent: &File, name: &OsStr, access: Access, create: bool) ->
         regular(&file)?;
     }
     Ok(file)
+}
+
+fn status_error(status: i32) -> io::Error {
+    // SAFETY: the conversion accepts any native status and uses no pointers.
+    io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
+}
+
+pub(super) fn rename_here(file: &File, name: &OsStr) -> io::Result<()> {
+    component(name)?;
+    let wide: Vec<u16> = name.encode_wide().collect();
+    let offset = offset_of!(FILE_RENAME_INFORMATION, FileName);
+    let name_len = u16::try_from(wide.len() * size_of::<u16>())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file name too long"))?;
+    let len = size_of::<FILE_RENAME_INFORMATION>() + usize::from(name_len);
+    let mut buffer = vec![0usize; len.div_ceil(size_of::<usize>())];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+    let mut status = IO_STATUS_BLOCK::default();
+    // SAFETY: the zeroed header disables replacement and uses the source file's
+    // directory. The aligned allocation covers the header and counted name.
+    let result = unsafe {
+        (*info).FileNameLength = name_len.into();
+        ptr::copy_nonoverlapping(
+            wide.as_ptr(),
+            buffer.as_mut_ptr().cast::<u8>().add(offset).cast(),
+            wide.len(),
+        );
+        NtSetInformationFile(
+            file.as_raw_handle(),
+            &mut status,
+            info.cast(),
+            len as u32,
+            FileRenameInformation,
+        )
+    };
+    if result < 0 {
+        return Err(status_error(result));
+    }
+    Ok(())
+}
+
+pub(super) fn delete(file: &File) -> io::Result<()> {
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: the handle is live and the input is a complete disposition record.
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const info).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 pub(super) type Entries = std::vec::IntoIter<(OsString, Kind)>;

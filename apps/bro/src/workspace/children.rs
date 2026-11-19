@@ -203,7 +203,7 @@ impl Parent {
     }
 
     #[cfg(unix)]
-    fn sync(&self) -> io::Result<()> {
+    pub(super) fn sync(&self) -> io::Result<()> {
         self.reopen()?.sync_all()
     }
 

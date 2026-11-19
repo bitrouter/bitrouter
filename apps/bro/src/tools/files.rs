@@ -12,7 +12,7 @@ use bitrouter_ai::harness::runtime::EffectStatus;
 
 use super::{MAX_FILE_BYTES, WorkspaceTools, validate_relative};
 use crate::workspace::children::{Access, Parent, regular};
-use crate::workspace::publish::{create_file, verify_destination, write_file};
+use crate::workspace::publish::StagedFile;
 
 pub(super) enum Node {
     File(File),
@@ -134,27 +134,18 @@ impl Destination {
         original: Option<&[u8]>,
         effect: &mut EffectStatus,
     ) -> Result<()> {
-        if let Some(file) = &mut self.file {
-            ensure!(
-                contents(file)?.as_slice() == original.context("missing original")?,
-                "file changed while preparing the edit"
-            );
-            verify_destination(&self.parent, &self.name, file)?;
-            *effect = EffectStatus::Unknown;
-            write_file(file, data)?;
-        } else {
-            let mut file = match create_file(&self.parent, &self.name) {
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    return Err(error.into());
-                }
-                result => {
-                    *effect = EffectStatus::Unknown;
-                    result?
-                }
-            };
-            write_file(&mut file, data)?;
-        }
-        self.parent.sync_ancestors()?;
-        Ok(())
+        let permissions = self
+            .file
+            .as_ref()
+            .map(|file| file.metadata().map(|metadata| metadata.permissions()))
+            .transpose()?;
+        let expected = match (self.file.as_mut(), original) {
+            (Some(file), Some(bytes)) => Some((file, bytes)),
+            (None, None) => None,
+            _ => anyhow::bail!("file publication is missing its original state"),
+        };
+        StagedFile::new(self.parent)?
+            .prepare(data, permissions)?
+            .publish(&self.name, expected, effect)
     }
 }

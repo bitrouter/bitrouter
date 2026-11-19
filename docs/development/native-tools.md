@@ -87,11 +87,13 @@ an escaping target is rejected. Directory enumeration never follows child links.
 After path resolution, open each child relative to its held parent directory.
 These checks retain the workspace boundary and are not OS sandboxing.
 
-`write` and `edit` verify an existing file and its original bytes before
-writing through the held file handle. They create new files exclusively in
-the held parent directory. An interrupted write can leave partial bytes;
-BRO reports an unknown effect when writing or syncing fails after mutation may
-have begun.
+`write` and `edit` sync the complete replacement before installing it in
+the held directory. New files never replace an existing entry. An edit
+verifies the existing file and its original bytes; on a publication conflict,
+the displaced file is retained for recovery. On Windows, the destination
+can be briefly absent during replacement while its original file is held
+under a recovery name. BRO reports an unknown effect when publication or
+syncing may have changed the workspace but completion is uncertain.
 
 ### File behavior
 

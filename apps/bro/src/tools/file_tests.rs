@@ -3,6 +3,7 @@ use super::WorkspaceTools;
 #[cfg(unix)]
 use super::files::{Node, contents};
 use crate::workspace::children::Parent;
+use crate::workspace::publish::StagedFile;
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{Result, ensure};
@@ -15,6 +16,8 @@ use tokio_util::sync::CancellationToken;
 #[cfg(unix)]
 #[test]
 fn pinned_descendant_keeps_original_file_and_publication_directory() -> Result<()> {
+    use std::io::{Read, Seek};
+
     let tmp = tempdir()?;
     let root = tmp.path();
     fs::create_dir_all(root.join("a/b"))?;
@@ -31,6 +34,10 @@ fn pinned_descendant_keeps_original_file_and_publication_directory() -> Result<(
     fs::write(root.join("a/b/note"), b"replacement")?;
     assert_eq!(contents(&mut reader)?, b"original");
     writer.publish(b"updated", Some(&original), &mut effect)?;
+    reader.rewind()?;
+    let mut observed = Vec::new();
+    reader.read_to_end(&mut observed)?;
+    assert_eq!(observed, b"original");
     assert_eq!(fs::read(root.join("moved/b/note"))?, b"updated");
     assert_eq!(fs::read(root.join("a/b/note"))?, b"replacement");
     Ok(())
@@ -79,7 +86,7 @@ fn nested_directory_inventory_keeps_its_open_parent() -> Result<()> {
 }
 
 #[test]
-fn writing_existing_file_preserves_its_object_and_truncates_old_bytes() -> Result<()> {
+fn publishing_existing_file_replaces_complete_contents() -> Result<()> {
     use std::io::Read;
 
     let tmp = tempdir()?;
@@ -92,8 +99,29 @@ fn writing_existing_file_preserves_its_object_and_truncates_old_bytes() -> Resul
     dest.publish(b"new", Some(b"original content"), &mut effect)?;
     let mut observed = Vec::new();
     observer.read_to_end(&mut observed)?;
-    assert_eq!(observed, b"new");
+    assert_eq!(observed, b"original content");
     assert_eq!(fs::read(path)?, b"new");
+    Ok(())
+}
+
+#[test]
+fn interrupted_staging_does_not_publish_new_or_existing_files() -> Result<()> {
+    let tmp = tempdir()?;
+    let existing = tmp.path().join("existing");
+    let absent = tmp.path().join("absent");
+    fs::write(&existing, b"old bytes")?;
+    let tools = WorkspaceTools::new(tmp.path(), ToolMode::Coding)?;
+    let parent = Parent::root(&tools.directory)?;
+    for permissions in [Some(existing.metadata()?.permissions()), None] {
+        drop(StagedFile::new(parent.clone())?);
+        let pending = StagedFile::new(parent.clone())?.prepare(b"staged bytes", permissions)?;
+        assert_eq!(fs::read(&existing)?, b"old bytes");
+        assert!(!absent.try_exists()?);
+        drop(pending);
+        assert_eq!(fs::read(&existing)?, b"old bytes");
+        assert!(!absent.try_exists()?);
+    }
+    assert_eq!(fs::read_dir(tmp.path())?.count(), 1);
     Ok(())
 }
 
@@ -201,8 +229,9 @@ async fn multiple_links_cannot_supply_content_or_write_authority() -> Result<()>
         )
         .await;
     assert!(
-        matches!(result, bitrouter_ai::types::ToolResultOutput::Text { value }
-        if value == "own:1: fixture line\n")
+        matches!(&result, bitrouter_ai::types::ToolResultOutput::Text { value }
+        if value == "own:1: fixture line\n"),
+        "unexpected grep result: {result:?}"
     );
     Ok(())
 }
