@@ -174,6 +174,7 @@ mod shared {
     use crate::gateway::shared::telemetry::Telemetry;
     use futures::FutureExt as _;
     use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+    use sea_orm_migration::SchemaManager;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
     use tokio::time::Instant;
@@ -278,7 +279,19 @@ routers:
         )?)
     }
 
-    async fn counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
+    async fn local_writer_counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
+        let schema = SchemaManager::new(db);
+        for table in [
+            "acp_capture_connections",
+            "acp_canonical_sessions",
+            "acp_capture_events",
+        ] {
+            ensure!(
+                !schema.has_table(table).await?,
+                "historical ACP table {table} exists in the current gateway schema"
+            );
+        }
+
         let mut counts = Vec::new();
         for table in [
             "requests",
@@ -292,9 +305,6 @@ routers:
             "eval_admission_events",
             "eval_snapshots",
             "checkpoint_evolution",
-            "acp_capture_connections",
-            "acp_canonical_sessions",
-            "acp_capture_events",
         ] {
             let row = db
                 .query_one(Statement::from_string(
@@ -302,7 +312,7 @@ routers:
                     format!("SELECT COUNT(*) AS count FROM {table}"),
                 ))
                 .await?
-                .context("legacy table count missing")?;
+                .with_context(|| format!("local writer table {table} count missing"))?;
             counts.push(row.try_get("", "count")?);
         }
         Ok(counts)
@@ -541,8 +551,8 @@ routers:
 
     async fn unchanged(db: &DatabaseConnection, baseline: &[i64]) -> Result<()> {
         ensure!(
-            counts(db).await?.as_slice() == baseline,
-            "shared assembly wrote a legacy durable table"
+            local_writer_counts(db).await?.as_slice() == baseline,
+            "shared assembly wrote a local durable table"
         );
         Ok(())
     }
@@ -550,7 +560,7 @@ routers:
     async fn campaign(db: &DatabaseConnection, telemetry: &Arc<Telemetry>) -> Result<()> {
         crate::db::run_migrations(db).await?;
         let capability = SharedContinuationDb::fixture(db.clone()).await?;
-        let baseline = counts(db).await?;
+        let baseline = local_writer_counts(db).await?;
         ensure!(baseline.iter().all(|count| *count == 0));
         for trajectory in [false, true] {
             let (assembled, config) = build_fixture(&capability, telemetry, trajectory).await?;
