@@ -7,27 +7,34 @@ use anyhow::{Result, ensure};
 use std::{fs, path::Path, process::Command};
 
 fn reject(home: &Path) -> Result<()> {
-    let entries = || -> Result<Vec<_>> {
-        let mut names = fs::read_dir(home)?
-            .map(|e| e.map(|e| e.file_name()))
+    let entries = || -> Result<Option<Vec<_>>> {
+        let dir = match fs::read_dir(home) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let mut names = dir
+            .map(|entry| entry.map(|entry| entry.file_name()))
             .collect::<std::io::Result<Vec<_>>>()?;
         names.sort();
-        Ok(names)
+        Ok(Some(names))
     };
     let before = entries()?;
     let id = "2ad653eb-9a51-4999-b59f-3c4b1d65174c";
-    for args in [
-        vec!["thread", "create"],
-        vec!["thread", "show", id],
-        vec!["skills", "explain", "--thread", id, "--turn", id],
-    ] {
+    let mut commands: Vec<&[&str]> = vec![&["thread", "create"], &["thread", "show", id]];
+    if before.is_some() {
+        commands.push(&["skills", "explain", "--thread", id, "--turn", id]);
+    }
+    for args in commands {
         let output = Command::new(binary::bro())
             .env("BRO_HOME", home)
             .args(args)
             .output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
         ensure!(
-            !output.status.success()
-                && String::from_utf8_lossy(&output.stderr).contains("gateway home")
+            !output.status.success() && stderr.contains("gateway home"),
+            "BRO {args:?} should reject {} as a gateway home: {stderr}",
+            home.display()
         );
         assert_eq!(entries()?, before);
     }
@@ -45,6 +52,34 @@ fn ordinary_gateway_home_is_rejected_before_any_bro_writes() -> Result<()> {
         let file = home.path().join(name);
         fs::write(&file, bytes)?;
         reject(home.path())?;
+        assert_eq!(fs::read(file)?, bytes);
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_gateway_home_is_rejected_before_any_bro_writes() -> Result<()> {
+    for (name, bytes) in [
+        ("bitrouter.db", b"fixture".as_slice()),
+        (".bitrouter-home-role", b"bitrouter\n".as_slice()),
+    ] {
+        let fixture = tempfile::tempdir()?;
+        let gateway = fixture.path().join("gateway");
+        let existing = gateway.join("existing/nested");
+        fs::create_dir_all(&existing)?;
+        let file = gateway.join(name);
+        fs::write(&file, bytes)?;
+
+        let missing = existing.join("new/bro");
+        reject(&missing)?;
+        reject(&existing)?;
+        #[cfg(unix)]
+        {
+            let alias = fixture.path().join("alias");
+            std::os::unix::fs::symlink(&existing, &alias)?;
+            reject(&alias.join("new/bro"))?;
+        }
+        assert!(fs::read_dir(&existing)?.next().is_none());
         assert_eq!(fs::read(file)?, bytes);
     }
     Ok(())
