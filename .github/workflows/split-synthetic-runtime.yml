@@ -1,0 +1,92 @@
+name: Split synthetic runtime
+
+on:
+  push:
+    branches: [codex/split-synthetic-02f461463f8d7c379ac0a9f6704c688d3d6dc604]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: split-synthetic-runtime
+  cancel-in-progress: false
+
+env:
+  BASELINE: b0d7e2fbeabe39b96692c48787a066e89c04aed0
+  CANDIDATE: 02f461463f8d7c379ac0a9f6704c688d3d6dc604
+  RUSTUP_TOOLCHAIN: 1.99.1
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+
+jobs:
+  paired:
+    if: github.repository == 'bitrouter/bitrouter'
+    name: Matched synthetic workloads
+    runs-on: macos-15
+    timeout-minutes: 320
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.BASELINE }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.CANDIDATE }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+          package-manager-cache: false
+      - name: Build exact releases without measuring during compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          export RUNNER_TEMP
+          mkdir "$RUNNER_TEMP/synthetic-builds"
+          tool="$GITHUB_WORKSPACE/harness/helpers/dist-helper/qualification/build.mjs"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          for role in m0 service; do
+            if [[ "$role" == m0 ]]; then
+              checkout=baseline; sha=$BASELINE; binary=bro
+            else
+              checkout=candidate; sha=$CANDIDATE; binary=bitrouter
+            fi
+            [[ "$(git -C "$checkout" rev-parse HEAD)" == "$sha" ]]
+            for variant in minimum http2; do
+              printf 'Building %s %s\n' "$role" "$variant"
+              (cd "$checkout" && SOURCE_SHA="$sha" ROLE="$role" VARIANT="$variant" node "$tool" runtime)
+              dest="$RUNNER_TEMP/executables/$role/$variant"
+              mkdir -p "$dest"
+              tar -xzf "$RUNNER_TEMP/m5-evidence/$role/$variant/runtime.tar.gz" -C "$dest" "$binary"
+              cp "$RUNNER_TEMP/m5-evidence/$role/$variant/build.json" "$RUNNER_TEMP/synthetic-builds/$role-$variant.json"
+              rm "$RUNNER_TEMP/m5-evidence/$role/$variant/runtime.tar.gz"
+            done
+          done
+      - name: Freeze baseline and score the candidate on the same runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-pair.mjs "$RUNNER_TEMP" "$CANDIDATE" "$RUNNER_TEMP/synthetic-results"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: synthetic-runtime-${{ env.CANDIDATE }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/synthetic-builds/m0-minimum.json
+            ${{ runner.temp }}/synthetic-builds/m0-http2.json
+            ${{ runner.temp }}/synthetic-builds/service-minimum.json
+            ${{ runner.temp }}/synthetic-builds/service-http2.json
+            ${{ runner.temp }}/synthetic-results/method.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.json
+            ${{ runner.temp }}/synthetic-results/baseline-budget.sha256
+            ${{ runner.temp }}/synthetic-results/comparison.json
+            ${{ runner.temp }}/synthetic-results/summary.json
+          if-no-files-found: warn
+          retention-days: 14
