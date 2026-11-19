@@ -16,15 +16,12 @@ const sourcePath = fileURLToPath(import.meta.url);
 const linux = process.platform === 'linux';
 const counts = Object.freeze(linux ? LINUX_COUNTS : COUNTS);
 const focused = linux && process.env.SYNTHETIC_FOCUSED === '1';
-const { json, instant, tools, long } = LINUX_COUNTS;
+const gatewayTools = { tools: LINUX_COUNTS.tools };
+const directTools = { tools: 8192 };
 const focusMatrix = {
-  'minimum-http1': { direct: { instant, tools }, gateway: { instant, tools }, tenant: { instant, tools } },
-  'http2-http1': {
-    direct: { json, instant, tools, long },
-    gateway: { json, instant, tools, long },
-    tenant: { tools },
-  },
-  'http2-h2c': { gateway: { json, instant, tools, long }, tenant: { tools } },
+  'minimum-http1': { direct: directTools, gateway: gatewayTools, tenant: gatewayTools },
+  'http2-http1': { direct: directTools, gateway: gatewayTools, tenant: gatewayTools },
+  'http2-h2c': { gateway: gatewayTools, tenant: gatewayTools },
 };
 const countsFor = (group, lane) => focused ? focusMatrix[group][lane] : counts;
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -173,13 +170,6 @@ async function collect(output, variants, role, sentinelOutput) {
   return { records, sentinels };
 }
 
-function longTail(records) {
-  const tail = records.filter(({ record }) => record.group === 'http2-h2c' && record.lane === 'gateway')
-    .flatMap(({ record }) => record.windows.long.rows.map(row => row.first));
-  return { n: tail.length, above125ms: tail.filter(ms => ms > 125).length,
-    largestMs: tail.sort((left, right) => right - left).slice(0, 8) };
-}
-
 export async function main(root, candidate, output) {
   assert.match(candidate, /^[0-9a-f]{40}$/);
   assert.notEqual(candidate, BASELINE);
@@ -189,7 +179,7 @@ export async function main(root, candidate, output) {
   await mkdir(output);
   const inputs = async () => Object.fromEntries(await Promise.all(SOURCES.map(async file => [file, await hash(join(HERE, file))])));
   const built = await receipts(root, candidate);
-  const method = { name: focused ? 'synthetic-gateway-split-linux-focused-v1' :
+  const method = { name: focused ? 'synthetic-gateway-split-linux-tools-v1' :
     linux ? 'synthetic-gateway-split-linux-longer-fast-windows-v1' : 'synthetic-gateway-split-v1',
     baseline: BASELINE, candidate,
     producer: linux ? 'parallel-linux-release-builds' :
@@ -211,8 +201,8 @@ export async function main(root, candidate, output) {
   if (focused) {
     method.order = 'Five M0 repeats per path and freeze before candidate. Five candidate repeats with contemporaneous M0 sentinels, alternating order within each path.';
     method.workload = { concurrency: CONCURRENCY, repeatsPerPath: 5, matrix: focusMatrix };
-    method.priorRun = '44514233016';
-    method.tailDiagnostic = 'Count first semantic outputs above 125 ms, near the preceding run’s frozen p99 limit.';
+    method.priorRun = '44534157776';
+    method.scope = 'Tool conversations in all original profiles. Use longer direct windows to distinguish mock drift from gateway changes. Process measurements are exploratory for this tools-only fixture.';
     method.sentinelPurpose = 'Compare M0 at the start and beside each candidate trial to characterize timing drift. The initial frozen budget remains the decision reference.';
   }
   const summarizeRecords = samples => summarize(samples.map(entry => entry.record), counts, focused ? focusMatrix : undefined);
@@ -245,11 +235,11 @@ export async function main(root, candidate, output) {
     await save(join(output, 'sentinel-comparison.json'), {
       m0Repeat: compare(checked.budgets, contemporary),
       concurrentComparison: compare(contemporary, current),
-      longFirstOutput: { baseline: longTail(base), candidate: longTail(measured), sentinel: longTail(sentinels) },
       sentinels: sentinels.map(({ file, record, sha256 }) => ({ name: file.split('/').at(-1), started: record.started, sha256 })),
     });
   }
-  const unresolved = comparison.filter(row => row.controlDrift || row.status !== 'within-budget');
+  const scored = focused ? comparison.filter(row => row.metric.split('/')[2] === 'tools') : comparison;
+  const unresolved = scored.filter(row => row.controlDrift || row.status !== 'within-budget');
   await save(join(output, 'comparison.json'), { comparison, unresolved: unresolved.map(row => row.metric),
     ...(linux ? { controlDriftRows: comparison.filter(row => row.controlDrift).map(row => row.metric) } : {}),
   });
