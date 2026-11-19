@@ -86,6 +86,34 @@ fn nested_gateway_home_is_rejected_before_any_bro_writes() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn gateway_owned_threads_directory_is_rejected_before_any_bro_writes() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let threads = home.path().join("threads");
+    fs::create_dir(&threads)?;
+    let marker = threads.join(".bitrouter-home-role");
+    let sentinel = threads.join("sentinel");
+    fs::write(&marker, b"bitrouter\n")?;
+    fs::write(&sentinel, b"untouched")?;
+    let home_before = entries(home.path())?;
+    let threads_before = entries(&threads)?;
+
+    let output = Command::new(binary::bro())
+        .env("BRO_HOME", home.path())
+        .args(["thread", "show", "2ad653eb-9a51-4999-b59f-3c4b1d65174c"])
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    ensure!(
+        !output.status.success() && stderr.contains("gateway home"),
+        "BRO should refuse the gateway-owned threads directory: {stderr}"
+    );
+    assert_eq!(entries(home.path())?, home_before);
+    assert_eq!(entries(&threads)?, threads_before);
+    assert_eq!(fs::read(marker)?, b"bitrouter\n");
+    assert_eq!(fs::read(sentinel)?, b"untouched");
+    Ok(())
+}
+
 #[cfg(any(unix, windows))]
 #[test]
 fn linked_threads_directory_is_rejected_before_any_bro_writes() -> Result<()> {

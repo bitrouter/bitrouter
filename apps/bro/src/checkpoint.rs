@@ -466,15 +466,14 @@ impl Home {
     pub fn open(root: &Path) -> Result<Self> {
         crate::migrated::reject_gateway_home(root)?;
         let dir = root.join("threads");
-        check_threads_directory(&dir)?;
+        checked_threads_directory(&dir)?;
         if !root.join("store.sqlite").try_exists()? {
             crate::home_owner::claim(root)?;
         }
         crate::durable::create_dirs(&dir, true)?;
         let root = root.canonicalize()?;
-        let dir = root.join("threads");
-        check_threads_directory(&dir)?;
-        let dir = dir.canonicalize()?;
+        let dir = checked_threads_directory(&root.join("threads"))?
+            .context("BRO threads directory disappeared")?;
         ensure!(
             dir.parent() == Some(root.as_path()),
             "BRO threads directory must be a direct child of {}",
@@ -691,10 +690,10 @@ fn overlapping(left: &Path, right: &Path) -> std::io::Result<bool> {
     Ok(false)
 }
 
-fn check_threads_directory(path: &Path) -> Result<()> {
+fn checked_threads_directory(path: &Path) -> Result<Option<PathBuf>> {
     let metadata = match path.symlink_metadata() {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
     };
     let ordinary = metadata.is_dir() && !metadata.file_type().is_symlink();
@@ -710,7 +709,9 @@ fn check_threads_directory(path: &Path) -> Result<()> {
         "BRO threads directory must be a regular directory: {}",
         path.display()
     );
-    Ok(())
+    let dir = path.canonicalize()?;
+    crate::home_owner::check(&dir)?;
+    Ok(Some(dir))
 }
 
 fn open_lock(path: &Path) -> Result<File> {
