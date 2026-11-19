@@ -190,7 +190,7 @@ pub async fn serve_with_extensions(
 }
 
 /// Run the bundled CLI host. Only a child launched by `bitrouter start` may be
-/// replaced automatically by `bro update`.
+/// replaced automatically by `bitrouter update`.
 pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
     crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
@@ -274,13 +274,13 @@ async fn serve_with_options(
     // whichever CWD the launcher happened to be in. The daemon's
     // runtime artefacts (db, socket, pid, log) all land in the home.
     let home = source.home();
-    crate::paths::claim_gateway_home(home)?;
     crate::paths::ensure_home_directory(home)?;
     std::env::set_current_dir(home)
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
 
     let startup_configuration =
         crate::reload::load_selected_configuration_baseline(source, selected).await?;
+    crate::paths::claim_gateway_home(home)?;
     let mut cfg = startup_configuration.config().clone();
     // Auto-enable the `claude-code` subscription provider when the user has
     // signed in (a `claude-code` credential is in the OAuth store). Runs before

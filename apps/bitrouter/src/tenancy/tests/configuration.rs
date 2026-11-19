@@ -123,7 +123,7 @@ async fn configuration_get_authenticates_public_metadata_before_returning_it() -
 }
 
 #[tokio::test]
-async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> Result<()> {
+async fn gateway_rejects_activation_and_restore_of_unavailable_learning() -> Result<()> {
     use sha2::{Digest, Sha256};
     for was_active in [false, true] {
         let fixture = Fixture::new().await?;
@@ -158,10 +158,14 @@ async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> 
                 .map_err(failure)?;
             fixture.service.shutdown().await?;
         }
-        // Preserve a valid compiler binding, as produced by a full build, then
-        // exercise the minimal binary's activation/restart boundary.
+        // Preserve a valid compiler binding for a retained document whose
+        // requested profile is unavailable to this gateway.
         let mut document = revision.document;
-        document.learning.mode = LearningMode::Observe;
+        document.learning.mode = if cfg!(feature = "eval-publication") {
+            LearningMode::Explore
+        } else {
+            LearningMode::Observe
+        };
         let compiled = fixture
             .service
             .resources
