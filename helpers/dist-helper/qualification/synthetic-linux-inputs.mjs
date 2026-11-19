@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { BASELINE, LINUX_TARGET, ROLES, VARIANTS, hash, verifyBuild } from './synthetic-build-identity.mjs';
 
-const [folder, temp, candidate, runId, attempt] = process.argv.slice(2).map((value, index) => index < 2 ? resolve(value) : value);
+const [folder, temp, candidate, runId, attempt, producerRef = process.env.GITHUB_REF] = process.argv.slice(2).map((value, index) => index < 2 ? resolve(value) : value);
 const read = async file => JSON.parse(await readFile(file, 'utf8'));
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', timeout: 10_000 }).trim();
 const archiveDigests = {
@@ -25,7 +25,7 @@ for (const [role, source, checkout] of [['m0', BASELINE, 'baseline'], ['service'
     const directory = join(folder, name);
     const receipt = await read(join(directory, 'build.json'));
     const { binary } = ROLES[role];
-    assert.equal(receipt.workflow, 'bitrouter/bitrouter/.github/workflows/split-synthetic-linux.yml@' + process.env.GITHUB_REF);
+    assert.equal(receipt.workflow, 'bitrouter/bitrouter/.github/workflows/split-synthetic-linux.yml@' + producerRef);
     assert.equal(receipt.run_id, runId);
     assert.equal(receipt.run_attempt, attempt);
     const tar = join(directory, 'runtime.tar.gz');
