@@ -331,6 +331,8 @@ jobs:
         bash .github/scripts/ci-test.sh gateway-bro --exact-tests 'binary(=product_process)' ignored gateway_routes_the_approved_bro_tool_continuation
         bash .github/scripts/ci-test.sh transferred-history --exact-tests 'binary(=mixed_store_migration)' ignored sealed::accounting::restarted_products_preserve_paid_history_and_refuse_historical_request_replay \
           sealed::acp::cold_restore_replays_the_captured_transcript_once
+        bash .github/scripts/ci-test.sh transferred-policy --exact-tests 'kind(lib)' ignored \
+          tenancy::tests::execution::receipts::mixed_store::mixed_restart_with_live_bro_continuation
     - name: Open staged and activated gateway directories with BRO
       if: matrix.product == 'bro'
       run: bash .github/scripts/ci-test.sh gateway-home --exact-tests 'binary(=home_owner)' ignored real_staged_and_activated_gateway_halves_reject_bro

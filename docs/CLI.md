@@ -1393,13 +1393,29 @@ bitrouter tenancy offline split-store --database /path/to/stopped.sqlite --desti
 bitrouter tenancy offline split-store --database /path/to/stopped.sqlite --destination /path/to/active --activate
 ```
 
-The first command preserves a rollback snapshot and creates inspection copies.
-Activation verifies both projections and reports blockers before exposing a
-runnable pair. Activation retires the original M0 database path. Repeat an
-interrupted publication with the same destination. The byte-exact rollback
-image is `rollback/source.sqlite`. Use the returned gateway database with its original service keys
-and the returned BRO directory as `BRO_HOME`. Check pending usage and tool effects
-at both owners before reopening admission or reverting an active installation.
+On Linux and macOS, the first command copies the stopped SQLite source into
+`rollback/source.sqlite` and creates two offline inspection projections.
+Choose a second, fresh destination for activation. Read the returned
+`dispatch_allowed`, `blockers` and store paths before starting either owner.
+
+| Source or retained state | Activation | Operator action or condition |
+| --- | --- | --- |
+| Stopped M0 SQLite, validated gateway catalog and empty BRO state | Supported | Start the gateway with its original configuration and external keys. |
+| Sealed format-7 Thread or released format-1 managed root with one completed local turn | Supported | Checkpoints, model requests, charges and tool outcomes must agree. A locally computed charge must match the frozen estimate and ledger; it remains locally computed. Bind the BRO home with `bro --data-dir <bro-home> --endpoint <gateway> managed restore <thread-id> --workspace <workspace>`. Restore workspace files separately; BRO replays tool history without executing it. |
+| Successful local write, edit or shell in a supported turn | Supported | A Thread requires the recorded approval, matching dispatch, typed result and completed effect. A managed root requires a matching durable started invocation and completed result. |
+| Active service Policy, settled charges or terminal Unknown | Supported | Keep the original keys and matching receipts, attempts and reconciliation evidence, including each required Unknown obligation. Unknown remains Unknown on restart. |
+| Closed, sessionless ACP capture with only connection lifecycle evidence | Supported | The gateway must verify capture ownership and its request inventory. |
+| Active or session-bearing ACP capture, or unsupported capture events | Refused | Inspect with the original stopped store and matching M0 binary. |
+| In-flight model request or dispatch intent, unresolved tool or approval, interrupted run, conflicting charge, unsupported checkpoint or owner | Refused | Use the inspection pair. Resolve outstanding work with the original owner before retrying activation. |
+| Existing M0 PostgreSQL or MySQL | Refused | Preserve the original database and matching M0 binary for recovery. Initialize the split gateway on a fresh database. |
+
+Successful activation retires the original SQLite path. Retry interrupted
+publication with the same source and destination. For rollback, stop both new
+owners, fence admission, and reconcile changes since activation, including any
+new charges, tool effects and workspace changes. Restore a private copy of
+`rollback/source.sqlite` with its matching M0 binary, workspace and external
+keys. The rollback image represents the instant of the split. Keep the
+successor stores offline while the restored owner has authority.
 
 ### Existing PostgreSQL and MySQL installations
 

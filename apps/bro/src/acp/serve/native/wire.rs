@@ -188,11 +188,16 @@ async fn sealed_history(c: &Connection, version: u64, session: Uuid, turn: &Turn
                     .tool_call_id
                     .as_deref()
                     .context("missing transferred tool ID")?;
-                let output = entry
-                    .content
-                    .as_ref()
-                    .and_then(Value::as_str)
-                    .context("missing transferred tool evidence")?;
+                let output = match turn.sealed_tool_results.get(id) {
+                    Some(result) => serde_json::to_value(&result.output)?,
+                    None => json!(
+                        entry
+                            .content
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            .context("missing transferred tool evidence")?
+                    ),
+                };
                 replay(c, session, json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed","rawOutput":output})).await?;
             }
             _ => anyhow::bail!("unsupported transferred message role"),

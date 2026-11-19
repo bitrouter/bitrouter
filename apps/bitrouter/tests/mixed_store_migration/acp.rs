@@ -1,5 +1,5 @@
 //! Replay the v7 writer's actual transcript using cold BRO processes.
-use super::{REQUESTS, THREAD, capture, captured, mixed_store};
+use super::{REQUESTS, THREAD, capture, captured, mixed_store, settle};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{path::Path, process::Stdio, time::Duration};
@@ -10,6 +10,7 @@ async fn replay(
     home: &Path,
     work: &Path,
     endpoint: &str,
+    thread: &str,
     version: u64,
 ) -> Result<Vec<Value>> {
     let mut peer = Command::new(bro)
@@ -23,7 +24,7 @@ async fn replay(
         .kill_on_drop(true)
         .spawn()?;
     let mut input = peer.stdin.take().context("ACP stdin")?;
-    let mut params = json!({"cwd":work,"sessionId":THREAD,"mcpServers":[]});
+    let mut params = json!({"cwd":work,"sessionId":thread,"mcpServers":[]});
     let method = if version == 1 {
         "session/load"
     } else {
@@ -59,7 +60,7 @@ async fn replay(
     );
     let mut updates = Vec::new();
     for f in &frames[1..frames.len() - 1] {
-        ensure!(f["method"] == "session/update" && f["params"]["sessionId"] == THREAD);
+        ensure!(f["method"] == "session/update" && f["params"]["sessionId"] == thread);
         updates.push(f["params"]["update"].clone());
     }
     Ok(updates)
@@ -68,13 +69,44 @@ async fn replay(
 #[tokio::test]
 #[ignore = "requires the separately built BRO in BITROUTER_TEST_BRO"]
 async fn cold_restore_replays_the_captured_transcript_once() -> Result<()> {
+    for tool in ["read", "write"] {
+        verify_capture(tool).await?;
+    }
+    Ok(())
+}
+
+async fn verify_capture(tool: &str) -> Result<()> {
     let dir = tempfile::tempdir()?;
     let work = tempfile::tempdir()?;
-    let (source, db) = captured(dir.path()).await?;
-    for id in REQUESTS {
-        capture::settle(&db, id, 0).await?;
-    }
-    db.close().await?;
+    let (source, thread, prompt, call, input, output, answer) = if tool == "write" {
+        let (source, db) = super::super::fresh(dir.path()).await?;
+        let thread = capture::install_approved(dir.path(), &db).await?;
+        db.close().await?;
+        (
+            source,
+            thread,
+            "Write the approved content to evidence.txt.",
+            "write-evidence",
+            json!({"path":"evidence.txt","content":"approved M0 write\n"}),
+            json!({"type":"json","value":{"bytes":18,"path":"evidence.txt"}}),
+            "Wrote evidence.txt.",
+        )
+    } else {
+        let (source, db) = captured(dir.path()).await?;
+        for id in REQUESTS {
+            settle(&db, id, 0).await?;
+        }
+        db.close().await?;
+        (
+            source,
+            THREAD.to_owned(),
+            "Read evidence.txt and report its contents.",
+            "read-evidence",
+            json!({"path":"evidence.txt","limit":10}),
+            json!("File \"evidence.txt\"\nL1: baseline persisted payload\n"),
+            "The evidence says baseline persisted payload.",
+        )
+    };
     let dest = dir.path().join("split");
     let result = mixed_store::activate(&source, &dest).await?;
     ensure!(result.dispatch_allowed, "{:?}", result.blockers);
@@ -91,7 +123,7 @@ async fn cold_restore_replays_the_captured_transcript_once() -> Result<()> {
             &endpoint,
             "managed",
             "restore",
-            THREAD,
+            &thread,
             "--workspace",
         ])
         .arg(work.path())
@@ -104,7 +136,7 @@ async fn cold_restore_replays_the_captured_transcript_once() -> Result<()> {
     );
     let mut ids = Vec::new();
     for version in [1, 2] {
-        let updates = replay(&bro, &home, work.path(), &endpoint, version).await?;
+        let updates = replay(&bro, &home, work.path(), &endpoint, &thread, version).await?;
         let tags: Vec<_> = updates
             .iter()
             .map(|u| u["sessionUpdate"].as_str())
@@ -140,21 +172,23 @@ async fn cold_restore_replays_the_captured_transcript_once() -> Result<()> {
                 u["content"][0]["text"].clone()
             }
         };
-        ensure!(content(&updates[0]) == "Read evidence.txt and report its contents.");
+        ensure!(content(&updates[0]) == prompt);
         ensure!(
             updates[1]["status"] == "pending"
-                && updates[1]["title"] == "read"
-                && updates[1]["toolCallId"] == "read-evidence"
+                && updates[1]["title"] == tool
+                && updates[1]["toolCallId"] == call
         );
-        ensure!(updates[1]["rawInput"] == json!({"path":"evidence.txt","limit":10}));
+        ensure!(updates[1]["rawInput"] == input);
         ensure!(
             updates[2]["toolCallId"] == updates[1]["toolCallId"]
                 && updates[2]["status"] == "completed"
         );
         ensure!(
-            updates[2]["rawOutput"] == "File \"evidence.txt\"\nL1: baseline persisted payload\n"
+            updates[2]["rawOutput"] == output,
+            "unexpected sealed {tool} output: {}",
+            updates[2]
         );
-        ensure!(content(&updates[3]) == "The evidence says baseline persisted payload.");
+        ensure!(content(&updates[3]) == answer);
         let pair = [
             updates[0]["messageId"].clone(),
             updates[3]["messageId"].clone(),
@@ -163,6 +197,10 @@ async fn cold_restore_replays_the_captured_transcript_once() -> Result<()> {
         ids.push(pair);
     }
     ensure!(ids[0] == ids[1]);
+    ensure!(
+        !work.path().join("evidence.txt").exists(),
+        "cold replay executed a tool"
+    );
     ensure!(
         gateway
             .received_requests()

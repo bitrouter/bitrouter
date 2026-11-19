@@ -1,9 +1,12 @@
 //! The offline harness reader checks every native batch, projection and artifact.
 //! Only a released single-root local turn with complete metering evidence can move.
 use super::*;
+mod approvals;
 mod codec;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::pipeline::native_accounting::{NativeCostBasis, NativeCostSource};
+use crate::gateway::pipeline::native_accounting::{
+    NativeCostBasis, NativeCostClaim, NativeCostSource,
+};
 use crate::metering::store::MeteringStore;
 use crate::storage::checkpoint::snapshot::{
     RunStatus, SessionSnapshot,
@@ -101,6 +104,8 @@ async fn project(
     let mut responses = BTreeMap::new();
     let mut intents = BTreeMap::new();
     let mut results = BTreeMap::new();
+    let mut approvals = approvals::Approvals::default();
+    let mut model_calls = BTreeMap::new();
     while let Some((seq, raw)) = rows.try_next().await? {
         sequence += 1;
         ensure!(
@@ -154,7 +159,12 @@ async fn project(
             }
             Some("accepted_key") => {
                 let e = &v["entry"];
-                let scope = if let Some(t) = e["turn_id"].as_str() {
+                let approval_scope = json!(["local", "local", "answer_approval", id]);
+                let scope = if e["scope"] == approval_scope.to_string() {
+                    let (turn, _) = queued.as_ref().context("approval before admission")?;
+                    approvals.accepted(turn, e)?;
+                    approval_scope
+                } else if let Some(t) = e["turn_id"].as_str() {
                     let (admitted, prompt) = queued
                         .as_ref()
                         .context("start key without an admitted turn")?;
@@ -253,27 +263,57 @@ async fn project(
                                 .is_none(),
                         "duplicate model request"
                     ),
-                    Some("model_response") if settled.is_none() => ensure!(
-                        requests.contains_key(field(f, "step_id")?)
-                            && f["item_id"] == f["step_id"]
-                            && responses
-                                .insert(
-                                    (
-                                        field(f, "step_id")?.to_owned(),
-                                        field(f, "request_id")?.to_owned()
-                                    ),
-                                    f.clone()
-                                )
-                                .is_none()
-                            && !f["usage"].is_null(),
-                        "unpaired model response"
-                    ),
-                    Some("tool_intent") if settled.is_none() => ensure!(
-                        intents
-                            .insert(field(&f["call"], "item_id")?.to_owned(), f["call"].clone())
-                            .is_none(),
-                        "duplicate tool intent"
-                    ),
+                    Some("model_response") if settled.is_none() => {
+                        for call in f["calls"].as_array().context("missing M0 model calls")? {
+                            ensure!(
+                                call["origin"] == "model"
+                                    && model_calls
+                                        .insert(
+                                            field(call, "item_id")?.to_owned(),
+                                            (f["step_id"].clone(), call.clone())
+                                        )
+                                        .is_none(),
+                                "duplicate projected model call"
+                            );
+                        }
+                        ensure!(
+                            requests.contains_key(field(f, "step_id")?)
+                                && f["item_id"] == f["step_id"]
+                                && responses
+                                    .insert(
+                                        (
+                                            field(f, "step_id")?.to_owned(),
+                                            field(f, "request_id")?.to_owned()
+                                        ),
+                                        f.clone()
+                                    )
+                                    .is_none()
+                                && !f["usage"].is_null(),
+                            "unpaired model response"
+                        );
+                    }
+                    Some("tool_intent") if settled.is_none() => {
+                        let call = &f["call"];
+                        let (step, model) = model_calls
+                            .remove(field(call, "item_id")?)
+                            .context("intent before model call")?;
+                        ensure!(
+                            step == f["step_id"]
+                                && model["name"] == call["name"]
+                                && model["provider_call_id"] == call["provider_call_id"]
+                                && call["origin"] == "model"
+                                && serde_json::from_str::<Value>(field(&model, "arguments")?)?
+                                    == serde_json::from_str::<Value>(field(call, "arguments")?)?,
+                            "M0 model call differs from intent"
+                        );
+                        approvals.consume(call)?;
+                        ensure!(
+                            intents
+                                .insert(field(&f["call"], "item_id")?.to_owned(), f["call"].clone())
+                                .is_none(),
+                            "duplicate tool intent"
+                        );
+                    }
                     Some("tool_result") if settled.is_none() => ensure!(
                         intents.contains_key(field(f, "item_id")?)
                             && matches!(f["effect"].as_str(), Some("completed" | "not_executed"))
@@ -332,6 +372,30 @@ async fn project(
                         released = true;
                     }
                     Some("turn_lifecycle")
+                        if settled.is_none()
+                            && f["turn_id"] == v["turn_id"]
+                            && f["lifecycle"]["kind"] == "input_requested" =>
+                    {
+                        let prompt = &f["lifecycle"];
+                        let (_, call) = model_calls
+                            .get(field(prompt, "tool_id")?)
+                            .context("approval before recorded model call")?;
+                        ensure!(
+                            prompt["tool_name"] == call["name"]
+                                && serde_json::from_str::<Value>(field(prompt, "arguments")?)?
+                                    == serde_json::from_str::<Value>(field(call, "arguments")?)?,
+                            "approval differs from model request"
+                        );
+                        approvals.request(prompt)?
+                    }
+                    Some("turn_lifecycle")
+                        if settled.is_none()
+                            && f["turn_id"] == v["turn_id"]
+                            && f["lifecycle"]["kind"] == "input_resolved" =>
+                    {
+                        approvals.resolve(&f["lifecycle"])?
+                    }
+                    Some("turn_lifecycle")
                         if f["lifecycle"]["kind"] == "started" && settled.is_none() => {}
                     Some("turn_lifecycle") if released && !finished => {
                         let l = &f["lifecycle"];
@@ -376,7 +440,10 @@ async fn project(
     }
 
     ensure!(
-        u64::try_from(sequence)? == head && checkpoint,
+        u64::try_from(sequence)? == head
+            && checkpoint
+            && approvals.finished()
+            && model_calls.is_empty(),
         "unsealed M0 history"
     );
     let (snapshot, config) = header.context("missing M0 header")?;
@@ -462,7 +529,11 @@ async fn project(
             .context("missing confirmed tool result")?;
         let native_result = i.result.as_ref().context("unknown native tool result")?;
         ensure!(
-            call["provider_call_id"] == i.provider_call_id
+            i.tool_observations.values().any(|o| o.status
+                == bitrouter_ai::core::protocol::ToolStatus::Running
+                && o.invocation_id == i.dispatch.invocation_id
+                && o.attempt_id == i.dispatch.attempt_id)
+                && call["provider_call_id"] == i.provider_call_id
                 && call["name"] == i.dispatch.tool
                 && serde_json::from_str::<Value>(field(call, "arguments")?)?
                     == i.dispatch.arguments
@@ -484,10 +555,13 @@ async fn project(
             "M0 tool receipt mismatch"
         );
     }
-    let history = chat_history(&root.history)?;
+    let sealed = seal_history(
+        &root.history,
+        json!({"turn_id":turn.parse::<Uuid>()?,"prompt":prompt,"request_id":key,"steps":[],"outcome":settled["outcome"]}),
+    )?;
     Ok(
         json!({"format":"bro-local/1","thread_id":id,"workspace":snapshot.workspace,"model":config.model,"tool_mode":config.tool_mode,"endpoint":"","effort":config.effort,"max_output_tokens":config.max_output_tokens,"m0_instructions":config.instructions,
-        "turns":[{"turn_id":turn.parse::<Uuid>()?,"prompt":prompt,"request_id":key,"steps":[],"sealed_messages":history,"outcome":settled["outcome"]}]}),
+        "turns":[sealed]}),
     )
 }
 
@@ -613,11 +687,17 @@ pub(super) async fn verify_settled(
                 .known_attempts
                 .checked_add(accounting.unknown_attempts)
                 == Some(run.model_attempts)
-            && state
-                .context_store
-                .work
-                .values()
-                .all(|w| w.skills.is_none())
+            && state.context_store.work.values().all(|w| {
+                w.skills.as_ref().is_none_or(|skills| {
+                    skills.selected
+                        && skills.catalog == Default::default()
+                        && skills.constraints.include.is_empty()
+                        && skills.constraints.exclude.is_empty()
+                        && skills.candidates.is_empty()
+                        && skills.failure.is_none()
+                        && skills.validated_step_count.is_none()
+                })
+            })
             && agent
                 .context_sources
                 .iter()
@@ -654,6 +734,7 @@ pub(super) async fn verify_settled(
         "unsupported native delegation, context or accounting"
     );
     let mut history = vec![Message::text(Role::User, run.input.text.clone())];
+    let mut provider_calls = BTreeSet::new();
     for step in &turn.steps {
         ensure!(
             serde_json::to_value(&step.input_history)? == serde_json::to_value(&history)?
@@ -679,11 +760,35 @@ pub(super) async fn verify_settled(
             role: Role::Assistant,
             content: result.content.clone(),
         });
+        let mut calls = result.content.iter().filter_map(|part| match part {
+            Content::ToolCall {
+                id,
+                name,
+                arguments,
+                ..
+            } => Some((id, name, arguments)),
+            _ => None,
+        });
         for inv in turn
             .invocations
             .iter()
             .filter(|i| i.dispatch.step_id == step.step_id)
         {
+            let (id, name, arguments) = calls
+                .next()
+                .context("native invocation without model call")?;
+            ensure!(
+                id == &inv.provider_call_id
+                    && provider_calls.insert(id)
+                    && name == &inv.dispatch.tool
+                    && serde_json::from_str::<Value>(arguments)? == inv.dispatch.arguments
+                    && state
+                        .manifest
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == *name && tool.effect == inv.effect),
+                "ordered native call differs from dispatch"
+            );
             let result = inv.result.as_ref().context("unconfirmed native tool")?;
             let output: ToolResultOutput =
                 serde_json::from_str(&result.output).unwrap_or_else(|_| ToolResultOutput::Text {
@@ -704,6 +809,14 @@ pub(super) async fn verify_settled(
                     && inv.dispatch.response_id.is_none(),
                 "unmatched native tool start"
             );
+            if matches!(name.as_str(), "write" | "edit" | "shell") {
+                ensure!(
+                    result.status == bitrouter_ai::core::protocol::ToolOutcome::Succeeded
+                        && approvals::confirmed_output(name, &inv.dispatch.arguments, &output)
+                        && inv.prior_uncertain_result.is_none(),
+                    "mutating tool lacks a confirmed successful structured result"
+                );
+            }
             history.push(Message {
                 role: Role::Tool,
                 content: vec![Content::ToolResult {
@@ -715,11 +828,19 @@ pub(super) async fn verify_settled(
                 }],
             });
         }
+        ensure!(
+            calls.next().is_none(),
+            "model call without confirmed invocation"
+        );
     }
     ensure!(
         serde_json::to_value(history)? == serde_json::to_value(&agent.history)?,
         "native context differs from confirmed outputs"
     );
+    let cost = state
+        .cost_work
+        .get(&run.run_id)
+        .context("missing cost coverage")?;
     let metering = MeteringStore::new(db.clone());
     let mut ids = BTreeSet::new();
     let mut claims = BTreeMap::new();
@@ -763,24 +884,43 @@ pub(super) async fn verify_settled(
             let [observation] = observations.as_slice() else {
                 bail!("missing native settlement observation")
             };
-            ensure!(
-                observation.request_id == r.request_id
-                    && observation.unknown_reason.is_none()
-                    && observation
-                        .claims
-                        .iter()
-                        .any(|c| c.basis == NativeCostBasis::Reconciled
-                            && c.request_id == r.request_id
-                            && Some(&c.model) == r.actual_model.as_ref()
-                            && Some(&c.provider) == r.actual_provider.as_ref()),
-                "unreconciled native model request {}",
-                r.request_id
-            );
             use sea_orm::EntityTrait;
             let row = crate::metering::entities::requests::Entity::find_by_id(&r.request_id)
                 .one(db)
                 .await?
                 .context("missing native bill")?;
+            let matches_attempt = |c: &NativeCostClaim| {
+                c.request_id == r.request_id
+                    && Some(&c.model) == r.actual_model.as_ref()
+                    && Some(&c.provider) == r.actual_provider.as_ref()
+            };
+            let reconciled = observation.unknown_reason.is_none()
+                && observation
+                    .claims
+                    .iter()
+                    .any(|c| c.basis == NativeCostBasis::Reconciled && matches_attempt(c));
+            let local = match observation.claims.as_slice() {
+                [c] => {
+                    observation.unknown_reason.as_deref() == Some("charge_not_reconciled")
+                        && cost.charge_unknown.get(&r.request_id)
+                            == observation.unknown_reason.as_ref()
+                        && row.reconciliation_status == "not_applicable"
+                        && row.authoritative_receipt_json.is_none()
+                        && row.authoritative_settled_at.is_none()
+                        && row.usage_origin == "provider_reported"
+                        && c.basis == NativeCostBasis::Estimated
+                        && matches_attempt(c)
+                        && u64::try_from(row.estimated_charge_micro_usd).ok() == Some(c.micro_usd)
+                        && r.token_cost.estimated_micro_usd() == Some(c.micro_usd)
+                        && cost.charges.values().any(|frozen| frozen == c)
+                }
+                _ => false,
+            };
+            ensure!(
+                observation.request_id == r.request_id && (reconciled || local),
+                "unverified native model charge {}",
+                r.request_id
+            );
             let usage = r
                 .result
                 .as_ref()
@@ -792,7 +932,7 @@ pub(super) async fn verify_settled(
                     && u64::try_from(row.reasoning_tokens)? == usage.reasoning_tokens
                     && u64::try_from(row.cache_read_tokens)? == usage.cache_read_tokens
                     && u64::try_from(row.cache_write_tokens)? == usage.cache_write_tokens,
-                "native usage conflicts with the reconciled bill"
+                "native usage conflicts with the retained bill"
             );
             for claim in &observation.claims {
                 let key = crate::storage::checkpoint::sha256(&serde_json::to_vec(&(
@@ -817,10 +957,6 @@ pub(super) async fn verify_settled(
         accounting.known_attempts == known && accounting.known_subtotal_micro_usd == Some(subtotal),
         "native token estimates do not match attempt evidence"
     );
-    let cost = state
-        .cost_work
-        .get(&run.run_id)
-        .context("missing cost coverage")?;
     ensure!(
         state.cost_work.len() == 1
             && cost.charge_unknown.keys().all(|id| ids.contains(id))
@@ -847,11 +983,12 @@ pub(super) async fn verify_settled(
     Ok(())
 }
 
-pub(super) fn chat_history(messages: &[Message]) -> Result<Vec<Value>> {
+pub(super) fn seal_history(messages: &[Message], mut turn: Value) -> Result<Value> {
     // Preserve only representations with an exact local Chat equivalent. In
     // particular, provider-executed calls and private continuation never degrade.
     crate::gateway::model::history::validate_history(messages).map_err(anyhow::Error::msg)?;
     let mut chat = Vec::new();
+    let mut typed = BTreeMap::new();
     for m in messages {
         let parts = serde_json::to_value(&m.content)?;
         let msg = match (m.role, m.content.as_slice()) {
@@ -881,18 +1018,37 @@ pub(super) fn chat_history(messages: &[Message]) -> Result<Vec<Value>> {
                     Content::ToolResult {
                         call_id,
                         tool_name: Some(name),
-                        output: ToolResultOutput::Text { value },
+                        output,
                         ..
                     },
                 ],
             ) if parts
-                == json!([{"type":"tool_result","call_id":call_id,"tool_name":name,"output":{"type":"text","value":value}}]) =>
+                == json!([{"type":"tool_result","call_id":call_id,"tool_name":name,"output":output}]) =>
             {
-                json!({"role":"tool","tool_call_id":call_id,"content":value})
+                let content = match output {
+                    ToolResultOutput::Text { value } => value.clone(),
+                    ToolResultOutput::Json { value }
+                        if matches!(name.as_str(), "write" | "edit" | "shell") =>
+                    {
+                        ensure!(
+                            typed
+                                .insert(call_id, json!({"output":output,"effect":"completed"}))
+                                .is_none(),
+                            "duplicate typed tool result"
+                        );
+                        serde_json::to_string(value)?
+                    }
+                    _ => bail!("unsupported sealed tool output"),
+                };
+                json!({"role":"tool","tool_call_id":call_id,"content":content})
             }
             _ => bail!("M0 history contains unsupported content or provider continuity"),
         };
         chat.push(msg);
     }
-    Ok(chat)
+    turn["sealed_messages"] = Value::Array(chat);
+    if !typed.is_empty() {
+        turn["sealed_tool_results"] = serde_json::to_value(typed)?;
+    }
+    Ok(turn)
 }

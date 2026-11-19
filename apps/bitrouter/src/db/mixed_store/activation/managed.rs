@@ -237,7 +237,13 @@ async fn checked(
         "unsupported managed input instructions"
     );
     let instructions = instructions.join("\n\n");
-    let history = transfer::chat_history(&root.history)?;
+    let sealed = transfer::seal_history(
+        &root.history,
+        json!({"turn_id":turn_id,"prompt":run.input.text,"request_id":request_id,"steps":[],"outcome":{"status":"completed","detail":format!("released managed session {name}"),"final_answer":run.final_answer}}),
+    )?;
+    let history = sealed["sealed_messages"]
+        .as_array()
+        .context("managed history")?;
     ensure!(
         history.first() == Some(&json!({"role":"user","content":run.input.text}))
             && history.last() == Some(&json!({"role":"assistant","content":run.final_answer})),
@@ -246,6 +252,6 @@ async fn checked(
     Ok((
         id,
         json!({"format":"bro-local/1","thread_id":id,"workspace":j.workspace,"model":run.input.model,"tool_mode":j.mode,"m0_instructions":instructions,"endpoint":"","effort":run.input.effort,"max_output_tokens":run.input.max_output_tokens,
-        "turns":[{"turn_id":turn_id,"prompt":run.input.text,"request_id":request_id,"steps":[],"sealed_messages":history,"outcome":{"status":"completed","detail":format!("released managed session {name}"),"final_answer":run.final_answer}}]}),
+        "turns":[sealed]}),
     ))
 }

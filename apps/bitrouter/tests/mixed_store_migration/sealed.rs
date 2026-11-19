@@ -1,6 +1,7 @@
 use super::*;
-use bitrouter as product;
-use serde_json::Value;
+use bitrouter::cloud::settlement::{SettlementReceipt, SettlementState, SettlementUsage};
+use bitrouter::metering::store::MeteringStore;
+use serde_json::{Value, json};
 #[path = "accounting.rs"]
 mod accounting;
 #[path = "acp.rs"]
@@ -17,15 +18,36 @@ const REQUESTS: [&str; 2] = [
 // but the capture did not include final bills. Reconcile those separately.
 async fn captured(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
     let (path, db) = fresh(dir).await?;
-    capture::install(dir, &db).await?;
+    capture::install_capture(dir, &db, CAPTURE, false).await?;
     Ok((path, db))
+}
+
+async fn settle(db: &DatabaseConnection, id: &str, amount: i64) -> Result<()> {
+    db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,"INSERT INTO requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,created_at,charge_status,reconciliation_status) VALUES(?,'local','local','test-model','mock',11,7,0,'now','unknown','pending')",[id.into()])).await?;
+    MeteringStore::new(db.clone())
+        .apply_authoritative_receipt_charge(&SettlementReceipt {
+            request_id: id.into(),
+            state: SettlementState::Computed,
+            model_id: Some("test-model".into()),
+            provider_id: Some("mock".into()),
+            usage: SettlementUsage {
+                uncached_input_tokens: 11,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                output_tokens: 7,
+                reasoning_tokens: 0,
+            },
+            final_charge_micro_usd: Some(amount),
+        })
+        .await?;
+    Ok(())
 }
 
 #[tokio::test]
 async fn transfers_sealed_read_once_only_after_both_zero_cost_receipts() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let (path, db) = captured(dir.path()).await?;
-    capture::settle(&db, REQUESTS[0], 0).await?;
+    settle(&db, REQUESTS[0], 0).await?;
     db.close().await?;
     let dest = dir.path().join("active");
     let report = mixed_store::activate(&path, &dest).await?;
@@ -35,12 +57,12 @@ async fn transfers_sealed_read_once_only_after_both_zero_cost_receipts() -> Resu
             && report
                 .blockers
                 .iter()
-                .any(|b| b.contains("unreconciled native")),
+                .any(|b| b.contains("missing native bill")),
         "{:?}",
         report.blockers
     );
     let db = connection(&path, false).await?;
-    capture::settle(&db, REQUESTS[1], 0).await?;
+    settle(&db, REQUESTS[1], 0).await?;
     db.close().await?;
     let report = mixed_store::activate(&path, &dest).await?;
     ensure!(report.dispatch_allowed, "{:?}", report.blockers);
@@ -62,8 +84,8 @@ async fn refuses_conflicting_receipt_amount_or_released_history() -> Result<()> 
     for paid in [false, true] {
         let dir = tempfile::tempdir()?;
         let (path, db) = captured(dir.path()).await?;
-        capture::settle(&db, REQUESTS[0], i64::from(paid)).await?;
-        capture::settle(&db, REQUESTS[1], 0).await?;
+        settle(&db, REQUESTS[0], i64::from(paid)).await?;
+        settle(&db, REQUESTS[1], 0).await?;
         if paid {
             db.execute_unprepared("UPDATE requests SET estimated_charge_micro_usd=7 WHERE estimated_charge_micro_usd=1").await?;
         } else {
@@ -77,6 +99,90 @@ async fn refuses_conflicting_receipt_amount_or_released_history() -> Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn transfers_only_the_sealed_result_of_the_approved_write() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (source, db) = fresh(dir.path()).await?;
+    let thread = capture::install_approved(dir.path(), &db).await?;
+    db.close().await?;
+    let dest = dir.path().join("active");
+    let result = mixed_store::activate(&source, &dest).await?;
+    ensure!(result.dispatch_allowed, "{:?}", result.blockers);
+    let origin: Value = serde_json::from_slice(&fs::read(dest.join("bro/sealed.json"))?)?;
+    let live: Value =
+        serde_json::from_slice(&fs::read(dest.join(format!("bro/threads/{thread}.json")))?)?;
+    let turn = &live["turns"][0];
+    ensure!(
+        origin[thread.as_str()] == live
+            && turn["steps"] == json!([])
+            && turn["outcome"]["final_answer"] == "Wrote evidence.txt."
+            && turn["sealed_tool_results"]
+                == json!({"write-evidence":{
+                    "effect":"completed", "output":{"type":"json","value":{"path":"evidence.txt","bytes":18}}
+                }})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn approved_mutation_requires_ordered_approval_call_result_and_effect() -> Result<()> {
+    let cases = [
+        (
+            "$.entry.scope",
+            "answer_approval",
+            "$.entry.fingerprint",
+            r#""wrong-fingerprint""#,
+        ),
+        (
+            "$.fact.lifecycle.kind",
+            "input_resolved",
+            "$.fact.lifecycle.approved",
+            "false",
+        ),
+        (
+            "$.fact.lifecycle.kind",
+            "input_requested",
+            "$.fact.lifecycle.tool_id",
+            r#""different-call""#,
+        ),
+        (
+            "$.fact.record",
+            "tool_result",
+            "$.fact.effect",
+            r#""not_executed""#,
+        ),
+        (
+            "$.fact.record",
+            "tool_result",
+            "$.fact.message.content[0].output.value.bytes",
+            "19",
+        ),
+    ];
+    for (selector, tag, field, replacement) in cases {
+        let dir = tempfile::tempdir()?;
+        let (source, db) = fresh(dir.path()).await?;
+        capture::install_approved(dir.path(), &db).await?;
+        let changed=db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "UPDATE bro_execution_records SET payload=json_set(payload,?,json(?)) WHERE instr(CASE WHEN json_valid(payload) THEN json_extract(payload,?) END,?)>0",
+            [field.into(),replacement.into(),selector.into(),tag.into()])).await?;
+        ensure!(changed.rows_affected() == 1);
+        db.close().await?;
+        let dest = dir.path().join("active");
+        let result = mixed_store::activate(&source, &dest).await?;
+        ensure!(
+            !result.dispatch_allowed
+                && !dest.exists()
+                && result
+                    .blockers
+                    .iter()
+                    .any(|b| b.contains("bro_execution_records")),
+            "{tag}: {:?}",
+            result.blockers
+        );
+    }
+    Ok(())
+}
+
 // Construct the unscoped managed writer's release envelope around the recorded
 // completed run. This fixture uses a harness without optional context views.
 fn managed_journal() -> Result<Value> {
@@ -86,7 +192,6 @@ fn managed_journal_with(edit: impl FnOnce(&mut Value) -> Result<()>) -> Result<V
     use bitrouter::storage::checkpoint::{CheckpointBatchExt, sha256};
     use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch};
     use bitrouter_ai::core::protocol::Limits;
-    use serde_json::json;
     let journal: Vec<Value> = serde_json::from_slice(&zstd::stream::decode_all(
         &include_bytes!("../fixtures/baseline-runtime-v7/journal.json.zst")[..],
     )?)?;
@@ -162,7 +267,7 @@ async fn released_managed_run_preserves_input_key_and_requires_confirmed_start()
         let dir = tempfile::tempdir()?;
         let (path, db) = fresh(dir.path()).await?;
         for id in REQUESTS {
-            capture::settle(&db, id, 0).await?;
+            settle(&db, id, 0).await?;
         }
         let mut j = managed_journal()?;
         if uncertain {

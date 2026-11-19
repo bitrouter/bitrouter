@@ -35,6 +35,7 @@ fn configured(binary: &Path, output: &Path) -> Command {
     let mut command = Command::new(binary);
     command
         .env_clear()
+        .env("HOME", output)
         .env("PATH", "/usr/bin:/bin")
         .env("BITROUTER_HOME", output)
         .env("TERM", "dumb")
@@ -86,13 +87,26 @@ fn event(delta: &str, reason: &str) -> String {
         "data: {{\"id\":\"baseline-capture\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{reason}}}],\"usage\":{{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}}}\n\n"
     )
 }
-fn respond(mut stream: TcpStream, output: &Path, index: usize) -> Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+fn respond(mut stream: TcpStream, output: &Path, calls: &AtomicUsize, write: bool) -> Result<()> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut request = Vec::new();
     let mut byte = [0_u8; 1];
     while !request.ends_with(b"\r\n\r\n") {
-        stream.read_exact(&mut byte)?;
+        if let Err(e) = stream.read_exact(&mut byte) {
+            if request.is_empty()
+                && matches!(
+                    e.kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                )
+            {
+                return Ok(());
+            }
+            return Err(e.into());
+        }
         request.push(byte[0]);
         if request.len() > 65536 {
             return Err("oversized fixture headers".into());
@@ -116,16 +130,25 @@ fn respond(mut stream: TcpStream, output: &Path, index: usize) -> Result<()> {
     }
     let mut body = vec![0; length];
     stream.read_exact(&mut body)?;
+    let index = calls.fetch_add(1, Ordering::SeqCst);
     fs::write(output.join(format!("provider-request-{index}.json")), body)?;
     let response = if index == 0 {
         event(
-            r#"{"role":"assistant","tool_calls":[{"index":0,"id":"read-evidence","type":"function","function":{"name":"read","arguments":"{\"path\":\"evidence.txt\",\"limit\":10}"}}]}"#,
+            if write {
+                r#"{"role":"assistant","tool_calls":[{"index":0,"id":"write-evidence","type":"function","function":{"name":"write","arguments":"{\"path\":\"evidence.txt\",\"content\":\"approved M0 write\\n\"}"}}]}"#
+            } else {
+                r#"{"role":"assistant","tool_calls":[{"index":0,"id":"read-evidence","type":"function","function":{"name":"read","arguments":"{\"path\":\"evidence.txt\",\"limit\":10}"}}]}"#
+            },
             "null",
         ) + &event("{}", "\"tool_calls\"")
             + "data: [DONE]\n\n"
     } else if index == 1 {
         event(
-            r#"{"role":"assistant","content":"The evidence says baseline persisted payload."}"#,
+            if write {
+                r#"{"role":"assistant","content":"Wrote evidence.txt."}"#
+            } else {
+                r#"{"role":"assistant","content":"The evidence says baseline persisted payload."}"#
+            },
             "null",
         ) + &event("{}", "\"stop\"")
             + "data: [DONE]\n\n"
@@ -145,6 +168,11 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let binary = PathBuf::from(args.next().ok_or("missing baseline executable")?);
     let output = PathBuf::from(args.next().ok_or("missing output directory")?);
+    let write = match args.next().as_deref().and_then(|v| v.to_str()) {
+        None => false,
+        Some("approved-write") => true,
+        _ => return Err("unknown capture case".into()),
+    };
     fs::create_dir(&output)?;
     fs::set_permissions(&output, fs::Permissions::from_mode(0o700))?;
     let workspace = output.join("workspace");
@@ -156,11 +184,16 @@ fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     listener.set_nonblocking(true)?;
+    let pricing = if write {
+        ", pricing: {input_micro_usd_per_token: 2.0, output_micro_usd_per_token: 5.0}"
+    } else {
+        ""
+    };
     let config = output.join("bitrouter.yaml");
     fs::write(
         &config,
         format!(
-            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: 'http://{address}'\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models: [{{id: test-model}}]\n",
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: 'http://{address}'\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models: [{{id: test-model{pricing}}}]\n",
             output.join("bitrouter.db").display()
         ),
     )?;
@@ -171,18 +204,24 @@ fn main() -> Result<()> {
     let capture = output.clone();
     let provider = std::thread::spawn(move || -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(90);
+        let mut workers = Vec::new();
         while !stop_worker.load(Ordering::SeqCst) && Instant::now() < deadline {
             match listener.accept() {
-                Ok((stream, _)) => respond(
-                    stream,
-                    &capture,
-                    calls_worker.fetch_add(1, Ordering::SeqCst),
-                )?,
+                Ok((stream, _)) => {
+                    let capture = capture.clone();
+                    let calls = Arc::clone(&calls_worker);
+                    workers.push(std::thread::spawn(move || {
+                        respond(stream, &capture, &calls, write)
+                    }));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(10))
                 }
                 Err(error) => return Err(error.into()),
             }
+        }
+        for worker in workers {
+            worker.join().map_err(|_| "provider connection failed")??;
         }
         Ok(())
     });
@@ -202,13 +241,17 @@ fn main() -> Result<()> {
             .args([
                 "task",
                 "run",
-                "Read evidence.txt and report its contents.",
-                "--read-only",
+                if write {
+                    "Write the approved content to evidence.txt."
+                } else {
+                    "Read evidence.txt and report its contents."
+                },
                 "--model",
                 "test-model",
                 "--workspace",
             ])
             .arg(&workspace)
+            .args((!write).then_some("--read-only"))
             .arg("--config")
             .arg(&config)
             .stdout(File::create(output.join("task.jsonl"))?)
@@ -239,7 +282,10 @@ fn main() -> Result<()> {
     );
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if shutdown.0.try_wait()?.is_some() {
+        if let Some(status) = shutdown.0.try_wait()? {
+            if !status.success() {
+                return Err(format!("baseline stop failed: {status}").into());
+            }
             break;
         }
         if Instant::now() >= deadline {
@@ -249,7 +295,10 @@ fn main() -> Result<()> {
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if server.0.try_wait()?.is_some() {
+        if let Some(status) = server.0.try_wait()? {
+            if !status.success() {
+                return Err(format!("baseline server failed during shutdown: {status}").into());
+            }
             break;
         }
         if Instant::now() >= deadline {
@@ -267,8 +316,26 @@ fn main() -> Result<()> {
     if calls.load(Ordering::SeqCst) != 2 {
         return Err("expected exactly two baseline model calls".into());
     }
+    if write {
+        if fs::read(workspace.join("evidence.txt"))? != b"approved M0 write\n" {
+            return Err("approved write missing".into());
+        }
+        let terminal: serde_json::Value = serde_json::from_str(
+            fs::read_to_string(output.join("task.jsonl"))?
+                .lines()
+                .last()
+                .ok_or("missing terminal task record")?,
+        )?;
+        if terminal["type"] != "terminal"
+            || terminal["status"] != "completed"
+            || terminal["unknown_effect"] != false
+            || terminal["final_answer"] != "Wrote evidence.txt."
+        {
+            return Err("task did not confirm the approved write".into());
+        }
+    }
     println!(
-        "captured baseline database at {}; 2 model calls, one read tool, foreground owner stopped",
+        "captured baseline database at {}; 2 model calls, one completed tool, foreground owner stopped",
         output.display()
     );
     Ok(())

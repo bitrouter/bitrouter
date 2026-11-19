@@ -60,6 +60,9 @@ pub(crate) struct Turn {
     /// Complete, already-settled Chat history verified by the M0 offline reader.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sealed_messages: Vec<ChatMessage>,
+    /// Confirmed effects and original JSON outputs rendered as Chat strings.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sealed_tool_results: std::collections::BTreeMap<String, SealedToolResult>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub children: std::collections::BTreeMap<Uuid, Thread>,
     pub steps: Vec<Step>,
@@ -129,6 +132,12 @@ pub(crate) enum ToolState {
         output: ToolResultOutput,
         effect: EffectStatus,
     },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct SealedToolResult {
+    pub output: ToolResultOutput,
+    pub effect: EffectStatus,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -262,6 +271,7 @@ impl Thread {
             startup_instructions: crate::gateway::workspace_instructions(&self.workspace)?,
             request_id,
             sealed_messages: vec![],
+            sealed_tool_results: Default::default(),
             children: Default::default(),
             check: self
                 .verification_command
@@ -290,6 +300,49 @@ impl Thread {
 }
 
 impl Turn {
+    fn validate_sealed_tools(&self) -> Result<()> {
+        let mut matched = std::collections::BTreeSet::new();
+        for (index, message) in self.sealed_messages.iter().enumerate() {
+            for call in &message.tool_calls {
+                if !matches!(call.function.name.as_str(), "write" | "edit" | "shell") {
+                    continue;
+                }
+                let result = self
+                    .sealed_tool_results
+                    .get(&call.id)
+                    .context("missing sealed mutation result")?;
+                let ToolResultOutput::Json { value } = &result.output else {
+                    bail!("invalid sealed result type")
+                };
+                let next = self
+                    .sealed_messages
+                    .get(index + 1)
+                    .context("missing sealed tool message")?;
+                ensure!(
+                    result.effect == EffectStatus::Completed
+                        && message.role == "assistant"
+                        && message.tool_calls.len() == 1
+                        && next.role == "tool"
+                        && next.tool_call_id.as_ref() == Some(&call.id)
+                        && next
+                            .content
+                            .as_ref()
+                            .and_then(|value| value.as_str())
+                            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                            .as_ref()
+                            == Some(value)
+                        && matched.insert(&call.id),
+                    "sealed mutation differs from Chat history"
+                );
+            }
+        }
+        ensure!(
+            matched.len() == self.sealed_tool_results.len(),
+            "unmatched sealed mutation result"
+        );
+        Ok(())
+    }
+
     pub fn final_answer(&self) -> Option<String> {
         let response = self.response()?;
         if !response.calls.is_empty() {
@@ -553,6 +606,7 @@ impl Home {
                 turn.sealed_messages.is_empty() || (turn.steps.is_empty() && turn.released()),
                 "unsettled imported history"
             );
+            turn.validate_sealed_tools()?;
             for (step_index, step) in turn.steps.iter().enumerate() {
                 if step_index + 1 < turn.steps.len() || turn.released() {
                     ensure!(

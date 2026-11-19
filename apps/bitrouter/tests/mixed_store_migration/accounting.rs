@@ -1,5 +1,5 @@
-//! Real sealed read, two authoritative paid bills, and independent historical
-//! service reservations. Only a newly admitted turn may call the gateway.
+//! Sealed tool effects, paid bills, and independent historical service
+//! reservations. Only a newly admitted turn may call the gateway.
 use super::*;
 use bitrouter::metering::{entities::requests, store::MeteringStore};
 use bitrouter::storage::evolution::{EvolutionStore, digest, records};
@@ -20,8 +20,25 @@ fn original(path: &Path, bytes: &[u8]) -> Result<()> {
 
 async fn combined(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
     let (path, db) = captured(dir).await?;
-    capture::settle(&db, REQUESTS[0], 173).await?;
-    capture::settle(&db, REQUESTS[1], 259).await?;
+    settle(&db, REQUESTS[0], 173).await?;
+    settle(&db, REQUESTS[1], 259).await?;
+    gateway_history(dir, &db).await?;
+    // Also keep an ordinary locally metered request for which M0 had no price.
+    db.execute(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "ATTACH ? AS past",
+        [dir.join("captured.sqlite")
+            .to_str()
+            .context("captured path")?
+            .into()],
+    ))
+    .await?;
+    db.execute_unprepared("INSERT INTO main.requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at) SELECT 'ordinary-local-unknown',user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at FROM past.requests ORDER BY request_id LIMIT 1").await?;
+    db.execute_unprepared("DETACH DATABASE past").await?;
+    Ok((path, db))
+}
+
+async fn gateway_history(dir: &Path, db: &DatabaseConnection) -> Result<()> {
     let journal = dir.join("gateway-journal.sqlite");
     original(&journal, FROZEN)?;
     db.execute(Statement::from_sql_and_values(
@@ -42,19 +59,7 @@ async fn combined(dir: &Path) -> Result<(PathBuf, DatabaseConnection)> {
         .await?;
     }
     db.execute_unprepared("DETACH DATABASE original").await?;
-    // Also keep an ordinary locally metered request for which M0 had no price.
-    db.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "ATTACH ? AS past",
-        [dir.join("captured.sqlite")
-            .to_str()
-            .context("captured path")?
-            .into()],
-    ))
-    .await?;
-    db.execute_unprepared("INSERT INTO main.requests(request_id,user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at) SELECT 'ordinary-local-unknown',user_id,api_key_id,model_id,provider_id,prompt_tokens,completion_tokens,reasoning_tokens,uncached_input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,usage_origin,raw_usage_json,charge_status,charge_evidence_json,reconciliation_status,estimated_charge_micro_usd,created_at FROM past.requests ORDER BY request_id LIMIT 1").await?;
-    db.execute_unprepared("DETACH DATABASE past").await?;
-    Ok((path, db))
+    Ok(())
 }
 
 async fn evidence(db: &DatabaseConnection) -> Result<(Vec<requests::Model>, Vec<records::Model>)> {
@@ -71,10 +76,7 @@ async fn evidence(db: &DatabaseConnection) -> Result<(Vec<requests::Model>, Vec<
         .order_by_asc(records::Column::RecordId)
         .all(db)
         .await?;
-    ensure!(
-        bills.len() == 6 && reservations.len() == 3,
-        "incomplete historical ledger"
-    );
+    ensure!(reservations.len() == 3, "incomplete historical ledger");
     Ok((bills, reservations))
 }
 
@@ -83,6 +85,7 @@ async fn paid_native_and_terminal_unknown_survive_ordinary_restart() -> Result<(
     let fixture = tempfile::tempdir()?;
     let (source, db) = combined(fixture.path()).await?;
     let before = evidence(&db).await?;
+    ensure!(before.0.len() == 6);
     db.close().await?;
     let dest = fixture.path().join("activated");
     let result = mixed_store::activate(&source, &dest).await?;
@@ -314,8 +317,22 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
     let gateway = std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY")
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_bitrouter").into());
     let dir = tempfile::tempdir()?;
-    let (source, db) = combined(dir.path()).await?;
+    let (source, db) = super::super::fresh(dir.path()).await?;
+    let thread = capture::install_approved(dir.path(), &db).await?;
+    let thread = thread.as_str();
+    gateway_history(dir.path(), &db).await?;
     let before = evidence(&db).await?;
+    ensure!(before.0.len() == 5);
+    let native = before
+        .0
+        .iter()
+        .filter(|r| {
+            r.provider_id == "mock"
+                && r.charge_status == "computed"
+                && r.estimated_charge_micro_usd == 57
+        })
+        .collect::<Vec<_>>();
+    ensure!(native.len() == 2);
     db.close().await?;
     let outcome = mixed_store::activate(&source, &dir.path().join("active")).await?;
     let pair = outcome
@@ -325,6 +342,23 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
     let bro_home = pair.bro.parent().context("BRO home")?;
     let work = dir.path().join("workspace");
     fs::create_dir(&work)?;
+    let effect = work.join("evidence.txt");
+    let bytes = include_bytes!("../fixtures/m0-approved-write/evidence.txt");
+    fs::write(&effect, bytes)?;
+    fs::File::options()
+        .write(true)
+        .open(&effect)?
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1000))?;
+    let original_file = fs::metadata(&effect)?;
+    let staged: Value = serde_json::from_slice(&fs::read(
+        bro_home.join("threads").join(format!("{thread}.json")),
+    )?)?;
+    let old = &staged["turns"][0];
+    ensure!(
+        old["sealed_tool_results"]["write-evidence"]
+            == json!({"effect":"completed","output":{"type":"json","value":{"path":"evidence.txt","bytes":18}}})
+    );
+
     let port = TcpListener::bind("127.0.0.1:0")?;
     let address = port.local_addr()?;
     let endpoint = format!("http://{address}");
@@ -333,10 +367,33 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
     fs::write(
         &config,
         format!(
-            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: true}}\ndatabase: {{url: 'sqlite://bitrouter.db?mode=rwc'}}\nproviders:\n  newly-routed:\n    api_base: '{}'\n    api_key: fixture-only\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
+            "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '{address}', skip_auth: false}}\ndatabase: {{url: 'sqlite://bitrouter.db?mode=rwc'}}\nproviders:\n  newly-routed:\n    api_base: '{}'\n    api_key: fixture-only\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
             provider.uri()
         ),
     )?;
+    let issued = Command::new(&gateway)
+        .current_dir(service_home)
+        .env_clear()
+        .env("HOME", service_home)
+        .env("BITROUTER_HOME", service_home)
+        .args([
+            "--json",
+            "key",
+            "sign",
+            "--user",
+            "bro-client",
+            "--db",
+            "sqlite://bitrouter.db?mode=rwc",
+        ])
+        .output()
+        .await?;
+    ensure!(
+        issued.status.success(),
+        "gateway key issuance failed: {}",
+        String::from_utf8_lossy(&issued.stderr)
+    );
+    let issued: Value = serde_json::from_slice(&issued.stdout)?;
+    let token = issued["secret"].as_str().context("issued credential")?;
     let body = format!(
         "data: {}\n\ndata: [DONE]\n\n",
         json!({"id":"new-completion","created":1,"model":"test-model","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"continued once"},"finish_reason":"stop"}]})
@@ -353,6 +410,7 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
         cmd.kill_on_drop(true)
             .env_clear()
             .env("HOME", &work)
+            .env("BITROUTER_API_KEY", token)
             .current_dir(&work)
             .arg("--data-dir")
             .arg(bro_home)
@@ -394,6 +452,7 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
                 );
                 if client
                     .get(format!("{endpoint}/v1/models"))
+                    .bearer_auth(token)
                     .send()
                     .await
                     .is_ok_and(|r| r.status().is_success())
@@ -404,8 +463,12 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
             }
         })
         .await??;
-        for old in [REQUESTS[0], "m0-single-paid", "m0-fallback-paid", UNKNOWN] {
-            let response=client.post(format!("{endpoint}/v1/chat/completions")).header("x-bitrouter-request-id",old).header("x-bitrouter-controller-id","different-controller")
+        for old in native.iter().map(|bill| bill.request_id.as_str()).chain([
+            "m0-single-paid",
+            "m0-fallback-paid",
+            UNKNOWN,
+        ]) {
+            let response=client.post(format!("{endpoint}/v1/chat/completions")).bearer_auth(token).header("x-bitrouter-request-id",old).header("x-bitrouter-controller-id","different-controller")
                 .json(&json!({"model":"test-model","messages":[{"role":"user","content":"must never dispatch"}]})).send().await?;
             ensure!(
                 !response.status().is_success(),
@@ -416,15 +479,28 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
             run(args(&[
                 "managed",
                 "restore",
-                THREAD,
+                thread,
                 "--workspace",
                 work.to_str().context("workspace")?,
             ]))
             .await?;
+            let historical = run(args(&[
+                "thread",
+                "start",
+                thread,
+                old["prompt"].as_str().context("old prompt")?,
+                "--request-id",
+                old["request_id"].as_str().context("old key")?,
+            ]))
+            .await?;
+            ensure!(
+                historical["turn_id"] == old["turn_id"]
+                    && historical["outcome"]["final_answer"] == "Wrote evidence.txt."
+            );
             let accepted = run(args(&[
                 "thread",
                 "start",
-                THREAD,
+                thread,
                 "continue after cutover",
                 "--request-id",
                 "after-cutover",
@@ -435,14 +511,14 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
         } else {
             let id = new_turn.as_deref().context("new turn")?;
             ensure!(
-                run(args(&["thread", "resume", THREAD, "--turn", id])).await?["final_answer"]
+                run(args(&["thread", "resume", thread, "--turn", id])).await?["final_answer"]
                     == "continued once"
             );
             ensure!(
                 run(args(&[
                     "thread",
                     "start",
-                    THREAD,
+                    thread,
                     "continue after cutover",
                     "--request-id",
                     "after-cutover"
@@ -450,8 +526,47 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
                 .await?["turn_id"]
                     == id
             );
+            let historical = run(args(&[
+                "thread",
+                "start",
+                thread,
+                old["prompt"].as_str().context("old prompt")?,
+                "--request-id",
+                old["request_id"].as_str().context("old key")?,
+            ]))
+            .await?;
+            ensure!(
+                historical["turn_id"] == old["turn_id"]
+                    && historical["outcome"]["final_answer"] == "Wrote evidence.txt."
+            );
         }
-        process.kill().await?;
+        use std::os::unix::fs::MetadataExt;
+        let current = fs::metadata(&effect)?;
+        ensure!(
+            fs::read(&effect)? == bytes
+                && current.ino() == original_file.ino()
+                && current.modified()? == original_file.modified()?
+        );
+        let stop = Command::new(&gateway)
+            .kill_on_drop(true)
+            .env_clear()
+            .env("HOME", service_home)
+            .env("BITROUTER_HOME", service_home)
+            .current_dir(service_home)
+            .args(["stop", "--config"])
+            .arg(&config)
+            .output();
+        let stopped = tokio::time::timeout(Duration::from_secs(20), stop).await??;
+        ensure!(
+            stopped.status.success(),
+            "gateway stop: {}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        ensure!(
+            tokio::time::timeout(Duration::from_secs(20), process.wait())
+                .await??
+                .success()
+        );
     }
     let seen = provider
         .received_requests()
@@ -459,17 +574,22 @@ async fn restarted_products_preserve_paid_history_and_refuse_historical_request_
         .context("provider history")?;
     ensure!(seen.len() == 1, "{} upstream dispatches", seen.len());
     let sent: Value = seen[0].body_json()?;
+    let history = sent["messages"].as_array().context("messages")?;
+    let calls: Vec<_> = history
+        .iter()
+        .flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
+        .collect();
+    let results: Vec<_> = history.iter().filter(|m| m["role"] == "tool").collect();
     ensure!(
-        sent["messages"]
-            .as_array()
-            .context("messages")?
-            .iter()
-            .filter(|m| m["tool_call_id"] == "read-evidence"
-                && m["content"]
-                    .as_str()
-                    .is_some_and(|s| s.contains("baseline persisted payload")))
-            .count()
-            == 1
+        calls.len() == 1
+            && results.len() == 1
+            && calls[0]["id"] == "write-evidence"
+            && calls[0]["function"]["name"] == "write"
+            && calls[0]["function"]["arguments"]
+                == r#"{"path":"evidence.txt","content":"approved M0 write\n"}"#
+            && results[0]["tool_call_id"] == "write-evidence"
+            && serde_json::from_str::<Value>(results[0]["content"].as_str().context("result")?)?
+                == json!({"path":"evidence.txt","bytes":18})
     );
     let db = db::connect(&format!("sqlite://{}", pair.bitrouter.display())).await?;
     ensure!(evidence(&db).await? == before);
@@ -487,7 +607,7 @@ async fn retained_native_charge_claims_require_the_exact_backing_evidence() -> R
         let dir = tempfile::tempdir()?;
         let (path, db) = fresh(dir.path()).await?;
         for (id, amount) in REQUESTS.iter().zip([173, 259]) {
-            capture::settle(&db, id, amount).await?;
+            settle(&db, id, amount).await?;
         }
         let observations = MeteringStore::new(db.clone())
             .read(&CallerContext::local(), &REQUESTS.map(str::to_owned))

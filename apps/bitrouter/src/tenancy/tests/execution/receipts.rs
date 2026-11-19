@@ -102,6 +102,7 @@ struct Harness {
     credential: CredentialIssued,
     headers: HeaderMap,
     base: String,
+    provider_base: String,
     path: &'static str,
     request: Value,
     route: bitrouter_ai::tenancy::configuration::ResourceRef,
@@ -360,6 +361,7 @@ impl Harness {
         let router =
             crate::tenancy::http::router(fixture.service.clone(), operators).merge(dispatch);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let provider_base = base;
         let base = format!("http://{}", listener.local_addr()?);
         let gateway =
             AbortOnDropHandle::new(tokio::spawn(
@@ -371,6 +373,7 @@ impl Harness {
             credential,
             headers,
             base,
+            provider_base,
             path,
             request,
             route,
