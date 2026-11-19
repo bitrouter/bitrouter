@@ -155,11 +155,11 @@ async function collect(output, variants, role, sentinelOutput) {
     for (let repeat = 1; repeat <= 5; repeat++) {
       const offset = (repeat - 1) % lanes.length;
       const order = [...lanes.slice(offset), ...lanes.slice(0, offset)];
-      for (const [index, lane] of order.entries()) {
+      for (const lane of order) {
         const retestM0 = async () => {
           sentinels.push(await collectTrial(sentinelOutput, variants[variant].m0, 'sentinel', group, repeat, lane));
         };
-        const baselineFirst = (repeat + index) % 2 === 0;
+        const baselineFirst = (repeat + lanes.indexOf(lane)) % 2 === 0;
         if (sentinelOutput && baselineFirst) await retestM0();
         records.push(await collectTrial(output, variants[variant][role], role, group, repeat, lane));
         if (sentinelOutput && !baselineFirst) await retestM0();
