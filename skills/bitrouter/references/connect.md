@@ -1,0 +1,242 @@
+# Persistent native model options
+
+`bro connect` presents a Codex / Claude / OpenCode / Pi / DeepSeek Harness / Hermes Agent / OpenClaw menu, previews files and effects, and
+asks once before connecting the detected clients. It works in gateway-only
+builds (`--no-default-features`); neither `harness` nor `core` is required.
+`--model ID` selects an exact gateway model ID. New connections default to
+`bitrouter/automatos`. `--display-name LABEL` supplies a native display/detail name;
+Pi and Hermes picker rows still use the model ID. It never creates a gateway alias.
+BitRouter is the provider; Automatos is its router model. For Hermes and OpenClaw,
+the default display label drops the `bitrouter/` prefix, while the exact gateway
+request ID is retained. Hermes has no separate native model label. OpenClaw's
+`automatos` provider alias resolves to the full gateway model ID, so the native
+selection can use `bitrouter/automatos` without changing the request model.
+Setup configures clients; it does not implement routing.
+
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw accept repeated `--model`
+flags to register several selectors in the same provider:
+
+```sh
+bro connect hermes --model bitrouter/automatos --model team/background
+bro connect openclaw --model bitrouter/automatos --model team/background
+```
+
+Both IDs must already be advertised by that gateway. The first is the primary
+entry: the existing `model`/`display_name` report fields and native primary alias
+retain their meaning. The ordered `models` report lists every registered ID.
+`--display-name` applies to the first entry; additional labels use their exact IDs
+(Hermes picker rows always use IDs). Duplicate IDs are refused. Codex and Claude
+retain their single-model connector contract and reject repeated `--model`.
+
+Define strategies and model combinations on the gateway. Select routes for
+agents, sessions and scheduled jobs in the native harness. The connector does
+not modify schedules or migrate saved workflow bindings when a route is removed.
+Registering a selector does not create a policy or activate a Flex service tier.
+
+```sh
+bro connect
+bro connect codex --dry-run
+bro connect claude --yes
+bro connect codex --base-url https://gateway.example/proxy/v1 --model team/coder
+bro connect claude --base-url https://gateway.example \
+  --model bitrouter/claude-automatos --display-name bitrouter/automatos
+bro connect codex --remove
+```
+
+- `--config PATH` selects the local daemon. The command starts it if needed after
+  confirmation. It does not restart an existing daemon.
+- `--base-url URL` targets an existing gateway instead, without reading local
+  BitRouter configuration or starting a daemon. It conflicts with `--config`.
+  Gateway roots and `/v1` URLs, including reverse-proxy path prefixes, are
+  accepted. Scripted explicit gateways require `BITROUTER_API_KEY`; independent
+  provider clients can prompt for a key interactively. Remote URLs require
+  HTTPS. HTTP is permitted only on loopback.
+- `--model ID` is checked against the target gateway's `/v1/models` catalog.
+  Codex and Claude manage one connection per client family at a time. Omit the flag on repeat
+  setup to retain the recorded model; a different model, explicit display name or endpoint requires
+  removal and reconnection. `--remove` uses the receipt, not a model argument.
+- Local credential-less setup requires loopback and `skip_auth: true` in the
+  selected config. No upstream provider credential is borrowed.
+- `--codex-catalog PATH` supplies a complete Codex ModelsResponse, not an OpenAI
+  model list. Otherwise the current catalog or models_cache.json is used, with
+  the installed Codex bundled catalog as a fallback for a fresh installation.
+- `--dry-run` neither starts a daemon nor writes configuration or receipts.
+- Noninteractive writes/restores require an explicit target and `--yes`.
+- Named remote contexts are rejected: these are local client-file operations.
+
+Codex and Claude connect/restore require a full client restart. New provider adapters
+report their own reload instructions; Pi refreshes its picker on `/model`. The command never quits
+an application, changes tool permissions, or submits an inference request.
+It checks that the gateway advertises the exact model before writing clients.
+`gateway_catalog_verified` is not inference validation; `inference_verified`
+remains false. A preview has state `preview`, a write has
+`configured_restart_required`, and repeat setup has
+`already_configured_restart_required`.
+
+## Independent provider clients
+
+OpenCode, Pi, DeepSeek Harness, Hermes and OpenClaw add a BitRouter provider without changing
+existing providers or the selected default. They support these additional flags:
+
+- `--instance PATH`: OpenCode/OpenClaw config file/directory, Pi agent directory, or Harness/Hermes home.
+  Receipt identity includes the resolved configuration path. Separate instances are independent.
+- `--protocol chat-completions|responses|messages`: choose the gateway wire API;
+  default is Chat Completions. This is a configuration choice, not a protocol certification.
+- `--profile NAME`: Harness or Hermes; repeat for initialized profiles. Without it,
+  Harness configures all detected initialized profiles, while Hermes uses only
+  its selected home/current profile. The connector does not create named profiles.
+  OpenClaw instances are selected with `--instance`, not `--profile`.
+- `--status`: inspect saved settings offline without file writes.
+- `--check`: verify installed settings and the exact gateway model in the catalog
+  using the stored client credential. No inference or tool request is sent.
+- `--update`: change endpoint, model, label, protocol, profile scope or key
+  (set `BITROUTER_API_KEY`). Omitted settings retain the saved connection;
+  an omitted key is reused only when the gateway URL is unchanged.
+  A recoverable journal protects the old connection if replacement fails.
+  Successful updates restore the earlier native default; select BitRouter again if desired.
+  An interrupted update is recovered by the next mutating connect invocation.
+  Supplying `--model` replaces the complete ordered selector set; omitting it
+  preserves the set. To drop a selector, supply the full remaining list.
+  Setup and `--check` validate every ID in one catalog fetch. A missing ID fails
+  before configuration writes or update restoration.
+
+Fresh setup reports `configured`, repeat setup `already_configured`, updates
+`updated`, and offline status `configuration_changed` when owned settings drift.
+`configuration_verified` proves supported settings are installed;
+`gateway_catalog_verified` proves catalog access. Neither means a running client
+has reloaded its configuration or that inference and tools work.
+
+`--remove` restores owned provider fields and prior selection only when the
+BitRouter entry is still selected, preserving later unrelated preferences.
+Edited owned provider fields are conflicts. Close config-writing clients during
+connect/update/remove; separate-file updates cannot exclude external writers atomically.
+
+Client details and acceptance boundaries:
+
+- [OpenCode CLI/TUI, Desktop and Web](connect-opencode.md)
+- [Pi CLI/TUI](connect-pi.md)
+- [DeepSeek Harness profiles](connect-deepseek.md)
+- [Hermes CLI/TUI, Desktop and Web profiles](connect-hermes.md)
+- [OpenClaw Gateway and connected clients](connect-openclaw.md)
+
+Hermes and OpenClaw initially support only `--protocol chat-completions`.
+Other protocol selections fail before connection files are written. Their
+Desktop/Web clients must use the configured backend; configuring a local home
+does not configure a remote backend or change a live session's model.
+
+`bro connect` configures the local server's instance. A Desktop/Web UI attached
+to another machine needs the connector run against that server's configuration.
+It does not silently modify remote machines.
+
+## Codex
+
+CLI and desktop normally share CODEX_HOME / ~/.codex/config.toml. The command
+adds a dedicated model_providers.bitrouter-connect Responses provider and
+a complete local model_catalog_json (`bitrouter-models.json`). The existing default, comments, unrelated
+settings and model metadata are preserved. Imported models are made API-visible
+so they remain selectable under gateway authentication.
+
+All selected models now pass through BitRouter. The x-bitrouter-harness header
+retains native model-to-provider mapping. If the selected model already appears
+in the source catalog, its capabilities are retained and it is made visible,
+without a duplicate entry. Otherwise setup supplies a generic text/tool template
+with 64K context and compaction at 48K; these are client configuration defaults,
+not verified model limits. The template advertises no reasoning levels, native
+web/image/audio tools, code-mode, service tiers or multi-agent backend. Use
+`--codex-catalog` with a complete catalog containing the selected model to supply
+its actual context limits and capabilities. A `/v1/models` ID alone does not
+prove those capabilities or tool-call compatibility.
+Desktop can still attach native namespace and web-search tool declarations.
+Linux Desktop 26.1027.30824 was verified against a native Responses upstream;
+its tool-bearing requests were refused by the gateway's lossless conversion
+checks against a Chat Completions upstream. A picker entry alone does not
+establish compatibility with arbitrary Chat Completions models.
+An active profile overriding provider/catalog is rejected. Project and managed
+settings can still take precedence. The fallback runs `codex debug models
+--bundled` without authentication/network access. Older clients without this
+command need an existing cache or an explicit catalog.
+
+A local catalog is a snapshot. After upgrading Codex or changing available
+models, remove and reconnect with a current source catalog. CLI and desktop
+using different custom homes require separate configuration.
+
+## Claude
+
+CLI settings use CLAUDE_CONFIG_DIR / ~/.claude/settings.json and the
+ANTHROPIC_CUSTOM_MODEL_OPTION, _NAME and _DESCRIPTION variables. Existing
+default models and permissions stay intact. The upstream API key field is
+cleared and replaced with a gateway bearer token. Conflicting credential helpers,
+provider-selection variables, custom headers and shell overrides are rejected.
+
+Desktop does not inherit CLI inference settings. A detected desktop gets a
+separate local Claude-3p/configLibrary BitRouter profile, selected through
+_meta.json, and deploymentMode: "3p". The schema was checked against Desktop
+4.4212.0; the implementation does not install or upgrade it. Existing profile model
+entries are retained and the alias is appended. With no explicit model list,
+this profile contains only the selected model. Previous profiles remain intact.
+Gateway mode does not support Anthropic cloud environments or Remote Control.
+Managed and bootstrap configurations are rejected. Standard application
+locations or an existing config library (also under CLAUDE_USER_DATA_DIR) are
+used for detection; an absent
+desktop is reported as skipped.
+
+Desktop filters model IDs that are not recognizably Claude, including the default
+`bitrouter/automatos`. For Desktop, select a gateway-advertised Claude route such
+as `bitrouter/claude-automatos` and set `--display-name bitrouter/automatos`.
+`labelOverride` changes the label, not the request model or capability checks.
+The gateway must implement that route; setup does not silently rename it or
+certify non-Claude backends. CLI does not inherit this Desktop name restriction.
+
+The documented Claude gateway contract is Anthropic Messages, including SSE
+and tool use. Validate the actual routed models against that contract before
+claiming inference compatibility. Adding an option does not certify non-Claude
+backends or provider-specific features.
+
+## Recovery and ownership
+
+Private receipts live in $BITROUTER_HOME/connections or ~/.bitrouter/connections.
+They include original file bytes and gateway credentials; do not publish them.
+Files are replaced atomically, receipts precede writes, and symlinks/multiply
+linked files are refused. Unix writes use mode 0600.
+
+`--remove` restores unchanged files exactly. Codex config recovery restores the
+owned provider and catalog pointers while preserving other settings written by
+the app. If the picker still selects the connected model, it restores the prior
+default model and reasoning effort; a later selection of another model is kept.
+Edits to the owned provider or catalog pointer remain conflicts. The catalog
+file and Claude CLI settings retain exact-file conflict checks.
+Claude Desktop restoration is
+scoped: it removes only the owned profile/list entry, restores the previous
+selection only while the BitRouter profile is selected, and preserves unrelated
+preferences and later profile selections. Desktop's `__sealed__:` credential
+migration is accepted; other edits to the owned profile or its list entry are
+conflicts. Resolve those before retrying; validation precedes all restore writes.
+If another profile was selected, its deployment mode stays unchanged. Interrupted
+transactions remain recoverable. Repeat connect accepts the supported Desktop
+normalizations but rejects a changed profile selection. Fully quit the client
+before connect/remove to avoid concurrent writers.
+
+Version-5 receipts add native provider ownership and instance metadata. Version-4 receipts add Codex config ownership rules. Version-3 receipts record
+the endpoint, request model, optional display name and Claude Desktop ownership
+rules. Earlier receipts remain readable with their original recovery behavior;
+existing Codex exact-file receipts do not silently acquire relaxed checks.
+Version-7 receipts store the ordered native selector set and Pi's complete owned
+selection set. This CLI reads versions 1–6 as single-selector connections and
+upgrades them on replacement while retaining their original restoration baseline.
+Use this CLI for version-7 removal and interrupted-update recovery; older CLIs
+are unsupported for these records.
+For Codex/Claude, rotate keys, refresh catalogs or include newly installed clients
+by removing and reconnecting. The three independent-provider clients also support `--update`.
+
+With inherit_defaults: true, a canonical auto router also supplies the default
+automatos router using the same policy/defaults/checks. An explicit
+routers.automatos is preserved. No implicit alias is added to legacy-only
+presets or configs opting out of defaults. The gateway must publish
+bitrouter/automatos before connection proceeds.
+
+Sources:
+- https://learn.chatgpt.com/docs/model-catalogs
+- https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway
+- https://code.claude.com/docs/en/model-config#add-a-custom-model-option
+- https://claude.com/docs/third-party/claude-desktop/gateway
+- https://claude.com/docs/third-party/claude-desktop/configuration-format
