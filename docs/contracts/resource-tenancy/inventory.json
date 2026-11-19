@@ -34,7 +34,7 @@
   {
     "name": "evolution",
     "paths": [
-      "apps/bitrouter/src/tenancy/learning",
+      "apps/bitrouter/src/tenancy/eval",
       "apps/bitrouter/src/storage/evolution.rs",
       "apps/bitrouter/src/db/mixed_store/catalog.rs"
     ],
@@ -52,7 +52,7 @@
       "apps/bitrouter/src/gateway/observability/inventory.rs"
     ],
     "existing": "Local BRO thread and execution identifiers; authenticated gateway request identities",
-    "target": "Local checkpoint ownership and principal-scoped gateway admission",
+    "target": "Local checkpoint ownership and globally unique ordinary gateway requests with principal-scoped reads",
     "obligations": "Parent/child recovery and immutable effects in BRO; repeat admission and settlement in BitRouter",
     "exclusions": "A caller-supplied session or controller ID cannot bind a gateway request to local execution state."
   },
