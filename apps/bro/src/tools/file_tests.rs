@@ -100,7 +100,9 @@ fn publishing_existing_file_replaces_complete_contents() -> Result<()> {
     let mut observed = Vec::new();
     observer.read_to_end(&mut observed)?;
     assert_eq!(observed, b"original content");
+    drop(observer);
     assert_eq!(fs::read(path)?, b"new");
+    assert_eq!(fs::read_dir(tmp.path())?.count(), 1);
     Ok(())
 }
 

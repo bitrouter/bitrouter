@@ -87,21 +87,24 @@ impl PreparedFile {
     pub fn publish(
         mut self,
         name: &OsStr,
-        expected: Option<(&mut File, &[u8])>,
+        expected: Option<(File, &[u8])>,
         effect: &mut EffectStatus,
     ) -> Result<()> {
         let stage = &mut self.0;
         component(name)?;
         regular(&stage.file)?;
-        if let Some((file, bytes)) = expected {
+        if let Some((mut file, bytes)) = expected {
             #[cfg(unix)]
-            check_name(&stage.parent.file, name, file)?;
-            check_contents(file, bytes)?;
+            check_name(&stage.parent.file, name, &file)?;
+            check_contents(&mut file, bytes)?;
             ensure!(
                 !file.metadata()?.permissions().readonly(),
                 "existing target is read-only"
             );
-            stage.replace(name, file, bytes, effect)?;
+            #[cfg(not(windows))]
+            stage.replace(name, &mut file, bytes, effect)?;
+            #[cfg(windows)]
+            stage.replace(file, bytes, effect)?;
         } else {
             stage.install_new(name, effect)?;
         }
@@ -186,43 +189,109 @@ impl StagedFile {
     #[cfg(windows)]
     fn replace(
         &mut self,
-        name: &OsStr,
-        original: &mut File,
+        mut original: File,
         expected: &[u8],
         effect: &mut EffectStatus,
     ) -> Result<()> {
-        use super::windows::{delete, rename_here};
-        let recovery = OsString::from(format!(".bro-recovery-{}", uuid::Uuid::new_v4()));
+        use super::windows::{delete, file_name, rename_here};
+        let name = file_name(&original)?;
         original.sync_all()?;
-        finish_rename(rename_here(original, &recovery), effect)?;
-        let retained = || {
-            format!(
-                "publication needs recovery; original entry retained at {}",
-                recovery.to_string_lossy()
-            )
-        };
+        let recovery = WindowsRecovery::persist(self, &name, expected)?;
+        let recovery_location = || recovery.location();
+        recovery
+            .displace(&original, effect)
+            .with_context(recovery_location)?;
         let publish = (|| -> Result<()> {
-            original.sync_all()?;
-            check_contents(original, expected)?;
-            rename_here(&self.file, name)?;
+            check_contents(&mut original, expected)?;
+            rename_here(&self.file, &name)?;
             Ok(())
         })();
         if let Err(error) = publish {
-            rename_here(original, name).with_context(retained)?;
-            original
-                .sync_all()
-                .context("could not sync restored workspace file")?;
+            rename_here(&original, &name).with_context(recovery_location)?;
+            original.sync_all().with_context(recovery_location)?;
+            recovery.remove()?;
             return Err(error);
         }
         self.published = true;
-        self.file.sync_all().with_context(retained)?;
-        delete(original).with_context(retained)?;
-        Ok(())
+        self.file.sync_all().with_context(recovery_location)?;
+        delete(&original).with_context(recovery_location)?;
+        drop(original);
+        recovery.remove()
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     fn replace(&mut self, _: &OsStr, _: &mut File, _: &[u8], _: &mut EffectStatus) -> Result<()> {
         anyhow::bail!("workspace publication is unavailable")
+    }
+}
+
+#[cfg(windows)]
+const MAX_RECOVERY_RECORD_BYTES: usize = 8 * 1024;
+
+#[cfg(windows)]
+struct WindowsRecovery {
+    record: PreparedFile,
+    record_name: String,
+    escrow_name: String,
+}
+
+#[cfg(windows)]
+impl WindowsRecovery {
+    fn persist(stage: &StagedFile, name: &OsStr, original: &[u8]) -> Result<Self> {
+        use sha2::{Digest, Sha256};
+        use std::os::windows::ffi::OsStrExt;
+
+        let prefix = format!(".bro-recovery-{}", uuid::Uuid::new_v4());
+        let record_name = format!("{prefix}.json");
+        let escrow_name = format!("{prefix}.original");
+        let name_utf16: Vec<u16> = name.encode_wide().collect();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "original_name": name.to_str(),
+            "original_name_utf16": name_utf16,
+            "escrow_name": escrow_name,
+            "staged_name": stage.name.to_str().context("missing staging name")?,
+            "original_sha256": hex::encode(Sha256::digest(original)),
+        }))?;
+        ensure!(
+            bytes.len() <= MAX_RECOVERY_RECORD_BYTES,
+            "Windows workspace recovery record is too large"
+        );
+        let mut record = StagedFile::new(stage.parent.clone())?.prepare(&bytes, None)?;
+        super::windows::rename_here(&record.0.file, OsStr::new(&record_name))?;
+        record.0.published = true;
+        let recovery = Self {
+            record,
+            record_name,
+            escrow_name,
+        };
+        recovery
+            .record
+            .0
+            .file
+            .sync_all()
+            .with_context(|| recovery.location())?;
+        Ok(recovery)
+    }
+
+    fn displace(&self, original: &File, effect: &mut EffectStatus) -> Result<()> {
+        finish_rename(
+            super::windows::rename_here(original, OsStr::new(&self.escrow_name)),
+            effect,
+        )?;
+        original.sync_all()?;
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        format!(
+            "workspace publication needs recovery; inspect {} beside the requested file (escrow: {})",
+            self.record_name, self.escrow_name
+        )
+    }
+
+    fn remove(self) -> Result<()> {
+        super::windows::delete(&self.record.0.file).with_context(|| self.location())
     }
 }
 
@@ -280,4 +349,56 @@ impl Drop for StagedFile {
             );
         }
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn interrupted_replacement_leaves_a_locatable_original() -> Result<()> {
+    use super::{Directory, children::Access, windows::file_name};
+    use sha2::{Digest, Sha256};
+    use std::{fs, os::windows::ffi::OsStrExt};
+
+    let project = tempfile::tempdir()?;
+    let target = project.path().join("Café.txt");
+    let original_bytes = b"original project notes";
+    fs::write(&target, original_bytes)?;
+    let root = Arc::new(Directory::open(&project.path().canonicalize()?)?);
+    let parent = Parent::root(&root)?;
+    let original = parent.open(OsStr::new("café.TXT"), Access::ReadWrite)?;
+    let original_name = file_name(&original)?;
+    let stage = StagedFile::new(parent)?.prepare(b"prepared edit", None)?;
+    let recovery = WindowsRecovery::persist(&stage.0, &original_name, original_bytes)?;
+    let mut effect = EffectStatus::NotExecuted;
+    recovery.displace(&original, &mut effect)?;
+    assert_eq!(effect, EffectStatus::Unknown);
+
+    drop(recovery);
+    drop(original);
+    drop(stage);
+    assert!(!target.try_exists()?);
+    let record = fs::read_dir(project.path())?
+        .collect::<io::Result<Vec<_>>>()?
+        .into_iter()
+        .find(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .context("recovery record missing after closing the publisher")?;
+    let data = fs::read(record.path())?;
+    assert!(data.len() <= MAX_RECOVERY_RECORD_BYTES);
+    let data: serde_json::Value = serde_json::from_slice(&data)?;
+    assert_eq!(data["original_name"], "Café.txt");
+    let name = target.file_name().context("test target missing filename")?;
+    assert_eq!(
+        data["original_name_utf16"],
+        serde_json::json!(name.encode_wide().collect::<Vec<_>>())
+    );
+    let escrow = data["escrow_name"]
+        .as_str()
+        .context("missing escrow name")?;
+    let staged = data["staged_name"]
+        .as_str()
+        .context("missing staged name")?;
+    assert!(!project.path().join(staged).try_exists()?);
+    let saved = fs::read(project.path().join(escrow))?;
+    assert_eq!(saved, original_bytes);
+    assert_eq!(data["original_sha256"], hex::encode(Sha256::digest(&saved)));
+    Ok(())
 }

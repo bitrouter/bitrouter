@@ -90,10 +90,25 @@ These checks retain the workspace boundary and are not OS sandboxing.
 `write` and `edit` sync the complete replacement before installing it in
 the held directory. New files never replace an existing entry. An edit
 verifies the existing file and its original bytes; on a publication conflict,
-the displaced file is retained for recovery. On Windows, the destination
-can be briefly absent during replacement while its original file is held
-under a recovery name. BRO reports an unknown effect when publication or
-syncing may have changed the workspace but completion is uncertain.
+the displaced file is retained for recovery. BRO reports an unknown effect
+when publication or syncing may have changed the workspace but completion is
+uncertain.
+
+On Windows, BRO installs and syncs a bounded `.bro-recovery-<id>.json`
+record beside the target before moving the held original to its matching
+`.bro-recovery-<id>.original` name. The record gives the exact original
+basename (including its UTF-16 form), the escrow and staging basenames, and
+the original SHA-256. The target can be absent if interrupted after the move
+and before the staged file is installed. BRO does not retry that publication
+or restore the original on restart.
+
+To recover, stop workspace writers and inspect the record and files in that
+directory. Verify the escrow bytes against the recorded digest. If the
+destination is absent, restore the escrow to the recorded name with a move
+that refuses to overwrite. If the destination exists, leave both files in
+place and reconcile them manually. A record without an escrow can also mean
+the move never happened or cleanup was interrupted; inspect the destination
+before removing the record or any leftover staging file.
 
 ### File behavior
 

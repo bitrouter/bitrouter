@@ -107,6 +107,40 @@ fn status_error(status: i32) -> io::Error {
     io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
 }
 
+pub(super) fn file_name(file: &File) -> io::Result<OsString> {
+    let mut path = vec![0u16; 512];
+    loop {
+        // SAFETY: file stays open and path holds the advertised number of UTF-16 units.
+        let len = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                path.as_mut_ptr(),
+                path.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_NONE,
+            )
+        } as usize;
+        if len == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len < path.len() {
+            let name = path[..len]
+                .rsplit(|unit| *unit == u16::from(b'\\'))
+                .next()
+                .ok_or(io::ErrorKind::InvalidData)?;
+            let name = OsString::from_wide(name);
+            component(&name)?;
+            return Ok(name);
+        }
+        if len <= path.len() || len > 32_768 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid Windows file name length",
+            ));
+        }
+        path.resize(len, 0);
+    }
+}
+
 pub(super) fn rename_here(file: &File, name: &OsStr) -> io::Result<()> {
     component(name)?;
     let wide: Vec<u16> = name.encode_wide().collect();

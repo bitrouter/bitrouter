@@ -129,7 +129,7 @@ impl Destination {
     }
 
     pub fn publish(
-        mut self,
+        self,
         data: &[u8],
         original: Option<&[u8]>,
         effect: &mut EffectStatus,
@@ -139,7 +139,7 @@ impl Destination {
             .as_ref()
             .map(|file| file.metadata().map(|metadata| metadata.permissions()))
             .transpose()?;
-        let expected = match (self.file.as_mut(), original) {
+        let expected = match (self.file, original) {
             (Some(file), Some(bytes)) => Some((file, bytes)),
             (None, None) => None,
             _ => anyhow::bail!("file publication is missing its original state"),
