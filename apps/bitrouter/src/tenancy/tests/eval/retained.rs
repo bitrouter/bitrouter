@@ -201,14 +201,6 @@ async fn finish_fixture_image(db: sea_orm::DatabaseConnection) -> Result<()> {
         "fixture checkpoint was busy"
     );
     ensure!(checkpoint.try_get_by_index::<i64>(1)? == checkpoint.try_get_by_index::<i64>(2)?);
-    let journal = db
-        .query_one(Statement::from_string(
-            backend,
-            "PRAGMA journal_mode=DELETE",
-        ))
-        .await?
-        .context("closing retained Eval fixture journal")?;
-    ensure!(journal.try_get_by_index::<String>(0)? == "delete");
     db.close().await?;
     Ok(())
 }
