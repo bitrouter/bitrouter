@@ -85,12 +85,20 @@ export async function createTenant(control, operator, upstream) {
     'bitrouter-capability-revision': String(cap.capability_revision), 'bitrouter-execution-revision': draft.revision_id,
     'bitrouter-tenancy-version': '1', 'bitrouter-receipt-mode': 'strict',
   };
-  return { headers, async check(rows) {
+  return { headers, async check(rows, samplesPerLeg) {
+    if (samplesPerLeg) {
+      const byLeg = Map.groupBy(rows, row => row.leg);
+      rows = [...byLeg.values()].flatMap(group => {
+        assert.ok(group.length >= samplesPerLeg);
+        return Array.from({ length: samplesPerLeg }, (_, index) => group[
+          Math.floor((index + 0.5) * group.length / samplesPerLeg)]);
+      });
+    }
     const examples = new Set();
     let checked = 0;
     for (const row of rows) {
       const key = row.scenario + '/' + row.leg;
-      if (!row.cancel && examples.has(key)) continue;
+      if (!samplesPerLeg && !row.cancel && examples.has(key)) continue;
       examples.add(key);
       const path = prefix + '/executions';
       let page;
@@ -115,6 +123,13 @@ export async function createTenant(control, operator, upstream) {
       } else {
         assert.equal(receipt.outcome, 'completed');
         assert.equal(receipt.attempts[0].outcome, 'completed');
+        if (samplesPerLeg) {
+          assert.ok(row.execution);
+          for (const usage of [receipt.usage, receipt.attempts[0].usage]) {
+            assert.deepEqual([usage.input_tokens, usage.output_tokens, usage.provenance, usage.complete],
+              [3, 5, 'provider', false]);
+          }
+        }
       }
       checked++;
     }

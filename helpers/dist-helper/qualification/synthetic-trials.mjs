@@ -88,7 +88,7 @@ async function window(driver, scenario, count, concurrency) {
   return { elapsed: performance.now() - started, rows: groups.flat() };
 }
 
-export async function trial(binary, lane, protocol, smoke) {
+export async function trial(binary, lane, protocol, smoke, diagnostic) {
   const temp = await mkdtemp('/tmp/br-synth-');
   let gateway, provider, driver, timer, sampleError, pendingSample;
   const processSamples = [];
@@ -188,11 +188,13 @@ export async function trial(binary, lane, protocol, smoke) {
     }, 250);
     const windows = {};
     let warmups = 0;
-    for (const [scenario, planned] of Object.entries(COUNTS)) {
+    const scenarios = diagnostic ? { [diagnostic.scenario]: diagnostic.count } : COUNTS;
+    const concurrency = diagnostic?.concurrency ?? CONCURRENCY;
+    for (const [scenario, planned] of Object.entries(scenarios)) {
       const warmed = await window(driver, ['long', 'cancel'].includes(scenario) ? 'json' : scenario,
-        smoke ? 1 : CONCURRENCY, CONCURRENCY);
+        diagnostic?.warmups ?? (smoke ? 1 : CONCURRENCY), concurrency);
       warmups += warmed.rows.length;
-      windows[scenario] = await window(driver, scenario, smoke ? 1 : planned, CONCURRENCY);
+      windows[scenario] = await window(driver, scenario, smoke ? 1 : planned, concurrency);
     }
     clearInterval(timer);
     await pendingSample;
@@ -208,7 +210,7 @@ export async function trial(binary, lane, protocol, smoke) {
     assert.deepEqual(observed, {
       started: rows.length + warmups, completed: rows.length + warmups - cancelled, cancelled, failed: 0,
     });
-    const receipts = tenancy ? await tenancy.check(rows) : 0;
+    const receipts = tenancy ? await tenancy.check(rows, diagnostic?.receiptSamples) : 0;
     return { startup: startupMs, idleKib, peakKib: Math.max(...processSamples), processSamples,
       observed, warmups, rows: rows.length, receipts, windows,
     };

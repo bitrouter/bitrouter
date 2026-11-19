@@ -1,0 +1,63 @@
+name: Split synthetic short-path diagnostic
+
+on:
+  push:
+    branches: [codex/split-diagnostic-cd48db41]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BASELINE: b0d7e2fbeabe39b96692c48787a066e89c04aed0
+  CANDIDATE: cd48db41a76d87ef92670cf59a662870e18e0026
+  CANDIDATE_RUN: '44477503080'
+  CANDIDATE_ATTEMPT: '1'
+
+jobs:
+  diagnose:
+    if: github.repository == 'bitrouter/bitrouter'
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.BASELINE }}
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.CANDIDATE }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.10.0
+          package-manager-cache: false
+      - name: Verify the four public release artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-import.mjs "$RUNNER_TEMP" "$CANDIDATE" "$CANDIDATE_RUN" "$CANDIDATE_ATTEMPT"
+      - name: Measure alternating short-path blocks on one runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          node harness/helpers/dist-helper/qualification/synthetic-diagnostic.mjs "$RUNNER_TEMP" "$RUNNER_TEMP/synthetic-diagnostic"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: synthetic-diagnostic-${{ env.CANDIDATE }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/synthetic-diagnostic/method.json
+            ${{ runner.temp }}/synthetic-diagnostic/summary.json
+            ${{ runner.temp }}/synthetic-diagnostic/block-*.json
+          if-no-files-found: warn
+          retention-days: 14
