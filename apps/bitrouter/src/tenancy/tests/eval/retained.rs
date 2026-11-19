@@ -181,6 +181,30 @@ async fn seeded(path: &Path, key_env: Option<&str>) -> Result<Seeded> {
     // Both the Service claim and the final pool clone retain the acquisition.
     // Return only facts so stopped-file readers can acquire a fresh owner.
     drop(fixture);
+    // The tests copy the stopped main file byte-for-byte. Ensure it contains
+    // every committed Eval row even if closing the last writer would leave WAL
+    // frames behind on this runner.
+    let backend = db.get_database_backend();
+    let checkpoint = db
+        .query_one(Statement::from_string(
+            backend,
+            "PRAGMA wal_checkpoint(TRUNCATE)",
+        ))
+        .await?
+        .context("checkpointing retained Eval fixture")?;
+    ensure!(
+        checkpoint.try_get_by_index::<i64>(0)? == 0,
+        "fixture checkpoint was busy"
+    );
+    ensure!(checkpoint.try_get_by_index::<i64>(1)? == checkpoint.try_get_by_index::<i64>(2)?);
+    let journal = db
+        .query_one(Statement::from_string(
+            backend,
+            "PRAGMA journal_mode=DELETE",
+        ))
+        .await?
+        .context("closing retained Eval fixture journal")?;
+    ensure!(journal.try_get_by_index::<String>(0)? == "delete");
     db.close().await?;
     Ok(seeded)
 }
