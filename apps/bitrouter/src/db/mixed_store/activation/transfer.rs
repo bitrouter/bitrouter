@@ -159,8 +159,10 @@ async fn project(
             }
             Some("accepted_key") => {
                 let e = &v["entry"];
-                let approval_scope = json!(["local", "local", "answer_approval", id]);
-                let scope = if e["scope"] == approval_scope.to_string() {
+                let actual_scope = field(e, "scope")?;
+                let approval_scope =
+                    serde_json::to_string(&json!(["local", "local", "answer_approval", id]))?;
+                let scope = if actual_scope == approval_scope.as_str() {
                     let (turn, _) = queued.as_ref().context("approval before admission")?;
                     approvals.accepted(turn, e)?;
                     approval_scope
@@ -175,13 +177,12 @@ async fn project(
                             && key.replace(field(e, "key")?.to_owned()).is_none(),
                         "start key mismatch"
                     );
-                    json!(["local", "local", "start", id])
+                    serde_json::to_string(&json!(["local", "local", "start", id]))?
                 } else {
-                    json!(["local", "local", "create_thread", null])
+                    serde_json::to_string(&json!(["local", "local", "create_thread", null]))?
                 };
-                let scope = serde_json::to_string(&scope)?;
                 ensure!(
-                    e["thread_id"] == id && e["scope"].as_str() == Some(scope.as_str()),
+                    e["thread_id"] == id && actual_scope == scope.as_str(),
                     "acceptance scope mismatch"
                 );
                 accepted.push(e.clone());

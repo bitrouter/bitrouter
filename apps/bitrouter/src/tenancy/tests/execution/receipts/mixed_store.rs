@@ -124,13 +124,14 @@ async fn mixed_restart(bro: Option<&std::path::Path>) -> Result<()> {
         )
         .await
         .map_err(failure)?;
+    h.revision = active;
     h.headers = headers(
         &h.fixture,
         h.credential
             .secret
             .as_deref()
             .context("issued credential")?,
-        &active.revision_id,
+        &h.revision.revision_id,
     )?;
     h.request["model"] = json!("selected");
     let client = Harness::client(false)?;
@@ -267,14 +268,14 @@ async fn mixed_restart(bro: Option<&std::path::Path>) -> Result<()> {
         db.close().await?;
     }
     if let Some(bin) = bro {
-        restart_products(&mut h, &id, bin, &stores, &thread, old).await?;
+        restart_products(&mut h, &receipt, bin, &stores, &thread, old).await?;
     }
     Ok(())
 }
 
 async fn restart_products(
     h: &mut Harness,
-    old_execution: &ExecutionId,
+    source_receipt: &ExecutionReceipt,
     bro: &std::path::Path,
     stores: &mixed_store::StagedStores,
     thread: &str,
@@ -399,36 +400,47 @@ async fn restart_products(
             historical["turn_id"] == old["turn_id"]
                 && historical["outcome"]["final_answer"] == "Wrote evidence.txt."
         );
-        let receipt = |id: &ExecutionId| {
-            client
-                .get(format!(
-                    "http://{control_address}/control/v1/tenants/{}/executions/{id}",
-                    h.fixture.tenant
-                ))
-                .bearer_auth(h.credential.secret.as_deref().unwrap_or_default())
-                .header("bitrouter-installation-id", h.fixture.installation.as_str())
-        };
-        let retained: ExecutionReceipt = receipt(old_execution)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
+        let secret = h
+            .credential
+            .secret
+            .as_deref()
+            .context("tenant credential")?;
+        let control = bitrouter_sdk::tenancy::TenancyClient::new(
+            &format!("http://{control_address}"),
+            secret,
+        )?;
+        let installation = &h.fixture.installation;
+        let tenant = &h.fixture.tenant;
+        let active = control.active_revision(installation, tenant).await?;
+        ensure!(active.revision_id.as_ref() == Some(&h.revision.revision_id));
+        let retained = control
+            .execution(installation, tenant, &source_receipt.execution_id)
             .await?;
-        ensure!(
-            retained.state == bitrouter_ai::tenancy::execution::ReceiptState::Unknown
-                && retained.attempts.len() == 1
-        );
+        ensure!(serde_json::to_value(&retained)? == serde_json::to_value(source_receipt)?);
         ensure!(h.calls.load(Ordering::SeqCst) == boot + 1);
         if boot == 0 {
-            let sent = client
+            let binding = control.capabilities().await?.bind(
+                h.revision.revision_id.clone(),
+                "migration-after-restart".try_into()?,
+            )?;
+            let mut request = client
                 .post(format!("{endpoint}{}", h.path))
-                .headers(h.headers.clone())
-                .json(&h.request)
-                .send()
-                .await?
-                .error_for_status()?;
+                .bearer_auth(secret)
+                .json(&h.request);
+            let encoded = serde_json::to_value(binding)?;
+            for (name, value) in encoded.as_object().context("dispatch binding")? {
+                request = request.header(name.as_str(), value.as_str().context("binding field")?);
+            }
+            let sent = request.send().await?;
+            if !sent.status().is_success() {
+                anyhow::bail!(
+                    "restarted Policy dispatch: {} {}",
+                    sent.status(),
+                    sent.text().await?
+                );
+            }
             let id = execution_id(&sent)?;
-            ensure!(&id != old_execution);
+            ensure!(id != source_receipt.execution_id);
             sent.text().await?;
             ensure!(
                 h.received
@@ -436,16 +448,16 @@ async fn restart_products(
                     .context("policy provider request after migration")?["model"]
                     == "model-b"
             );
-            new_execution = Some(id);
+            new_execution = Some(control.execution(installation, tenant, &id).await?);
         } else {
-            let persisted: ExecutionReceipt =
-                receipt(new_execution.as_ref().context("new execution")?)
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-            ensure!(persisted.attempts.len() == 1);
+            let expected = new_execution.as_ref().context("new execution")?;
+            let persisted = control
+                .execution(installation, tenant, &expected.execution_id)
+                .await?;
+            ensure!(
+                persisted.attempts.len() == 1
+                    && serde_json::to_value(&persisted)? == serde_json::to_value(expected)?
+            );
         }
         let after = fs::metadata(&effect)?;
         ensure!(
