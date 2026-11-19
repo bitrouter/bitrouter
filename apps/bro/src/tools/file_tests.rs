@@ -155,9 +155,8 @@ fn existing_replacement_with_identical_content_keeps_its_identity() -> Result<()
 
 #[tokio::test]
 async fn multiple_links_cannot_supply_content_or_write_authority() -> Result<()> {
-    let original = tempdir()?;
     let grant = tempdir()?;
-    let file = original.path().join("original");
+    let file = grant.path().join("original");
     fs::write(&file, b"shared fixture bytes")?;
     fs::hard_link(&file, grant.path().join("alias"))?;
     let tools = WorkspaceTools::new(grant.path(), ToolMode::Coding)?;
