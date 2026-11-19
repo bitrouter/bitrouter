@@ -89,7 +89,9 @@ pub(crate) struct Parent {
     pub file: File,
     previous: Option<Arc<Parent>>,
     #[cfg(windows)]
-    _grant: Option<Arc<Directory>>,
+    grant: Option<Arc<Directory>>,
+    #[cfg(windows)]
+    cursor: std::sync::Mutex<()>,
 }
 
 impl Parent {
@@ -98,7 +100,9 @@ impl Parent {
             file: root.file.try_clone()?,
             previous: None,
             #[cfg(windows)]
-            _grant: Some(root.clone()),
+            grant: Some(root.clone()),
+            #[cfg(windows)]
+            cursor: std::sync::Mutex::new(()),
         }))
     }
 
@@ -132,7 +136,9 @@ impl Parent {
             file,
             previous: Some(self.clone()),
             #[cfg(windows)]
-            _grant: None,
+            grant: None,
+            #[cfg(windows)]
+            cursor: std::sync::Mutex::new(()),
         })
     }
 
@@ -177,7 +183,11 @@ impl Parent {
         }
         #[cfg(windows)]
         {
-            super::windows::Entries::new(&self.file)
+            let cursor = self
+                .grant
+                .as_ref()
+                .map_or(&self.cursor, |root| &root.cursor);
+            Ok(Entries(super::windows::entries(&self.file, cursor)?))
         }
     }
 
@@ -221,7 +231,16 @@ pub(crate) enum Kind {
 #[cfg(unix)]
 pub(crate) struct Entries(rustix::fs::Dir);
 #[cfg(windows)]
-pub(crate) type Entries = super::windows::Entries;
+pub(crate) struct Entries(super::windows::Entries);
+
+#[cfg(windows)]
+impl Iterator for Entries {
+    type Item = io::Result<(std::ffi::OsString, Kind)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(Ok)
+    }
+}
 
 #[cfg(unix)]
 impl Iterator for Entries {

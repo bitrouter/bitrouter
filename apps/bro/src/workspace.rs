@@ -109,6 +109,8 @@ pub(crate) struct Directory {
     pub path: PathBuf,
     #[cfg(windows)]
     _ancestors: Vec<fs::File>,
+    #[cfg(windows)]
+    cursor: std::sync::Mutex<()>,
 }
 
 impl Directory {
@@ -152,6 +154,8 @@ impl Directory {
             path,
             #[cfg(windows)]
             _ancestors: ancestors,
+            #[cfg(windows)]
+            cursor: std::sync::Mutex::new(()),
         })
     }
 

@@ -23,8 +23,7 @@ use windows_sys::{
     },
     Win32::{
         Foundation::{
-            ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError,
-            UNICODE_STRING,
+            ERROR_NO_MORE_FILES, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING,
         },
         Storage::FileSystem::*,
         System::IO::IO_STATUS_BLOCK,
@@ -102,40 +101,32 @@ pub(super) fn open(parent: &File, name: &OsStr, access: Access, create: bool) ->
     Ok(file)
 }
 
-pub(crate) struct Entries {
-    file: File,
+pub(super) type Entries = std::vec::IntoIter<(OsString, Kind)>;
+
+pub(super) fn entries(dir: &File, cursor: &std::sync::Mutex<()>) -> io::Result<Entries> {
+    let _cursor = cursor
+        .lock()
+        .map_err(|_| io::Error::other("workspace directory cursor unavailable"))?;
+    let entries = DirectoryScan {
+        file: dir,
+        buffer: vec![0; 8192],
+        offset: None,
+        first: true,
+        done: false,
+    }
+    .collect::<io::Result<Vec<_>>>()?;
+    Ok(entries.into_iter())
+}
+
+struct DirectoryScan<'a> {
+    file: &'a File,
     buffer: Vec<u64>,
     offset: Option<usize>,
     first: bool,
     done: bool,
 }
 
-impl Entries {
-    pub fn new(dir: &File) -> io::Result<Self> {
-        // Each iterator needs an independent directory cursor.
-        // SAFETY: dir is live and ReOpenFile returns a separately owned handle.
-        let handle = unsafe {
-            ReOpenFile(
-                dir.as_raw_handle(),
-                FILE_LIST_DIRECTORY,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: checked for failure above.
-        let file = unsafe { File::from_raw_handle(handle) };
-        Ok(Self {
-            file,
-            buffer: vec![0; 8192],
-            offset: None,
-            first: true,
-            done: false,
-        })
-    }
-
+impl DirectoryScan<'_> {
     fn entry(&mut self) -> io::Result<Option<(OsString, Kind)>> {
         let size = self.buffer.len() * 8;
         if self.offset.is_none() {
@@ -213,7 +204,7 @@ impl Entries {
     }
 }
 
-impl Iterator for Entries {
+impl Iterator for DirectoryScan<'_> {
     type Item = io::Result<(OsString, Kind)>;
     fn next(&mut self) -> Option<Self::Item> {
         while !self.done {
