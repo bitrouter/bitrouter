@@ -4,6 +4,7 @@ mod catalog;
 mod checkpoint;
 mod durable;
 mod gateway;
+mod home_owner;
 mod migrated;
 mod orchestration;
 mod runner;

@@ -358,11 +358,17 @@ impl CliReport for OnboardingStatusReport {
 
 /// Ensure a configured daemon is ready, or complete first-run onboarding.
 pub async fn entry(output: &Output) -> Result<()> {
+    if let Ok(home) = crate::paths::runtime_home() {
+        crate::paths::check_gateway_home(&home)?;
+    }
     crate::prompt::interruptible(entry_inner(output)).await
 }
 
 async fn entry_inner(output: &Output) -> Result<()> {
     let path = config_path(None)?;
+    if let Some(home) = path.parent() {
+        crate::paths::check_gateway_home(home)?;
+    }
     let source = crate::daemon_locator::selected_source(None)?;
     if path.is_file() {
         return emit(output, &crate::daemon::ensure_started(&source).await?);
@@ -424,10 +430,11 @@ fn save_config(
 ) -> Result<PathBuf> {
     use std::io::Write;
     let path = config_path(flags.config.as_deref())?;
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        crate::paths::ensure_home_directory(parent)?;
+    if let Some(parent) = path.parent() {
+        crate::paths::claim_gateway_home(parent)?;
+        if !parent.exists() {
+            crate::paths::ensure_home_directory(parent)?;
+        }
     }
     // Serialize config publication with MCP edits and the policy/router writers.
     let _publication_lock = crate::policy_lock::acquire_publication_lock(&path)?;
@@ -511,7 +518,14 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
     crate::prompt::interruptible(run_inner(flags, output)).await
 }
 
-async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
+async fn run_inner(mut flags: OnboardingFlags, output: &Output) -> Result<()> {
+    if let Ok(home) = crate::paths::runtime_home() {
+        crate::paths::check_gateway_home(&home)?;
+    }
+    let config = config_path(flags.config.as_deref())?;
+    if let Some(parent) = config.parent() {
+        crate::paths::check_gateway_home(parent)?;
+    }
     anyhow::ensure!(
         flags.harnesses.is_empty() && flags.after != Some(AfterAction::Launch),
         "configure and launch local agents with BRO"
@@ -523,6 +537,10 @@ async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
         flags.provider_api_keys.len() <= flags.providers.len(),
         "each --provider-api-key needs a paired --provider"
     );
+    if let Some(home) = config.parent() {
+        crate::paths::claim_gateway_home(home)?;
+    }
+    flags.config = Some(config);
     let manager = crate::cloud::default_manager()?;
     if flags.reset {
         reset_credentials(flags.yes, crate::prompt::terminal()).await?;

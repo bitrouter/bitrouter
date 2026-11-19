@@ -37,10 +37,22 @@ fn reject(home: &Path) -> Result<()> {
 
 #[test]
 fn ordinary_gateway_home_is_rejected_before_any_bro_writes() -> Result<()> {
-    let home = tempfile::tempdir()?;
-    fs::write(home.path().join("bitrouter.db"), b"fixture")?;
-    reject(home.path())
+    for (name, bytes) in [
+        ("bitrouter.db", b"fixture".as_slice()),
+        (".bitrouter-home-role", b"bitrouter\n".as_slice()),
+    ] {
+        let home = tempfile::tempdir()?;
+        let file = home.path().join(name);
+        fs::write(&file, bytes)?;
+        reject(home.path())?;
+        assert_eq!(fs::read(file)?, bytes);
+    }
+    Ok(())
 }
+
+#[cfg(unix)]
+#[path = "home_owner/gateway.rs"]
+mod gateway;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -50,6 +62,7 @@ async fn real_staged_and_activated_gateway_halves_reject_bro() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let binary = std::env::var_os("BITROUTER_TEST_GATEWAY_BINARY").context("gateway executable")?;
     let fixture = tempfile::tempdir()?;
+    gateway::ordinary_and_legacy(&binary, fixture.path()).await?;
     let src = fixture.path().join("source.sqlite");
     fs::File::create_new(&src)?;
     fs::set_permissions(&src, fs::Permissions::from_mode(0o600))?;
@@ -92,6 +105,7 @@ async fn real_staged_and_activated_gateway_halves_reject_bro() -> Result<()> {
         assert_eq!(fs::read(gateway.join("bitrouter.db"))?, bytes);
         let bro = dest.join("bro");
         assert_eq!(bro.join("ACTIVATED").is_file(), activate);
+        gateway::refuses(&binary, &bro, fixture.path()).await?;
         ensure!(
             Command::new(binary::bro())
                 .env("BRO_HOME", bro)

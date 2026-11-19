@@ -172,6 +172,7 @@ pub async fn serve_with_extensions(
     source: &crate::paths::ConfigSource,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
+    crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
     #[cfg(not(feature = "multi-instance"))]
     let crate::config::shared_process::Selection::Local(selected) = selected;
@@ -191,6 +192,7 @@ pub async fn serve_with_extensions(
 /// Run the bundled CLI host. Only a child launched by `bitrouter start` may be
 /// replaced automatically by `bro update`.
 pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
+    crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
     #[cfg(not(feature = "multi-instance"))]
     let crate::config::shared_process::Selection::Local(selected) = selected;
@@ -213,14 +215,29 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
 /// A verified running local owner can be reused without parsing saved edits.
 /// Shared services use foreground serve.
 pub async fn validate_local_daemon_source(source: &crate::paths::ConfigSource) -> Result<()> {
+    crate::paths::check_gateway_home(source.home())?;
     let selected = crate::config::shared_process::select(source).await?;
-    #[cfg(feature = "multi-instance")]
-    anyhow::ensure!(
-        matches!(selected, crate::config::shared_process::Selection::Local(_)),
-        "shared gateway must run through foreground serve, not local daemon commands"
-    );
-    #[cfg(not(feature = "multi-instance"))]
-    drop(selected);
+    match selected {
+        crate::config::shared_process::Selection::Local(input) => {
+            check_local_database_home(source, input.as_deref())?;
+        }
+        #[cfg(feature = "multi-instance")]
+        crate::config::shared_process::Selection::Shared(_) => {
+            anyhow::bail!(
+                "shared gateway must run through foreground serve, not local daemon commands"
+            )
+        }
+    }
+    Ok(())
+}
+
+fn check_local_database_home(
+    source: &crate::paths::ConfigSource,
+    input: Option<&crate::config::shared_process::LocalInput>,
+) -> Result<()> {
+    let default_database = crate::config::DatabaseConfig::default();
+    let database = input.map_or(&default_database, |input| &input.config.database);
+    crate::paths::gateway_database_home(&database.url, source.home())?;
     Ok(())
 }
 
@@ -242,6 +259,7 @@ async fn serve_with_options(
     selected: Option<Box<crate::config::shared_process::LocalInput>>,
 ) -> Result<()> {
     validate_startup_features()?;
+    check_local_database_home(source, selected.as_deref())?;
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
             "bitrouter is already running (pid {}); stop it before launching this executable again",
@@ -256,6 +274,7 @@ async fn serve_with_options(
     // whichever CWD the launcher happened to be in. The daemon's
     // runtime artefacts (db, socket, pid, log) all land in the home.
     let home = source.home();
+    crate::paths::claim_gateway_home(home)?;
     crate::paths::ensure_home_directory(home)?;
     std::env::set_current_dir(home)
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;

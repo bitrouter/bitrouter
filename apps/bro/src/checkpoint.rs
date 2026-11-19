@@ -412,6 +412,9 @@ pub(crate) struct Home {
 impl Home {
     pub fn open(root: &Path) -> Result<Self> {
         crate::migrated::reject_gateway_home(root)?;
+        if !root.join("store.sqlite").try_exists()? {
+            crate::home_owner::claim(root)?;
+        }
         let dir = root.join("threads");
         crate::durable::create_dirs(&dir, true)?;
         Ok(Self {

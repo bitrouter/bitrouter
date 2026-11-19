@@ -154,6 +154,12 @@ pub async fn key_sign(
     user_id: &str,
     policy_id: Option<&str>,
 ) -> Result<GeneratedKey> {
+    if let Ok(home) = crate::paths::runtime_home() {
+        crate::paths::check_gateway_home(&home)?;
+    }
+    if let Some(home) = crate::paths::gateway_database_home(db_url, &std::env::current_dir()?)? {
+        crate::paths::claim_gateway_home(&home)?;
+    }
     let db = crate::db::connect(db_url)
         .await
         .context("connecting to database")?;

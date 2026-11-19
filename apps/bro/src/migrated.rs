@@ -48,6 +48,7 @@ fn regular(path: &Path) -> Result<bool> {
 }
 
 pub(crate) fn reject_gateway_home(root: &Path) -> Result<()> {
+    crate::home_owner::check(root)?;
     for name in [
         "bitrouter.db",
         "bitrouter.db-wal",
@@ -55,6 +56,9 @@ pub(crate) fn reject_gateway_home(root: &Path) -> Result<()> {
         "bitrouter.db-shm",
         "bitrouter.yaml",
         "bitrouter.start.lock",
+        ".installation.lock",
+        "correlation.key",
+        "continuation.key",
     ] {
         match root.join(name).symlink_metadata() {
             Ok(_) => bail!("gateway home cannot be used as BRO home ({name})"),
