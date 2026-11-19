@@ -38,7 +38,8 @@ async function receipts(root, candidate) {
 async function settle(path) {
   const observations = [];
   let streak = 0;
-  for (let sample = 0; sample < 16; sample++) {
+  const deadline = performance.now() + 15 * 60_000;
+  while (performance.now() < deadline) {
     const top = run('/usr/bin/top', ['-l', '2', '-n', '0', '-s', '1']);
     const matches = [...top.matchAll(/(\d+(?:\.\d+)?)% idle/g)];
     const idle = Number(matches.at(-1)?.[1]);
@@ -49,6 +50,17 @@ async function settle(path) {
     await delay(10_000);
   }
   await save(path, observations);
+  const highestStreak = observations.reduce(({ current, highest }, { idle }) => {
+    const next = idle > 80 ? current + 1 : 0;
+    return { current: next, highest: Math.max(highest, next) };
+  }, { current: 0, highest: 0 }).highest;
+  const percentages = observations.map(({ idle }) => idle).sort((left, right) => left - right);
+  console.log('Runner preflight:', JSON.stringify({
+    side: path.endsWith('/baseline/idle.json') ? 'baseline' : 'candidate',
+    samples: observations.length, above80: observations.filter(({ idle }) => idle > 80).length,
+    idlePercent: { min: percentages[0], median: percentages[Math.floor(percentages.length / 2)], max: percentages.at(-1) },
+    highestStreak, passed: streak === 3,
+  }));
   assert.equal(streak, 3, 'runner did not settle before measurement');
 }
 
