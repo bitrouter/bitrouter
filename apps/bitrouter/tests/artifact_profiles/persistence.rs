@@ -177,7 +177,7 @@ fn reject_old(fixture: &mut Fixture, binary: &Path, listen: std::net::SocketAddr
                 stdout: fs::read(&process.stdout)?,
                 diagnostic: process.diagnostic(),
             };
-            return output.rejected("unsupported database role or format");
+            return output.rejected("incomplete or unsupported store format ledger");
         }
         ensure!(
             Instant::now() < deadline,
@@ -213,8 +213,8 @@ fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 2]) -> Result<(
     // read-only WAL connection can create sidecars before the candidate starts.
     let original = snapshot(fixture, OLD_OWNER, "&immutable=true")?;
     ensure!(
-        !path.with_extension("db-wal").exists(),
-        "historical fixture observation created a WAL"
+        !path.with_extension("db-wal").exists() && !path.with_extension("db-shm").exists(),
+        "historical fixture observation created WAL sidecars"
     );
     ensure!(original.ledger.len() == 26);
     for (rows, expected) in original.rows.iter().zip([1, 1, 284, 2, 0, 2]) {
@@ -228,8 +228,8 @@ fn exercise_old_refusal(fixture: &mut Fixture, binaries: [&Path; 2]) -> Result<(
             "refusal rewrote the old database"
         );
         ensure!(
-            !path.with_extension("db-wal").exists(),
-            "refusal created a writable WAL"
+            !path.with_extension("db-wal").exists() && !path.with_extension("db-shm").exists(),
+            "refusal created WAL sidecars"
         );
         ensure!(
             snapshot(fixture, OLD_OWNER, "&immutable=true")? == original,
