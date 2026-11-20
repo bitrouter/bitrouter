@@ -1,19 +1,19 @@
 //! Group identity across real tenant, credential, HTTP and streaming boundaries.
 use super::*;
 use bitrouter_ai::tenancy::{
-    admission_v2::AdmissionProfileV2,
+    admission::AdmissionProfile,
     authority::{TenantPut, TenantState},
-    resources_v2::{DefinitionV2, ResourcePutV2},
+    resources::{Definition, ResourcePut},
 };
 
 mod boundaries;
 
-pub(super) fn grouped(rpm: u32) -> Result<AdmissionProfileV2> {
+pub(super) fn grouped(rpm: u32) -> Result<AdmissionProfile> {
     let local = rules(rpm, true)?;
     let mut health = local.health.context("health")?;
     health.failure_threshold = 3;
-    Ok(AdmissionProfileV2 {
-        schema_version: 2,
+    Ok(AdmissionProfile {
+        schema_version: 1,
         rate: local.rate,
         observe_rate_group_id: None,
         health: Some(health),
@@ -42,7 +42,7 @@ fn move_tenant(value: &mut Value) {
 }
 
 pub(super) async fn harness(
-    profiles: &[AdmissionProfileV2],
+    profiles: &[AdmissionProfile],
     all_success: bool,
     two_tenants: bool,
 ) -> Result<OrderedHarness> {
@@ -54,7 +54,7 @@ pub(super) async fn harness(
                 .iter_mut()
                 .find(|row| row["reference"] == json!(expected))
                 .context("profile")?;
-            row["definition"] = json!({"kind":"admission_profile_v2","profile":profile});
+            row["definition"] = json!({"kind":"admission_profile","profile":profile});
         }
         if all_success {
             let route = rows
@@ -411,6 +411,7 @@ async fn shared_health_distributed_failures_block_other_member_but_bypass_cannot
     bypass.rate = None;
     bypass.health = None;
     bypass.health_group_id = None;
+    bypass.health_group_id = None;
     bypass.observe_rate_group_id = Some("shared-rpm".try_into()?);
     let harness = harness(&[bypass, grouped(1)?, grouped(3)?], false, false).await?;
     let protocol = GenerationProtocol::ChatCompletions;
@@ -510,19 +511,19 @@ async fn shared_health_distributed_failures_block_other_member_but_bypass_cannot
     // An authenticated RPM-only rotation cannot split or reset the shared circuit.
     let control = harness.control(true, HttpVersion::Http1Only)?;
     let caps = control
-        .resource_capabilities_v2(&harness.fixture.installation)
+        .resource_capabilities(&harness.fixture.installation)
         .await?;
-    ensure!(caps.provisioning_enabled && caps.admission_profile_versions == [1, 2]);
+    ensure!(caps.provisioning_enabled && caps.generation_protocols.len() == 4);
     let rotated = control
-        .put_resource_v2(
+        .put_resource(
             &harness.fixture.tenant,
-            &ResourcePutV2 {
-                format: 2,
+            &ResourcePut {
+                format: 1,
                 operation_id: "shared-rpm-rotation".try_into()?,
                 installation_id: harness.fixture.installation.clone(),
                 key: reference(1)?.key(),
                 expected_revision: Some("r1".try_into()?),
-                definition: DefinitionV2::AdmissionProfileV2 {
+                definition: Definition::AdmissionProfile {
                     profile: grouped(100)?,
                 },
             },

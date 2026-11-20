@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     admission::{
-        AdmissionProfileV1, AvailabilityObservation, FallbackRule, HealthObservation,
+        AdmissionProfile, AvailabilityObservation, FallbackRule, HealthObservation,
         HealthProfileV1, HealthRules, RateProfileV1,
     },
     authority::{OwnerKind, ResourceKind},
@@ -32,9 +32,10 @@ fn reference(name: &str) -> Result<ResourceRef> {
     })
 }
 
-fn rules(rpm: u32) -> Result<AdmissionProfileV1> {
-    Ok(AdmissionProfileV1 {
+fn rules(rpm: u32) -> Result<AdmissionProfile> {
+    Ok(AdmissionProfile {
         schema_version: 1,
+        health_group_id: Some("profile".try_into()?),
         observe_rate_group_id: None,
         rate: Some(RateProfileV1 {
             rate_group_id: "shared".try_into()?,
@@ -55,7 +56,7 @@ fn admitted(
     runtime: &Arc<Runtime>,
     installation: &InstallationId,
     profile: &ResourceRef,
-    rules: &AdmissionProfileV1,
+    rules: &AdmissionProfile,
     now: Instant,
 ) -> Result<super::state::Ticket> {
     runtime
@@ -177,6 +178,7 @@ fn explicit_read_only_group_observes_across_profiles_without_charge_or_probe() -
     let mut read_only = rules.clone();
     read_only.rate = None;
     read_only.health = None;
+    read_only.health_group_id = None;
     read_only.observe_rate_group_id = Some("shared".try_into()?);
     let view = runtime
         .observe(&installation, &observer, &read_only, now)

@@ -37,7 +37,7 @@ async fn native_controls_actual_predecessor_has_no_discovery_and_refuses_nonnull
         "native-predecessor".try_into()?,
         OrderedCandidateSelectionV1 {
             schema_version: 1,
-            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
             route: provisioned.route,
             candidate_indices: vec![1],
             generation_defaults_digest: None,

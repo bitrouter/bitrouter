@@ -1,6 +1,6 @@
 //! Select a definition without buffering numeric tokens through Serde Content.
 //! Internally tagged enum buffering cannot carry RawValue's exact-number input.
-//! Legacy variants keep their original derived decoder and serialized fields.
+//! Every current variant uses a closed decoder with exact numeric tokens.
 
 use super::*;
 use serde::de::Error;
@@ -38,7 +38,7 @@ enum ProfileTag {
 struct Profile {
     #[serde(rename = "kind")]
     _kind: ProfileTag,
-    profile: AdmissionProfileV1,
+    profile: AdmissionProfile,
 }
 
 #[derive(Deserialize)]
@@ -52,32 +52,37 @@ enum RouteTag {
 struct Route {
     #[serde(rename = "kind")]
     _kind: RouteTag,
+    #[serde(deserialize_with = "routing")]
     routing: Value,
     selector: String,
     #[serde(deserialize_with = "nullable")]
     policy: Option<ResourceRef>,
     credentials: Vec<CredentialBinding>,
-    attachments: Vec<AdmissionAttachmentV1>,
+    attachments: Vec<AdmissionAttachment>,
 }
 
 #[derive(Deserialize)]
-#[serde(
-    remote = "Definition",
-    tag = "kind",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-enum IndependentDefinition {
-    Credential {
-        secret: String,
-    },
-    Route {
-        routing: Value,
-        selector: String,
-        #[serde(deserialize_with = "nullable")]
-        policy: Option<ResourceRef>,
-        credentials: Vec<CredentialBinding>,
-    },
+#[serde(deny_unknown_fields)]
+struct Credential {
+    kind: String,
+    secret: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnprofiledRoute {
+    kind: String,
+    #[serde(deserialize_with = "routing")]
+    routing: Value,
+    selector: String,
+    #[serde(deserialize_with = "nullable")]
+    policy: Option<ResourceRef>,
+    credentials: Vec<CredentialBinding>,
+}
+
+fn routing<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Value, D::Error> {
+    super::super::json::object(deserializer, 3)
+        .map(|object| Value::Object(object.into_iter().collect()))
 }
 
 impl<'de> Deserialize<'de> for Definition {
@@ -110,10 +115,30 @@ impl<'de> Deserialize<'de> for Definition {
                     attachments: value.attachments,
                 })
             }
-            _ => IndependentDefinition::deserialize(&mut serde_json::Deserializer::from_str(
-                raw.get(),
-            ))
-            .map_err(D::Error::custom),
+            "credential" => {
+                let value: Credential =
+                    serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+                if value.kind != "credential" {
+                    return Err(D::Error::custom("invalid resource kind"));
+                }
+                Ok(Self::Credential {
+                    secret: value.secret,
+                })
+            }
+            "route" => {
+                let value: UnprofiledRoute =
+                    serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+                if value.kind != "route" {
+                    return Err(D::Error::custom("invalid resource kind"));
+                }
+                Ok(Self::Route {
+                    routing: value.routing,
+                    selector: value.selector,
+                    policy: value.policy,
+                    credentials: value.credentials,
+                })
+            }
+            _ => Err(D::Error::custom("unsupported resource kind")),
         }
     }
 }

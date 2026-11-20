@@ -84,10 +84,7 @@ pub(super) async fn prepare(
     let mut retained = None;
     let mut resource = None;
     let context = match command {
-        Command::Resource(..)
-        | Command::ResourceV2(..)
-        | Command::ResourceV3(..)
-        | Command::RevokeResource(..) => {
+        Command::Resource(..) | Command::RevokeResource(..) => {
             let prepared =
                 super::resources::management::prepare(db, resources, state, caller, command, now)
                     .await?;
@@ -296,10 +293,7 @@ pub(super) fn apply(
     let next_revision = revision()?;
     let mut issued = None;
     let (resource, changes) = match command {
-        Command::Resource(..)
-        | Command::ResourceV2(..)
-        | Command::ResourceV3(..)
-        | Command::RevokeResource(..) => {
+        Command::Resource(..) | Command::RevokeResource(..) => {
             return super::resources::management::apply(state, caller, command, prepared, now);
         }
         Command::Configuration(..) | Command::Activate(..) => {

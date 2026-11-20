@@ -185,8 +185,8 @@ async fn shared_probe_stream_drop_releases_group_without_certifying_late_termina
 async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normalizes_exact_numbers()
 -> Result<()> {
     let harness = harness(&[grouped(100)?], false, false).await?;
-    let command = ResourcePutV2 {
-        format: 2,
+    let command = ResourcePut {
+        format: 1,
         operation_id: "raw-shared-member".try_into()?,
         installation_id: harness.fixture.installation.clone(),
         key: ResourceRef {
@@ -195,7 +195,7 @@ async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normaliz
         }
         .key(),
         expected_revision: None,
-        definition: DefinitionV2::AdmissionProfileV2 {
+        definition: Definition::AdmissionProfile {
             profile: grouped(7)?,
         },
     };
@@ -221,11 +221,11 @@ async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normaliz
     let count = before.resource_lifecycle.len();
     drop(before);
     for invalid in [
-        raw.replace("\"format\":2,", ""),
-        raw.replace("\"format\":2", "\"format\":2,\"format\":2"),
-        raw.replace("\"format\":2", "\"format\":3"),
-        raw.replace("\"format\":2", "\"format\":1"),
-        raw.replace("\"format\":2", "\"format\":2.00000000000000001"),
+        raw.replace("\"format\":1,", ""),
+        raw.replace("\"format\":1", "\"format\":1,\"format\":1"),
+        raw.replace("\"format\":1", "\"format\":3"),
+        raw.replace("\"format\":1", "\"format\":2"),
+        raw.replace("\"format\":1", "\"format\":1.00000000000000001"),
         raw.replace("\"health_group_id\":\"shared-circuit\",", ""),
         raw.replace(
             "\"health_group_id\":\"shared-circuit\"",
@@ -255,15 +255,15 @@ async fn actual_resource_put_version_dispatch_refuses_raw_ambiguity_and_normaliz
         );
     }
     let normalized = raw
-        .replace("\"format\":2", "\"format\":2e0")
-        .replace("\"schema_version\":2", "\"schema_version\":2.0")
+        .replace("\"format\":1", "\"format\":1e0")
+        .replace("\"schema_version\":1", "\"schema_version\":1.0")
         .replace("\"member_rpm\":7", "\"member_rpm\":7e0");
     let response = send(normalized).await?;
     ensure!(response.status().is_success());
     let original: bitrouter_ai::tenancy::operation::OperationResult = response.json().await?;
     let replay = harness
         .control(true, HttpVersion::Http1Only)?
-        .put_resource_v2(&harness.fixture.tenant, &command)
+        .put_resource(&harness.fixture.tenant, &command)
         .await?;
     ensure!(
         original.resource_revision.is_some()

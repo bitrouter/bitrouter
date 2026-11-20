@@ -32,7 +32,7 @@ async fn fixture_profiled_view(
             profile.owner_kind = OwnerKind::OperatorPool;
             slots.push(
                 json!({"reference":profile,"definition":{"kind":"admission_profile",
-                "profile":{"schema_version":1,"rate":null,"health":null,"fallback":"stop"}}}),
+                "profile":{"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"stop"}}}),
             );
             for protocol in ["chat_completions", "messages", "responses"] {
                 attachments.push(json!({"inbound_protocol":protocol,"candidate_index":index,
@@ -173,7 +173,7 @@ async fn profiled_subsets_keep_exact_protocol_ordinals_and_only_selected_profile
         (ApiProtocol::Responses, GenerationProtocol::Responses),
     ] {
         let manifest = checked(view.candidate_manifest(&reference, protocol, 1_u64.try_into()?))?;
-        assert_eq!(manifest.admission_mode, AdmissionMode::ProfiledV1);
+        assert_eq!(manifest.admission_mode, AdmissionMode::Profiled);
         assert_eq!(manifest.candidates.len(), 4);
         for descriptor in &manifest.candidates {
             let profile = descriptor
@@ -187,7 +187,7 @@ async fn profiled_subsets_keep_exact_protocol_ordinals_and_only_selected_profile
             );
         }
         let route = checked(view.select_ordered_for_test(&reference, &inbound, &[3, 1]))?;
-        assert_eq!(route.admission_mode(), AdmissionMode::ProfiledV1);
+        assert_eq!(route.admission_mode(), AdmissionMode::Profiled);
         assert_eq!(route.dependencies().len(), 5);
         for descriptor in &manifest.candidates {
             let selected = [3, 1].contains(&descriptor.candidate_index);

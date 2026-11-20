@@ -49,7 +49,7 @@
       "maximum": 1048576
     },
     "profile_versions": {
-      "description": "Supported retained profile versions, exactly [1, 2].",
+      "description": "Supported retained profile versions, exactly [1].",
       "type": "array",
       "items": {
         "type": "integer",
@@ -57,11 +57,10 @@
         "minimum": 0,
         "maximum": 255
       },
-      "minItems": 2,
-      "maxItems": 2,
+      "minItems": 1,
+      "maxItems": 1,
       "const": [
-        1,
-        2
+        1
       ]
     }
   },

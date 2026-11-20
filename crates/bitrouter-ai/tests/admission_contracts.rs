@@ -1,5 +1,5 @@
 use bitrouter_ai::tenancy::{
-    admission::{AdmissionMode, AdmissionProfileV1, AvailabilityObservation, HealthObservation},
+    admission::{AdmissionMode, AdmissionProfile, AvailabilityObservation, HealthObservation},
     ordered::{
         CandidateManifestV1, GenerationProtocol, MAX_MANIFEST_BYTES, OrderedCandidateSelectionV1,
     },
@@ -13,7 +13,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn profile() -> Value {
     json!({"schema_version":1,"rate":{"rate_group_id":"shared","member_rpm":0},
         "health":{"rules":"availability_v1","failure_threshold":3,"transient_cooldown_seconds":0,
-            "persistent_cooldown_seconds":3600,"probe_lease_seconds":60},"fallback":"stop"})
+            "persistent_cooldown_seconds":3600,"probe_lease_seconds":60},"health_group_id":"profile","fallback":"stop"})
 }
 
 fn reference(kind: &str, maximal: bool) -> Value {
@@ -28,7 +28,7 @@ fn reference(kind: &str, maximal: bool) -> Value {
 
 fn manifest(count: usize) -> Result<CandidateManifestV1, serde_json::Error> {
     let id = "x".repeat(128);
-    serde_json::from_value(json!({"schema_version":1,"admission_mode":"profiled_v1",
+    serde_json::from_value(json!({"schema_version":1,"admission_mode":"profiled",
         "installation_id":id,"tenant_id":id,"execution_revision":id,"authority_revision":9007199254740991_u64,
         "route":reference("route",true),"inbound_protocol":"chat_completions",
         "candidates":(0..count).map(|ordinal| json!({"candidate_index":ordinal,
@@ -42,7 +42,7 @@ fn manifest(count: usize) -> Result<CandidateManifestV1, serde_json::Error> {
 
 #[test]
 fn zero_rpm_and_disabled_are_distinct_and_required_nulls_are_not_defaults() -> TestResult {
-    let zero: AdmissionProfileV1 = serde_json::from_value(profile())?;
+    let zero: AdmissionProfile = serde_json::from_value(profile())?;
     zero.validate()?;
     assert_eq!(zero.rate.as_ref().map(|rate| rate.member_rpm), Some(0));
     for field in ["rate", "health"] {
@@ -51,10 +51,13 @@ fn zero_rpm_and_disabled_are_distinct_and_required_nulls_are_not_defaults() -> T
             .as_object_mut()
             .ok_or("profile object")?
             .remove(field);
-        assert!(serde_json::from_value::<AdmissionProfileV1>(missing).is_err());
+        assert!(serde_json::from_value::<AdmissionProfile>(missing).is_err());
         let mut null = profile();
         null[field] = Value::Null;
-        serde_json::from_value::<AdmissionProfileV1>(null)?.validate()?;
+        if field == "health" {
+            null["health_group_id"] = Value::Null;
+        }
+        serde_json::from_value::<AdmissionProfile>(null)?.validate()?;
     }
     for (pointer, value) in [
         ("/schema_version", json!(2)),
@@ -69,14 +72,14 @@ fn zero_rpm_and_disabled_are_distinct_and_required_nulls_are_not_defaults() -> T
         let mut value_to_parse = profile();
         *value_to_parse.pointer_mut(pointer).ok_or("pointer")? = value;
         assert!(
-            !serde_json::from_value::<AdmissionProfileV1>(value_to_parse)
+            !serde_json::from_value::<AdmissionProfile>(value_to_parse)
                 .is_ok_and(|profile| profile.validate().is_ok()),
             "{pointer}"
         );
     }
     let mut unknown = profile();
     unknown["health"]["retry"] = json!(true);
-    assert!(serde_json::from_value::<AdmissionProfileV1>(unknown).is_err());
+    assert!(serde_json::from_value::<AdmissionProfile>(unknown).is_err());
     Ok(())
 }
 
@@ -91,7 +94,7 @@ fn cooldown_integers_preserve_full_u64_without_fraction_rounding() -> TestResult
         value["health"][field] = json!(u64::MAX);
     }
     let encoded = serde_json::to_string(&value)?;
-    let parsed: AdmissionProfileV1 = serde_json::from_str(&encoded)?;
+    let parsed: AdmissionProfile = serde_json::from_str(&encoded)?;
     parsed.validate()?;
     assert_eq!(
         parsed
@@ -107,13 +110,11 @@ fn cooldown_integers_preserve_full_u64_without_fraction_rounding() -> TestResult
         "-1",
     ] {
         assert!(
-            serde_json::from_str::<AdmissionProfileV1>(
-                &encoded.replace("18446744073709551615", bad)
-            )
-            .is_err()
+            serde_json::from_str::<AdmissionProfile>(&encoded.replace("18446744073709551615", bad))
+                .is_err()
         );
     }
-    let integral: AdmissionProfileV1 =
+    let integral: AdmissionProfile =
         serde_json::from_str(&encoded.replace("18446744073709551615", "184467440737095516150e-1"))?;
     assert_eq!(parsed, integral);
     Ok(())
@@ -121,7 +122,7 @@ fn cooldown_integers_preserve_full_u64_without_fraction_rounding() -> TestResult
 
 #[test]
 fn live_rotations_only_change_the_member_ceiling() -> TestResult {
-    let original: AdmissionProfileV1 = serde_json::from_value(profile())?;
+    let original: AdmissionProfile = serde_json::from_value(profile())?;
     let mut ceiling = profile();
     ceiling["rate"]["member_rpm"] = json!(u32::MAX);
     assert!(original.permits_rotation_to(&serde_json::from_value(ceiling)?));
@@ -144,7 +145,7 @@ fn live_rotations_only_change_the_member_ceiling() -> TestResult {
 
 #[test]
 fn read_only_group_is_explicit_same_owner_immutable_and_never_a_rate_ceiling() -> TestResult {
-    let original: AdmissionProfileV1 = serde_json::from_value(profile())?;
+    let original: AdmissionProfile = serde_json::from_value(profile())?;
     assert!(
         !serde_json::to_value(&original)?
             .as_object()
@@ -163,9 +164,10 @@ fn read_only_group_is_explicit_same_owner_immutable_and_never_a_rate_ceiling() -
     assert!(!observed.permits_rotation_to(&rotated));
     observed.rate = None;
     observed.health = None;
+    observed.health_group_id = None;
     observed.validate()?;
     assert!(observed.rate.is_none());
-    let roundtrip: AdmissionProfileV1 = serde_json::from_slice(&serde_json::to_vec(&observed)?)?;
+    let roundtrip: AdmissionProfile = serde_json::from_slice(&serde_json::to_vec(&observed)?)?;
     assert_eq!(roundtrip, observed);
     Ok(())
 }
@@ -223,11 +225,11 @@ fn read_only_observation_preserves_bounds_authority_and_exact_counts() -> TestRe
 
 #[test]
 fn actual_selection_serialization_preserves_arbitrary_order_and_requires_mode() -> TestResult {
-    for (count, maximum) in [(1, 572), (8, 600), (9, 604), (64, 824)] {
+    for (count, maximum) in [(1, 569), (8, 597), (9, 601), (64, 821)] {
         let indices: Vec<_> = (0..count).map(|i| 255 - i).collect();
         let selected: OrderedCandidateSelectionV1 = serde_json::from_value(
             json!({"schema_version":1,
-            "admission_mode":"profiled_v1","route":reference("route",true),"candidate_indices":indices}),
+            "admission_mode":"profiled","route":reference("route",true),"candidate_indices":indices}),
         )?;
         selected.validate()?;
         assert_eq!(serde_json::to_vec(&selected)?.len(), maximum);
@@ -237,7 +239,7 @@ fn actual_selection_serialization_preserves_arbitrary_order_and_requires_mode() 
         assert_eq!(bytes, maximum + 96);
         assert!((bytes * 8).div_ceil(6) <= 4096);
         let accepted = selected.accept(GenerationProtocol::Responses)?;
-        assert_eq!(accepted.admission_mode, AdmissionMode::ProfiledV1);
+        assert_eq!(accepted.admission_mode, AdmissionMode::Profiled);
         assert_eq!(accepted.candidate_indices, indices);
         let mut missing = serde_json::to_value(selected)?;
         missing
@@ -254,7 +256,7 @@ fn final_manifest_bound_includes_observations_and_escaped_models() -> TestResult
     let maximum = manifest(256)?;
     maximum.validate()?;
     let bytes = serde_json::to_vec(&maximum)?;
-    assert_eq!(bytes.len(), 894522);
+    assert_eq!(bytes.len(), 894519);
     assert!(bytes.len() < MAX_MANIFEST_BYTES);
     let mut observed = maximum.clone();
     for candidate in &mut observed
@@ -266,7 +268,7 @@ fn final_manifest_bound_includes_observations_and_escaped_models() -> TestResult
         candidate.observed_shared_count = Some(candidate.rate.as_ref().ok_or("rate")?.shared_count);
     }
     observed.validate()?;
-    assert_eq!(serde_json::to_vec(&observed)?.len(), 905018);
+    assert_eq!(serde_json::to_vec(&observed)?.len(), 905015);
     let mut oversized = serde_json::to_value(maximum)?;
     oversized["runtime_observation"]["observed_at"] = json!(format!(
         "2026-11-02T00:00:00.{}Z",
@@ -359,19 +361,21 @@ fn historical_ordered_binding_is_not_implicitly_upgraded_to_send_authority() -> 
     );
     let mut explicit: Value = serde_json::from_str(historical)?;
     explicit["selection"]["admission_mode"] = json!("legacy");
+    assert!(serde_json::from_value::<OrderedDispatchBindingV2>(explicit.clone()).is_err());
+    explicit["selection"]["admission_mode"] = json!("unprofiled");
     serde_json::from_value::<OrderedDispatchBindingV2>(explicit)?.validate()?;
     Ok(())
 }
 
 #[test]
 fn actual_profile_and_full_command_serializers_preserve_aggregate_byte_limits() -> TestResult {
-    let maximum: AdmissionProfileV1 = serde_json::from_value(json!({"schema_version":1,
+    let maximum: AdmissionProfile = serde_json::from_value(json!({"schema_version":1,
         "rate":{"rate_group_id":"g".repeat(128),"member_rpm":u32::MAX},
         "health":{"rules":"availability_v1","failure_threshold":u32::MAX,
             "transient_cooldown_seconds":u64::MAX,"persistent_cooldown_seconds":u64::MAX,
-            "probe_lease_seconds":u64::MAX},"fallback":"ordered_terminal_rejections_v1"}))?;
+            "probe_lease_seconds":u64::MAX},"health_group_id":"profile","fallback":"ordered_terminal_rejections_v1"}))?;
     maximum.validate()?;
-    assert_eq!(serde_json::to_vec(&maximum)?.len(), 456);
+    assert_eq!(serde_json::to_vec(&maximum)?.len(), 484);
     let attachments: Vec<_> = (0..768).map(|index| json!({
         "inbound_protocol":match index / 256 {0 => "chat_completions",1 => "messages",_ => "responses"},
         "candidate_index":index % 256,"credential":reference("credential",true),"profile":reference("policy",true),
@@ -389,21 +393,37 @@ fn actual_profile_and_full_command_serializers_preserve_aggregate_byte_limits() 
     let mut command: ResourcePut = serde_json::from_value(json!({"format":1,
         "operation_id":"o".repeat(128),"installation_id":"i".repeat(128),"key":key,
         "expected_revision":"v".repeat(128),"definition":{"kind":"profiled_route",
-            "routing":{},"selector":"s".repeat(512),"policy":reference("policy",true),
+            "routing":{},"selector":"s".repeat(512),"policy":null,
             "credentials":credentials,"attachments":attachments}}))?;
     command.validate()?;
-    assert_eq!(serde_json::to_vec(&command)?.len(), 1017903);
+    let base_bytes = serde_json::to_vec(&command)?.len();
+    let padding = 1024 * 1024 - base_bytes - 12;
     let Definition::ProfiledRoute { routing, .. } = &mut command.definition else {
         return Err("profiled command".into());
     };
-    *routing = json!({"padding":"x".repeat(30661)});
+    *routing = json!({"padding":"x".repeat(padding)});
     assert_eq!(serde_json::to_vec(&command)?.len(), 1024 * 1024);
     command.validate()?;
     let Definition::ProfiledRoute { routing, .. } = &mut command.definition else {
         return Err("profiled command".into());
     };
-    *routing = json!({"padding":"x".repeat(30662)});
+    *routing = json!({"padding":"x".repeat(padding + 1)});
     assert_eq!(serde_json::to_vec(&command)?.len(), 1024 * 1024 + 1);
     assert!(command.validate().is_err());
+    Ok(())
+}
+
+#[test]
+fn admission_modes_accept_only_explicit_current_execution_semantics() -> TestResult {
+    for (mode, wire) in [
+        (AdmissionMode::Unprofiled, "unprofiled"),
+        (AdmissionMode::Profiled, "profiled"),
+    ] {
+        assert_eq!(serde_json::to_value(mode)?, json!(wire));
+        assert_eq!(serde_json::from_value::<AdmissionMode>(json!(wire))?, mode);
+    }
+    for retired in ["legacy", "profiled_v1"] {
+        assert!(serde_json::from_value::<AdmissionMode>(json!(retired)).is_err());
+    }
     Ok(())
 }

@@ -26,7 +26,7 @@ const MAX_ROUTE_DEPENDENCIES: usize = 16_384;
 
 struct Source {
     native_route: bool,
-    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
+    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachment>>,
     routing: Arc<serde_json::Value>,
     credentials: Vec<CredentialBinding>,
     choice: Option<super::super::core_choice::Profile>,
@@ -107,27 +107,7 @@ pub(super) fn decode_with_operation(
                 sources.insert(
                     reference,
                     Source {
-                        native_route: false,
-                        routing: Arc::new(routing),
-                        credentials,
-                        envelope,
-                        admission: Some(attachments.into_iter().map(|item|bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1 {inbound_protocol:item.inbound_protocol,candidate_index:item.candidate_index,credential:item.credential,profile:item.profile}).collect()),
-                        choice: None,
-                        assessment: None,
-                        block: None,
-                    },
-                );
-            }
-            Definition::NativeProfiledRouteV1 {
-                routing,
-                credentials,
-                attachments,
-                ..
-            } => {
-                sources.insert(
-                    reference,
-                    Source {
-                        native_route: true,
+                        native_route: attachments.iter().any(|item| item.inbound_protocol == bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent),
                         routing: Arc::new(routing),
                         credentials,
                         envelope,
@@ -138,7 +118,7 @@ pub(super) fn decode_with_operation(
                     },
                 );
             }
-            Definition::AdmissionProfile { .. } | Definition::AdmissionProfileV2 { .. } => {}
+            Definition::AdmissionProfile { .. } => {}
             Definition::Policy { document, name, .. } => {
                 policies.insert(
                     reference,

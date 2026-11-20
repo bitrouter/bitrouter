@@ -165,7 +165,7 @@ async fn native_generate_content_mounted_discovery_without_peer_is_disabled_and_
     ensure!(!capabilities.enabled && !capabilities.cached_content_enabled);
     ensure!(
         !control
-            .resource_capabilities_v3(&ordered.fixture.installation)
+            .resource_capabilities(&ordered.fixture.installation)
             .await?
             .provisioning_enabled
     );

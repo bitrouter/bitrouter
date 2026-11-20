@@ -513,6 +513,16 @@ The [resource DTOs and validators](../../../crates/bitrouter-ai/src/tenancy/reso
 define the fields and semantic constraints. The put command accepts the closed
 set of resource definitions, including credential slots, model-only Policies,
 admission profiles and static routes with explicit profile attachments.
+The canonical schemas are [put](../resource-provisioning/put.schema.json),
+[capabilities](../resource-provisioning/capabilities.schema.json),
+[revoke](../resource-provisioning/revoke.schema.json), and
+[status](../resource-provisioning/status.schema.json). The current put format is
+`1`; `profiled_route` attachments address Chat Completions, Messages, Responses,
+and GenerateContent explicitly. Admission profiles require `health_group_id`
+exactly when health admission is enabled. Group identity is scoped to the
+installation and operator pool; member RPM remains independently rotatable.
+Ordered callers select `unprofiled` or `profiled` admission explicitly.
+
 Discovery requires `Bitrouter-Installation-Id`. It reports which definitions
 can be provisioned and their bounds. Provisioning is disabled without a
 configured wrapping key. Upstream secrets are distinct from API bearer
@@ -693,7 +703,7 @@ at most 4096 encoded bytes. Its decoded shape is:
 ```json
 {
   "schema_version": 1,
-  "admission_mode": "profiled_v1",
+  "admission_mode": "profiled",
   "route": {
     "owner_kind": "tenant",
     "owner_id": "example-tenant",
@@ -1077,10 +1087,10 @@ mutation recovery semantics. SDK methods are
 routes nor falls back to another interface.
 
 The closed contracts are
-[discovery](profile-observation-capabilities-v1.schema.json),
-[request](profile-observation-request-v1.schema.json),
-[snapshot](profile-observation-snapshot-v1.schema.json) and
-[entry](profile-observation-entry-v1.schema.json). All fields are required,
+[discovery](profile-observation-capabilities.schema.json),
+[request](profile-observation-request.schema.json),
+[snapshot](profile-observation-snapshot.schema.json) and
+[entry](profile-observation-entry.schema.json). All fields are required,
 including nullable fields. Unknown and duplicate fields fail. Integer decoding
 accepts exact integral decimal/exponent spellings without floating-point
 rounding; fractions and values outside the declared bounds fail.

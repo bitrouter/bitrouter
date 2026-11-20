@@ -158,7 +158,7 @@ pub struct CandidateDescriptorV1 {
     pub target: Target,
     /// Exact retained upstream credential reference.
     pub credential: ResourceRef,
-    /// Exact pinned profile association, or explicit null for a legacy root.
+    /// Exact pinned profile association, or explicit null for an unprofiled root.
     #[serde(deserialize_with = "nullable")]
     pub admission_profile: Option<ResourceRef>,
 }
@@ -233,15 +233,15 @@ impl Validate for CandidateManifestV1 {
             candidate.validate()?;
             require(
                 candidate.admission_profile.is_some()
-                    == (self.admission_mode == AdmissionMode::ProfiledV1),
+                    == (self.admission_mode == AdmissionMode::Profiled),
                 "manifest admission mode",
             )?;
             validate_tenant_reference(&candidate.credential, &self.tenant_id)?;
         }
         if let Some(observation) = &self.runtime_observation {
             require(
-                self.admission_mode == AdmissionMode::ProfiledV1,
-                "legacy runtime observation",
+                self.admission_mode == AdmissionMode::Profiled,
+                "unprofiled runtime observation",
             )?;
             require(
                 observation.candidates.len() == self.candidates.len(),

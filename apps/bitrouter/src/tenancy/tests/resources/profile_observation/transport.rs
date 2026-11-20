@@ -12,7 +12,7 @@ async fn actual_sdk_reads_standalone_profiles_over_h1_h2_and_retained_restart() 
         "local",
         "create-local",
         None,
-        rules(1, Some(2), true),
+        rules("member-local", Some(2), true),
     )
     .await?;
     let shared = provision(
@@ -20,7 +20,7 @@ async fn actual_sdk_reads_standalone_profiles_over_h1_h2_and_retained_restart() 
         "shared",
         "create-shared",
         None,
-        rules(2, Some(3), true),
+        rules("circuit", Some(3), true),
     )
     .await?;
     let mut previous_instance = None;
@@ -50,7 +50,7 @@ async fn actual_sdk_reads_standalone_profiles_over_h1_h2_and_retained_restart() 
             let caps = client.admission_profile_observation_capabilities().await?;
             ensure!(
                 caps.installation_id == fixture.installation
-                    && caps.profile_versions == [1, 2]
+                    && caps.profile_versions == [1]
                     && caps.observation_enabled
             );
             if let Some(previous) = &previous_instance {
@@ -89,7 +89,14 @@ async fn actual_sdk_reads_standalone_profiles_over_h1_h2_and_retained_restart() 
 async fn operator_only_http_and_direct_service_reject_tenant_authority_and_installation_transplants()
 -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, false)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, false),
+    )
+    .await?;
     let issued = fixture.issue("tenant-admin").await?;
     let input = request(&fixture, vec![pin])?;
     ensure!(
@@ -146,7 +153,14 @@ async fn operator_only_http_and_direct_service_reject_tenant_authority_and_insta
 async fn actual_handler_refuses_held_authority_lock_before_legacy_middleware_can_block()
 -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, false)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, false),
+    )
+    .await?;
     let input = request(&fixture, vec![pin])?;
     let app = router(&fixture)?;
     let authority = fixture.service.authority.clone();
@@ -189,7 +203,14 @@ async fn actual_handler_refuses_held_authority_lock_before_legacy_middleware_can
 #[tokio::test]
 async fn original_body_deadline_returns_no_observations_and_releases_capacity() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, false)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, false),
+    )
+    .await?;
     let input = request(&fixture, vec![pin])?;
     let before = durable(&fixture).await?;
     let runtime = operational(&fixture)?;
@@ -214,7 +235,14 @@ async fn original_body_deadline_returns_no_observations_and_releases_capacity() 
 #[tokio::test]
 async fn complete_256_entry_batches_and_raw_body_bounds_never_truncate() -> Result<()> {
     let fixture = keyed_fixture().await?;
-    let pin = provision(&fixture, "member", "create", None, rules(2, None, false)).await?;
+    let pin = provision(
+        &fixture,
+        "member",
+        "create",
+        None,
+        rules("circuit", None, false),
+    )
+    .await?;
     let mut input = request(
         &fixture,
         (0..256)
@@ -263,6 +291,42 @@ async fn complete_256_entry_batches_and_raw_body_bounds_never_truncate() -> Resu
     let mut duplicate = http_request(&fixture, &input)?;
     *duplicate.body_mut() = Body::from(raw);
     ensure!(app.oneshot(duplicate).await?.status() == StatusCode::BAD_REQUEST);
+    fixture.service.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn resource_capabilities_has_one_current_route() -> Result<()> {
+    use bitrouter_ai::tenancy::{resources::ResourceCapabilities, validation::Validate};
+    let fixture = keyed_fixture().await?;
+    let app = router(&fixture)?;
+    for suffix in ["", "/v2", "/v3"] {
+        let request = HttpRequest::builder()
+            .uri(format!("/control/v1/tenancy/resource-capabilities{suffix}"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("bitrouter-installation-id", fixture.installation.as_str())
+            .body(Body::empty())?;
+        let response = app.clone().oneshot(request).await?;
+        if suffix.is_empty() {
+            ensure!(response.status() == StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await?;
+            let capabilities: ResourceCapabilities = serde_json::from_slice(&bytes)?;
+            capabilities.validate()?;
+            ensure!(
+                capabilities.installation_id == fixture.installation
+                    && capabilities.provisioning_enabled
+            );
+            ensure!(
+                capabilities.generation_protocols[3]
+                    == bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent
+            );
+        } else {
+            ensure!(
+                response.status() == StatusCode::NOT_FOUND,
+                "retired route {suffix}"
+            );
+        }
+    }
     fixture.service.shutdown().await?;
     Ok(())
 }

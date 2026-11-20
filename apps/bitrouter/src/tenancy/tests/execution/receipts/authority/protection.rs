@@ -1,7 +1,7 @@
 //! Publication races exercise the real authority owner and loopback provider.
 use super::*;
 use bitrouter_ai::tenancy::{
-    admission::AdmissionAttachmentV1,
+    admission::AdmissionAttachment,
     authority::{OwnerKind, ResourceKey, ResourceKind},
     configuration::ResourceRef,
     ordered::GenerationProtocol,
@@ -47,7 +47,7 @@ async fn protect(harness: &Harness) -> Result<()> {
             expected_revision: None,
             definition: Definition::AdmissionProfile {
                 profile: serde_json::from_value(
-                    json!({"schema_version":1,"rate":null,"health":null,"fallback":"stop"}),
+                    json!({"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"stop"}),
                 )?,
             },
         },
@@ -70,7 +70,7 @@ async fn protect(harness: &Harness) -> Result<()> {
                 provider: "mock".into(), account: "default".into(), credential: harness.slot.clone(),
             }],
             attachments: [GenerationProtocol::ChatCompletions,GenerationProtocol::Messages,GenerationProtocol::Responses]
-                .into_iter().map(|inbound_protocol| AdmissionAttachmentV1 {
+                .into_iter().map(|inbound_protocol| AdmissionAttachment {
                     inbound_protocol,candidate_index:0,credential:harness.slot.clone(),profile:profile.clone(),
                 }).collect(),
         },

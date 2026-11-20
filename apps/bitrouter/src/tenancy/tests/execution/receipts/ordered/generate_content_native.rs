@@ -10,7 +10,7 @@ use bitrouter_ai::tenancy::{
         ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
         Outcome as AdapterOutcome,
     },
-    resources_v3::ResourcePutV3,
+    resources::ResourcePut,
     usage_evidence::{Protocol, Source},
 };
 use hmac::{Hmac, KeyInit, Mac};
@@ -267,7 +267,7 @@ impl Harness {
         let control = ordered.control(true, HttpVersion::Http1Only)?;
         ensure!(
             control
-                .resource_capabilities_v3(&ordered.fixture.installation)
+                .resource_capabilities(&ordered.fixture.installation)
                 .await
                 .context("native resource capability")?
                 .provisioning_enabled
@@ -291,7 +291,7 @@ impl Harness {
             .take()
             .context("captured route")?;
         let mut definition = definition;
-        definition["kind"] = "native_profiled_route_v1".into();
+        definition["kind"] = "profiled_route".into();
         for index in 0..2 {
             let name = format!("provider-{index}");
             definition["routing"]["providers"][&name]["api_protocol"] = if index == native_ordinal {
@@ -326,11 +326,11 @@ impl Harness {
             )
             .await
             .context("native resource status")?;
-        let command: ResourcePutV3 = serde_json::from_value(
+        let command: ResourcePut = serde_json::from_value(
             json!({"format":3,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
         )?;
         let published = control
-            .put_resource_v3(&ordered.fixture.tenant, &command)
+            .put_resource(&ordered.fixture.tenant, &command)
             .await
             .map_err(|error| match &error {
                 bitrouter_sdk::error::Error::Tenancy(failure) => anyhow::anyhow!(

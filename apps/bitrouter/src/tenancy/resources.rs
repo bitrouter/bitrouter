@@ -128,7 +128,7 @@ impl Envelope {
         }
         if artifacts
             .iter()
-            .any(|artifact| artifact.definition.is_shared_profile())
+            .any(|artifact| artifact.definition.is_admission_profile())
         {
             return 5;
         }
@@ -158,12 +158,7 @@ impl Envelope {
         let profiled: HashSet<_> = self
             .artifacts
             .iter()
-            .filter(|artifact| {
-                matches!(
-                    artifact.definition,
-                    Definition::ProfiledRoute { .. } | Definition::NativeProfiledRouteV1 { .. }
-                )
-            })
+            .filter(|artifact| matches!(artifact.definition, Definition::ProfiledRoute { .. }))
             .map(|artifact| &artifact.reference)
             .collect();
         manifest::bounded_bytes(
@@ -541,10 +536,6 @@ impl Resources {
             ensure!(
                 matches!(manifest.format, 3 | 4) || !resource.definition.is_native_route(),
                 "native route requires import format three"
-            );
-            ensure!(
-                matches!(manifest.format, 2..=4) || !resource.definition.is_shared_profile(),
-                "shared health requires import format two"
             );
             ensure!(
                 unique.insert(resource.reference.clone()),

@@ -3,9 +3,10 @@ use super::*;
 #[tokio::test]
 async fn profiled_observer_only_root_reads_real_shared_count_without_rate_or_health_admission()
 -> Result<()> {
-    let observer: AdmissionProfileV1 =
-        serde_json::from_value(json!({"schema_version":1,"rate":null,
-        "observe_rate_group_id":"shared-rpm","health":null,"fallback":"stop"}))?;
+    let observer: AdmissionProfile = serde_json::from_value(
+        json!({"schema_version":1,"rate":null,
+        "observe_rate_group_id":"shared-rpm","health":null,"health_group_id":null,"fallback":"stop"}),
+    )?;
     let harness = OrderedHarness::with_resource_edits(
         2,
         8,

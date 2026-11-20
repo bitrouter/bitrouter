@@ -37,7 +37,7 @@ fn status() -> TestResult<Value> {
 
 async fn roundtrip(version: Version, mode: HttpVersion) -> TestResult {
     let replies = vec![
-        json!({"format":1,"installation_id":"installation","provisioning_enabled":true,"max_command_bytes":1048576,"tenant_routes_require_approved_origins":true}),
+        json!({"format":1,"installation_id":"installation","provisioning_enabled":true,"max_command_bytes":1048576,"tenant_routes_require_approved_origins":true,"generation_protocols":["chat_completions","messages","responses","generate_content"]}),
         applied(), status()?, applied(),
     ].into_iter().map(|body| server::json(body).map(Some)).collect::<TestResult<Vec<_>>>()?;
     let server = server::serve(version, replies).await?;

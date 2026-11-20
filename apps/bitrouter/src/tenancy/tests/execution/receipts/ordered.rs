@@ -220,7 +220,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
     ) -> Result<Self> {
         Self::with_resource_edits(count, limit, malformed, defaults, profiles, |_| Ok(())).await
     }
@@ -230,7 +230,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
         Self::with_native_mode(count, limit, malformed, defaults, profiles, false, edit).await
@@ -241,7 +241,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         native_controls: bool,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
@@ -262,7 +262,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         capacity: CapacityConfig,
         edit: impl FnOnce(&mut Vec<Value>) -> Result<()>,
     ) -> Result<Self> {
@@ -283,7 +283,7 @@ impl OrderedHarness {
         limit: u8,
         malformed: Option<usize>,
         defaults: Value,
-        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfileV1]>,
+        profiles: Option<&[bitrouter_ai::tenancy::admission::AdmissionProfile]>,
         (native_controls, adapter, capacity): (
             bool,
             Option<Arc<private_adapter::FixtureAdapter>>,
@@ -378,6 +378,15 @@ impl OrderedHarness {
             let mut attachments = Vec::new();
             for (index, profile) in profiles.iter().enumerate() {
                 let profile_ref = profiled::reference(index)?;
+                let mut profile = profile.clone();
+                // These fixtures request isolated circuits unless a test supplies an explicit shared group.
+                if profile
+                    .health_group_id
+                    .as_ref()
+                    .is_some_and(|group| group.as_str() == "profile")
+                {
+                    profile.health_group_id = Some(profile_ref.resource_id.clone());
+                }
                 for protocol in ["chat_completions", "messages", "responses"] {
                     attachments.push(json!({"inbound_protocol":protocol,"candidate_index":index,
                         "credential":credentials[index]["credential"],"profile":profile_ref}));
@@ -410,7 +419,7 @@ impl OrderedHarness {
             4
         } else if definitions
             .iter()
-            .any(|entry| entry["definition"]["kind"] == "admission_profile_v2")
+            .any(|entry| entry["definition"]["kind"] == "admission_profile")
         {
             2
         } else {

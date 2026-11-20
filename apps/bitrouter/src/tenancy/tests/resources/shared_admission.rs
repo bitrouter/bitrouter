@@ -1,9 +1,9 @@
 use super::*;
 use crate::tenancy::resources::lifecycle;
 use bitrouter_ai::tenancy::{
-    admission_v2::AdmissionProfileV2,
+    admission::AdmissionProfile,
     identity::RevisionId,
-    resources_v2::{DefinitionV2, ResourcePutV2},
+    resources::{Definition, ResourcePut},
 };
 use serde_json::json;
 
@@ -19,9 +19,9 @@ async fn revision_count(fixture: &Fixture) -> Result<usize> {
     Ok(usize::try_from(row.try_get::<i64>("", "count")?)?)
 }
 
-fn input(fixture: &Fixture, name: &str, operation: &str, rpm: u32) -> Result<ResourcePutV2> {
-    Ok(ResourcePutV2 {
-        format: 2,
+fn input(fixture: &Fixture, name: &str, operation: &str, rpm: u32) -> Result<ResourcePut> {
+    Ok(ResourcePut {
+        format: 1,
         operation_id: operation.try_into()?,
         installation_id: fixture.installation.clone(),
         key: ResourceKey {
@@ -31,8 +31,8 @@ fn input(fixture: &Fixture, name: &str, operation: &str, rpm: u32) -> Result<Res
             resource_id: name.try_into()?,
         },
         expected_revision: None,
-        definition: DefinitionV2::AdmissionProfileV2 {
-            profile: serde_json::from_value(json!({"schema_version":2,
+        definition: Definition::AdmissionProfile {
+            profile: serde_json::from_value(json!({"schema_version":1,
                 "rate":{"rate_group_id":"window","member_rpm":rpm},
                 "health":{"rules":"availability_v1","failure_threshold":3,
                     "transient_cooldown_seconds":10,"persistent_cooldown_seconds":30,"probe_lease_seconds":5},
@@ -41,9 +41,11 @@ fn input(fixture: &Fixture, name: &str, operation: &str, rpm: u32) -> Result<Res
     })
 }
 
-fn rules(input: &mut ResourcePutV2) -> &mut AdmissionProfileV2 {
-    let DefinitionV2::AdmissionProfileV2 { profile } = &mut input.definition;
-    profile
+fn rules(input: &mut ResourcePut) -> Result<&mut AdmissionProfile> {
+    let Definition::AdmissionProfile { profile } = &mut input.definition else {
+        anyhow::bail!("profile required");
+    };
+    Ok(profile)
 }
 
 fn local_input(fixture: &Fixture, operation: &str) -> Result<ResourcePut> {
@@ -52,12 +54,12 @@ fn local_input(fixture: &Fixture, operation: &str) -> Result<ResourcePut> {
     local.definition = Definition::AdmissionProfile {
         profile: serde_json::from_value(json!({"schema_version":1,
             "rate":{"rate_group_id":"window","member_rpm":1},
-            "health":null,"fallback":"stop"}))?,
+            "health":null,"health_group_id":null,"fallback":"stop"}))?,
     };
     Ok(local)
 }
 
-fn pinned(input: &ResourcePutV2, revision: RevisionId) -> ResourceRef {
+fn pinned(input: &ResourcePut, revision: RevisionId) -> ResourceRef {
     ResourceRef {
         owner_kind: input.key.owner_kind,
         owner_id: input.key.owner_id.clone(),
@@ -67,13 +69,13 @@ fn pinned(input: &ResourcePutV2, revision: RevisionId) -> ResourceRef {
     }
 }
 
-async fn put_v2(fixture: &Fixture, input: ResourcePutV2) -> Result<OperationResult> {
+async fn put_profile(fixture: &Fixture, input: ResourcePut) -> Result<OperationResult> {
     result(
         fixture
             .service
             .execute(
                 fixture.operator.clone(),
-                Command::ResourceV2(fixture.tenant.clone(), input),
+                Command::Resource(fixture.tenant.clone(), input),
             )
             .await
             .map_err(failure)?,
@@ -130,7 +132,7 @@ async fn first_profile_and_group_witnesses_roll_back_with_failed_operation_then_
 async fn rejected(
     fixture: &Fixture,
     caller: Caller,
-    input: ResourcePutV2,
+    input: ResourcePut,
     code: ErrorCode,
 ) -> Result<()> {
     let before = fixture
@@ -151,7 +153,7 @@ async fn rejected(
     drop(before);
     let response = fixture
         .service
-        .execute(caller, Command::ResourceV2(fixture.tenant.clone(), input))
+        .execute(caller, Command::Resource(fixture.tenant.clone(), input))
         .await;
     match response {
         Err(error) => ensure!(error.0.code == code),
@@ -186,7 +188,7 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
     let mut fixture = keyed_fixture().await?;
     let first = input(&fixture, "first", "first", 1)?;
     let mut second = input(&fixture, "second", "second", 3)?;
-    rules(&mut second)
+    rules(&mut second)?
         .health
         .as_mut()
         .context("health")?
@@ -194,11 +196,11 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
     let (a, b) = tokio::join!(
         fixture.service.execute(
             fixture.operator.clone(),
-            Command::ResourceV2(fixture.tenant.clone(), first.clone())
+            Command::Resource(fixture.tenant.clone(), first.clone())
         ),
         fixture.service.execute(
             fixture.operator.clone(),
-            Command::ResourceV2(fixture.tenant.clone(), second.clone())
+            Command::Resource(fixture.tenant.clone(), second.clone())
         ),
     );
     let mut winners = Vec::new();
@@ -244,8 +246,8 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
     // The rejected candidate did not install its conflicting group rules.
     loser.operation_id = "compatible-after-race".try_into()?;
     loser.definition = winner.definition.clone();
-    rules(&mut loser).rate.as_mut().context("rate")?.member_rpm = 9;
-    put_v2(&fixture, loser).await?;
+    rules(&mut loser)?.rate.as_mut().context("rate")?.member_rpm = 9;
+    put_profile(&fixture, loser).await?;
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -254,13 +256,17 @@ async fn conflicting_first_members_have_one_winner_and_never_publish_loser_state
 async fn every_group_rule_is_immutable_across_rotation_all_revocation_and_restart() -> Result<()> {
     let mut fixture = keyed_fixture().await?;
     let original = input(&fixture, "original", "original", 1)?;
-    let created = put_v2(&fixture, original.clone()).await?;
+    let created = put_profile(&fixture, original.clone()).await?;
     let old = pinned(&original, created.resource_revision.context("revision")?);
     let mut rotate = original.clone();
     rotate.operation_id = "rotate".try_into()?;
     rotate.expected_revision = Some(old.revision_id.clone());
-    rules(&mut rotate).rate.as_mut().context("rate")?.member_rpm = 0;
-    let rotated = put_v2(&fixture, rotate.clone()).await?;
+    rules(&mut rotate)?
+        .rate
+        .as_mut()
+        .context("rate")?
+        .member_rpm = 0;
+    let rotated = put_profile(&fixture, rotate.clone()).await?;
     let current = pinned(&rotate, rotated.resource_revision.context("revision")?);
     for (n, reference) in [old.clone(), current.clone()].into_iter().enumerate() {
         let revision = fixture.service.current().map_err(failure)?.revision;
@@ -292,7 +298,7 @@ async fn every_group_rule_is_immutable_across_rotation_all_revocation_and_restar
             &format!("different-{n}"),
             3,
         )?;
-        let health = rules(&mut different).health.as_mut().context("health")?;
+        let health = rules(&mut different)?.health.as_mut().context("health")?;
         match n {
             0 => health.failure_threshold += 1,
             1 => health.transient_cooldown_seconds += 1,
@@ -308,32 +314,32 @@ async fn every_group_rule_is_immutable_across_rotation_all_revocation_and_restar
         .await?;
     }
     let sibling = input(&fixture, "new-member", "new-member", 3)?;
-    put_v2(&fixture, sibling).await?;
+    put_profile(&fixture, sibling).await?;
     // Only the complete health rule is shared across different member keys.
     let mut independent = input(&fixture, "independent-rate", "independent-rate", 9)?;
-    rules(&mut independent)
+    rules(&mut independent)?
         .rate
         .as_mut()
         .context("rate")?
         .rate_group_id = "different-window".try_into()?;
-    rules(&mut independent).fallback = bitrouter_ai::tenancy::admission::FallbackRule::Stop;
-    put_v2(&fixture, independent).await?;
+    rules(&mut independent)?.fallback = bitrouter_ai::tenancy::admission::FallbackRule::Stop;
+    put_profile(&fixture, independent).await?;
     let mut observed = input(&fixture, "observed-only", "observed-only", 9)?;
-    rules(&mut observed).rate = None;
-    rules(&mut observed).observe_rate_group_id = Some("window".try_into()?);
-    put_v2(&fixture, observed).await?;
+    rules(&mut observed)?.rate = None;
+    rules(&mut observed)?.observe_rate_group_id = Some("window".try_into()?);
+    put_profile(&fixture, observed).await?;
     let mut foreign = input(&fixture, "different-pool", "different-pool", 3)?;
     foreign.key.owner_id = "other-pool".try_into()?;
-    rules(&mut foreign)
+    rules(&mut foreign)?
         .health
         .as_mut()
         .context("health")?
         .failure_threshold = 8;
-    put_v2(&fixture, foreign).await?;
+    put_profile(&fixture, foreign).await?;
     let mut move_group = rotate.clone();
     move_group.operation_id = "move-group".try_into()?;
     move_group.expected_revision = Some(current.revision_id.clone());
-    rules(&mut move_group).health_group_id = Some("replacement".try_into()?);
+    rules(&mut move_group)?.health_group_id = Some("replacement".try_into()?);
     rejected(
         &fixture,
         fixture.operator.clone(),
@@ -360,11 +366,11 @@ async fn every_group_rule_is_immutable_across_rotation_all_revocation_and_restar
 }
 
 #[tokio::test]
-async fn v2_replay_operator_authority_and_cross_version_operation_identity() -> Result<()> {
+async fn profile_replay_preserves_operator_authority_and_operation_identity() -> Result<()> {
     let mut fixture = keyed_fixture().await?;
-    let original = input(&fixture, "profile", "create-v2", 1)?;
-    let created = put_v2(&fixture, original.clone()).await?;
-    let replay = put_v2(&fixture, original.clone()).await?;
+    let original = input(&fixture, "profile", "create-profile", 1)?;
+    let created = put_profile(&fixture, original.clone()).await?;
+    let replay = put_profile(&fixture, original.clone()).await?;
     ensure!(created.resource_revision == replay.resource_revision);
     let issued = fixture.issue("tenant-editor").await?;
     let caller = fixture
@@ -379,22 +385,22 @@ async fn v2_replay_operator_authority_and_cross_version_operation_identity() -> 
         ErrorCode::Forbidden,
     )
     .await?;
-    let mut v1 = local_input(&fixture, "create-v2")?;
+    let mut disabled = local_input(&fixture, "create-profile")?;
     ensure!(
-        matches!(fixture.service.execute(fixture.operator.clone(), Command::Resource(fixture.tenant.clone(), v1.clone())).await, Err(error) if error.0.code == ErrorCode::OperationConflict)
+        matches!(fixture.service.execute(fixture.operator.clone(), Command::Resource(fixture.tenant.clone(), disabled.clone())).await, Err(error) if error.0.code == ErrorCode::OperationConflict)
     );
-    // A new operation still cannot reinterpret the retained member's family.
-    v1.operation_id = "change-to-v1".try_into()?;
-    v1.expected_revision = created.resource_revision.clone();
+    // A new operation still cannot reinterpret the retained member's health rules.
+    disabled.operation_id = "disable-health".try_into()?;
+    disabled.expected_revision = created.resource_revision.clone();
     ensure!(
-        matches!(fixture.service.execute(fixture.operator.clone(), Command::Resource(fixture.tenant.clone(), v1)).await, Err(error) if error.0.code == ErrorCode::InvalidRequest)
+        matches!(fixture.service.execute(fixture.operator.clone(), Command::Resource(fixture.tenant.clone(), disabled)).await, Err(error) if error.0.code == ErrorCode::InvalidRequest)
     );
-    let mut local = local_input(&fixture, "local-v1")?;
+    let mut local = local_input(&fixture, "disabled-health")?;
     local.key.resource_id = "local".try_into()?;
     let local_revision = put(&fixture, fixture.operator.clone(), local)
         .await?
         .resource_revision;
-    let mut changed = input(&fixture, "local", "change-to-v2", 1)?;
+    let mut changed = input(&fixture, "local", "enable-health", 1)?;
     changed.expected_revision = local_revision;
     rejected(
         &fixture,
@@ -404,7 +410,7 @@ async fn v2_replay_operator_authority_and_cross_version_operation_identity() -> 
     )
     .await?;
     restart(&mut fixture).await?;
-    ensure!(put_v2(&fixture, original).await?.resource_revision == created.resource_revision);
+    ensure!(put_profile(&fixture, original).await?.resource_revision == created.resource_revision);
     fixture.service.shutdown().await?;
     Ok(())
 }
@@ -414,7 +420,7 @@ async fn revoked_policy_lock_and_shared_profile_keys_cannot_change_family_after_
 -> Result<()> {
     let mut fixture = keyed_fixture().await?;
     let original = input(&fixture, "shared", "create-shared", 1)?;
-    let created = put_v2(&fixture, original.clone()).await?;
+    let created = put_profile(&fixture, original.clone()).await?;
     let shared_ref = pinned(
         &original,
         created.resource_revision.context("shared revision")?,

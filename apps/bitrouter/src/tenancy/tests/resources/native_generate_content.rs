@@ -1,11 +1,11 @@
 //! Retained operation replay is independent of a newly disabled transport.
 use super::*;
-use bitrouter_ai::tenancy::resources_v3::ResourcePutV3;
+use bitrouter_ai::tenancy::resources::ResourcePut;
 use serde_json::json;
 
 #[tokio::test]
-async fn native_generate_content_committed_v3_replays_after_restart_without_adapter() -> Result<()>
-{
+async fn native_generate_content_committed_resource_replays_after_restart_without_adapter()
+-> Result<()> {
     let mut fixture = keyed_fixture().await?;
     let slot_input = credential(&fixture, "native-replay-slot")?;
     let slot_result = put(&fixture, fixture.operator.clone(), slot_input.clone()).await?;
@@ -13,15 +13,15 @@ async fn native_generate_content_committed_v3_replays_after_restart_without_adap
     let profile_input: ResourcePut = serde_json::from_value(json!({
         "format":1,"operation_id":"native-replay-profile","installation_id":fixture.installation,
         "key":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy","resource_id":"native-replay-profile"},
-        "expected_revision":null,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"fallback":"ordered_terminal_rejections_v1"}}
+        "expected_revision":null,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"ordered_terminal_rejections_v1"}}
     }))?;
     let profile_result = put(&fixture, fixture.operator.clone(), profile_input.clone()).await?;
     let profile = reference(&profile_input, &profile_result)?;
     let attachments = ["chat_completions","messages","responses","generate_content"].map(|protocol| json!({"inbound_protocol":protocol,"candidate_index":0,"credential":slot,"profile":profile}));
-    let input: ResourcePutV3 = serde_json::from_value(json!({
-        "format":3,"operation_id":"native-replay-route","installation_id":fixture.installation,
+    let input: ResourcePut = serde_json::from_value(json!({
+        "format":1,"operation_id":"native-replay-route","installation_id":fixture.installation,
         "key":{"owner_kind":"tenant","owner_id":fixture.tenant,"resource_kind":"route","resource_id":"native-replay-route"},"expected_revision":null,
-        "definition":{"kind":"native_profiled_route_v1","selector":"fixture:base","policy":null,
+        "definition":{"kind":"profiled_route","selector":"fixture:base","policy":null,
             "routing":{"providers":{"fixture":{"api_base":"http://127.0.0.1:1","api_protocol":[{"*":["ordered_generate_content","chat_completions","messages","responses"]}],"models":[{"id":"base"}]}}},
             "credentials":[{"provider":"fixture","account":"default","credential":slot}],"attachments":attachments}
     }))?;
@@ -36,7 +36,7 @@ async fn native_generate_content_committed_v3_replays_after_restart_without_adap
             .service
             .execute(
                 fixture.operator.clone(),
-                Command::ResourceV3(fixture.tenant.clone(), input.clone()),
+                Command::Resource(fixture.tenant.clone(), input.clone()),
             )
             .await
             .map_err(failure)?,
@@ -49,7 +49,7 @@ async fn native_generate_content_committed_v3_replays_after_restart_without_adap
             .service
             .execute(
                 fixture.operator.clone(),
-                Command::ResourceV3(fixture.tenant.clone(), input.clone()),
+                Command::Resource(fixture.tenant.clone(), input.clone()),
             )
             .await
             .map_err(failure)?,
@@ -64,18 +64,18 @@ async fn native_generate_content_committed_v3_replays_after_restart_without_adap
         .service
         .execute(
             fixture.operator.clone(),
-            Command::ResourceV3(fixture.tenant.clone(), changed),
+            Command::Resource(fixture.tenant.clone(), changed),
         )
         .await;
     ensure!(matches!(rejected,Err(error) if error.0.code==ErrorCode::OperationConflict));
     let mut fresh = input;
-    fresh.operation_id = "disabled-new-v3".try_into()?;
+    fresh.operation_id = "disabled-new-native".try_into()?;
     fresh.key.resource_id = "disabled-new-native-route".try_into()?;
     let rejected = fixture
         .service
         .execute(
             fixture.operator.clone(),
-            Command::ResourceV3(fixture.tenant.clone(), fresh),
+            Command::Resource(fixture.tenant.clone(), fresh),
         )
         .await;
     ensure!(matches!(rejected,Err(error) if error.0.code==ErrorCode::CapabilityMismatch));

@@ -2,7 +2,7 @@
 use super::*;
 use crate::tenancy::{command::Command, model::Caller, tests::issued};
 use bitrouter_ai::tenancy::{
-    admission::{AdmissionProfileV1, AvailabilityObservation, HealthObservation},
+    admission::{AdmissionProfile, AvailabilityObservation, HealthObservation},
     authority::{BindingPut, GrantScope, TenantRole},
     operation::{DispatchState, ErrorCode},
 };
@@ -111,11 +111,12 @@ pub(super) async fn draft_profiles(
     }
 }
 
-pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfileV1> {
+pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfile> {
     Ok(serde_json::from_value(json!({"schema_version":1,
         "rate":{"rate_group_id":"shared-rpm","member_rpm":rpm},
         "health": if health { json!({"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,
             "persistent_cooldown_seconds":120,"probe_lease_seconds":5}) } else { Value::Null },
+        "health_group_id":if health {json!("profile")} else {Value::Null},
         "fallback":"ordered_terminal_rejections_v1"}))?)
 }
 

@@ -118,7 +118,7 @@
           "properties": {
             "profile": {
               "description": "Closed, bounded operational rules.",
-              "$ref": "#/$defs/AdmissionProfileV1"
+              "$ref": "#/$defs/AdmissionProfile"
             },
             "kind": {
               "type": "string",
@@ -147,8 +147,8 @@
               "maxLength": 512
             },
             "policy": {
-              "description": "Required-nullable policy reference; only qualified static roots execute.",
-              "$ref": "#/$defs/RequiredNullable_ResourceRef"
+              "description": "Required null; profiled routes use a static ordered root.",
+              "type": "null"
             },
             "credentials": {
               "description": "Separately owned immutable credential slots.",
@@ -160,13 +160,13 @@
               "maxItems": 256
             },
             "attachments": {
-              "description": "Total unique map over the three actual compiled protocol roots.",
+              "description": "Total unique map over the actual compiled protocol roots.",
               "type": "array",
               "items": {
-                "$ref": "#/$defs/AdmissionAttachmentV1"
+                "$ref": "#/$defs/AdmissionAttachment"
               },
               "minItems": 1,
-              "maxItems": 768
+              "maxItems": 1024
             },
             "kind": {
               "type": "string",
@@ -283,23 +283,23 @@
         }
       ]
     },
-    "AdmissionProfileV1": {
-      "description": "Immutable rules with a live, independently rotatable member RPM ceiling.",
+    "AdmissionProfile": {
+      "description": "Immutable shared-health membership with an independently rotatable member RPM.",
       "type": "object",
       "properties": {
         "schema_version": {
-          "description": "Profile format, exactly one.",
+          "description": "Current profile format, exactly one. Health membership is explicit.",
           "type": "integer",
           "format": "uint8",
           "minimum": 1,
           "maximum": 1
         },
         "rate": {
-          "description": "Null disables rate admission; a zero ceiling refuses locally.",
+          "description": "Null disables charging; a zero member ceiling refuses locally.",
           "$ref": "#/$defs/RequiredNullable_RateProfileV1"
         },
         "observe_rate_group_id": {
-          "description": "Optional read-only group in this profile's operator-pool namespace.\nDoes not enable rate admission, charge a timestamp or consult a circuit.",
+          "description": "Optional read-only rate group in this profile's operator pool.",
           "anyOf": [
             {
               "$ref": "#/$defs/ResourceId"
@@ -310,11 +310,15 @@
           ]
         },
         "health": {
-          "description": "Null disables the availability circuit.",
+          "description": "Null disables health admission and observation. Requires a null group.",
           "$ref": "#/$defs/RequiredNullable_HealthProfileV1"
         },
+        "health_group_id": {
+          "description": "Installation/operator-pool-scoped circuit identity; present exactly when health is enabled.",
+          "$ref": "#/$defs/RequiredNullable_ResourceId"
+        },
         "fallback": {
-          "description": "Explicit permission to advance after a proven terminal HTTP rejection.",
+          "description": "Explicit permission to advance after a qualified terminal rejection.",
           "$ref": "#/$defs/FallbackRule"
         }
       },
@@ -323,6 +327,7 @@
         "schema_version",
         "rate",
         "health",
+        "health_group_id",
         "fallback"
       ]
     },
@@ -425,6 +430,16 @@
         }
       ]
     },
+    "RequiredNullable_ResourceId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "FallbackRule": {
       "description": "Ordered fallback permission; uncertainty never authorizes another attempt.",
       "oneOf": [
@@ -440,14 +455,32 @@
         }
       ]
     },
-    "RequiredNullable_ResourceRef": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ResourceRef"
+    "CredentialBinding": {
+      "description": "One explicit provider/account binding to an immutable upstream credential.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "Provider name in the route's explicit routing source.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
         },
-        {
-          "type": "null"
+        "account": {
+          "description": "Explicit account label, including `default` for a single account.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "credential": {
+          "description": "Authorized credential slot revision; never a secret or an ambient key.",
+          "$ref": "#/$defs/ResourceRef"
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "account",
+        "credential"
       ]
     },
     "ResourceRef": {
@@ -496,35 +529,7 @@
       ],
       "additionalProperties": false
     },
-    "CredentialBinding": {
-      "description": "One explicit provider/account binding to an immutable upstream credential.",
-      "type": "object",
-      "properties": {
-        "provider": {
-          "description": "Provider name in the route's explicit routing source.",
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "account": {
-          "description": "Explicit account label, including `default` for a single account.",
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "credential": {
-          "description": "Authorized credential slot revision; never a secret or an ambient key.",
-          "$ref": "#/$defs/ResourceRef"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "provider",
-        "account",
-        "credential"
-      ]
-    },
-    "AdmissionAttachmentV1": {
+    "AdmissionAttachment": {
       "description": "Exact association with one retained protocol-root ordinal and credential.",
       "type": "object",
       "properties": {
@@ -561,7 +566,18 @@
       "enum": [
         "chat_completions",
         "messages",
-        "responses"
+        "responses",
+        "generate_content"
+      ]
+    },
+    "RequiredNullable_ResourceRef": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        {
+          "type": "null"
+        }
       ]
     },
     "Document": {
