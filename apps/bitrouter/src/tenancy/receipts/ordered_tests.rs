@@ -447,7 +447,7 @@ async fn restart_case(digest: Option<bitrouter_ai::tenancy::identity::Digest>) -
         else {
             anyhow::bail!("ordered dispatch");
         };
-        ensure!(accepted_selection.generation_defaults_digest.as_ref() == Some(digest));
+        ensure!(accepted_selection.generation_defaults_digest.as_ref() == Some(&digest));
         ensure!(candidate.evidence.document.dispatch == candidate.receipt.dispatch);
     }
     let inventory = store::inventory(&db, &installation).await?;

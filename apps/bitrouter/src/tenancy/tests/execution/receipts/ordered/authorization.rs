@@ -416,7 +416,7 @@ async fn concurrent_scoped_callers_preserve_order_and_immutable_configuration() 
         ensure!(receipt.state == ReceiptState::Committed && receipt.outcome == Outcome::Completed);
         ensure!(receipt.correlation_id == binding.correlation_id);
         ensure!(receipt.execution_revision == harness.revision.revision_id);
-        ensure!(receipt_selection(&receipt)? == binding.selection.accept(protocol)?);
+        ensure!(receipt_selection(&receipt)? == &binding.selection.accept(protocol)?);
         ensure!(
             receipt
                 .attempts
