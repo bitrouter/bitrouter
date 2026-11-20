@@ -91,7 +91,7 @@ async fn end<T>(mut stream: EventStream<T>) -> TestResult<ProtocolEnd> {
 }
 async fn dispatch(
     client: &GatewayClient,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     protocol: usize,
     stream: bool,
 ) -> TestResult {

@@ -1,15 +1,15 @@
 use bitrouter_ai::tenancy::{
-    execution::{ExecutionReceipt, Outcome, Provenance, ReceiptState, Usage},
-    execution_v2::{AttemptV2, ExecutionReceiptV2},
+    execution::Attempt,
+    execution::{Dispatch, ExecutionReceipt, Outcome, Provenance, ReceiptState, Usage},
     ordered::{
-        AcceptedSelectionV2, CandidateManifestV1, GenerationProtocol, OrderedCandidateSelectionV1,
-        OrderedCapabilitiesV2, OrderedDispatchBindingV2,
+        AcceptedSelection, CandidateManifest, GenerationProtocol, OrderedCandidateSelection,
+        OrderedCapabilities, OrderedDispatchBinding,
     },
     usage_evidence::{
-        AttemptEvidence, Capture, Dimension, Estimation, ExecutionUsageEvidenceV1, Frame, Protocol,
-        Quantity, Semantics, Source,
+        AttemptEvidence, Capture, Dimension, Estimation, Frame, Protocol, Quantity, Semantics,
+        Source,
     },
-    usage_evidence_v2::{EvidenceBudgetV2, ExecutionUsageEvidenceV2},
+    usage_evidence::{EvidenceBudget, ExecutionUsageEvidence},
     validation::Validate,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -31,7 +31,7 @@ fn reference(kind: &str) -> Value {
     json!({"owner_kind":"tenant", "owner_id":"tenant", "resource_kind":kind,
         "resource_id":kind, "revision_id":"revision"})
 }
-fn selected(indices: Vec<u16>) -> Result<OrderedCandidateSelectionV1, serde_json::Error> {
+fn selected(indices: Vec<u16>) -> Result<OrderedCandidateSelection, serde_json::Error> {
     serde_json::from_value(
         json!({"schema_version":1, "admission_mode":"unprofiled", "route":reference("route"), "candidate_indices":indices}),
     )
@@ -47,14 +47,14 @@ fn unknown_usage() -> Usage {
         complete: false,
     }
 }
-fn receipt(count: u16) -> Result<ExecutionReceiptV2, Box<dyn std::error::Error>> {
+fn receipt(count: u16) -> Result<ExecutionReceipt, Box<dyn std::error::Error>> {
     let accepted_selection =
         selected((0..count).collect())?.accept(GenerationProtocol::Messages)?;
     let attempts = (0..count)
         .map(|index| {
-            Ok(AttemptV2 {
+            Ok(Attempt {
                 attempt_id: format!("attempt-{index}").try_into()?,
-                candidate_index: index,
+                candidate_index: Some(index),
                 target: None,
                 outcome: Outcome::Failed,
                 observed_http_status: Some(503),
@@ -63,16 +63,17 @@ fn receipt(count: u16) -> Result<ExecutionReceiptV2, Box<dyn std::error::Error>>
             })
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    Ok(ExecutionReceiptV2 {
-        schema_version: 2,
+    Ok(ExecutionReceipt {
         installation_id: "installation".try_into()?,
         tenant_id: "tenant".try_into()?,
         principal_id: "principal".try_into()?,
         execution_id: "execution".try_into()?,
         correlation_id: "correlation".try_into()?,
         execution_revision: "revision".try_into()?,
-        accepted_selection,
-        attempt_limit: 64,
+        dispatch: Dispatch::Ordered {
+            accepted_selection,
+            attempt_limit: 64,
+        },
         state: ReceiptState::Committed,
         outcome: Outcome::Failed,
         attempts,
@@ -80,13 +81,14 @@ fn receipt(count: u16) -> Result<ExecutionReceiptV2, Box<dyn std::error::Error>>
         recorded_at: "2026-11-02T00:00:00Z".try_into()?,
     })
 }
-fn evidence(receipt: &ExecutionReceiptV2) -> ExecutionUsageEvidenceV2 {
-    ExecutionUsageEvidenceV2 {
-        schema_version: 2,
+fn evidence(receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
+    ExecutionUsageEvidence {
         installation_id: receipt.installation_id.clone(),
         tenant_id: receipt.tenant_id.clone(),
         execution_id: receipt.execution_id.clone(),
-        accepted_selection: receipt.accepted_selection.clone(),
+        dispatch: receipt.dispatch.clone(),
+        parent_execution_id: None,
+        child_execution_ids: vec![],
         capture: Capture::Captured,
         extractor_version: 1,
         estimation: Estimation::NotCaptured,
@@ -106,7 +108,7 @@ fn evidence(receipt: &ExecutionReceiptV2) -> ExecutionUsageEvidenceV2 {
         dropped_frames: 0,
     }
 }
-fn frame(receipt: &ExecutionReceiptV2, sequence: usize, attempt: usize) -> Frame {
+fn frame(receipt: &ExecutionReceipt, sequence: usize, attempt: usize) -> Frame {
     Frame {
         sequence: sequence as u64,
         attempt_id: receipt.attempts[attempt].attempt_id.clone(),
@@ -139,7 +141,7 @@ fn strict_object<T: Serialize + DeserializeOwned>(value: &T) -> TestResult {
             serde_json::from_value::<T>(missing).is_err(),
             "missing {key}"
         );
-        if !object[key].is_null() {
+        if !object[key].is_null() && key != "candidate_index" {
             let mut null = value.clone();
             null[key] = Value::Null;
             assert!(serde_json::from_value::<T>(null).is_err(), "null {key}");
@@ -161,32 +163,34 @@ fn strict_object<T: Serialize + DeserializeOwned>(value: &T) -> TestResult {
     assert!(serde_json::from_value::<T>(unknown).is_err());
     Ok(())
 }
-fn legacy_receipt(receipt: &ExecutionReceiptV2) -> Result<ExecutionReceipt, serde_json::Error> {
-    let mut value = serde_json::to_value(receipt)?;
-    if let Some(object) = value.as_object_mut() {
-        for field in ["schema_version", "accepted_selection", "attempt_limit"] {
-            object.remove(field);
-        }
+fn strict_receipt(receipt: &ExecutionReceipt) -> Result<ExecutionReceipt, serde_json::Error> {
+    let mut value = receipt.clone();
+    value.dispatch = Dispatch::Strict;
+    for attempt in &mut value.attempts {
+        attempt.candidate_index = None;
     }
-    if let Some(attempts) = value["attempts"].as_array_mut() {
-        for attempt in attempts {
-            if let Some(object) = attempt.as_object_mut() {
-                object.remove("candidate_index");
-                object.remove("observed_http_status");
-            }
-        }
-    }
-    serde_json::from_value(value)
+    Ok(value)
 }
-fn legacy_evidence(
-    evidence: &ExecutionUsageEvidenceV2,
-) -> Result<ExecutionUsageEvidenceV1, serde_json::Error> {
-    let mut value = serde_json::to_value(evidence)?;
-    if let Some(object) = value.as_object_mut() {
-        object.remove("accepted_selection");
+fn strict_evidence(
+    evidence: &ExecutionUsageEvidence,
+) -> Result<ExecutionUsageEvidence, serde_json::Error> {
+    let mut value = evidence.clone();
+    value.dispatch = Dispatch::Strict;
+    Ok(value)
+}
+fn selection_mut(
+    dispatch: &mut Dispatch,
+) -> Result<&mut AcceptedSelection, Box<dyn std::error::Error>> {
+    match dispatch {
+        Dispatch::Ordered {
+            accepted_selection, ..
+        } => Ok(accepted_selection),
+        Dispatch::Strict => Err("expected ordered dispatch".into()),
     }
-    value["schema_version"] = json!(1);
-    value["parent_execution_id"] = Value::Null;
-    value["child_execution_ids"] = json!([]);
-    serde_json::from_value(value)
+}
+fn limit_mut(dispatch: &mut Dispatch) -> Result<&mut u8, Box<dyn std::error::Error>> {
+    match dispatch {
+        Dispatch::Ordered { attempt_limit, .. } => Ok(attempt_limit),
+        Dispatch::Strict => Err("expected ordered dispatch".into()),
+    }
 }

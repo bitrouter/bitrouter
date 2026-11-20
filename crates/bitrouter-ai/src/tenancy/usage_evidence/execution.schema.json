@@ -2,7 +2,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
+    "dispatch",
     "installation_id",
     "tenant_id",
     "execution_id",
@@ -18,9 +18,6 @@
     "child_execution_ids"
   ],
   "properties": {
-    "schema_version": {
-      "const": 1
-    },
     "installation_id": {
       "type": "string",
       "minLength": 1,
@@ -47,7 +44,11 @@
       ]
     },
     "extractor_version": {
-      "const": 1
+      "type": "integer",
+      "enum": [
+        1,
+        2
+      ]
     },
     "estimation": {
       "enum": [
@@ -58,7 +59,7 @@
     },
     "attempts": {
       "type": "array",
-      "maxItems": 8,
+      "maxItems": 64,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -161,7 +162,7 @@
     },
     "frames": {
       "type": "array",
-      "maxItems": 512,
+      "maxItems": 4096,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -188,10 +189,12 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "protocol": {
+            "type": "string",
             "enum": [
               "chat_completions",
-              "responses",
               "messages",
+              "responses",
+              "generate_content",
               "decisions"
             ]
           },
@@ -202,7 +205,8 @@
               "chat_chunk",
               "response_terminal",
               "message_start",
-              "message_delta"
+              "message_delta",
+              "generate_content_chunk"
             ]
           },
           "semantics": {
@@ -361,6 +365,47 @@
             "if": {
               "properties": {
                 "protocol": {
+                  "const": "generate_content"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "enum": [
+                    "json",
+                    "http_error",
+                    "generate_content_chunk"
+                  ]
+                },
+                "semantics": {
+                  "const": "snapshot"
+                },
+                "quantities": {
+                  "items": {
+                    "properties": {
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 2147483647
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "protocol": {
                   "const": "decisions"
                 }
               }
@@ -392,9 +437,6 @@
     },
     "estimate": {
       "anyOf": [
-        {
-          "type": "null"
-        },
         {
           "type": "object",
           "additionalProperties": false,
@@ -449,6 +491,137 @@
               "maximum": 9007199254740991
             }
           }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dispatch": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "strict"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "ordered"
+            },
+            "accepted_selection": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "route",
+                "inbound_protocol",
+                "candidate_indices",
+                "admission_mode"
+              ],
+              "properties": {
+                "route": {
+                  "type": "object",
+                  "properties": {
+                    "owner_kind": {
+                      "enum": [
+                        "tenant",
+                        "operator_pool"
+                      ]
+                    },
+                    "owner_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "resource_kind": {
+                      "type": "string",
+                      "const": "route"
+                    },
+                    "resource_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "revision_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    }
+                  },
+                  "required": [
+                    "owner_kind",
+                    "owner_id",
+                    "resource_kind",
+                    "resource_id",
+                    "revision_id"
+                  ],
+                  "additionalProperties": false
+                },
+                "inbound_protocol": {
+                  "type": "string",
+                  "enum": [
+                    "chat_completions",
+                    "messages",
+                    "responses",
+                    "generate_content"
+                  ]
+                },
+                "candidate_indices": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "admission_mode": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "profiled_v1"
+                  ]
+                },
+                "generation_defaults_digest": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            "attempt_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          },
+          "required": [
+            "mode",
+            "accepted_selection",
+            "attempt_limit"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -482,7 +655,10 @@
       "if": {
         "properties": {
           "capture": {
-            "enum": ["not_captured", "unavailable"]
+            "enum": [
+              "not_captured",
+              "unavailable"
+            ]
           }
         }
       },
@@ -554,8 +730,342 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 1,
+                    "maxItems": 8
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 512
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 9,
+                    "maxItems": 16
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 1024
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 17,
+                    "maxItems": 24
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 1536
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 25,
+                    "maxItems": 32
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 2048
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 33,
+                    "maxItems": 40
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 2560
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 41,
+                    "maxItems": 48
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 3072
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 49,
+                    "maxItems": 56
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 3584
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "ordered"
+              },
+              "accepted_selection": {
+                "properties": {
+                  "candidate_indices": {
+                    "minItems": 57,
+                    "maxItems": 64
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "frames": {
+            "maxItems": 4096
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {
+            "properties": {
+              "mode": {
+                "const": "strict"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "attempts": {
+            "maxItems": 8
+          },
+          "frames": {
+            "maxItems": 512,
+            "items": {
+              "properties": {
+                "protocol": {
+                  "not": {
+                    "const": "generate_content"
+                  }
+                },
+                "source": {
+                  "not": {
+                    "const": "generate_content_chunk"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "parent_execution_id": {
+            "type": "null"
+          },
+          "child_execution_ids": {
+            "maxItems": 0
+          },
+          "frames": {
+            "items": {
+              "properties": {
+                "protocol": {
+                  "not": {
+                    "const": "decisions"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "dispatch": {
+                "properties": {
+                  "mode": {
+                    "const": "ordered"
+                  },
+                  "accepted_selection": {
+                    "properties": {
+                      "inbound_protocol": {
+                        "const": "generate_content"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "frames": {
+                "contains": {
+                  "properties": {
+                    "protocol": {
+                      "const": "generate_content"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "extractor_version": {
+            "const": 2
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "extractor_version": {
+            "const": 1
+          }
+        }
+      }
     }
   ],
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ExecutionUsageEvidenceV1"
+  "$comment": "Dispatch-specific bounds and exact numeric observations; ordered dispatch prohibits auxiliary linkage. Runtime validation additionally binds identities, dispatch, actual attempt order, targets and outcomes to the immutable receipt and checks encoded byte limits.",
+  "title": "ExecutionUsageEvidence",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

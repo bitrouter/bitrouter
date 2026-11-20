@@ -1,16 +1,16 @@
 use super::*;
 use bitrouter_ai::tenancy::ordered::{
-    OrderedCandidateSelectionV1, OrderedCapabilitiesV2, OrderedDispatchBindingV2,
+    OrderedCandidateSelection, OrderedCapabilities, OrderedDispatchBinding,
 };
 use bitrouter_sdk::gateway::tenancy::Reply;
 
-fn ordered_binding(correlation: &str) -> TestResult<OrderedDispatchBindingV2> {
-    let capabilities: OrderedCapabilitiesV2 = serde_json::from_value(json!({
+fn ordered_binding(correlation: &str) -> TestResult<OrderedDispatchBinding> {
+    let capabilities: OrderedCapabilities = serde_json::from_value(json!({
         "contract_version":2,"installation_id":"installation","instance_id":"instance",
         "capability_revision":"capability-1","authority_revision":7,"attempt_limit":64,
         "revision_bound_dispatch":true,"strict_receipts":true,"dispatch_enabled":true
     }))?;
-    let selection: OrderedCandidateSelectionV1 = serde_json::from_value(json!({
+    let selection: OrderedCandidateSelection = serde_json::from_value(json!({
         "schema_version":1,"admission_mode":"unprofiled","route":{"owner_kind":"tenant","owner_id":"tenant",
         "resource_kind":"route","resource_id":"route","revision_id":"route-revision"},
         "candidate_indices":[255,8,0]

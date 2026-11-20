@@ -1,20 +1,60 @@
-//! Versioned technical observations, independent of the frozen execution receipt.
+//! Bounded technical observations, independent of the frozen execution receipt.
 //!
 //! Frames are ordered observations, not additive totals. An omitted quantity was
 //! absent at its source; an invalid quantity has a null value. Explicit zero is
 //! retained. No response content, arbitrary metadata or credentials are accepted.
 
 use super::{
-    execution::{Outcome, Target},
+    execution::{Dispatch, ExecutionReceipt, Outcome, Target},
     identity::{AttemptId, AuthorityRevision, ExecutionId, InstallationId, TenantId},
     validation::{Validate, ValidationError, bytes, nullable, require, unique, write_json},
 };
 use serde::{Deserialize, Serialize};
 
 /// Maximum serialized evidence document size.
-pub const MAX_BYTES: usize = 256 * 1024;
+pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 /// Maximum observations retained per execution.
-pub const MAX_FRAMES: usize = 512;
+pub const MAX_FRAMES: usize = 4096;
+/// Pure reservation bounds computed from the accepted count, not actual sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EvidenceBudget {
+    /// Total encoded bytes: 256 KiB per block of eight accepted candidates.
+    pub max_bytes: usize,
+    /// Frame array bytes: 192 KiB per block of eight accepted candidates.
+    pub max_frame_bytes: usize,
+    /// Reserved identity/terminal bytes: 64 KiB per block of eight candidates.
+    pub reserved_bytes: usize,
+    /// Frames per execution: 512 per block of eight accepted candidates.
+    pub max_frames: usize,
+}
+impl EvidenceBudget {
+    /// Fixed strict-dispatch reservation, also one ordered block of eight.
+    pub const STRICT: Self = Self {
+        max_bytes: 256 * 1024,
+        max_frame_bytes: 192 * 1024,
+        reserved_bytes: 64 * 1024,
+        max_frames: 512,
+    };
+
+    /// Compute the evidence reservation for the whole accepted selection.
+    ///
+    /// # Errors
+    /// Rejects counts outside 1–64, including an empty selection.
+    pub fn for_attempts(accepted_count: usize) -> Result<Self, ValidationError> {
+        require(
+            (1..=super::ordered::MAX_ATTEMPTS).contains(&accepted_count),
+            "evidence accepted count",
+        )?;
+        let blocks = accepted_count.div_ceil(8);
+        Ok(Self {
+            max_bytes: Self::STRICT.max_bytes * blocks,
+            max_frame_bytes: Self::STRICT.max_frame_bytes * blocks,
+            reserved_bytes: Self::STRICT.reserved_bytes * blocks,
+            max_frames: Self::STRICT.max_frames * blocks,
+        })
+    }
+}
+
 /// Maximum observations retained per physical attempt.
 pub const MAX_ATTEMPT_FRAMES: usize = 128;
 /// Maximum quantities retained per observation.
@@ -37,7 +77,7 @@ wire_enum! { /// Original protocol whose usage object was inspected.
         ChatCompletions, /// Responses.
         Responses, /// Messages.
         Messages, /// Decisions.
-        Decisions, /// Private ordered native GenerateContent. Evidence v2 only.
+        Decisions, /// Private ordered native GenerateContent. Ordered dispatch only.
         GenerateContent }
 }
 wire_enum! { /// Fixed source locations; never provider-controlled strings.
@@ -47,7 +87,7 @@ wire_enum! { /// Fixed source locations; never provider-controlled strings.
         ChatChunk, /// Accepted response terminal usage.
         ResponseTerminal, /// Accepted initial message usage.
         MessageStart, /// Accepted message update usage.
-        MessageDelta, /// Accepted native GenerateContent usageMetadata snapshot. Evidence v2 only.
+        MessageDelta, /// Accepted native GenerateContent usageMetadata snapshot. Ordered dispatch only.
         GenerateContentChunk }
 }
 wire_enum! { /// Arithmetic semantics of one source observation.
@@ -203,13 +243,12 @@ pub struct AttemptEvidence {
     pub terminal_observed: bool,
 }
 
-/// Independently versioned evidence; adding fields to the receipt is forbidden.
+/// Original observations bound to the immutable receipt and its dispatch.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExecutionUsageEvidenceV1 {
-    /// Exactly one for this schema.
-    #[serde(deserialize_with = "super::number::integer")]
-    pub schema_version: u8,
+pub struct ExecutionUsageEvidence {
+    /// Exact dispatch accepted by the corresponding receipt.
+    pub dispatch: Dispatch,
     /// Bound installation.
     pub installation_id: InstallationId,
     /// Bound tenant.
@@ -218,10 +257,10 @@ pub struct ExecutionUsageEvidenceV1 {
     pub execution_id: ExecutionId,
     /// Distinguishes historical absence, retained capture and observations lost at recovery.
     pub capture: Capture,
-    /// Extractor version, fixed at one for this protocol mapping.
+    /// Qualified mapping discriminator: two for native ingress or observations, one otherwise.
     #[serde(deserialize_with = "super::number::integer")]
     pub extractor_version: u8,
-    /// This version does not reconstruct estimates from canonical zero-filled usage.
+    /// Whether an estimator was actually observed; never reconstructed from totals.
     pub estimation: Estimation,
     /// Required null unless the existing stream estimator was actually used.
     #[serde(deserialize_with = "nullable")]
@@ -231,7 +270,7 @@ pub struct ExecutionUsageEvidenceV1 {
     pub parent_execution_id: Option<ExecutionId>,
     /// Independently admitted owned children. Their usage must not be added to these frames.
     pub child_execution_ids: Vec<ExecutionId>,
-    /// Attempts in receipt dispatch order, at most eight.
+    /// Attempts in receipt dispatch order, bounded by accepted dispatch.
     pub attempts: Vec<AttemptEvidence>,
     /// Observations in execution order, with bounded prefix retention.
     pub frames: Vec<Frame>,
@@ -241,29 +280,31 @@ pub struct ExecutionUsageEvidenceV1 {
     #[serde(deserialize_with = "super::number::integer")]
     pub dropped_frames: u64,
 }
-impl Validate for ExecutionUsageEvidenceV1 {
+impl Validate for ExecutionUsageEvidence {
     fn validate(&self) -> Result<(), ValidationError> {
         self.validate_fields()?;
-        bytes(self, MAX_BYTES)
+        bytes(self, self.budget()?.max_bytes)
     }
 }
 
-impl ExecutionUsageEvidenceV1 {
-    /// Encode the validated v1 document as compact JSON within its wire byte limit.
+impl ExecutionUsageEvidence {
+    /// Encode the validated document as compact JSON within its wire byte limit.
     ///
     /// # Errors
     /// Returns the same contract violations as [`Validate::validate`].
     pub fn to_validated_json(&self) -> Result<String, ValidationError> {
         self.validate_fields()?;
         let mut json = Vec::new();
-        write_json(self, MAX_BYTES, &mut json)?;
+        write_json(self, self.budget()?.max_bytes, &mut json)?;
         String::from_utf8(json).map_err(|_| ValidationError("invalid JSON encoding"))
     }
 
     fn validate_fields(&self) -> Result<(), ValidationError> {
+        self.dispatch.validate_for(&self.tenant_id)?;
+        let budget = self.budget()?;
         require(
-            self.schema_version == 1 && self.extractor_version == 1,
-            "usage evidence version",
+            self.extractor_version == Self::extractor_version_for(&self.dispatch, &self.frames),
+            "usage extractor version",
         )?;
         unique(
             &self
@@ -272,10 +313,10 @@ impl ExecutionUsageEvidenceV1 {
                 .map(|a| &a.attempt_id)
                 .collect::<Vec<_>>(),
             0,
-            8,
+            self.dispatch.accepted_count(),
         )?;
         require(
-            self.frames.len() <= MAX_FRAMES && self.dropped_frames <= AuthorityRevision::MAX,
+            self.frames.len() <= budget.max_frames && self.dropped_frames <= AuthorityRevision::MAX,
             "usage evidence bounds",
         )?;
         require(
@@ -310,18 +351,97 @@ impl ExecutionUsageEvidenceV1 {
                 "absent evidence cannot assert observations",
             )?;
         }
+        match &self.dispatch {
+            Dispatch::Strict => require(
+                self.frames.iter().all(|frame| {
+                    frame.protocol != Protocol::GenerateContent
+                        && frame.source != Source::GenerateContentChunk
+                }),
+                "strict usage evidence protocol",
+            )?,
+            Dispatch::Ordered { .. } => {
+                require(
+                    self.parent_execution_id.is_none() && self.child_execution_ids.is_empty(),
+                    "ordered evidence linkage",
+                )?;
+                require(
+                    self.frames
+                        .iter()
+                        .all(|frame| frame.protocol != Protocol::Decisions),
+                    "ordered evidence protocol",
+                )?;
+                require(
+                    self.frames
+                        .iter()
+                        .filter(|frame| frame.protocol == Protocol::GenerateContent)
+                        .all(|frame| {
+                            frame.quantities.iter().all(|quantity| {
+                                quantity.value.is_none_or(|value| value <= i32::MAX as u64)
+                            })
+                        }),
+                    "native quantity range",
+                )?;
+            }
+        }
+        validate_observations(&self.attempts, &self.frames)?;
+        bytes(&self.frames, budget.max_frame_bytes)
+    }
+
+    /// Reservation determined by the accepted selection, never the actual sends.
+    ///
+    /// # Errors
+    /// Rejects an empty or oversized ordered selection.
+    pub fn budget(&self) -> Result<EvidenceBudget, ValidationError> {
+        EvidenceBudget::for_attempts(self.dispatch.accepted_count())
+    }
+
+    /// Select the mapping discriminator from admitted ingress and observed protocols.
+    pub fn extractor_version_for(dispatch: &Dispatch, frames: &[Frame]) -> u8 {
+        if matches!(dispatch, Dispatch::Ordered { accepted_selection, .. } if accepted_selection.inbound_protocol == super::ordered::GenerationProtocol::GenerateContent)
+            || frames
+                .iter()
+                .any(|frame| frame.protocol == Protocol::GenerateContent)
+        {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Validate identities, dispatch and all captured actual attempts against the receipt.
+    ///
+    /// # Errors
+    /// Rejects invalid documents, mismatched selection, identities, target or outcome,
+    /// and missing, reordered or fabricated captured attempts.
+    pub fn validate_against(&self, receipt: &ExecutionReceipt) -> Result<(), ValidationError> {
+        self.validate()?;
+        receipt.validate()?;
         require(
-            self.frames.iter().all(|frame| {
-                frame.protocol != Protocol::GenerateContent
-                    && frame.source != Source::GenerateContentChunk
-            }),
-            "v1 usage evidence protocol",
+            self.installation_id == receipt.installation_id
+                && self.tenant_id == receipt.tenant_id
+                && self.execution_id == receipt.execution_id
+                && self.dispatch == receipt.dispatch,
+            "usage evidence receipt binding",
         )?;
-        validate_observations(&self.attempts, &self.frames)
+        if self.capture == Capture::Captured {
+            require(
+                self.attempts.len() == receipt.attempts.len(),
+                "usage evidence actual attempts",
+            )?;
+            for (evidence, attempt) in self.attempts.iter().zip(&receipt.attempts) {
+                require(
+                    evidence.attempt_id == attempt.attempt_id
+                        && evidence.outcome == attempt.outcome
+                        && same_target(evidence.target.as_ref(), attempt.target.as_ref()),
+                    "usage evidence attempt binding",
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
-// Shared extractor facts; version-specific attempt/frame/byte bounds stay at callers.
+// Shared extractor facts; dispatch-specific bounds are checked above.
 pub(super) fn validate_observations(
     attempts: &[AttemptEvidence],
     frames: &[Frame],
@@ -396,10 +516,10 @@ pub(super) fn validate_observations(
     Ok(())
 }
 
-/// Separate discovery prevents widening the frozen tenancy capabilities DTO.
+/// Discovery of bounded usage observation capture.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct UsageEvidenceCapabilitiesV1 {
+pub struct UsageEvidenceCapabilities {
     /// Contract version, exactly one.
     pub schema_version: u8,
     /// Bound installation.
@@ -419,8 +539,8 @@ pub struct UsageEvidenceCapabilitiesV1 {
     /// False: this contract does not qualify a generic server tool loop.
     pub server_tool_capture: bool,
 }
-impl UsageEvidenceCapabilitiesV1 {
-    /// Describe the bounded extractor supported by version one.
+impl UsageEvidenceCapabilities {
+    /// Describe the bounded extractor and its absolute dispatch limits.
     pub fn new(installation_id: InstallationId) -> Self {
         Self {
             schema_version: 1,
@@ -435,7 +555,7 @@ impl UsageEvidenceCapabilitiesV1 {
         }
     }
 }
-impl Validate for UsageEvidenceCapabilitiesV1 {
+impl Validate for UsageEvidenceCapabilities {
     fn validate(&self) -> Result<(), ValidationError> {
         require(
             self.schema_version == 1
@@ -447,5 +567,19 @@ impl Validate for UsageEvidenceCapabilitiesV1 {
                 && !self.server_tool_capture,
             "usage evidence capabilities",
         )
+    }
+}
+
+fn same_target(left: Option<&Target>, right: Option<&Target>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.provider_id == right.provider_id
+                && left.model_id == right.model_id
+                && left.account_id == right.account_id
+                && left.credential_id == right.credential_id
+                && left.credential_version == right.credential_version
+        }
+        _ => false,
     }
 }

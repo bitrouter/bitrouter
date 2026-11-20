@@ -8,7 +8,7 @@ fn value() -> serde_json::Value {
 fn receipt() -> Result<ExecutionReceipt, Box<dyn std::error::Error>> {
     let usage = json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false});
     Ok(serde_json::from_value(
-        json!({"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed","attempts":[{"attempt_id":"attempt-a","target":null,"outcome":"failed","usage":usage,"native_usage":[]},{"attempt_id":"attempt-b","target":null,"outcome":"failed","usage":usage,"native_usage":[]}],"usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
+        json!({"dispatch":{"mode":"strict"},"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed","attempts":[{"attempt_id":"attempt-a","candidate_index":null,"observed_http_status":null,"target":null,"outcome":"failed","usage":usage,"native_usage":[]},{"attempt_id":"attempt-b","candidate_index":null,"observed_http_status":null,"target":null,"outcome":"failed","usage":usage,"native_usage":[]}],"usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
     )?)
 }
 #[test]

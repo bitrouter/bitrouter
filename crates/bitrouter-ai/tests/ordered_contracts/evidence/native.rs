@@ -9,7 +9,7 @@ fn native_mapping_versions_bind_ingress_and_actual_wire_independently() -> TestR
     ] {
         for native_frame in [false, true] {
             let mut receipt = receipt(1)?;
-            receipt.accepted_selection.inbound_protocol = inbound;
+            selection_mut(&mut receipt.dispatch)?.inbound_protocol = inbound;
             let mut document = evidence(&receipt);
             let mut observed = frame(&receipt, 0, 0);
             if native_frame {
@@ -23,13 +23,13 @@ fn native_mapping_versions_bind_ingress_and_actual_wire_independently() -> TestR
                 1
             };
             assert_eq!(
-                ExecutionUsageEvidenceV2::extractor_version_for(inbound, &document.frames),
+                ExecutionUsageEvidence::extractor_version_for(&receipt.dispatch, &document.frames),
                 required
             );
             document.extractor_version = required;
             document.validate_against(&receipt)?;
             let raw = serde_json::to_string(&document)?;
-            serde_json::from_str::<ExecutionUsageEvidenceV2>(&raw)?.validate_against(&receipt)?;
+            serde_json::from_str::<ExecutionUsageEvidence>(&raw)?.validate_against(&receipt)?;
             document.extractor_version = if required == 1 { 2 } else { 1 };
             assert!(document.validate().is_err());
         }
@@ -40,7 +40,7 @@ fn native_mapping_versions_bind_ingress_and_actual_wire_independently() -> TestR
 #[test]
 fn frameless_native_capture_keeps_new_discriminator_for_every_absence_state() -> TestResult {
     let mut receipt = receipt(1)?;
-    receipt.accepted_selection.inbound_protocol = GenerationProtocol::GenerateContent;
+    selection_mut(&mut receipt.dispatch)?.inbound_protocol = GenerationProtocol::GenerateContent;
     for capture in [
         Capture::Captured,
         Capture::NotCaptured,
@@ -73,7 +73,7 @@ fn native_source_int32_presence_and_v1_fence_are_exact() -> TestResult {
     ] {
         document.frames[0].source = source;
         document.validate_against(&receipt)?;
-        let mut legacy = legacy_evidence(&document)?;
+        let mut legacy = strict_evidence(&document)?;
         legacy.extractor_version = 1;
         assert!(legacy.validate().is_err());
     }
@@ -113,7 +113,7 @@ fn native_source_int32_presence_and_v1_fence_are_exact() -> TestResult {
 #[cfg(feature = "schema")]
 #[test]
 fn native_schemas_accept_exact_new_versions_and_keep_v1_closed() -> TestResult {
-    let ordered = serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidenceV2))?;
+    let ordered = serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidence))?;
     let mut cases = Vec::new();
     let receipt = receipt(1)?;
     let mut document = evidence(&receipt);
@@ -133,8 +133,8 @@ fn native_schemas_accept_exact_new_versions_and_keep_v1_closed() -> TestResult {
     wrong = raw;
     wrong["frames"][0]["source"] = json!("message_delta");
     cases.push(json!({"valid":false,"schema":"ordered","document":wrong}));
-    let legacy = serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidenceV1))?;
-    let mut old = legacy_evidence(&document)?;
+    let legacy = serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidence))?;
+    let mut old = strict_evidence(&document)?;
     old.extractor_version = 1;
     cases.push(json!({"valid":false,"schema":"legacy","document":old}));
     let native_rule = ordered["allOf"]
@@ -150,7 +150,10 @@ fn native_schemas_accept_exact_new_versions_and_keep_v1_closed() -> TestResult {
         native_rule["else"]["properties"]["extractor_version"]["const"],
         1
     );
-    assert_eq!(legacy["properties"]["extractor_version"]["const"], 1);
+    assert_eq!(
+        legacy["properties"]["extractor_version"]["enum"],
+        json!([1, 2])
+    );
     if let Ok(path) = std::env::var("BITROUTER_NATIVE_EVIDENCE_SCHEMA_FIXTURES") {
         std::fs::write(
             path,

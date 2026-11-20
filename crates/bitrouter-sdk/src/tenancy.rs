@@ -385,11 +385,12 @@ impl TenancyClient {
         tenant: &TenantId,
         execution: &ExecutionId,
     ) -> Result<ExecutionReceipt> {
+        let request = self
+            .http
+            .get(self.url(&format!("tenants/{tenant}/executions/{execution}"))?)
+            .header("Bitrouter-Installation-Id", installation.as_str());
         let result: ExecutionReceipt = self
-            .get(
-                &format!("tenants/{tenant}/executions/{execution}"),
-                Some(installation),
-            )
+            .send_bounded(request, bitrouter_ai::tenancy::execution::MAX_BYTES)
             .await?;
         transport::response_matches(
             result.installation_id == *installation

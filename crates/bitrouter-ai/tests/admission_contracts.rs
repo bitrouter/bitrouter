@@ -1,7 +1,7 @@
 use bitrouter_ai::tenancy::{
     admission::{AdmissionMode, AdmissionProfile, AvailabilityObservation, HealthObservation},
     ordered::{
-        CandidateManifestV1, GenerationProtocol, MAX_MANIFEST_BYTES, OrderedCandidateSelectionV1,
+        CandidateManifest, GenerationProtocol, MAX_MANIFEST_BYTES, OrderedCandidateSelection,
     },
     resources::{Definition, ResourcePut},
     validation::Validate,
@@ -26,7 +26,7 @@ fn reference(kind: &str, maximal: bool) -> Value {
         "resource_id":id,"revision_id":id})
 }
 
-fn manifest(count: usize) -> Result<CandidateManifestV1, serde_json::Error> {
+fn manifest(count: usize) -> Result<CandidateManifest, serde_json::Error> {
     let id = "x".repeat(128);
     serde_json::from_value(json!({"schema_version":1,"admission_mode":"profiled",
         "installation_id":id,"tenant_id":id,"execution_revision":id,"authority_revision":9007199254740991_u64,
@@ -218,7 +218,7 @@ fn read_only_observation_preserves_bounds_authority_and_exact_counts() -> TestRe
     let mut raw = serde_json::to_value(manifest(1)?)?;
     for invalid in [json!(-1), json!(0.5), json!(9007199254740992_u64)] {
         raw["runtime_observation"]["candidates"][0]["observed_shared_count"] = invalid;
-        assert!(serde_json::from_value::<CandidateManifestV1>(raw.clone()).is_err());
+        assert!(serde_json::from_value::<CandidateManifest>(raw.clone()).is_err());
     }
     Ok(())
 }
@@ -227,7 +227,7 @@ fn read_only_observation_preserves_bounds_authority_and_exact_counts() -> TestRe
 fn actual_selection_serialization_preserves_arbitrary_order_and_requires_mode() -> TestResult {
     for (count, maximum) in [(1, 569), (8, 597), (9, 601), (64, 821)] {
         let indices: Vec<_> = (0..count).map(|i| 255 - i).collect();
-        let selected: OrderedCandidateSelectionV1 = serde_json::from_value(
+        let selected: OrderedCandidateSelection = serde_json::from_value(
             json!({"schema_version":1,
             "admission_mode":"profiled","route":reference("route",true),"candidate_indices":indices}),
         )?;
@@ -246,7 +246,7 @@ fn actual_selection_serialization_preserves_arbitrary_order_and_requires_mode() 
             .as_object_mut()
             .ok_or("selection")?
             .remove("admission_mode");
-        assert!(serde_json::from_value::<OrderedCandidateSelectionV1>(missing).is_err());
+        assert!(serde_json::from_value::<OrderedCandidateSelection>(missing).is_err());
     }
     Ok(())
 }
@@ -274,7 +274,7 @@ fn final_manifest_bound_includes_observations_and_escaped_models() -> TestResult
         "2026-11-02T00:00:00.{}Z",
         "0".repeat(MAX_MANIFEST_BYTES)
     ));
-    let typed: CandidateManifestV1 = serde_json::from_value(oversized)?;
+    let typed: CandidateManifest = serde_json::from_value(oversized)?;
     assert!(typed.validate().is_err());
     Ok(())
 }
@@ -307,7 +307,7 @@ fn observations_cannot_relabel_foreign_ordinals_or_missing_authority_as_zero() -
     for field in ["admission_mode", "runtime_observation"] {
         let mut changed = serde_json::to_value(manifest(1)?)?;
         changed.as_object_mut().ok_or("manifest")?.remove(field);
-        assert!(serde_json::from_value::<CandidateManifestV1>(changed).is_err());
+        assert!(serde_json::from_value::<CandidateManifest>(changed).is_err());
     }
     Ok(())
 }
@@ -351,19 +351,19 @@ fn resource_envelope_keeps_explicit_variants_and_operator_profile_ownership() ->
 
 #[test]
 fn historical_ordered_binding_is_not_implicitly_upgraded_to_send_authority() -> TestResult {
-    use bitrouter_ai::tenancy::ordered::OrderedDispatchBindingV2;
+    use bitrouter_ai::tenancy::ordered::OrderedDispatchBinding;
     // This former wire shape is deliberately not a new send-capable binding.
     // Archive consumers must retain their historical codec and original bytes.
     let historical = r#"{"Bitrouter-Tenancy-Version":"2","Bitrouter-Installation-Id":"installation","Bitrouter-Instance-Id":"instance","Bitrouter-Capability-Revision":"capability","Bitrouter-Execution-Revision":"execution","Bitrouter-Correlation-Id":"correlation","Bitrouter-Receipt-Mode":"strict","selection":{"schema_version":1,"route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route","revision_id":"revision"},"candidate_indices":[0]}}"#;
-    let rejected = serde_json::from_str::<OrderedDispatchBindingV2>(historical);
+    let rejected = serde_json::from_str::<OrderedDispatchBinding>(historical);
     assert!(
         rejected.is_err_and(|error| error.to_string().contains("missing field `admission_mode`"))
     );
     let mut explicit: Value = serde_json::from_str(historical)?;
     explicit["selection"]["admission_mode"] = json!("legacy");
-    assert!(serde_json::from_value::<OrderedDispatchBindingV2>(explicit.clone()).is_err());
+    assert!(serde_json::from_value::<OrderedDispatchBinding>(explicit.clone()).is_err());
     explicit["selection"]["admission_mode"] = json!("unprofiled");
-    serde_json::from_value::<OrderedDispatchBindingV2>(explicit)?.validate()?;
+    serde_json::from_value::<OrderedDispatchBinding>(explicit)?.validate()?;
     Ok(())
 }
 

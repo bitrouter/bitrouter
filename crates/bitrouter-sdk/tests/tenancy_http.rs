@@ -44,7 +44,7 @@ fn empty_usage() -> Value {
     json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false})
 }
 fn receipt() -> Value {
-    json!({"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":empty_usage(),"recorded_at":"2026-10-25T00:00:00Z"})
+    json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":empty_usage(),"recorded_at":"2026-10-25T00:00:00Z"})
 }
 fn tenant_input() -> TestResult<TenantPut> {
     Ok(serde_json::from_value(

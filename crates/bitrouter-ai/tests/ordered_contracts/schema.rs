@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::tenancy::ordered::CandidateDescriptorV1;
+use bitrouter_ai::tenancy::ordered::CandidateDescriptor;
 use schemars::{JsonSchema, SchemaGenerator};
 
 #[path = "schema/fixtures.rs"]
@@ -15,15 +15,15 @@ fn exported() -> Result<Vec<(String, Value)>, serde_json::Error> {
     }
     Ok(schemas![
         GenerationProtocol,
-        OrderedCandidateSelectionV1,
-        AcceptedSelectionV2,
-        CandidateDescriptorV1,
-        CandidateManifestV1,
-        OrderedCapabilitiesV2,
-        OrderedDispatchBindingV2,
-        AttemptV2,
-        ExecutionReceiptV2,
-        ExecutionUsageEvidenceV2,
+        OrderedCandidateSelection,
+        AcceptedSelection,
+        CandidateDescriptor,
+        CandidateManifest,
+        OrderedCapabilities,
+        OrderedDispatchBinding,
+        Attempt,
+        ExecutionReceipt,
+        ExecutionUsageEvidence,
     ])
 }
 
@@ -39,7 +39,14 @@ fn all_ordered_wire_types_export_closed_self_contained_schemas() -> TestResult {
     );
     for (name, schema) in exported()? {
         assert_eq!(schema["title"], name);
-        assert!(bundle["$defs"].get(&name).is_some(), "{name}");
+        assert_eq!(
+            bundle["$defs"].get(&name).is_some(),
+            !matches!(
+                name.as_str(),
+                "Attempt" | "ExecutionReceipt" | "ExecutionUsageEvidence"
+            ),
+            "{name}"
+        );
         assert!(
             !schema.to_string().contains("\"$ref\""),
             "unresolved reference in {name}"
@@ -53,7 +60,7 @@ fn all_ordered_wire_types_export_closed_self_contained_schemas() -> TestResult {
         let required = schema["required"].as_array().ok_or("required")?;
         let optional = usize::from(matches!(
             name.as_str(),
-            "OrderedCandidateSelectionV1" | "AcceptedSelectionV2"
+            "OrderedCandidateSelection" | "AcceptedSelection"
         ));
         assert_eq!(properties.len(), required.len() + optional, "{name}");
         for property in properties.keys() {
@@ -66,9 +73,9 @@ fn all_ordered_wire_types_export_closed_self_contained_schemas() -> TestResult {
     }
     // Embedding these contracts must work without leaking bundle-relative refs.
     let mut generator = SchemaGenerator::default();
-    generator.subschema_for::<ExecutionReceiptV2>();
-    generator.subschema_for::<ExecutionUsageEvidenceV2>();
-    let root = generator.into_root_schema_for::<OrderedDispatchBindingV2>();
+    generator.subschema_for::<ExecutionReceipt>();
+    generator.subschema_for::<ExecutionUsageEvidence>();
+    let root = generator.into_root_schema_for::<OrderedDispatchBinding>();
     assert!(serde_json::to_value(root)?["$defs"].is_object());
     Ok(())
 }
@@ -76,7 +83,7 @@ fn all_ordered_wire_types_export_closed_self_contained_schemas() -> TestResult {
 #[test]
 fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
     let schemas: std::collections::HashMap<_, _> = exported()?.into_iter().collect();
-    for name in ["OrderedCandidateSelectionV1", "AcceptedSelectionV2"] {
+    for name in ["OrderedCandidateSelection", "AcceptedSelection"] {
         let indices = &schemas[name]["properties"]["candidate_indices"];
         assert_eq!(indices["minItems"], 1);
         assert_eq!(indices["maxItems"], 64);
@@ -89,11 +96,9 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
         );
     }
     for (name, field, version) in [
-        ("OrderedCandidateSelectionV1", "schema_version", 1),
-        ("CandidateManifestV1", "schema_version", 1),
-        ("OrderedCapabilitiesV2", "contract_version", 2),
-        ("ExecutionReceiptV2", "schema_version", 2),
-        ("ExecutionUsageEvidenceV2", "schema_version", 2),
+        ("OrderedCandidateSelection", "schema_version", 1),
+        ("CandidateManifest", "schema_version", 1),
+        ("OrderedCapabilities", "contract_version", 2),
     ] {
         assert_eq!(schemas[name]["properties"][field]["const"], version);
     }
@@ -106,33 +111,33 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
             "generate_content"
         ])
     );
-    for name in ["OrderedCapabilitiesV2", "ExecutionReceiptV2"] {
+    for name in ["OrderedCapabilities"] {
         assert_eq!(schemas[name]["properties"]["attempt_limit"]["minimum"], 1);
         assert_eq!(schemas[name]["properties"]["attempt_limit"]["maximum"], 64);
     }
     assert_eq!(
-        schemas["ExecutionUsageEvidenceV2"]["properties"]["extractor_version"]["enum"],
+        schemas["ExecutionUsageEvidence"]["properties"]["extractor_version"]["enum"],
         json!([1, 2])
     );
-    let descriptor = &schemas["CandidateDescriptorV1"]["properties"];
+    let descriptor = &schemas["CandidateDescriptor"]["properties"];
     assert_eq!(descriptor["candidate_index"]["maximum"], 255);
     assert_eq!(
         descriptor["credential"]["properties"]["resource_kind"]["const"],
         "credential"
     );
     for (name, field, max) in [
-        ("CandidateManifestV1", "candidates", 256),
-        ("ExecutionReceiptV2", "attempts", 64),
-        ("ExecutionUsageEvidenceV2", "attempts", 64),
-        ("ExecutionUsageEvidenceV2", "frames", 4096),
-        ("AttemptV2", "native_usage", 32),
+        ("CandidateManifest", "candidates", 256),
+        ("ExecutionReceipt", "attempts", 64),
+        ("ExecutionUsageEvidence", "attempts", 64),
+        ("ExecutionUsageEvidence", "frames", 4096),
+        ("Attempt", "native_usage", 32),
     ] {
         assert_eq!(schemas[name]["properties"][field]["maxItems"], max);
     }
     for (name, field) in [
-        ("AttemptV2", "target"),
-        ("AttemptV2", "observed_http_status"),
-        ("ExecutionUsageEvidenceV2", "estimate"),
+        ("Attempt", "target"),
+        ("Attempt", "observed_http_status"),
+        ("ExecutionUsageEvidence", "estimate"),
     ] {
         assert!(
             schemas[name]["required"]
@@ -148,13 +153,16 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
                 .any(|s| s["type"] == "null")
         );
     }
-    let status = &schemas["AttemptV2"]["properties"]["observed_http_status"]["anyOf"][0];
+    let status = &schemas["Attempt"]["properties"]["observed_http_status"]["anyOf"][0];
     assert_eq!(status["minimum"], 200);
     assert_eq!(status["maximum"], 599);
-    let frame = &schemas["ExecutionUsageEvidenceV2"]["properties"]["frames"]["items"];
+    let frame = &schemas["ExecutionUsageEvidence"]["properties"]["frames"]["items"];
     assert_eq!(
-        frame["properties"]["protocol"]["enum"],
-        schemas["GenerationProtocol"]["enum"]
+        frame["properties"]["protocol"]["enum"]
+            .as_array()
+            .ok_or("protocols")?
+            .len(),
+        5
     );
     assert_eq!(frame["properties"]["quantities"]["maxItems"], 32);
     assert_eq!(
@@ -162,27 +170,34 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
         9007199254740991_u64
     );
     assert!(
-        schemas["ExecutionUsageEvidenceV2"]["properties"]
+        schemas["ExecutionUsageEvidence"]["properties"]
             .get("child_execution_ids")
-            .is_none()
+            .is_some()
     );
     assert!(
-        schemas["ExecutionUsageEvidenceV2"]["properties"]
+        schemas["ExecutionUsageEvidence"]["properties"]
             .get("parent_execution_id")
-            .is_none()
+            .is_some()
     );
     Ok(())
 }
 
 #[test]
-fn frozen_v1_schemas_keep_their_attempt_and_frame_limits() -> TestResult {
-    let receipt = serde_json::to_value(schemars::schema_for!(ExecutionReceipt))?;
-    let evidence = serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidenceV1))?;
-    assert_eq!(receipt["properties"]["attempts"]["maxItems"], 8);
-    assert_eq!(evidence["properties"]["attempts"]["maxItems"], 8);
-    assert_eq!(evidence["properties"]["frames"]["maxItems"], 512);
-    assert_eq!(evidence["properties"]["schema_version"]["const"], 1);
-    assert!(evidence["properties"].get("accepted_selection").is_none());
+fn shared_schemas_require_dispatch_and_preserve_strict_bounds() -> TestResult {
+    for schema in [
+        serde_json::to_value(schemars::schema_for!(ExecutionReceipt))?,
+        serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidence))?,
+    ] {
+        assert!(schema["properties"].get("schema_version").is_none());
+        assert_eq!(
+            schema["properties"]["dispatch"]["oneOf"][0]["properties"]["mode"]["const"],
+            "strict"
+        );
+        assert_eq!(
+            schema["properties"]["dispatch"]["oneOf"][1]["properties"]["mode"]["const"],
+            "ordered"
+        );
+    }
     Ok(())
 }
 
