@@ -8,7 +8,7 @@ use super::*;
 const WORKING_ROWS: usize = PAGE + 16;
 const WORKING_BYTES: usize = PAGE * 1024
     + 3 * (super::super::MAX_RECEIPT + super::super::MAX_DISPOSITION + 4096)
-    + 3 * (bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 128)
+    + 3 * (bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes + 128)
     + 3 * crate::tenancy::receipts::auxiliary::MAX_BYTES
     + 2 * 4096
     + 16 * 1024;

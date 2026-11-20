@@ -51,7 +51,7 @@ fn envelope(canonical: Value) -> Result<GenerationDefaultsEnvelope> {
 
 async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     defaults: GenerationDefaultsEnvelope,
     protocol: GenerationProtocol,
     stream: bool,
@@ -222,12 +222,12 @@ async fn canonical_defaults_actual_three_ingress_three_egress_json_sse_h1_h2_ret
                     let receipt = harness.receipt(&id).await?;
                     ensure!(
                         receipt.outcome == Outcome::Completed
-                            && receipt.accepted_selection.generation_defaults_digest
+                            && receipt_selection(&receipt)?.generation_defaults_digest
                                 == Some(defaults.digest()?)
                     );
                     let evidence = harness
                         .control(true, HttpVersion::Http1Only)?
-                        .usage_evidence_v2(&receipt)
+                        .usage_evidence(&receipt)
                         .await?;
                     evidence.validate_against(&receipt)?;
                     rendered(bodies(&harness)?.last().context("provider body")?, wire)?;
@@ -272,11 +272,11 @@ async fn canonical_defaults_fallback_retains_one_identity_and_protocol_specific_
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
-    ensure!(receipt.accepted_selection.generation_defaults_digest == Some(defaults.digest()?));
+    ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(defaults.digest()?));
     let bodies = bodies(&harness)?;
     ensure!(bodies.len() == 2);
     rendered(&bodies[0], "messages")?;
@@ -316,7 +316,9 @@ async fn canonical_defaults_equivalent_integer_spelling_keeps_bound_identity() -
         let _: Value = response.json().await?;
         let receipt = harness.receipt(&id).await?;
         ensure!(receipt.outcome == Outcome::Completed);
-        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(defaults.digest()?));
+        ensure!(
+            receipt_selection(&receipt)?.generation_defaults_digest == Some(defaults.digest()?)
+        );
         let observed = bodies(&harness)?;
         let body = observed.last().context("provider body")?;
         ensure!(body["max_tokens"] == 25 && body["seed"] == json!(i64::MIN));

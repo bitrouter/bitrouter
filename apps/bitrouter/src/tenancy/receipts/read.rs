@@ -15,9 +15,7 @@ use std::sync::Arc;
 
 pub(in crate::tenancy) enum Request {
     One(ExecutionId),
-    OneV2(ExecutionId),
     UsageEvidence(ExecutionId),
-    UsageEvidenceV2(ExecutionId),
     ProviderTechnical(ExecutionId),
     Page {
         correlation: CorrelationId,
@@ -128,11 +126,9 @@ pub(in crate::tenancy) async fn body(
 ) -> Result<Vec<u8>, Failure> {
     let encoded = match request {
         Request::One(id)
-        | Request::OneV2(id)
         | Request::UsageEvidence(id)
-        | Request::UsageEvidenceV2(id)
         | Request::ProviderTechnical(id) => {
-            use super::store::format::{Format, Terminal};
+            use super::store::format::Terminal;
             let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
                 .map_err(|_| storage_failure())?
@@ -146,15 +142,7 @@ pub(in crate::tenancy) async fn body(
                 return serde_json::to_vec(&facts)
                     .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable));
             }
-            let expected = if matches!(request, Request::OneV2(_) | Request::UsageEvidenceV2(_)) {
-                Format::V2
-            } else {
-                Format::V1
-            };
-            if terminal.format() != expected {
-                return Err(ErrorCode::CapabilityMismatch.into());
-            }
-            if matches!(request, Request::One(_) | Request::OneV2(_)) {
+            if matches!(request, Request::One(_)) {
                 return Ok(terminal.json().as_bytes().to_vec());
             }
             match terminal {

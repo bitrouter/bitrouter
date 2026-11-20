@@ -421,7 +421,7 @@ async fn qualify(
     );
     // Deliberately bind the predecessor's real identities without pretending
     // its v1 discovery negotiated v2. This is the unsupported-version probe.
-    let binding = OrderedDispatchBindingV2 {
+    let binding = OrderedDispatchBinding {
         contract_version: "2".into(),
         installation_id: caps.installation_id.clone(),
         instance_id: caps.instance_id.clone(),
@@ -429,7 +429,7 @@ async fn qualify(
         execution_revision: provisioned.revision.revision_id.clone(),
         correlation_id: "unsupported-v2".try_into()?,
         receipt_mode: "strict".into(),
-        selection: OrderedCandidateSelectionV1 {
+        selection: OrderedCandidateSelection {
             generation_defaults_digest: None,
             admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
             schema_version: 1,

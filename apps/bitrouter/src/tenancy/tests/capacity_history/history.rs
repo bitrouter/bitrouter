@@ -29,6 +29,7 @@ fn usage(n: u64) -> Usage {
 
 fn candidate(h: &Harness, reference: &ResourceRef, id: &str) -> Result<Candidate> {
     let mut receipt = ExecutionReceipt {
+        dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
         installation_id: h.fixture.installation.clone(),
         tenant_id: h.fixture.tenant.clone(),
         principal_id: h.fixture.principal.clone(),
@@ -44,6 +45,8 @@ fn candidate(h: &Harness, reference: &ResourceRef, id: &str) -> Result<Candidate
     let mut evidence = Evidence::default();
     for index in 0..8 {
         let attempt = Attempt {
+            candidate_index: None,
+            observed_http_status: None,
             attempt_id: format!("attempt-{index}-{}", "a".repeat(112)).try_into()?,
             target: Some(Target {
                 provider_id: "synthetic-provider".try_into()?,
@@ -359,7 +362,7 @@ async fn late_reads(
             .wire(Method::GET, &format!("{path}/usage-evidence"), token, &())
             .await?;
         ensure!(status == StatusCode::OK);
-        let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+        let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence =
             serde_json::from_slice(&body)?;
         ensure!(evidence.execution_id == receipt.execution_id);
         bitrouter_ai::tenancy::validation::Validate::validate(&evidence)?;

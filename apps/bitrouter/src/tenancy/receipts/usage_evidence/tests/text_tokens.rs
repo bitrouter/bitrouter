@@ -58,7 +58,7 @@ fn text_tokens_json_and_sse_keep_original_quantities_without_double_counting() -
             );
         }
         ensure!(
-            ExecutionUsageEvidenceV2::extractor_version_for(
+            ExecutionUsageEvidence::extractor_version_for(
                 bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
                 &[frame],
             ) == 1

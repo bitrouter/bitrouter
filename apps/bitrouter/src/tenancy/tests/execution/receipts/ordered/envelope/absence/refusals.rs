@@ -20,7 +20,7 @@ fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
 
 async fn send(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     path: &str,
     raw: String,
 ) -> Result<reqwest::Response> {
@@ -275,7 +275,7 @@ async fn envelope_v2_policy_lock_stays_unsupported_with_valid_binding_and_no_sen
             .bind(
                 harness.revision.revision_id.clone(),
                 "ordered-correlation".try_into()?,
-                OrderedCandidateSelectionV1 {
+                OrderedCandidateSelection {
                     schema_version: 1,
                     admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: harness.route.clone(),
@@ -459,7 +459,7 @@ async fn envelope_v2_retains_supported_model_facts_and_refuses_required_counting
             .bind(
                 harness.revision.revision_id.clone(),
                 "ordered-correlation".try_into()?,
-                OrderedCandidateSelectionV1 {
+                OrderedCandidateSelection {
                     schema_version: 1,
                     admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: harness.route.clone(),

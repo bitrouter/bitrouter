@@ -167,28 +167,22 @@ impl EvalIdentity {
         .await
         .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?
         .ok_or(ErrorCode::InvalidRequest)?;
-        let (revision, route, targets): (_, _, Vec<_>) = match &receipt {
-            super::super::receipts::store::format::Terminal::V1(candidate) => (
-                &candidate.receipt.execution_revision,
-                None,
-                candidate
-                    .receipt
-                    .attempts
-                    .iter()
-                    .filter_map(|attempt| attempt.target.as_ref())
-                    .collect(),
-            ),
-            super::super::receipts::store::format::Terminal::V2(candidate) => (
-                &candidate.receipt.execution_revision,
-                Some(&candidate.receipt.accepted_selection.route),
-                candidate
-                    .receipt
-                    .attempts
-                    .iter()
-                    .filter_map(|attempt| attempt.target.as_ref())
-                    .collect(),
-            ),
+        let receipt = match &receipt {
+            super::super::receipts::store::format::Terminal::V1(candidate) => &candidate.receipt,
+            super::super::receipts::store::format::Terminal::V2(candidate) => &candidate.receipt,
         };
+        let revision = &receipt.execution_revision;
+        let route = match &receipt.dispatch {
+            bitrouter_ai::tenancy::execution::Dispatch::Strict => None,
+            bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+                accepted_selection, ..
+            } => Some(&accepted_selection.route),
+        };
+        let targets: Vec<_> = receipt
+            .attempts
+            .iter()
+            .filter_map(|attempt| attempt.target.as_ref())
+            .collect();
         if revision != &execution.configuration_revision || revision != retained.revision_id() {
             return Err(ErrorCode::InvalidRequest.into());
         }

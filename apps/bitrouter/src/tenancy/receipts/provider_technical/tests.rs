@@ -10,6 +10,7 @@ use bitrouter_ai::tenancy::{
 fn terminal() -> Result<Terminal> {
     Ok(Terminal::V1(Arc::new(Candidate::new(
         ExecutionReceipt {
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: "installation".try_into()?,
             tenant_id: "tenant".try_into()?,
             principal_id: "principal".try_into()?,
@@ -19,6 +20,8 @@ fn terminal() -> Result<Terminal> {
             state: ReceiptState::Incomplete,
             outcome: Outcome::Failed,
             attempts: vec![Attempt {
+                candidate_index: None,
+                observed_http_status: None,
                 attempt_id: "attempt".try_into()?,
                 target: None,
                 outcome: Outcome::Failed,

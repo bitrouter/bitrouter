@@ -17,7 +17,7 @@ use crate::tenancy::oauth::storage as oauth;
 //   page before fetching the next. Validation drops each candidate before the
 //   next outer key and retains no history-sized vector.
 const RECEIPT: usize = super::super::MAX_RECEIPT + super::super::MAX_DISPOSITION + 4096;
-const USAGE: usize = bitrouter_ai::tenancy::usage_evidence::MAX_BYTES;
+const USAGE: usize = bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes;
 const AUXILIARY: usize = crate::tenancy::receipts::auxiliary::MAX_BYTES;
 pub(super) const WORKING_ROWS: usize = 64 + PAGE + oauth::pending::WORKING_ROWS + 16;
 pub(super) const WORKING_BYTES: usize = 1024 * 1024

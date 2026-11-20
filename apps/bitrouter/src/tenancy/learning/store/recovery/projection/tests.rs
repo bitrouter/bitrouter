@@ -9,6 +9,7 @@ use sea_orm::TransactionTrait;
 fn unknown(id: &str) -> Result<Candidate> {
     Candidate::new(
         ExecutionReceipt {
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: "installation".try_into()?,
             tenant_id: "tenant".try_into()?,
             principal_id: "creator".try_into()?,

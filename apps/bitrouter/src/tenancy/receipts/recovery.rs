@@ -79,6 +79,7 @@ impl Seed {
         self.validate_usage_version()?;
         let candidate = Candidate::new(
             ExecutionReceipt {
+                dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
                 installation_id: self.installation.clone(),
                 tenant_id: self.tenant.clone(),
                 principal_id: self.principal.clone(),

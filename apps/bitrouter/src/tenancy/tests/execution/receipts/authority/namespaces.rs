@@ -371,7 +371,7 @@ async fn owned_usage_linkage_rejects_another_tenant_in_the_same_installation_bef
                 )
                 .await
                 .map_err(failure)?;
-            let document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+            let document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence =
                 serde_json::from_slice(&bytes)?;
             ensure!(
                 document.parent_execution_id.is_none()

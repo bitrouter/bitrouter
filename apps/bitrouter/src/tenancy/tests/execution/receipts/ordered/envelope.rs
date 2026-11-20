@@ -17,7 +17,7 @@ fn defaults(params: Value) -> Result<GenerationDefaultsEnvelope> {
 
 pub(super) async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     defaults: GenerationDefaultsEnvelope,
     protocol: GenerationProtocol,
     stream: bool,
@@ -118,7 +118,7 @@ async fn harness(wire: &str, retained: Value) -> Result<OrderedHarness> {
 async fn completed(
     harness: &OrderedHarness,
     id: &ExecutionId,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
 ) -> Result<()> {
     let receipt = harness.receipt(id).await?;
     ensure!(receipt.outcome == Outcome::Completed);
@@ -136,14 +136,14 @@ async fn completed(
         receipt.usage.cache_read_tokens == Some(3) && receipt.usage.cache_write_tokens == Some(2)
     );
     ensure!(
-        receipt.accepted_selection.generation_defaults_digest
+        receipt_selection(&receipt)?.generation_defaults_digest
             == binding.selection.generation_defaults_digest
     );
-    ensure!(receipt.accepted_selection.route == binding.selection.route);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt_selection(&receipt)?.route == binding.selection.route);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     let evidence = harness
         .control(true, HttpVersion::Http1Only)?
-        .usage_evidence_v2(&receipt)
+        .usage_evidence(&receipt)
         .await?;
     evidence.validate_against(&receipt)?;
     Ok(())

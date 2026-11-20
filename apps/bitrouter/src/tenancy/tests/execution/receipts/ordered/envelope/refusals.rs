@@ -20,7 +20,7 @@ fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
 
 async fn send(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     path: &str,
     raw: String,
 ) -> Result<reqwest::Response> {

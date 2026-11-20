@@ -489,9 +489,9 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                     let receipt = harness.ordered.receipt(&id).await?;
                     ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 2);
                     ensure!(
-                        receipt.accepted_selection.inbound_protocol
+                        receipt_selection(&receipt)?.inbound_protocol
                             == GenerationProtocol::GenerateContent
-                            && receipt.accepted_selection.candidate_indices == [1, 0]
+                            && receipt_selection(&receipt)?.candidate_indices == [1, 0]
                     );
                     ensure!(harness.ordered.observed()? == ["model-1", "model-0"]);
                     {
@@ -523,7 +523,7 @@ async fn native_generate_content_actual_mixed_json_sse_original_order_and_counte
                         );
                     }
                     let control = harness.ordered.control(false, version)?;
-                    let evidence = control.usage_evidence_v2(&receipt).await?;
+                    let evidence = control.usage_evidence(&receipt).await?;
                     ensure!(evidence.extractor_version == 2);
                     if !stream {
                         ensure!(
@@ -628,7 +628,7 @@ async fn native_generate_content_failed_json_never_asserts_estimator_non_use() -
         let evidence = harness
             .ordered
             .control(false, HttpVersion::Http1Only)?
-            .usage_evidence_v2(&receipt)
+            .usage_evidence(&receipt)
             .await?;
         ensure!(
             evidence.estimation == bitrouter_ai::tenancy::usage_evidence::Estimation::NotCaptured,

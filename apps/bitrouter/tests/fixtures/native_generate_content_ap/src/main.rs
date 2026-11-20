@@ -4,7 +4,7 @@ use bitrouter_ai::{
     tenancy::{
         generate_content::{OrderedGenerateContentCapabilitiesV1, OrderedGenerateContentRequestV1},
         generation_defaults::GenerationDefaultsEnvelope,
-        ordered::OrderedDispatchBindingV2,
+        ordered::OrderedDispatchBinding,
     },
 };
 use bitrouter_sdk::gateway::{GatewayClient, HttpVersion, TransportOptions, tenancy::Body};
@@ -17,7 +17,7 @@ use std::io::{Read, Write};
 struct Input {
     endpoint: String,
     token: String,
-    binding: OrderedDispatchBindingV2,
+    binding: OrderedDispatchBinding,
     capabilities: OrderedGenerateContentCapabilitiesV1,
     request: OrderedGenerateContentRequestV1,
     defaults: Option<GenerationDefaultsEnvelope>,

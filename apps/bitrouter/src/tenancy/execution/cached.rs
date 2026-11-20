@@ -15,7 +15,7 @@ use bitrouter_ai::tenancy::{
     configuration::ResourceRef,
     identity::AuthorityRevision,
     operation::ErrorCode,
-    ordered::{CandidateManifestV1, GenerationProtocol},
+    ordered::{CandidateManifest, GenerationProtocol},
 };
 
 use super::{Service, Submission, authorize_route};
@@ -176,7 +176,7 @@ impl Service {
         authority_revision: AuthorityRevision,
         reference: &ResourceRef,
         inbound: GenerationProtocol,
-    ) -> Result<CandidateManifestV1, Failure> {
+    ) -> Result<CandidateManifest, Failure> {
         let key = ExecutionKey::Control {
             authority_revision: u64::from(authority_revision),
             binding: configuration_store::execution_cache_binding(stored)

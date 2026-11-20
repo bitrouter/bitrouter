@@ -4,7 +4,7 @@ use crate::tenancy::{origin::StartupOwner, ownership, transaction::Proof};
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
-    execution_v2::AttemptV2,
+    execution::Attempt,
     ordered::GenerationProtocol,
     usage_evidence::AttemptEvidence,
 };
@@ -35,7 +35,7 @@ fn identity(installation: &InstallationId, id: &str, count: usize) -> Result<Ide
         correlation: "correlation".try_into()?,
         revision: "revision".try_into()?,
         ordered: Some((
-            AcceptedSelectionV2 {
+            AcceptedSelection {
                 generation_defaults_digest: None,
                 admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                 route: ResourceRef {
@@ -74,9 +74,9 @@ fn terminal(intent: &Intent) -> Result<Terminal> {
         .iter()
         .enumerate()
         .map(|(i, &ordinal)| {
-            Ok(AttemptV2 {
+            Ok(Attempt {
                 attempt_id: format!("attempt-{i}").try_into()?,
-                candidate_index: ordinal,
+                candidate_index: Some(ordinal),
                 target: None,
                 outcome: Outcome::Failed,
                 observed_http_status: Some(503),
@@ -119,7 +119,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
     use bitrouter_ai::tenancy::admission::AdmissionMode;
     use serde_json::json;
     for (count, expected) in [(1, 1826), (8, 1854), (9, 1860), (64, 2082)] {
-        let selected = AcceptedSelectionV2 {
+        let selected = AcceptedSelection {
             generation_defaults_digest: None,
             admission_mode: AdmissionMode::Profiled,
             route: ResourceRef {
@@ -134,7 +134,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
                 .map(|index| u16::try_from(255 - index))
                 .collect::<std::result::Result<Vec<_>, _>>()?,
         };
-        let budget = EvidenceBudgetV2::for_attempts(count)?;
+        let budget = EvidenceBudget::for_attempts(count)?;
         let intent: Intent = serde_json::from_value(
             json!({"schema_version":2,"installation":"i".repeat(128),
             "tenant":"t".repeat(128),"principal":"p".repeat(128),"execution":"e".repeat(128),
@@ -162,7 +162,12 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
         };
         ensure!(intent.matches(&terminal.receipt));
         let mut changed = terminal.receipt.clone();
-        changed.accepted_selection.admission_mode = AdmissionMode::Unprofiled;
+        if let bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+            accepted_selection, ..
+        } = &mut changed.dispatch
+        {
+            accepted_selection.admission_mode = AdmissionMode::Unprofiled;
+        }
         ensure!(!intent.matches(&changed));
         let mut oversized = serde_json::to_value(intent)?;
         oversized["admitted_at"] = json!(format!("2026-11-02T00:00:00.{}Z", "0".repeat(MAX_BYTES)));
@@ -211,7 +216,7 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
                     .receipt
                     .attempts
                     .iter()
-                    .map(|a| a.candidate_index)
+                    .filter_map(|a| a.candidate_index)
                     .collect::<Vec<_>>()
                     == intent.selection.candidate_indices
         );
@@ -228,24 +233,24 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
             &db,
             &installation,
             &identity.tenant,
-            &Request::OneV2(identity.execution.clone()),
+            &Request::One(identity.execution.clone()),
             failure,
         )
         .await
         .map_err(|error| anyhow::anyhow!("v2 read failed: {:?}", error.0.code))?;
         ensure!(v2 == candidate.json().as_bytes());
-        for request in [
-            Request::One(identity.execution.clone()),
-            Request::UsageEvidence(identity.execution.clone()),
-        ] {
-            let error = read::body(&db, &installation, &identity.tenant, &request, failure)
-                .await
-                .err()
-                .context("v1 mismatch")?;
-            ensure!(
-                error.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch
-            );
-        }
+        let evidence = read::body(
+            &db,
+            &installation,
+            &identity.tenant,
+            &Request::UsageEvidence(identity.execution.clone()),
+            failure,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("evidence read failed: {:?}", error.0.code))?;
+        let evidence: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence =
+            serde_json::from_slice(&evidence)?;
+        evidence.validate_against(&saved.receipt)?;
     }
     ensure!(
         Intent::new(
@@ -423,7 +428,11 @@ async fn restart_case(digest: Option<bitrouter_ai::tenancy::identity::Digest>) -
     };
     ensure!(
         candidate.receipt.attempts.is_empty()
-            && candidate.receipt.accepted_selection == intent.selection
+            && candidate.receipt.dispatch
+                == (bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+                    accepted_selection: intent.selection.clone(),
+                    attempt_limit: intent.attempt_limit
+                })
             && candidate.receipt.usage.input_tokens.is_none()
     );
     ensure!(
@@ -431,21 +440,14 @@ async fn restart_case(digest: Option<bitrouter_ai::tenancy::identity::Digest>) -
             && candidate.evidence.document.frames.is_empty()
     );
     if let Some(digest) = digest {
-        ensure!(
-            candidate
-                .receipt
-                .accepted_selection
-                .generation_defaults_digest
-                == Some(digest.clone())
-        );
-        ensure!(
-            candidate
-                .evidence
-                .document
-                .accepted_selection
-                .generation_defaults_digest
-                == Some(digest.clone())
-        );
+        let bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+            accepted_selection, ..
+        } = &candidate.receipt.dispatch
+        else {
+            anyhow::bail!("ordered dispatch");
+        };
+        ensure!(accepted_selection.generation_defaults_digest.as_ref() == Some(digest));
+        ensure!(candidate.evidence.document.dispatch == candidate.receipt.dispatch);
     }
     let inventory = store::inventory(&db, &installation).await?;
     ensure!(inventory.rows == 1 && inventory.unknown_count == 1);
@@ -627,9 +629,14 @@ async fn ordered_terminal_cannot_change_intent_ingress_protocol() -> Result<()> 
         anyhow::bail!("fixture format")
     };
     let mut receipt = candidate.receipt.clone();
-    receipt.accepted_selection.inbound_protocol = GenerationProtocol::Responses;
+    if let bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+        accepted_selection, ..
+    } = &mut receipt.dispatch
+    {
+        accepted_selection.inbound_protocol = GenerationProtocol::Responses;
+    }
     let mut evidence = candidate.evidence.document.clone();
-    evidence.accepted_selection = receipt.accepted_selection.clone();
+    evidence.dispatch = receipt.dispatch.clone();
     let replacement = Terminal::V2(Arc::new(CandidateV2::new(
         receipt,
         Disposition {

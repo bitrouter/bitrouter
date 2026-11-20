@@ -10,6 +10,7 @@ pub(super) fn candidate(
 ) -> Result<Candidate> {
     Candidate::new(
         ExecutionReceipt {
+            dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
             installation_id: installation.try_into()?,
             tenant_id: tenant.try_into()?,
             principal_id: principal.try_into()?,

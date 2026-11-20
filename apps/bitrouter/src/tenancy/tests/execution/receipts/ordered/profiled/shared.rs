@@ -184,7 +184,7 @@ async fn binding(
     route: &ResourceRef,
     index: u16,
     protocol: GenerationProtocol,
-) -> Result<OrderedDispatchBindingV2> {
+) -> Result<OrderedDispatchBinding> {
     let control = harness.control(true, HttpVersion::Http1Only)?;
     let manifest = control
         .candidate_manifest(
@@ -205,7 +205,7 @@ async fn binding(
     Ok(control.ordered_capabilities().await?.bind(
         revision.revision_id.clone(),
         "shared-correlation".try_into()?,
-        OrderedCandidateSelectionV1 {
+        OrderedCandidateSelection {
             schema_version: 1,
             admission_mode: manifest.admission_mode,
             route: route.clone(),
@@ -218,7 +218,7 @@ async fn binding(
 async fn invoke(
     harness: &OrderedHarness,
     token: &str,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     protocol: GenerationProtocol,
     stream: bool,
     version: HttpVersion,
@@ -303,7 +303,7 @@ async fn refused(
         .context("refusal execution")?;
     let receipt = harness
         .control(true, HttpVersion::Http1Only)?
-        .execution_v2(&fixture.installation, &fixture.tenant, id)
+        .execution(&fixture.installation, &fixture.tenant, id)
         .await?;
     ensure!(receipt.outcome == Outcome::Failed && receipt.attempts.len() == attempts);
     Ok(())
@@ -343,12 +343,12 @@ async fn shared_health_two_tenants_distinct_ceilings_actual_h1_h2_json_sse_matri
                     let id = invoke(&harness, token, selection, protocol, stream, version).await?;
                     let receipt = harness
                         .control(true, version)?
-                        .execution_v2(&fixture.installation, &fixture.tenant, &id)
+                        .execution(&fixture.installation, &fixture.tenant, &id)
                         .await?;
                     ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 1);
                     ensure!(
                         receipt.attempts[0].candidate_index
-                            == selection.selection.candidate_indices[0]
+                            == Some(selection.selection.candidate_indices[0])
                     );
                 }
                 refused(

@@ -2,13 +2,12 @@
 
 use bitrouter_ai::tenancy::{
     execution::ExecutionReceipt,
-    execution_v2::ExecutionReceiptV2,
     identity::{AttemptId, AuthorityRevision},
+    usage_evidence::EvidenceBudget,
     usage_evidence::{
-        AttemptEvidence, Capture, Dimension, Estimation, ExecutionUsageEvidenceV1, Frame,
-        MAX_ATTEMPT_FRAMES, MAX_FRAMES, Protocol, Quantity, Semantics, Source,
+        AttemptEvidence, Capture, Dimension, Estimation, ExecutionUsageEvidence, Frame,
+        MAX_ATTEMPT_FRAMES, Protocol, Quantity, Semantics, Source,
     },
-    usage_evidence_v2::{EvidenceBudgetV2, ExecutionUsageEvidenceV2},
     validation::ValidationError,
 };
 use serde_json::Value;
@@ -21,7 +20,7 @@ mod tests;
 /// Retained prefix with a sticky stop; terminal metadata has separate capacity.
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
-    budget: Option<EvidenceBudgetV2>,
+    budget: Option<EvidenceBudget>,
     frames: Vec<Frame>,
     bytes: usize,
     dropped: u64,
@@ -34,7 +33,7 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     pub(super) fn ordered(accepted_count: usize) -> Result<Self, ValidationError> {
         Ok(Self {
-            budget: Some(EvidenceBudgetV2::for_attempts(accepted_count)?),
+            budget: Some(EvidenceBudget::for_attempts(accepted_count)?),
             ..Self::default()
         })
     }
@@ -54,7 +53,12 @@ impl Snapshot {
             return;
         }
         if self.dropped > 0
-            || self.frames.len() >= self.budget.map_or(MAX_FRAMES, |budget| budget.max_frames)
+            || self.frames.len()
+                >= self
+                    .budget
+                    .map_or(EvidenceBudget::STRICT.max_frames, |budget| {
+                        budget.max_frames
+                    })
             || self
                 .frames
                 .iter()
@@ -98,11 +102,13 @@ impl Snapshot {
         let encoded_size = self
             .bytes
             .saturating_add(size)
-            .saturating_add(self.budget.map_or(0, |_| self.frames.len() + 2));
+            .saturating_add(self.frames.len() + 2);
         if encoded_size
             > self
                 .budget
-                .map_or(192 * 1024, |budget| budget.max_frame_bytes)
+                .map_or(EvidenceBudget::STRICT.max_frame_bytes, |budget| {
+                    budget.max_frame_bytes
+                })
         {
             self.drop_frame();
             return;
@@ -113,14 +119,17 @@ impl Snapshot {
     fn drop_frame(&mut self) {
         self.dropped = self.dropped.saturating_add(1).min(AuthorityRevision::MAX);
     }
-    pub(super) fn document(self, receipt: &ExecutionReceipt) -> ExecutionUsageEvidenceV1 {
-        ExecutionUsageEvidenceV1 {
-            schema_version: 1,
+    pub(super) fn document(self, receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
+        ExecutionUsageEvidence {
+            dispatch: receipt.dispatch.clone(),
             installation_id: receipt.installation_id.clone(),
             tenant_id: receipt.tenant_id.clone(),
             execution_id: receipt.execution_id.clone(),
             capture: Capture::Captured,
-            extractor_version: 1,
+            extractor_version: ExecutionUsageEvidence::extractor_version_for(
+                &receipt.dispatch,
+                &self.frames,
+            ),
             estimation: if self.estimate.is_some() {
                 Estimation::Captured
             } else if self.estimator_seen {
@@ -151,57 +160,16 @@ impl Snapshot {
             dropped_frames: self.dropped,
         }
     }
-
-    pub(super) fn document_v2(self, receipt: &ExecutionReceiptV2) -> ExecutionUsageEvidenceV2 {
-        ExecutionUsageEvidenceV2 {
-            schema_version: 2,
-            installation_id: receipt.installation_id.clone(),
-            tenant_id: receipt.tenant_id.clone(),
-            execution_id: receipt.execution_id.clone(),
-            accepted_selection: receipt.accepted_selection.clone(),
-            capture: Capture::Captured,
-            extractor_version: ExecutionUsageEvidenceV2::extractor_version_for(
-                receipt.accepted_selection.inbound_protocol,
-                &self.frames,
-            ),
-            estimation: if self.estimate.is_some() {
-                Estimation::Captured
-            } else if self.estimator_seen {
-                Estimation::NotUsed
-            } else {
-                Estimation::NotCaptured
-            },
-            estimate: self.estimate,
-            attempts: receipt
-                .attempts
-                .iter()
-                .map(|attempt| AttemptEvidence {
-                    attempt_id: attempt.attempt_id.clone(),
-                    target: attempt.target.clone(),
-                    outcome: attempt.outcome,
-                    terminal_observed: self.terminals.contains(&attempt.attempt_id)
-                        && matches!(
-                            attempt.outcome,
-                            bitrouter_ai::tenancy::execution::Outcome::Completed
-                                | bitrouter_ai::tenancy::execution::Outcome::Failed
-                        ),
-                })
-                .collect(),
-            frames: self.frames,
-            truncated: self.dropped > 0,
-            dropped_frames: self.dropped,
-        }
-    }
 }
 
-pub(super) fn historical(receipt: &ExecutionReceipt) -> ExecutionUsageEvidenceV1 {
-    ExecutionUsageEvidenceV1 {
-        schema_version: 1,
+pub(super) fn historical(receipt: &ExecutionReceipt) -> ExecutionUsageEvidence {
+    ExecutionUsageEvidence {
+        dispatch: receipt.dispatch.clone(),
         installation_id: receipt.installation_id.clone(),
         tenant_id: receipt.tenant_id.clone(),
         execution_id: receipt.execution_id.clone(),
         capture: Capture::NotCaptured,
-        extractor_version: 1,
+        extractor_version: ExecutionUsageEvidence::extractor_version_for(&receipt.dispatch, &[]),
         estimation: Estimation::NotCaptured,
         estimate: None,
         parent_execution_id: None,

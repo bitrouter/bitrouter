@@ -147,14 +147,6 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(super::ordered::manifest),
         )
         .route(
-            "/control/v1/tenancy/tenants/{tenant}/executions/{execution}/v2",
-            get(super::ordered::receipt),
-        )
-        .route(
-            "/control/v1/tenancy/tenants/{tenant}/executions/{execution}/usage-evidence/v2",
-            get(super::ordered::evidence),
-        )
-        .route(
             "/control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts",
             get(super::receipts::provider_technical::http::read),
         )

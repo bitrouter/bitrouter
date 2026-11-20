@@ -22,7 +22,7 @@ async fn ordered_retained_continuation_defaults_reject_before_any_provider_send(
         let binding = control.ordered_capabilities().await?.bind(
             harness.revision.revision_id.clone(),
             "no-continuation-defaults".try_into()?,
-            OrderedCandidateSelectionV1 {
+            OrderedCandidateSelection {
                 generation_defaults_digest: None,
                 admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                 schema_version: 1,

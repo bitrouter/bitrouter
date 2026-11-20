@@ -230,7 +230,7 @@ async fn native_generate_content_mounted_original_tokens_survive_opaque_number_k
     ensure!(body["candidates"][0]["content"]["parts"][1]["inlineData"]["mimeType"] == "image/png");
     ensure!(harness.ordered.observed()? == ["model-0"]);
     let receipt = harness.ordered.receipt(&id).await?;
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     {
         let records = harness
             .peer

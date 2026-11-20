@@ -60,6 +60,8 @@ async fn canonical_outcome_and_attempt_unknown_count_but_incomplete_usage_does_n
         receipt.outcome = outcome;
         if attempt {
             receipt.attempts.push(Attempt {
+                candidate_index: None,
+                observed_http_status: None,
                 attempt_id: "attempt".try_into()?,
                 target: None,
                 outcome: Outcome::Unknown,

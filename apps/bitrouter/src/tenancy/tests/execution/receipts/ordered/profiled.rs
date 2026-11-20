@@ -122,7 +122,7 @@ pub(super) fn rules(rpm: u32, health: bool) -> Result<AdmissionProfile> {
 
 async fn manifest(
     harness: &OrderedHarness,
-) -> Result<bitrouter_ai::tenancy::ordered::CandidateManifestV1> {
+) -> Result<bitrouter_ai::tenancy::ordered::CandidateManifest> {
     Ok(harness
         .control(true, HttpVersion::Http1Only)?
         .candidate_manifest(
@@ -165,7 +165,7 @@ async fn profiled_exact_orders_charge_only_actual_reached_hops_and_retain_ordina
             receipt
                 .attempts
                 .iter()
-                .map(|attempt| attempt.candidate_index)
+                .filter_map(|attempt| attempt.candidate_index)
                 .collect::<Vec<_>>()
                 == order
         );
@@ -245,7 +245,7 @@ async fn profiled_local_zero_then_terminal_rejection_falls_back_without_inventin
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
@@ -645,7 +645,7 @@ async fn profiled_persistent_status_respects_exact_fallback_rule_and_later_circu
             )
             .await?;
         let receipt = harness.receipt(&id).await?;
-        ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+        ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
         harness.fixture.service.shutdown().await?;
     }
     Ok(())

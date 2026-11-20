@@ -116,7 +116,7 @@ async fn shared_probe_stream_drop_releases_group_without_certifying_late_termina
             && receipt.attempts.len() == 1
     );
     ensure!(
-        receipt.attempts[0].candidate_index == 0
+        receipt.attempts[0].candidate_index == Some(0)
             && receipt.attempts[0].observed_http_status == Some(200)
     );
     ensure!(

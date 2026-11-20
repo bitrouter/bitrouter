@@ -66,7 +66,7 @@ async fn profiled_observer_only_root_reads_real_shared_count_without_rate_or_hea
     let binding = control.ordered_capabilities().await?.bind(
         revision.revision_id.clone(),
         "observer-call".try_into()?,
-        OrderedCandidateSelectionV1 {
+        OrderedCandidateSelection {
             schema_version: 1,
             admission_mode: initial.admission_mode,
             route: observer_route.clone(),
@@ -122,11 +122,11 @@ async fn profiled_observer_only_root_reads_real_shared_count_without_rate_or_hea
             .await?;
         let id = reply.metadata.execution_id.context("observer execution")?;
         let receipt = control
-            .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+            .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
             .await?;
         ensure!(
             receipt.outcome == Outcome::Completed
-                && receipt.accepted_selection.route == observer_route
+                && receipt_selection(&receipt)?.route == observer_route
         );
     }
     ensure!(
