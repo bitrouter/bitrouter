@@ -814,7 +814,7 @@ mod registry_tests {
         let pricing = Arc::new(PricingTable::new());
         assert!(pricing.snapshot(&route).tariff.guarantees_known_price());
         let mut prompt: bitrouter_ai::types::Prompt = serde_json::from_value(
-            json!({"model":"org/model","messages":[],"tools":[],"params":{"extra":{"service_tier":"priority"}},"stream":false}),
+            json!({"model":"org/model","messages":[],"tools":[],"params":{"extra_protocol":"chat_completions","extra":{"service_tier":"priority"}},"stream":false}),
         )?;
         let mut context =
             PipelineContext::new(crate::gateway::pipeline::types::PipelineRequest::new(
