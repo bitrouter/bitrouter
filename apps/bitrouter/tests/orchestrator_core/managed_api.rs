@@ -27,8 +27,6 @@ mod provider_limits;
 #[path = "managed_api/collaboration.rs"]
 mod collaboration;
 
-#[path = "managed_api/sdk.rs"]
-
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 

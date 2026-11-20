@@ -54,6 +54,7 @@ macro_rules! route_labels {
 
 route_labels! {
     /// The intent of the request.
+    #[derive(Default)]
     pub enum TaskFamily {
         /// Generate or implement code.
         CodeGeneration => "code:generation",
@@ -80,6 +81,7 @@ route_labels! {
         /// General agent work.
         AgentGeneral => "agent:general",
         /// Insufficient information to choose a semantic label.
+        #[default]
         Unknown => "unknown",
     }
 }
@@ -99,12 +101,6 @@ route_labels! {
         Finalize => "finalize",
         /// Insufficient information to choose a semantic label.
         Unknown => "unknown",
-    }
-}
-
-impl Default for TaskFamily {
-    fn default() -> Self {
-        Self::Unknown
     }
 }
 
