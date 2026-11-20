@@ -769,7 +769,7 @@ async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_recei
             .await
             .map_err(|error| anyhow::anyhow!("technical read failed: {:?}", error.0.code))?;
             let saved: Option<
-                bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1,
+                bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
             > = serde_json::from_slice(&bytes)?;
             ensure!(saved == Some(facts));
             let loaded =

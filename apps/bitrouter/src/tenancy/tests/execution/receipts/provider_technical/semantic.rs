@@ -100,11 +100,11 @@ async fn real_semantic_clock_precedes_output_hook_and_error_keeps_observed_prefi
                     == FirstSemanticKind::Text
             );
             ensure!(facts.operations[0].generation_duration_ms == Some(0));
-            let scoped = measured_v2(&harness, &Harness::client(false)?, &id)
+            let scoped = measured(&harness, &Harness::client(false)?, &id)
                 .await?
-                .context("actual post-error/hook v2 getter")?;
+                .context("actual post-error/hook getter")?;
             scoped.validate_against(&receipt)?;
-            ensure!(scoped.operation_view() == Some(facts.clone()));
+            ensure!(scoped == facts);
             let owner = scoped
                 .pipeline_scope
                 .as_ref()
@@ -328,7 +328,7 @@ async fn real_json_callback_wait_is_hop_and_context_time_not_provider_operation_
         ensure!(result.request_id == "observed-independent-context");
         drop(execution);
         let client = Harness::client(false)?;
-        let facts = measured_v2(&harness, &client, &id)
+        let facts = measured(&harness, &client, &id)
             .await?
             .context("actual durable JSON scope")?;
         let receipt = harness.receipt(&client, &id).await?;

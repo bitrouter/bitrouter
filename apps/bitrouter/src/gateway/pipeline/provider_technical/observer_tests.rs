@@ -2,7 +2,7 @@
 use super::*;
 use crate::tenancy::receipts::provider_technical::Capture;
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::tenancy::provider_technical_facts_v2::HopProfile;
+use bitrouter_ai::tenancy::provider_technical_facts::HopProfile;
 
 #[test]
 fn fork_slots_keep_actual_hop_identity_and_same_context_overlap_loses_only_observer() -> Result<()>

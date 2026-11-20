@@ -1,7 +1,7 @@
 //! Noncritical provider measurements. This journal never grants a send, waits
 //! for a producer, changes a receipt, or participates in its durable commitment.
 #[cfg(test)]
-use bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1;
+use bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts;
 use bitrouter_ai::tenancy::{
     identity::AttemptId,
     provider_technical_facts::{
@@ -182,7 +182,7 @@ impl Capture {
     pub(in crate::tenancy) fn take(
         &self,
         terminal: &super::store::format::Terminal,
-    ) -> Option<ProviderTechnicalFactsV1> {
+    ) -> Option<ProviderTechnicalFacts> {
         if !self.healthy() {
             return None;
         }
@@ -200,8 +200,11 @@ impl Capture {
             super::store::format::Terminal::V1(value) => value.receipt.execution_revision.clone(),
             super::store::format::Terminal::V2(value) => value.receipt.execution_revision.clone(),
         };
-        let result = ProviderTechnicalFactsV1 {
-            schema_version: 1,
+        let result = ProviderTechnicalFacts {
+            schema_version: 3,
+            pipeline_scope: None,
+            hop_observations: Vec::new(),
+            observer_hops: Vec::new(),
             receipt_format: match terminal.format() {
                 super::store::format::Format::V1 => 1,
                 super::store::format::Format::V2 => 2,
@@ -245,18 +248,18 @@ impl Capture {
 }
 impl Pending {
     #[cfg(test)]
-    pub(in crate::tenancy) fn operation_view(
+    pub(in crate::tenancy) fn operation_snapshot(
         &self,
         terminal: &super::store::format::Terminal,
-    ) -> Option<ProviderTechnicalFactsV1> {
-        self.facts(terminal, None, Vec::new())?.operation_view()
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts> {
+        self.facts(terminal, None, Vec::new())
     }
-    pub(in crate::tenancy) async fn finish_v3(
+    pub(in crate::tenancy) async fn finish(
         self,
         terminal: &super::store::format::Terminal,
         deadline: tokio::time::Instant,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v3::ProviderTechnicalFactsV3> {
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts> {
         tokio::select! {biased;
             ()=cancel.cancelled()=>return None,
             _=tokio::time::sleep_until(deadline)=>{},
@@ -270,30 +273,19 @@ impl Pending {
         // Observer validation/size failure is isolated by Prepared::capture;
         // the already-valid original scope remains eligible for its one write.
         Some(
-            bitrouter_ai::tenancy::provider_technical_facts_v3::ProviderTechnicalFactsV3 {
-                schema_version: 3,
-                scope,
+            bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts {
                 observer_hops: snapshot.observers,
+                ..scope
             },
         )
     }
-    #[cfg(test)]
-    pub(in crate::tenancy) async fn finish(
-        self,
-        terminal: &super::store::format::Terminal,
-        deadline: tokio::time::Instant,
-        cancel: &tokio_util::sync::CancellationToken,
-    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2> {
-        self.finish_v3(terminal, deadline, cancel)
-            .await
-            .map(|v| v.scope)
-    }
+
     fn facts(
         &self,
         terminal: &super::store::format::Terminal,
-        scope: Option<bitrouter_ai::tenancy::provider_technical_facts_v2::PipelineScope>,
-        hops: Vec<bitrouter_ai::tenancy::provider_technical_facts_v2::HopObservation>,
-    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2> {
+        scope: Option<bitrouter_ai::tenancy::provider_technical_facts::PipelineScope>,
+        hops: Vec<bitrouter_ai::tenancy::provider_technical_facts::HopObservation>,
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts> {
         if !self.capture.healthy() {
             return None;
         }
@@ -302,8 +294,9 @@ impl Pending {
             super::store::format::Terminal::V1(value) => value.receipt.execution_revision.clone(),
             super::store::format::Terminal::V2(value) => value.receipt.execution_revision.clone(),
         };
-        let result = bitrouter_ai::tenancy::provider_technical_facts_v2::ProviderTechnicalFactsV2 {
-            schema_version: 2,
+        let result = bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts {
+            schema_version: 3,
+            observer_hops: Vec::new(),
             receipt_format: match terminal.format() {
                 super::store::format::Format::V1 => 1,
                 super::store::format::Format::V2 => 2,

@@ -19,8 +19,6 @@ pub mod ordered;
 pub mod private_adapter;
 pub mod profile_observation;
 pub mod provider_technical_facts;
-pub mod provider_technical_facts_v2;
-pub mod provider_technical_facts_v3;
 pub mod resources;
 pub mod resources_v2;
 pub mod resources_v3;

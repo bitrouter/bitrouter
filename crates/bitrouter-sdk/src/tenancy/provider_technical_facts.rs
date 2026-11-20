@@ -1,40 +1,42 @@
-//! Read-only provider observations through the existing bounded Core transport.
+//! Read actual Core-owned scope through the existing bounded Core transport.
 use super::TenancyClient;
 use crate::error::{Error, Result};
 use bitrouter_ai::tenancy::{
     identity::{ExecutionId, InstallationId, TenantId},
-    provider_technical_facts::{MAX_BYTES, ProviderTechnicalFactsV1},
+    provider_technical_facts::MAX_BYTES,
+    provider_technical_facts::ProviderTechnicalFacts,
 };
 
 impl TenancyClient {
-    /// Read optional provider measurements for the original execution. Null means
-    /// not retained, never zero or a reason to repeat inference. Old Core routing
-    /// or version errors are returned through the existing service-error surface.
+    /// Read optional provider operation, pipeline, hop and observer measurements.
+    /// Validate against the original receipt
+    /// before interpreting any actual-arm or parent/child association.
     ///
     /// # Errors
-    /// Returns authorization, unsupported/missing execution, bounded transport,
-    /// schema or identity errors. Pair with `validate_against` or
-    /// `validate_against_v2` for the original receipt format.
-    pub async fn provider_technical_facts_v1(
+    /// Original authorization, unsupported Core route, bounded transfer,
+    /// malformed schema or identity errors. This method never retries or sends
+    /// a provider request, resumes a stream, or falls back to another source.
+    pub async fn provider_technical_facts(
         &self,
         installation: &InstallationId,
         tenant: &TenantId,
         execution: &ExecutionId,
-    ) -> Result<Option<ProviderTechnicalFactsV1>> {
+    ) -> Result<Option<ProviderTechnicalFacts>> {
         let request = self
             .http
             .get(self.url(&format!(
-                "tenants/{tenant}/executions/{execution}/provider-technical-facts/v1"
+                "tenants/{tenant}/executions/{execution}/provider-technical-facts"
             ))?)
             .header("Bitrouter-Installation-Id", installation.as_str());
-        let result: Option<ProviderTechnicalFactsV1> =
-            self.send_bounded(request, MAX_BYTES).await?;
+        let result: Option<ProviderTechnicalFacts> = self.send_bounded(request, MAX_BYTES).await?;
         if result.as_ref().is_some_and(|facts| {
             &facts.installation_id != installation
                 || &facts.tenant_id != tenant
                 || &facts.execution_id != execution
         }) {
-            return Err(Error::Response("provider technical identity mismatch"));
+            return Err(Error::Response(
+                "provider technical scope identity mismatch",
+            ));
         }
         Ok(result)
     }

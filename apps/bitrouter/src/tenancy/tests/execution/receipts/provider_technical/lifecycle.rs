@@ -242,7 +242,7 @@ async fn healthy_required_48_service_survives_optional_name_conflict_and_real_dd
             );
             let response = client
                 .get(format!(
-                    "{}/control/v1/tenants/{}/executions/{id}/provider-technical-facts/v1",
+                    "{}/control/v1/tenants/{}/executions/{id}/provider-technical-facts",
                     harness.base, harness.fixture.tenant
                 ))
                 .bearer_auth(token)
@@ -256,13 +256,29 @@ async fn healthy_required_48_service_survives_optional_name_conflict_and_real_dd
                 ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
                 let failure: bitrouter_ai::tenancy::operation::Error = response.json().await?;
                 ensure!(
-                    failure.code == bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable
+                    failure.code
+                        == bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable
                 );
             } else {
                 ensure!(response.status() == StatusCode::OK);
-                ensure!(response.headers().get("cache-control").is_some_and(|v| v == "no-store"));
-                ensure!(response.json::<Option<bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFactsV1>>().await?.is_none());
-                ensure!(!crate::db::migration::provider_technical::available(&harness.fixture.db).await?);
+                ensure!(
+                    response
+                        .headers()
+                        .get("cache-control")
+                        .is_some_and(|v| v == "no-store")
+                );
+                ensure!(
+                    response
+                        .json::<Option<
+                            bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
+                        >>()
+                        .await?
+                        .is_none()
+                );
+                ensure!(
+                    !crate::db::migration::provider_technical::available(&harness.fixture.db)
+                        .await?
+                );
             }
             let version = harness
                 .fixture

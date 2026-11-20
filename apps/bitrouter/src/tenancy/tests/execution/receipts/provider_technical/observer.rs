@@ -8,7 +8,7 @@ use crate::gateway::pipeline::{
     types::{PipelineInput, PipelineRequest, RoutingTarget},
 };
 use bitrouter_ai::{
-    tenancy::provider_technical_facts_v3::{ObserverHopProfile, ProviderTechnicalFactsV3},
+    tenancy::provider_technical_facts::{ObserverHopProfile, ProviderTechnicalFacts},
     types::{ApiProtocol, OperationScope, StreamPart},
 };
 use futures::StreamExt;
@@ -57,13 +57,13 @@ async fn real_json_failed_open_and_success_sse_keep_exact_observer_and_guard_pro
    if streamed {let response=pipeline.clone().execute_stream(request).await;if failed{ensure!(response.is_err());}else{let mut parts=response?;while let Some(part)=tokio::time::timeout(TIMEOUT,parts.next()).await?{part?;}drop(parts);}}else{pipeline.execute(request).await?;}
    drop(execution);tokio::time::timeout(TIMEOUT,harness.fixture.service.technical_io.wait(&id)).await??;
    let client=Harness::client(false)?;
-   let response=client.get(format!("{}/control/v1/tenants/{}/executions/{id}/provider-technical-facts/v3",harness.base,harness.fixture.tenant)).bearer_auth(harness.credential.secret.as_deref().context("actual issued reader")?).header("Bitrouter-Installation-Id",harness.fixture.installation.as_str()).send().await?;
+   let response=client.get(format!("{}/control/v1/tenants/{}/executions/{id}/provider-technical-facts",harness.base,harness.fixture.tenant)).bearer_auth(harness.credential.secret.as_deref().context("actual issued reader")?).header("Bitrouter-Installation-Id",harness.fixture.installation.as_str()).send().await?;
    ensure!(response.status()==StatusCode::OK && response.headers().get("cache-control").is_some_and(|v|v=="no-store"));
-   let data:Option<ProviderTechnicalFactsV3>=response.json().await?;let data=data.context("real retained observer/scopes")?;
+   let data:Option<ProviderTechnicalFacts>=response.json().await?;let data=data.context("real retained observer/scopes")?;
    let original=harness.receipt(&client,&id).await?;data.validate_against(&original)?;
-   ensure!(measured_v2(&harness,&client,&id).await?==Some(data.scope.clone()));ensure!(measured(&harness,&client,&id).await?==data.scope.operation_view());
-   if mode=="sse"{ensure!(data.observer_hops.is_empty(),"successful open duplicated notify sample");ensure!(data.scope.hop_observations[0].profile==bitrouter_ai::tenancy::provider_technical_facts_v2::HopProfile::CoreStreamHopNotifyV1);}else{
-    ensure!(data.observer_hops.len()==1);let observed=&data.observer_hops[0];let guard=&data.scope.hop_observations[0];
+   ensure!(measured(&harness,&client,&id).await?==Some(data.clone()));
+   if mode=="sse"{ensure!(data.observer_hops.is_empty(),"successful open duplicated notify sample");ensure!(data.hop_observations[0].profile==bitrouter_ai::tenancy::provider_technical_facts::HopProfile::CoreStreamHopNotifyV1);}else{
+    ensure!(data.observer_hops.len()==1);let observed=&data.observer_hops[0];let guard=&data.hop_observations[0];
     ensure!(observed.profile==if failed{ObserverHopProfile::CoreStreamOpenHopObserverFloorV1}else{ObserverHopProfile::CoreJsonHopObserverFloorV1});
     ensure!(observed.attempt_ids==guard.attempt_ids && observed.closing_attempt_id==guard.closing_attempt_id);
     ensure!(guard.duration_ms.context("original outer guard scalar")?>=observed.duration_ms.saturating_add(25),"later end observer leaked into observer-local scalar");

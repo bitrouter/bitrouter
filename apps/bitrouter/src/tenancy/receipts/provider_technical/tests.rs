@@ -46,7 +46,7 @@ fn usage() -> Usage {
         complete: false,
     }
 }
-fn facts() -> Result<ProviderTechnicalFactsV1> {
+fn facts() -> Result<ProviderTechnicalFacts> {
     let capture = Arc::new(Capture::default());
     let operation = capture.begin(Instant::now(), false);
     operation.armed(&"attempt".try_into()?);
@@ -54,6 +54,29 @@ fn facts() -> Result<ProviderTechnicalFactsV1> {
     operation.selected();
     capture.freeze();
     capture.take(&terminal()?).context("unit observations")
+}
+
+#[test]
+fn invalid_observer_is_omitted_without_changing_operation_facts() -> Result<()> {
+    use bitrouter_ai::tenancy::provider_technical_facts::{
+        HopEnd, ObserverHop, ObserverHopProfile,
+    };
+    let original = facts()?;
+    let mut captured = original.clone();
+    captured.observer_hops.push(ObserverHop {
+        profile: ObserverHopProfile::CoreJsonHopObserverFloorV1,
+        attempt_ids: vec!["foreign".try_into()?],
+        closing_attempt_id: "foreign".try_into()?,
+        duration_ms: 0,
+        end: HopEnd::Completed,
+    });
+    let prepared = storage::Prepared::capture(&captured)?;
+    let decoded: ProviderTechnicalFacts = serde_json::from_str(&prepared.json)?;
+    assert_eq!(decoded, original);
+    let mut invalid_operation = captured;
+    invalid_operation.operations[0].attempt_ids.clear();
+    assert!(storage::Prepared::capture(&invalid_operation).is_err());
+    Ok(())
 }
 
 #[test]
