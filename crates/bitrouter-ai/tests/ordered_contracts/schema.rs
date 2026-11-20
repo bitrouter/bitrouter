@@ -184,6 +184,14 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
 
 #[test]
 fn shared_schemas_require_dispatch_and_preserve_strict_bounds() -> TestResult {
+    let mut selection = serde_json::to_value(schemars::schema_for!(AcceptedSelection))?;
+    assert_eq!(
+        selection["properties"]["admission_mode"]["enum"],
+        json!(["unprofiled", "profiled"])
+    );
+    let object = selection.as_object_mut().ok_or("selection schema")?;
+    object.remove("$schema");
+    object.remove("title");
     for schema in [
         serde_json::to_value(schemars::schema_for!(ExecutionReceipt))?,
         serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidence))?,
@@ -196,6 +204,11 @@ fn shared_schemas_require_dispatch_and_preserve_strict_bounds() -> TestResult {
         assert_eq!(
             schema["properties"]["dispatch"]["oneOf"][1]["properties"]["mode"]["const"],
             "ordered"
+        );
+        assert_eq!(
+            schema["properties"]["dispatch"]["oneOf"][1]["properties"]["accepted_selection"],
+            selection,
+            "embedded accepted selection drift"
         );
     }
     Ok(())
