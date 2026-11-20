@@ -1446,7 +1446,7 @@ pub struct ProviderModel {
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,

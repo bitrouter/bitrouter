@@ -399,7 +399,8 @@ async fn native_subscription_reservation_survives_configuration_restore()
 #[tokio::test]
 async fn native_output_budget_follows_the_effort_eligible_route()
 -> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortConfig};
+    use crate::gateway::model::capabilities::ReasoningEffortConfig;
+    use bitrouter_ai::types::ReasoningEffort;
     for (ineligible, eligible) in [(128_000, 32_000), (32_000, 128_000)] {
         let workspace = TempDir::new()?;
         let executor = Arc::new(Recording {

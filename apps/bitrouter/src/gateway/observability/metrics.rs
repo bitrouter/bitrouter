@@ -10,7 +10,7 @@
 //! at it.
 //!
 //! This trait and `ObserveHook` are host-side rendering seams. The shared span
-//! schema and attribute vocabulary live in [`bitrouter_ai::observe`], without
+//! schema and attribute vocabulary live in [`crate::gateway::observability`], without
 //! depending on a renderer or this host runtime.
 //!
 //! Spend / token / rate aggregations are *not* SDK concerns. Any deployment

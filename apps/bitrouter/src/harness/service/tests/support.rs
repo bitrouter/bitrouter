@@ -25,13 +25,13 @@ use crate::harness::storage::{ExecutionRecord, ExecutionStore};
 use crate::harness::thread::ThreadRequest;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::TurnRequest;
-use bitrouter_ai::harness::agent::AgentConfig;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
 use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 fn routing_target() -> RoutingTarget {

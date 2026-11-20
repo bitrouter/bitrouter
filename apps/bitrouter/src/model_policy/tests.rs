@@ -250,17 +250,10 @@ fn raw_policy_byte_and_collection_limits_are_enforced() -> Result<()> {
     decode(&serde_json::to_string(&at_policy_limit)?)?;
     let mut too_many_policies = at_policy_limit;
     too_many_policies["policies"]["policy-256"] = minimal["policies"]["auto"].clone();
-    let mut too_many_routes = minimal;
-    too_many_routes["policies"]["auto"]["routes"] = (0..4097)
-        .map(|n| (format!("route-{n:04}"), json!("only")))
-        .collect::<serde_json::Map<_, _>>()
-        .into();
-    // The over-limit route map must fail on its count before class parsing.
     for (invalid, reason) in [
         (too_many_tiers, "policy tier count"),
         (too_many_tools, "policy tool tier capacity exceeded"),
         (too_many_policies, "policy count"),
-        (too_many_routes, "policy route capacity exceeded"),
     ] {
         for raw in [
             serde_json::to_string(&invalid)?,
@@ -273,6 +266,77 @@ fn raw_policy_byte_and_collection_limits_are_enforced() -> Result<()> {
                 error.to_string().contains(reason),
                 "wrong refusal for {reason}: {error:#}"
             );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn typed_route_domain_and_tier_references_are_enforced() -> Result<()> {
+    let mut value = source();
+    let families = [
+        "code:generation",
+        "code:debugging",
+        "code:review",
+        "code:sql_database",
+        "code:frontend_ui",
+        "code:devops_config",
+        "code:repository_analysis",
+        "agent:multi_step_planning",
+        "agent:workflow_execution",
+        "agent:web_research",
+        "agent:memory_operations",
+        "agent:general",
+        "unknown",
+    ];
+    let steps = [
+        "orchestrate",
+        "implement",
+        "mechanical",
+        "verify",
+        "finalize",
+        "unknown",
+    ];
+    let mut routes = serde_json::Map::new();
+    for family in families {
+        for step in steps {
+            for risk in ["normal", "guarded"] {
+                routes.insert(format!("{family}|{step}|{risk}"), json!("economy"));
+            }
+        }
+    }
+    assert_eq!(routes.len(), 156);
+    value["policies"]["auto"]["routes"] = routes.into();
+    value["policies"]["auto"]["classifier_digest"] =
+        json!(compiled_predictor_contract().config_digest);
+    for raw in [
+        serde_json::to_string(&value)?,
+        serde_saphyr::to_string(&value)?,
+    ] {
+        assert_eq!(decode(&raw)?.policies["auto"].routes.len(), 156);
+    }
+    for (key, tier, reason) in [
+        (
+            "code:generation|implement|normal",
+            "missing",
+            "policy route tier must exist",
+        ),
+        (
+            "code:generation|implement|context",
+            "economy",
+            "canonical task-family|next-step|risk",
+        ),
+    ] {
+        let mut invalid = value.clone();
+        invalid["policies"]["auto"]["routes"][key] = json!(tier);
+        for raw in [
+            serde_json::to_string(&invalid)?,
+            serde_saphyr::to_string(&invalid)?,
+        ] {
+            let error = decode(&raw)
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("accepted {key} -> {tier}"))?;
+            assert!(format!("{error:#}").contains(reason), "{error:#}");
         }
     }
     Ok(())

@@ -1,6 +1,6 @@
 //! Public harness inspection contracts. Execution and storage remain application-owned.
 
-use crate::policy::{NextStep, TaskFamily};
+use bitrouter_ai::policy::{NextStep, TaskFamily};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

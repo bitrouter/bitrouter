@@ -11,11 +11,11 @@ use super::threads::unknown_thread;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
 use crate::harness::thread::ThreadCloseReceipt;
 use crate::harness::thread::ThreadTarget;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnEvent;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::harness::turn::VerificationStatus;
 
@@ -152,7 +152,8 @@ impl ThreadService {
                     turn_id: turn_id.clone(),
                     fact: Box::new(ExecutionRecord::TurnLifecycle {
                         turn_id: turn_id.clone(),
-                        lifecycle: bitrouter_ai::harness::turn::TurnLifecycle::CancelRequested,
+                        lifecycle:
+                            crate::managed_contract::harness::turn::TurnLifecycle::CancelRequested,
                     }),
                 });
             }
@@ -248,7 +249,8 @@ impl ThreadService {
         &self,
         thread_id: &str,
         key: &str,
-    ) -> Result<Option<bitrouter_ai::harness::thread::ThreadSnapshot>, ServiceError> {
+    ) -> Result<Option<crate::managed_contract::harness::thread::ThreadSnapshot>, ServiceError>
+    {
         let mut completed = None;
         self.scan_receipt(thread_id, |record| {
             if let ExecutionRecord::ThreadCloseCompleted {

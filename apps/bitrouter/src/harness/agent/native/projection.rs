@@ -4,9 +4,9 @@ use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 
 use crate::harness::agent::RunEvent;
 use crate::harness::storage::ExecutionRecord;
+use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::item::CallRecord;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::harness::item::CallOrigin;
-use bitrouter_ai::harness::item::CallRecord;
 use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[derive(Default)]

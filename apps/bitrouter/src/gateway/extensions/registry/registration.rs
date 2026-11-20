@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use bitrouter_ai::extension::request_check::Callback;
+use crate::gateway::extensions::request_check::Callback;
 use bitrouter_ai::types::OperationScope;
 
 /// One statically linked implementation consumed by a host at startup.

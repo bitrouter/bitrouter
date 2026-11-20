@@ -90,10 +90,6 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
             "policy tier count must be 1..=256"
         );
         ensure!(
-            policy.routes.len() <= 4096,
-            "policy route capacity exceeded"
-        );
-        ensure!(
             policy.tool_safe_tiers.len() <= 256,
             "policy tool tier capacity exceeded"
         );

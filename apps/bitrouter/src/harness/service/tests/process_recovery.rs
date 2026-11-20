@@ -21,12 +21,12 @@ use crate::harness::storage::StoredExecution;
 use crate::harness::storage::ThreadHistoryChunk;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::thread::WorkspaceGrant;
-use bitrouter_ai::harness::item::CallOrigin;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::ExecutionOwner;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadRecoveryRequest;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadRecoveryRequest;
+use crate::managed_contract::harness::thread::ThreadStatus;
 
 #[derive(Serialize, Deserialize)]
 struct JournalImage {
@@ -75,7 +75,7 @@ impl ExecutionStore for CrashStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(&self, id: &str) -> Result<Option<ExecutionOwner>, String> {
@@ -285,7 +285,7 @@ async fn native_process_loss_at_commit_windows_never_retires_owner_or_replays_wo
         // Reopen the test journal image with the original active owner. This
         // deliberately does not manufacture a stopped proof after waitpid.
         let memory = Arc::new(MemoryExecutionStore::default());
-        let bitrouter_ai::harness::runtime::OwnerClaim::Acquired { owner } =
+        let crate::managed_contract::harness::runtime::OwnerClaim::Acquired { owner } =
             memory.claim_owner(&image.owner.server_instance_id).await?
         else {
             return Err("journal owner restore failed".into());

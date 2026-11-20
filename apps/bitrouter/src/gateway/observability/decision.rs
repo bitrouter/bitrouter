@@ -1,12 +1,12 @@
 //! Bounded request observation shared by gateway settlement and evaluation consumers.
 
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
 use crate::gateway::pipeline::settlement::SettlementContext;
 use crate::gateway::routing::exploration::RouteAssignment;
 use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::storage::evaluation::canonical_digest;
 use bitrouter_ai::eval::{EvidenceItem, RouteDecisionMeasurement};
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::policy::TaskFamily;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::ser::SerializeStruct;
@@ -714,8 +714,8 @@ pub(crate) mod tests {
             decision_id: format!("decision-{request_id}"),
             policy: "auto:cost".into(),
             policy_digest: DIGEST.into(),
-            route_projection: "opening".into(),
-            request_key: "opening".into(),
+            route_projection: "code:review|implement|normal".into(),
+            request_key: "unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),

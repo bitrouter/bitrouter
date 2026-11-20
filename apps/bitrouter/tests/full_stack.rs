@@ -22,9 +22,9 @@ use std::time::Duration;
 
 use axum_test::TestServer;
 use bitrouter::config;
+use bitrouter::gateway::extensions::request_check::Decision;
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
-use bitrouter_ai::extension::request_check::Decision;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

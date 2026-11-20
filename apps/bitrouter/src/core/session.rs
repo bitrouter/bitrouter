@@ -1,6 +1,7 @@
 //! Managed session transitions. Provider calls and harness commits run outside
 //! the state lock. A separate commit serializer preserves the one-batch rule.
 
+use crate::managed_contract::harness::inspection::AgentStatus;
 use crate::skills::mcp::HeldMcpSkillExt;
 use crate::storage::checkpoint::snapshot::AgentState;
 use crate::storage::checkpoint::snapshot::AgentTurn;
@@ -16,7 +17,6 @@ use crate::storage::checkpoint::snapshot::RootRun;
 use crate::storage::checkpoint::snapshot::RunStatus;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::pending_dependencies;
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 use crate::storage::checkpoint::validation::HarnessManifestExt;
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
@@ -119,7 +119,7 @@ pub trait HarnessPort: Send + Sync {
         _server: &str,
         _uri: &str,
         _cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, CoreError> {
         Err(reject(
             ErrorCode::UnsupportedCapability,
             "host does not resolve MCP skill metadata",
@@ -2577,8 +2577,12 @@ impl CoreSession {
             agent_turn_id: turn.agent_turn_id.clone(),
             provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
-                bitrouter_ai::harness::agent::ModelMode::Fixed => NativeModelSelection::Fixed,
-                bitrouter_ai::harness::agent::ModelMode::Policy => NativeModelSelection::Policy,
+                crate::managed_contract::harness::agent::ModelMode::Fixed => {
+                    NativeModelSelection::Fixed
+                }
+                crate::managed_contract::harness::agent::ModelMode::Policy => {
+                    NativeModelSelection::Policy
+                }
             },
         });
         {
@@ -4339,7 +4343,9 @@ impl NativeExecutionControl for StepControl {
                         "frozen_model_after_context_rebuild".into()
                     } else if joint_model.is_some() {
                         "decision_context_model_policy".into()
-                    } else if modes.model == bitrouter_ai::harness::agent::ModelMode::Fixed {
+                    } else if modes.model
+                        == crate::managed_contract::harness::agent::ModelMode::Fixed
+                    {
                         "fixed_override".into()
                     } else {
                         "named_model_policy".into()

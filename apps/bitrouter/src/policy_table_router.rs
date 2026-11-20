@@ -1229,7 +1229,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::gateway::routing::assessment::{Assessment, Judgment};
-    use bitrouter_ai::harness::inspection::ProgressState;
+    use crate::managed_contract::harness::inspection::ProgressState;
     use bitrouter_ai::policy::NextStep;
     use bitrouter_ai::policy::TaskFamily;
 

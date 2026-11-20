@@ -571,9 +571,8 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     ensure!(
         denied
             .downcast_ref::<bitrouter::client::agent_local::ReplyError>()
-            .is_some_and(
-                |error| error.code == bitrouter_ai::harness::runtime::ErrorCode::Unauthorized
-            )
+            .is_some_and(|error| error.code
+                == bitrouter::managed_contract::harness::runtime::ErrorCode::Unauthorized)
     );
     loop {
         let snapshot: Value = client
@@ -585,7 +584,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
             .json()
             .await?;
         if snapshot["turn"]["status"] == "completed" {
-            let inventory: bitrouter_ai::harness::resources::HarnessInventory =
+            let inventory: bitrouter::managed_contract::harness::resources::HarnessInventory =
                 serde_json::from_value(snapshot["turn"]["resources"].clone())?;
             ensure!(
                 inventory.skills.is_empty() && inventory.local_skills.skills.is_empty(),
@@ -741,7 +740,8 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let (local_thread, _) = local_client
         .create_and_start(
             unlisted.clone(),
-            bitrouter_ai::harness::agent::AgentConfig::fixed("test-model", None).read_only(),
+            bitrouter::managed_contract::harness::agent::AgentConfig::fixed("test-model", None)
+                .read_only(),
             None,
             "Local inspection".into(),
         )

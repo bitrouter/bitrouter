@@ -168,7 +168,7 @@ existence of cached content; listing a skill does not authorize execution.
 Upstream connections use configured server credentials, not a downstream user's
 inference credential. Connection sharing does not confer tenant isolation.
 
-Schemas and bounded skills representations are in the [wire types](../../crates/bitrouter-ai/src/protocol/mcp_skills.rs).
+Schemas and bounded skills representations are in the [wire types](../../apps/bitrouter/src/skills/wire.rs).
 The protocol is evolving; callers must use discovered capabilities, tolerate
 unknown optional response fields, reject unsupported required behavior and
 handle errors.

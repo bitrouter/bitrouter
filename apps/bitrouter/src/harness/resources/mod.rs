@@ -1,10 +1,10 @@
 //! Workspace-scoped project instructions, MCP and skills for the native runtime.
 //! AGENTS.md augments model instructions; resource discovery never grants permission.
 
-use crate::skills::mcp::SkillScopeExt;
-use bitrouter_ai::harness::resources::HarnessInventory;
+use crate::managed_contract::harness::resources::HarnessInventory;
 #[cfg(feature = "core")]
-use bitrouter_ai::harness::resources::McpTool;
+use crate::managed_contract::harness::resources::McpTool;
+use crate::skills::mcp::SkillScopeExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -204,13 +204,13 @@ impl HarnessResources {
         let local_skills = if let Some(library) = &config.library {
             match discover_with_authority(discovery, library.catalog(workspace, caller)).await? {
                 Ok(catalog) => catalog,
-                Err(error) => bitrouter_ai::harness::skills::LocalSkillCatalog {
+                Err(error) => crate::managed_contract::harness::skills::LocalSkillCatalog {
                     skills: Vec::new(),
                     problems: vec![error],
                 },
             }
         } else {
-            bitrouter_ai::harness::skills::LocalSkillCatalog::default()
+            crate::managed_contract::harness::skills::LocalSkillCatalog::default()
         };
         // Unknown effects are not exposed in read-only mode, regardless of MCP hints.
         let tool_servers: std::collections::BTreeSet<_> = config
@@ -224,8 +224,10 @@ impl HarnessResources {
             .mcp_sources
             .iter()
             .filter(|(_, grant)| {
-                bitrouter_ai::harness::skills::SkillScope::authorize(grant, caller, workspace)
-                    .is_ok()
+                crate::managed_contract::harness::skills::SkillScope::authorize(
+                    grant, caller, workspace,
+                )
+                .is_ok()
             })
             .map(|(server, _)| server.clone())
             .collect();
@@ -266,7 +268,7 @@ impl HarnessResources {
             caller,
             policy: &config.skills,
         };
-        let mut mcp_skills = bitrouter_ai::harness::skills::McpSkillCatalog::default();
+        let mut mcp_skills = crate::managed_contract::harness::skills::McpSkillCatalog::default();
         for server in allowed_sources {
             let result = discover_with_authority(
                 discovery,
@@ -297,15 +299,13 @@ impl HarnessResources {
                     mcp_skills.skills.append(&mut catalog.skills);
                     mcp_skills.excluded.append(&mut catalog.excluded);
                 }
-                Err(reason) => {
-                    mcp_skills
-                        .excluded
-                        .push(bitrouter_ai::harness::skills::McpSkillProblem {
-                            server,
-                            uri: None,
-                            reason,
-                        })
-                }
+                Err(reason) => mcp_skills.excluded.push(
+                    crate::managed_contract::harness::skills::McpSkillProblem {
+                        server,
+                        uri: None,
+                        reason,
+                    },
+                ),
             }
         }
         let binding_digest =
@@ -341,7 +341,7 @@ impl HarnessResources {
 
     pub(crate) async fn managed_skill_file(
         &self,
-        binding: &bitrouter_ai::harness::skills::LocalSkill,
+        binding: &crate::managed_contract::harness::skills::LocalSkill,
         path: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, String> {
@@ -357,7 +357,7 @@ impl HarnessResources {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, String> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, String> {
         self.mcp
             .lock()
             .await
@@ -402,7 +402,7 @@ impl HarnessResources {
 
     pub(crate) async fn mcp_skill_file(
         &self,
-        held: &bitrouter_ai::harness::skills::HeldMcpSkill,
+        held: &crate::managed_contract::harness::skills::HeldMcpSkill,
         read: crate::skills::mcp::SkillRead<'_>,
         cancel: &CancellationToken,
     ) -> Result<crate::skills::mcp::VerifiedSkillFile, String> {

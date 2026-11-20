@@ -51,16 +51,16 @@ allowlisted metadata and a `Body::Json` or `Body::Stream`. The stream yields
 typed data events. Its protocol end is not a receipt or settlement decision.
 The `stream_*` methods yield protocol-specific data events.
 
-Enable `bitrouter-ai`'s `axum` feature in the consuming application and compose
-its `axum::response::Reply` with your handlers. Map SDK errors to safe public
+Compose `bitrouter::gateway::http_adapter::response::Reply` with your handlers
+when embedding the application adapters. Map SDK errors to safe public
 errors yourself; neither headers nor private diagnostics are forwarded by the
 adapter. The SDK itself has no production Axum dependency.
 
-The [Axum gateway example](examples/axum_gateway.rs) demonstrates all three
+The [Axum gateway example](../../apps/bitrouter/examples/axum_gateway.rs) demonstrates all three
 generation protocols and Decisions using a shared connection pool:
 
 ```sh
-BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter-sdk --example axum_gateway
+BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter --example axum_gateway
 ```
 
 It listens on loopback port 4357; deployment identity, middleware and business

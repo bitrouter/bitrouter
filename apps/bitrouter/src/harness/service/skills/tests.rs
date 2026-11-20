@@ -1,8 +1,10 @@
 use super::*;
 use crate::harness::agent::AgentConfigExt;
 use crate::harness::storage::MemoryExecutionStore;
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::thread::{PermissionProfile, ThreadSnapshot, ThreadStatus};
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

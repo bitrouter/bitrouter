@@ -81,7 +81,12 @@ impl From<RequestRow> for RequestView {
             cache_read_tokens: row.cache_read_tokens,
             cache_write_tokens: row.cache_write_tokens,
             charge_micro_usd: row.estimated_charge_micro_usd,
-            charge_status: row.charge_status.as_str().to_string(),
+            charge_status: match row.charge_status {
+                ChargeStatus::LegacyUnknown => ChargeStatus::Unknown,
+                status => status,
+            }
+            .as_str()
+            .to_string(),
             latency_ms: row.latency_ms,
             error: row.error,
             episode_id: row.episode_id,
@@ -668,7 +673,7 @@ mod tests {
     fn each_row_carries_its_charge_evidence() {
         let value = json(&report(None, vec![row(), unpriced()]));
         assert_eq!(value["rows"][0]["charge_status"], "computed");
-        assert_eq!(value["rows"][1]["charge_status"], "legacy_unknown");
+        assert_eq!(value["rows"][1]["charge_status"], "unknown");
     }
 
     #[test]

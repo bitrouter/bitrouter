@@ -1,6 +1,7 @@
 # BitRouter service API
 
-Status: **accepted, `service-api/1.0.0-beta.6`**. This is the single
+Status: **accepted, `service-api/1.0.0-beta.6`**. The [code constant](../../../crates/bitrouter-ai/src/control/mod.rs)
+identifies this contract independently of transport versions. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -925,7 +926,7 @@ must keep it disabled or use provider credentials with genuinely isolated state.
 The option is immutable for a serving instance; restart requires fresh discovery.
 
 Authenticated `GET /control/v1/tenancy/ordered/native-controls/capabilities`
-returns the closed [version-one descriptor](ordered-native-controls-capabilities-v1.schema.json).
+returns the closed [version-one descriptor](ordered-native-controls-capabilities.schema.json).
 It binds installation, instance and capability revision, reports current authority
 revision, and enables the mode only when operator policy and ordered dispatch
 readiness both hold. The SDK

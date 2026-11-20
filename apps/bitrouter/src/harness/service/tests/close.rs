@@ -7,7 +7,7 @@ use super::support::{app, final_turn, input, target, thread_request, tool_call, 
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::harness::turn::CancelTurnRequest;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 #[tokio::test]
@@ -210,19 +210,19 @@ impl ExecutionStore for CloseStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit(
@@ -272,7 +272,7 @@ impl ExecutionStore for CloseStore {
     }
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -325,7 +325,7 @@ async fn close_store_failure_preserves_fence_and_is_recovery_bound_after_restart
         .ok_or("close falsely succeeded")?;
     assert_eq!(
         error.code,
-        bitrouter_ai::harness::runtime::ErrorCode::StorageUnavailable
+        crate::managed_contract::harness::runtime::ErrorCode::StorageUnavailable
     );
     assert_eq!(
         service.read_thread(&target, &caller)?.status,
@@ -363,7 +363,7 @@ async fn close_store_failure_preserves_fence_and_is_recovery_bound_after_restart
     };
     let loaded = restarted.load_thread(&fresh_target, &caller).await?;
     assert_eq!(loaded.thread.status, ThreadStatus::RecoveryRequired);
-    assert!(loaded.recovery.ok_or("recovery report missing")?.blockers.iter().any(|blocker|matches!(blocker,bitrouter_ai::harness::thread::RecoveryBlocker::InvalidRecord{detail} if detail.contains("close"))));
+    assert!(loaded.recovery.ok_or("recovery report missing")?.blockers.iter().any(|blocker|matches!(blocker,crate::managed_contract::harness::thread::RecoveryBlocker::InvalidRecord{detail} if detail.contains("close"))));
     restarted.shutdown().await;
     Ok(())
 }

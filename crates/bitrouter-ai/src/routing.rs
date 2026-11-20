@@ -1,7 +1,6 @@
 //! Public routing identities and policy data carried by service APIs.
 //! Selection, authorization and execution remain application-owned.
 
-use crate::event::PipelineEvent;
 use serde::{Deserialize, Serialize};
 
 /// How a cascade chain should be ordered.
@@ -54,10 +53,4 @@ pub struct RouterRequestIdentity {
     pub original_selector: String,
     /// Versioned, redaction-safe effective binding digest.
     pub binding_digest: String,
-}
-
-impl PipelineEvent for RouterRequestIdentity {
-    fn event_name(&self) -> &'static str {
-        "router.resolved"
-    }
 }

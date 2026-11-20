@@ -3,7 +3,7 @@
 //! Hosts emit this event during settlement. Exporters apply the schema's
 //! reserved-key and scalar-value rules without exposing transport types here.
 
-use crate::event::PipelineEvent;
+use super::event::PipelineEvent;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 /// `$ai_total_cost_usd`).
 ///
 /// The full reserved region is the committed artifact
-/// `crates/bitrouter-ai/span-schema.json`.
+/// `apps/bitrouter/span-schema.json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpanAttributes(pub Map<String, Value>);
 

@@ -5,10 +5,15 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::harness::agent::ModelMode;
-use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
-use bitrouter_ai::harness::thread::{ThreadHistoryPage, ThreadSnapshot, ThreadView};
-use bitrouter_ai::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot};
+use crate::managed_contract::harness::agent::ModelMode;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeCapabilities;
+use crate::managed_contract::harness::thread::ThreadHistoryPage;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::SteeringReceipt;
 use bitrouter_ai::types::ReasoningEffort;
 
 pub const PROTOCOL_VERSION: u32 = 2;
@@ -16,7 +21,7 @@ pub const PROTOCOL_VERSION: u32 = 2;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CreateThreadRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
+    pub skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
     pub workspace: PathBuf,
     pub model: String,
     #[serde(default)]

@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::ApiProtocol;
 use serde::Serialize;
 

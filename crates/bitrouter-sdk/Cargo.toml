@@ -31,7 +31,6 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-bitrouter-ai = { workspace = true, features = ["axum"] }
 flate2 = "1"
 axum.workspace = true
 bytes.workspace = true

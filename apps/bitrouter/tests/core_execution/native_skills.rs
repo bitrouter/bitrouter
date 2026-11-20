@@ -3,11 +3,13 @@ use bitrouter::gateway::model::decision::types::{
     Answer, DecisionError, DecisionRequest, DecisionResponse, DecisionUsage,
 };
 use bitrouter::gateway::model::decision::{DecisionExecutor, DecisionRuntime};
+use bitrouter::managed_contract::harness::skills::LocalScope;
+use bitrouter::managed_contract::harness::skills::LocalSkill;
+use bitrouter::managed_contract::harness::skills::SkillConstraints;
+use bitrouter::managed_contract::harness::skills::SkillSelector;
 use bitrouter::skills::mcp::HeldMcpSkillExt;
 use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter::storage::skills::{SkillCatalog, SkillSource};
-use bitrouter_ai::harness::skills::{LocalScope, LocalSkill};
-use bitrouter_ai::harness::skills::{SkillConstraints, SkillSelector};
 use bitrouter_ai::types::Tool;
 use std::collections::BTreeMap;
 use tokio_util::sync::CancellationToken;
@@ -186,7 +188,7 @@ struct NativeSkills {
     read_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     read_seen: tokio::sync::Semaphore,
     read_token: Mutex<Option<CancellationToken>>,
-    direct: Mutex<Vec<bitrouter_ai::harness::skills::HeldMcpSkill>>,
+    direct: Mutex<Vec<bitrouter::managed_contract::harness::skills::HeldMcpSkill>>,
     metadata_reads: AtomicUsize,
     file_reads: AtomicUsize,
     supporting_bytes: Mutex<Vec<u8>>,
@@ -292,21 +294,21 @@ impl NativeSkills {
         reference: &str,
         supporting: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        use bitrouter_ai::harness::skills::{HeldMcpSkill, SkillOrigin, SkillScope};
+        use bitrouter::managed_contract::harness::skills::HeldMcpSkill;
+        use bitrouter::managed_contract::harness::skills::SkillOrigin;
+        use bitrouter::managed_contract::harness::skills::SkillScope;
         let host = Self::new(durable, marker).await?;
         let body = format!(
             "---\nname: review\ndescription: review workflow\nallowed-tools: shell\n---\n{marker}\n"
         )
         .into_bytes();
-        let entry: bitrouter_ai::protocol::mcp_skills::SkillEntry = serde_json::from_value(
-            json!({
-                "uri":"skill://review/SKILL.md", "frontmatter":{"name":"review","description":"review workflow","allowed-tools":"shell"},
-                "resources":[
-                    {"uri":"skill://review/SKILL.md","digest":format!("sha256:{}",sha256(&body)),"size":body.len()},
-                    {"uri":reference,"digest":format!("sha256:{}",sha256(supporting)),"size":supporting.len()}
-                ], "fixtureExtension":{"retained":true},
-            }),
-        )?;
+        let entry: bitrouter::skills::wire::SkillEntry = serde_json::from_value(json!({
+            "uri":"skill://review/SKILL.md", "frontmatter":{"name":"review","description":"review workflow","allowed-tools":"shell"},
+            "resources":[
+                {"uri":"skill://review/SKILL.md","digest":format!("sha256:{}",sha256(&body)),"size":body.len()},
+                {"uri":reference,"digest":format!("sha256:{}",sha256(supporting)),"size":supporting.len()}
+            ], "fixtureExtension":{"retained":true},
+        }))?;
         fn canonical(value: serde_json::Value) -> serde_json::Value {
             match value {
                 serde_json::Value::Object(values) => serde_json::Value::Object(
@@ -405,7 +407,7 @@ impl HarnessPort for NativeSkills {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+    ) -> Result<bitrouter::managed_contract::harness::skills::HeldMcpSkill, CoreError> {
         self.metadata_reads.fetch_add(1, Ordering::SeqCst);
         if cancel.is_cancelled() {
             return Err(CoreError::rejected(
@@ -1933,9 +1935,7 @@ async fn any_support_manifest_change_requires_new_consent_even_when_root_bytes_a
         }
         updated.entry = serde_json::from_value(entry)?;
         let mut sorted = updated.entry.clone();
-        if let bitrouter_ai::protocol::mcp_skills::SkillResources::Enumerated(files) =
-            &mut sorted.resources
-        {
+        if let bitrouter::skills::wire::SkillResources::Enumerated(files) = &mut sorted.resources {
             files.sort_by(|left, right| left.uri.cmp(&right.uri));
         }
         updated.entry_digest = sha256(&serde_json::to_vec(&canonical(serde_json::to_value(

@@ -1,11 +1,8 @@
-//! Compiled regex rules and request-check callbacks.
+//! Compiled regex rules and their configuration.
 //!
-//! Capability inputs and decisions come from `bitrouter-ai`. Hosts own
-//! registration and execution. Legacy global/output hooks live in
-//! `bitrouter::gateway::extensions::guardrails` under its `guardrails` feature.
+//! Native callback registration and execution are application-owned.
 
 #![forbid(unsafe_code)]
 
-pub mod checker;
 pub mod config;
 pub mod rules;

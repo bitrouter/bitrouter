@@ -1,6 +1,6 @@
 //! Core skill constraints and explicit consent wire values.
 
-use bitrouter_ai::harness::skills::HeldMcpSkill;
+use crate::managed_contract::harness::skills::HeldMcpSkill;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

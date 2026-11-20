@@ -129,11 +129,3 @@ impl ModelError {
         }
     }
 }
-
-impl From<bitrouter_ai::error::ValidationError> for ModelError {
-    fn from(error: bitrouter_ai::error::ValidationError) -> Self {
-        Self::InvalidRequest {
-            message: error.message,
-        }
-    }
-}

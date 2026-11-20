@@ -26,6 +26,7 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
+use crate::gateway::model::capabilities::ReasoningEffortConfig;
 use crate::managed_contract::evidence::{ModelTokenLimits, NativeRouteConstraints};
 use bitrouter_ai::{
     policy::{Document, Policy, Target},
@@ -33,7 +34,7 @@ use bitrouter_ai::{
         configuration::{Configuration, GenerationDefaults, Learning, Limits, ResourceRef},
         operation::ErrorCode,
     },
-    types::{ApiProtocol, ReasoningEffortConfig},
+    types::ApiProtocol,
 };
 use serde_json::{Map, Value};
 

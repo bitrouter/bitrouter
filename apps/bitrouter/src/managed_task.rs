@@ -30,7 +30,7 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
     pub request_id: Option<String>,
     pub server_instance: Option<String>,
-    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
+    pub skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, clap::Args)]

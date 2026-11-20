@@ -1,4 +1,4 @@
-use bitrouter_ai::wire::{self, Frame};
+use bitrouter::gateway::wire::{self, Frame};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

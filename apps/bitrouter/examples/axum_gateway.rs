@@ -1,23 +1,25 @@
-//! A loopback gateway composed from public contracts and the HTTP SDK only.
+//! A loopback gateway composed from application adapters and the HTTP SDK.
 //!
 //! Run with BITROUTER_URL and optionally BITROUTER_API_KEY. The example binds
 //! 127.0.0.1:4357. Add application-owned identity, authorization and middleware
 //! before exposing a deployment. No internal request headers are forwarded.
 
 use axum::{Router, extract::State, routing::post};
+use bitrouter::gateway::{
+    http_adapter::{error::Error, extract::Json, response::Reply},
+    wire::{DEFAULT_EVENT_LIMIT, DEFAULT_JSON_LIMIT},
+};
 use bitrouter_ai::{
-    axum::{error::Error, extract::Json, response::Reply},
     decisions::DecisionRequest,
     protocol::{
         chat_completions::ChatRequest, messages::MessagesRequest, responses::ResponsesRequest,
     },
-    wire::{DEFAULT_EVENT_LIMIT, DEFAULT_JSON_LIMIT},
 };
 use bitrouter_sdk::{
     error::Error as SdkError,
     gateway::{GatewayClient, reply::Body},
 };
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 
 // Select safe public presentation here; do not serialize SDK diagnostics.
 fn public_error(_: SdkError) -> Error {

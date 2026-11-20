@@ -203,7 +203,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     );
 
     let span = attributed
-        .get_event::<bitrouter_ai::observe::span_attributes::SpanAttributes>()
+        .get_event::<crate::gateway::observability::span_attributes::SpanAttributes>()
         .expect("session span attributes");
     assert_eq!(
         span.0

@@ -1,43 +1,9 @@
-//! The span schema, as a declaration rather than as call sites.
+//! Application observation schema and exporter conformance rules.
 //!
-//! What BitRouter owns as an interop surface is the *schema*: the span names,
-//! the `bitrouter.*` attribute vocabulary, and the invariants that fail
-//! silently and expensively when a deployment re-derives them differently.
-//! That schema used to exist only as ~90 `KeyValue::new` call sites inside the
-//! OTLP exporter, so the only way to answer "what does BitRouter emit?" was to
-//! read the exporter and re-derive it. This module is the answer in
-//! declarative form.
-//!
-//! Three consumers, all of them checked rather than advisory:
-//!
-//! 1. `crates/bitrouter-ai/span-schema.json` is rendered from
-//!    [`render_json`] and committed, and an ordinary test fails when it goes
-//!    stale — so the declaration cannot drift from the renderers without a
-//!    visible diff. It ships with the crate: it is the file a deployment
-//!    implements.
-//! 2. Conformance tests in `bitrouter-telemetry` drive real request and agent
-//!    lifecycles and assert that every exported span is declared here, that
-//!    every attribute key it carries is declared on that span, and that every
-//!    attribute marked required is present.
-//! 3. [`is_reserved_attribute_key`] is the enforcement point for the extension
-//!    region — the bounded hatch a deployment may add its own attributes
-//!    through, applied wherever a renderer stamps [`SpanAttributes`].
-//!
-//! **This module names no `opentelemetry` type, and carries no dependency
-//! beyond `serde`.** That is what makes it the contract rather than one
-//! renderer's internals, and it is why it is behind no feature gate: a
-//! deployment reading the declaration must not have to opt into a renderer it
-//! is not using. The *declaration* is public for the same reason — a second
-//! renderer needs it at compile time, not just as JSON.
-//!
-//! The three helpers that only a conformance suite calls — [`span_def_for`],
-//! [`value_type_matches`] and [`render_json`] — are behind the default-off
-//! `testing` feature. They have no production callers, and shipping public API
-//! nobody calls is what CLAUDE.md rule 4 forbids; the feature carries no
-//! dependency, so a renderer enables it under `[dev-dependencies]` and pays
-//! nothing at build time.
-//!
-//! [`SpanAttributes`]: crate::observe::span_attributes::SpanAttributes
+//! The committed `apps/bitrouter/span-schema.json` describes emitted spans,
+//! attributes, metrics and extension keys. Application telemetry tests check
+//! real lifecycles against this declaration; ordinary unit tests check the
+//! committed artifact. No telemetry transport is needed to read it.
 
 use serde::Serialize;
 
@@ -1259,14 +1225,7 @@ pub fn is_reserved_attribute_key(key: &str) -> bool {
 /// every gate while `span-schema.json` kept promising `int` to anyone
 /// implementing against it.
 ///
-/// Not `#[cfg(test)]`, and the reason is the point of this module. The only
-/// conformance suite used to live in this crate, so gating it on `test` cost
-/// nothing; renderers now live in other crates, and a check a second renderer
-/// cannot call is not a contract. Behind `testing` rather than ungated,
-/// though: a renderer needs it in its test build and nowhere else. The same
-/// goes for [`span_def_for`] and [`render_json`].
-#[cfg(any(test, feature = "testing"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg(test)]
 pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
     matches!(
         (declared, observed),
@@ -1280,7 +1239,7 @@ pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
 /// The literal part of a span name — everything before the first
 /// interpolated `{...}` segment. Empty when the whole name is interpolated,
 /// as it is for the ingress SERVER span.
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 fn literal_prefix(name: &'static str) -> &'static str {
     match name.find('{') {
         Some(index) => &name[..index],
@@ -1298,8 +1257,7 @@ fn literal_prefix(name: &'static str) -> &'static str {
 ///
 /// Lives here rather than in any renderer's test module so every renderer
 /// checks its exports against the same rule.
-#[cfg(any(test, feature = "testing"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg(test)]
 pub fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
     SPANS.iter().find(|span| {
         span.kind == kind && {
@@ -1311,7 +1269,7 @@ pub fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
 
 /// Render the declaration as the committed JSON artifact.
 ///
-/// The output is `crates/bitrouter-ai/span-schema.json`, kept in step by the
+/// The output is `apps/bitrouter/span-schema.json`, kept in step by the
 /// test below. Ordering is declaration order throughout, so the diff is
 /// stable, and a schema change shows up in review as a diff of the wire
 /// surface rather than as a line buried in a renderer.
@@ -1319,8 +1277,7 @@ pub fn span_def_for(name: &str, kind: SpanKind) -> Option<&'static SpanDef> {
 /// Returns the serializer's error only if the declaration itself cannot be
 /// serialized, which is unreachable for a tree of `&'static str` — but it is
 /// returned rather than unwrapped, because this crate does not panic.
-#[cfg(any(test, feature = "testing"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+#[cfg(test)]
 pub fn render_json() -> Result<String, serde_json::Error> {
     let mut rendered = serde_json::to_string_pretty(&SCHEMA)?;
     rendered.push('\n');
@@ -1333,7 +1290,7 @@ mod tests {
 
     /// Regeneration command, quoted in the failure message so the fix is in
     /// front of whoever hits it.
-    const REGENERATE: &str = "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact";
+    const REGENERATE: &str = "UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter committed_artifact";
 
     fn artifact_path() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("span-schema.json")

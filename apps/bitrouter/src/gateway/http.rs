@@ -2141,7 +2141,8 @@ async fn stream_response(
             .to_wire()
             .map(String::into_bytes)
     });
-    bitrouter_ai::axum::response::Reply::sse_body(Body::from_stream(with_keepalive)).into_response()
+    crate::gateway::http_adapter::response::Reply::sse_body(Body::from_stream(with_keepalive))
+        .into_response()
 }
 
 impl IntoResponse for BitrouterError {
@@ -3265,7 +3266,7 @@ mod tests {
         use bitrouter_ai::types::{FinishReason, StreamPart};
         let executor = MockExecutor::new(vec![MockResponse::Stream(vec![
             StreamPart::TextDelta {
-                text: "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+                text: "\0".repeat(crate::gateway::wire::DEFAULT_JSON_LIMIT / 6),
             },
             StreamPart::Finish {
                 reason: FinishReason::Stop,
@@ -3312,7 +3313,7 @@ mod tests {
             },
             StreamPart::Finish {
                 reason: FinishReason::Other(
-                    "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+                    "\0".repeat(crate::gateway::wire::DEFAULT_JSON_LIMIT / 6),
                 ),
             },
         ])]);

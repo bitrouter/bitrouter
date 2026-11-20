@@ -16,8 +16,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::ResourceError;
 use super::sha256;
-use bitrouter_ai::harness::resources::MaterialRef;
-use bitrouter_ai::harness::resources::McpTool;
+use crate::managed_contract::harness::resources::MaterialRef;
+use crate::managed_contract::harness::resources::McpTool;
 use bitrouter_ai::harness::runtime::EffectStatus;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -64,7 +64,7 @@ impl McpConnections {
         server: &str,
         access: &crate::skills::mcp::SkillAccess<'_>,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::McpSkillCatalog, String> {
+    ) -> Result<crate::managed_contract::harness::skills::McpSkillCatalog, String> {
         self.client.list_skills(server, access, cancel).await
     }
 
@@ -74,13 +74,13 @@ impl McpConnections {
         uri: &str,
         access: &crate::skills::mcp::SkillAccess<'_>,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, String> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, String> {
         self.client.get_skill(server, uri, access, cancel).await
     }
 
     pub async fn read_skill_file(
         &self,
-        held: &bitrouter_ai::harness::skills::HeldMcpSkill,
+        held: &crate::managed_contract::harness::skills::HeldMcpSkill,
         access: &crate::skills::mcp::SkillAccess<'_>,
         read: crate::skills::mcp::SkillRead<'_>,
         cancel: &CancellationToken,

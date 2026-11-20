@@ -108,7 +108,7 @@ impl OnlineWorkflowState {
         use crate::gateway::routing::workflow::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
-        use bitrouter_ai::harness::inspection::ProgressState;
+        use crate::managed_contract::harness::inspection::ProgressState;
         use bitrouter_ai::policy::NextStep;
         use bitrouter_ai::policy::TaskFamily;
         let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
@@ -167,7 +167,7 @@ impl OnlineWorkflowState {
         mut self,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use bitrouter_ai::harness::inspection::ProgressState;
+        use crate::managed_contract::harness::inspection::ProgressState;
         use bitrouter_ai::policy::NextStep;
         use bitrouter_ai::policy::TaskFamily;
         self.predictive.task_family =

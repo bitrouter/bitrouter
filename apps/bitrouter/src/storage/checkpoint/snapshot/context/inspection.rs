@@ -1,12 +1,15 @@
 //! Bounded public task/view observations. These are never execution authority.
 
-use bitrouter_ai::harness::inspection::{
-    DecisionUsage, Inspection, RoutingPhase, RoutingStatus, TaskView, Workflow,
-};
+use crate::managed_contract::harness::inspection::DecisionUsage;
+use crate::managed_contract::harness::inspection::Inspection;
+use crate::managed_contract::harness::inspection::RoutingPhase;
+use crate::managed_contract::harness::inspection::RoutingStatus;
+use crate::managed_contract::harness::inspection::TaskView;
+use crate::managed_contract::harness::inspection::Workflow;
 
+use crate::managed_contract::harness::inspection::AgentStatus;
 use crate::storage::checkpoint::snapshot::ModelStep;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 /// Application-owned helpers for the public Inspection contract.
 pub trait InspectionExt: Sized {

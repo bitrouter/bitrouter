@@ -1,7 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::harness::inspection::AgentStatus;
+use crate::managed_contract::harness::inspection::AgentStatus;
 pub mod accounting;
 pub mod allocation;
 pub mod collaboration;

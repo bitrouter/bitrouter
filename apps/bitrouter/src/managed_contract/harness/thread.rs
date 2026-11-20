@@ -1,9 +1,13 @@
 //! Public harness thread contracts. Execution and storage remain application-owned.
 
-use crate::harness::agent::AgentConfig;
-use crate::harness::item::CallRecord;
-use crate::harness::runtime::EffectStatus;
-use crate::harness::turn::{SteeringReceipt, TurnEvent, TurnLifecycle, TurnReceipt, TurnSnapshot};
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnLifecycle;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::turn::SteeringReceipt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -59,7 +63,7 @@ pub struct ThreadView {
 pub struct RecoveryState {
     pub source_server_instance_id: String,
     #[serde(default)]
-    pub source_execution_owner: Option<crate::harness::runtime::ExecutionOwner>,
+    pub source_execution_owner: Option<crate::managed_contract::harness::runtime::ExecutionOwner>,
     pub source_cursor: u64,
     pub stored_status: ThreadStatus,
     pub stored_pause_reason: Option<String>,
@@ -72,7 +76,7 @@ pub struct RecoveryState {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryTurn {
     #[serde(default)]
-    pub resources: Option<crate::harness::resources::HarnessInventory>,
+    pub resources: Option<crate::managed_contract::harness::resources::HarnessInventory>,
     pub turn_id: String,
     pub user_item_id: String,
     pub cancel_requested: bool,
@@ -82,11 +86,11 @@ pub struct RecoveryTurn {
     #[serde(default)]
     pub continuation_checkpoint: bool,
     #[serde(default)]
-    pub outcome: Option<crate::harness::runtime::SettlementOutcome>,
+    pub outcome: Option<crate::managed_contract::harness::runtime::SettlementOutcome>,
     #[serde(default)]
     pub confirmed_verification: Option<(
-        crate::harness::turn::VerificationStatus,
-        crate::harness::turn::VerificationEvidence,
+        bitrouter_ai::harness::turn::VerificationStatus,
+        bitrouter_ai::harness::turn::VerificationEvidence,
     )>,
 }
 
@@ -124,7 +128,7 @@ pub enum RecoveryBlocker {
 pub enum ThreadChange {
     ContextRouting {
         turn_id: String,
-        inspection: Box<crate::harness::inspection::Inspection>,
+        inspection: Box<crate::managed_contract::harness::inspection::Inspection>,
     },
     Created {
         view: Box<ThreadView>,
@@ -165,15 +169,15 @@ pub enum ThreadChange {
         item_id: String,
         request_id: String,
         requested_model: String,
-        usage: Option<crate::types::Usage>,
-        message: crate::types::Message,
+        usage: Option<bitrouter_ai::types::Usage>,
+        message: bitrouter_ai::types::Message,
         calls: Vec<CallRecord>,
     },
     AssistantInterrupted {
         turn_id: String,
         step_id: String,
         item_id: String,
-        partial: crate::types::Message,
+        partial: bitrouter_ai::types::Message,
         detail: String,
     },
     ToolIntent {
@@ -185,20 +189,20 @@ pub enum ThreadChange {
         turn_id: String,
         step_id: String,
         item_id: String,
-        message: crate::types::Message,
+        message: bitrouter_ai::types::Message,
         effect: EffectStatus,
     },
     VerificationResult {
         turn_id: String,
         call: CallRecord,
-        evidence: crate::harness::turn::VerificationEvidence,
+        evidence: bitrouter_ai::harness::turn::VerificationEvidence,
         effect: EffectStatus,
         active_duration_ms: u64,
         tool_calls: u32,
     },
     ContextAdvanced {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        resources: Option<Box<crate::harness::resources::HarnessInventory>>,
+        resources: Option<Box<crate::managed_contract::harness::resources::HarnessInventory>>,
         turn_id: String,
         context_version: u64,
     },

@@ -18,10 +18,10 @@ use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::turn::ApprovalAnswer;
 use crate::harness::turn::CancelTurnRequest;
 use crate::harness::turn::SteeringRequest;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::turn::SteeringStatus;
 use bitrouter_ai::harness::turn::TurnStatus;
 #[cfg(unix)]
@@ -111,7 +111,7 @@ async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
         }
         if let ExecutionRecord::ThreadEvent { event } = record {
             for change in &event.changes {
-                if let bitrouter_ai::harness::thread::ThreadChange::ContextRouting {
+                if let crate::managed_contract::harness::thread::ThreadChange::ContextRouting {
                     turn_id,
                     inspection,
                 } = change
@@ -1205,7 +1205,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .await?
         .ok_or("Thread missing")?;
     assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::AcceptedKey { entry } if entry.key == "answer")).count(), 1);
-    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, bitrouter_ai::harness::turn::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
+    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::managed_contract::harness::turn::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("approved.txt"))?,
         "approved once"
@@ -1234,19 +1234,19 @@ impl ExecutionStore for RejectTurnStore {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
 
@@ -1287,7 +1287,7 @@ impl ExecutionStore for RejectTurnStore {
 
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         facts: &[ExecutionRecord],
@@ -1450,7 +1450,7 @@ async fn shutdown_preserves_unstarted_queue_and_records_a_durable_pause()
 async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
 -> Result<(), Box<dyn std::error::Error>> {
     use crate::harness::thread::WorkspaceGrant;
-    use bitrouter_ai::harness::thread::PermissionProfile;
+    use crate::managed_contract::harness::thread::PermissionProfile;
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("note.txt"), "original")?;
     let memory = Arc::new(MemoryExecutionStore::default());

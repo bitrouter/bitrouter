@@ -13,7 +13,7 @@ use crate::harness::resources::{HarnessConfig, instructions::InstructionConfig};
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::harness::thread::WorkspaceGrant;
-use bitrouter_ai::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::PermissionProfile;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 fn startup(prompt: &Prompt) -> Option<&str> {
@@ -649,7 +649,7 @@ async fn corrupt_or_unsettled_instruction_context_blocks_recovery()
         let recovery = view.recovery.as_ref().ok_or("recovery report")?;
         assert!(!recovery.context_valid);
         assert!(recovery.blockers.iter().any(|blocker| matches!(blocker,
-            bitrouter_ai::harness::thread::RecoveryBlocker::InvalidRecord { detail }
+            crate::managed_contract::harness::thread::RecoveryBlocker::InvalidRecord { detail }
                 if detail.contains("startup instruction")
         )));
         assert!(
@@ -657,7 +657,7 @@ async fn corrupt_or_unsettled_instruction_context_blocks_recovery()
                 .recover_thread(
                     &target,
                     &CallerContext::local(),
-                    bitrouter_ai::harness::thread::ThreadRecoveryRequest {
+                    crate::managed_contract::harness::thread::ThreadRecoveryRequest {
                         source_server_instance_id: recovery.source_server_instance_id.clone(),
                         source_cursor: recovery.source_cursor,
                         idempotency_key: "invalid-recovery".into(),

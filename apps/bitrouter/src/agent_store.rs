@@ -13,9 +13,9 @@ use crate::harness::storage::owner_time_ms;
 use crate::harness::storage::push_history_event;
 use crate::harness::storage::validate_owner_id;
 use crate::harness::storage::validate_runtime_format;
+use crate::managed_contract::harness::runtime::ExecutionOwner;
+use crate::managed_contract::harness::runtime::OwnerClaim;
 use anyhow::{Context, ensure};
-use bitrouter_ai::harness::runtime::ExecutionOwner;
-use bitrouter_ai::harness::runtime::OwnerClaim;
 #[cfg(test)]
 use sea_orm::ActiveModelTrait;
 use sea_orm::{
@@ -1437,9 +1437,9 @@ mod tests {
     }
 
     fn history_event(seq: u64, text: &str) -> ExecutionRecord {
-        use bitrouter_ai::harness::thread::ThreadChange;
-        use bitrouter_ai::harness::thread::ThreadEvent;
-        use bitrouter_ai::harness::turn::TurnReceipt;
+        use crate::managed_contract::harness::thread::ThreadChange;
+        use crate::managed_contract::harness::thread::ThreadEvent;
+        use crate::managed_contract::harness::turn::TurnReceipt;
         ExecutionRecord::ThreadEvent {
             event: ThreadEvent {
                 server_instance_id: "first-process".into(),

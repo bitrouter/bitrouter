@@ -1,11 +1,11 @@
 //! Exercises the paired adapter at the actual profiled JSON and SSE send gates.
 
-use axum::body::Bytes;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use bitrouter_ai::tenancy::private_adapter::{
+use crate::managed_contract::private_adapter::{
     ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
     Outcome as AdapterOutcome,
 };
+use axum::body::Bytes;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 

@@ -82,7 +82,7 @@ fn classifier_research_slices_have_a_frozen_manifest() {
     }
     assert_eq!(
         manifest.dataset_digest,
-        "sha256:258286f7ff692a8d2eb4c661d7b136a0c710ae11eb475d3779240fdcf597c737"
+        "sha256:7d53ce56cd93f65c3f2c8dd71b0026a960d5cbf2968d347a949bd06883a124d1"
     );
     assert_eq!(manifest.current_predictor_exact_count, 1);
     assert_eq!(manifest.current_predictor_mismatch_count, 9);

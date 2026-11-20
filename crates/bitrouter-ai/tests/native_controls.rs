@@ -90,7 +90,7 @@ fn native_discovery_schema_keeps_the_exact_protocol_field_set() -> TestResult {
         capabilities()["controls"]
     );
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/specs/service-api/ordered-native-controls-capabilities-v1.schema.json");
+        .join("../../docs/specs/service-api/ordered-native-controls-capabilities.schema.json");
     let rendered = format!("{}\n", serde_json::to_string_pretty(&schema)?);
     // Bootstrap only this new artifact; existing schemas are never rewritten.
     if std::env::var("BITROUTER_WRITE_NATIVE_CONTROLS_SCHEMA").as_deref() == Ok("1")

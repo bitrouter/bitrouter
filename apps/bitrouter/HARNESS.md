@@ -52,8 +52,8 @@ no observer holds them; this does not resolve their stored recovery blockers.
 
 | Module | Responsibility |
 | --- | --- |
-| AI `harness::{api,thread,turn}` | Public HTTP requests/envelopes, Thread/Turn status, receipts, snapshots, history, lifecycle, approval and recovery views |
-| AI `harness::{agent,item,runtime,resources,inspection}` | Nested public configuration, call identity, limits/ownership, material and context-inspection data |
+| AI `harness::{agent,runtime,turn}` | Tool permissions, effect status and turn events shared with BRO |
+| App `managed_contract::harness` | Agent configuration, thread/turn observations, call identity, ownership, materials, skills and context inspection |
 | `thread.rs` | App-local targets, authenticated requests, close and explicit recovery commands |
 | `turn.rs` and `service/observation.rs` | App-owned event projection and lifecycle helpers on public data; local runtime requests |
 | `item.rs` | Internal bounds for volatile output and status detail |
@@ -63,20 +63,16 @@ no observer holds them; this does not resolve their stored recovery blockers.
 model-content contract. A tool call has a stable BRO Item ID as well as the
 provider's call ID; these identities serve different purposes.
 
-Public types are imported from their AI owner, for example
-`bitrouter_ai::harness::turn::TurnSnapshot` and
-`bitrouter_ai::harness::item::CallRecord`. The app owns `AgentConfigExt`,
+Application records are imported from their defining modules, for example
+`bitrouter::managed_contract::harness::turn::TurnSnapshot` and
+`bitrouter::managed_contract::harness::item::CallRecord`. The app owns `AgentConfigExt`,
 `TurnSnapshotExt`, `ThreadViewExt` and private runtime-limit defaults. Shared
 checkpoint inspection keeps its projection in application storage and its public
-view in AI; the complete `SessionSnapshot` remains private application data.
+view in application contracts; the complete `SessionSnapshot` remains private application data.
 There are no compatibility re-exports from `service`, `thread` or `storage`.
 
-The HTTP client is `bitrouter_sdk::harness::HarnessClient`. It pins the discovered
-server instance, takes an explicit execution bearer and caller-owned acceptance
-keys, and consumes the existing continuing SSE surface. It does not discover
-sockets, perform workspace effects, acknowledge checkpoints or automatically
-replay an interrupted mutation. Local directory/close/recovery commands remain
-outside that HTTP surface.
+The SDK has no harness or managed-core client. Local task clients use the
+application-owned transport below.
 
 OS-local task envelopes, directory projections and typed transport live in
 application `client::agent_local`. They compile without harness execution and

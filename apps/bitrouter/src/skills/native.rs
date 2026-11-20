@@ -1,7 +1,9 @@
 //! Read existing skill directories without an installation index or version store.
 
-#[cfg(feature = "harness")]
 use crate::gateway::caller::CallerContext;
+#[cfg(feature = "harness")]
+#[cfg(feature = "harness")]
+use crate::managed_contract::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 #[cfg(feature = "harness")]
 use crate::skills::format;
 #[cfg(feature = "harness")]
@@ -11,8 +13,6 @@ use anyhow::Result;
 use anyhow::{Context, ensure};
 #[cfg(feature = "harness")]
 use async_trait::async_trait;
-#[cfg(feature = "harness")]
-use bitrouter_ai::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 

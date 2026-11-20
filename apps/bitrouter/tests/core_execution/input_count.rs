@@ -485,6 +485,7 @@ impl bitrouter::gateway::assembly::PromptTransform for ManagedProtocolInput {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.params.store = Some(true);
         if self.automatic_truncation {
+            prompt.params.extra_protocol = Some(ApiProtocol::Responses);
             prompt
                 .params
                 .extra

@@ -1,10 +1,10 @@
 use super::*;
 use crate::gateway::model::decision::types::DecisionUsage;
+use crate::managed_contract::harness::inspection::AgentStatus;
 use crate::storage::checkpoint::snapshot::context::WorkUnit;
 use crate::storage::checkpoint::snapshot::context::evidence::{
     EvidenceBlock, EvidenceSource, SourceSpan,
 };
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 struct Fixture {
     store: ContextStore,

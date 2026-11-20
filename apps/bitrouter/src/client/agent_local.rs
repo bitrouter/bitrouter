@@ -3,15 +3,20 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeCapabilities;
 #[cfg(all(test, unix))]
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::{
-    ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView,
-};
-use bitrouter_ai::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot, TurnStatus};
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadHistoryPage;
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use anyhow::{Context, Result};
+use bitrouter_ai::harness::turn::SteeringReceipt;
+use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -108,12 +113,12 @@ pub enum Operation {
         workspace: PathBuf,
         model: String,
         #[serde(default)]
-        model_mode: bitrouter_ai::harness::agent::ModelMode,
+        model_mode: crate::managed_contract::harness::agent::ModelMode,
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
+        skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -136,7 +141,7 @@ pub enum Operation {
     },
     RecoverThread {
         thread_id: String,
-        request: bitrouter_ai::harness::thread::ThreadRecoveryRequest,
+        request: crate::managed_contract::harness::thread::ThreadRecoveryRequest,
     },
     ReadTurn {
         thread_id: String,
@@ -691,7 +696,7 @@ mod tests {
                                 snapshot: Box::new(ThreadSnapshot {
                                     server_instance_id: "fixture-epoch".into(),
                                     thread_id: "original-thread".into(),
-                                    status: bitrouter_ai::harness::thread::ThreadStatus::Idle,
+                                    status: crate::managed_contract::harness::thread::ThreadStatus::Idle,
                                     workspace: PathBuf::from("/fixture"),
                                     model: "fixture-model".into(),
                                     permission_profile: PermissionProfile::ReadOnly,
@@ -767,11 +772,13 @@ mod tests {
             skill_constraints: false,
         };
         let mut config = fixture_config();
-        config.skills = Some(bitrouter_ai::harness::skills::SkillConstraints {
-            include: vec![bitrouter_ai::harness::skills::SkillSelector::Mcp {
-                server: "source".into(),
-                uri: "skill://review/SKILL.md".into(),
-            }],
+        config.skills = Some(crate::managed_contract::harness::skills::SkillConstraints {
+            include: vec![
+                crate::managed_contract::harness::skills::SkillSelector::Mcp {
+                    server: "source".into(),
+                    uri: "skill://review/SKILL.md".into(),
+                },
+            ],
             exclude: Vec::new(),
         });
         let error = client

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::rules::{RuleSet, flatten_fragments};
-use bitrouter_ai::extension::request_check::{Callback, Decision, Input};
+use crate::gateway::extensions::request_check::{Callback, Decision, Input};
+use bitrouter_guardrails::rules::{RuleSet, flatten_fragments};
 
 const INPUT_BLOCKED_REASON: &str = "guardrail.input_blocked";
 
@@ -33,12 +33,14 @@ pub fn callback(rules: RuleSet) -> Arc<Callback> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::extension::request_check::{
+    use crate::gateway::extensions::request_check::{
         ContentFragment, ContentFragmentKind, ContentRole, RequestCheckCoverage,
         RequestCheckCoverageScope, RequestCheckCoverageStatus,
     };
 
-    use crate::config::{InputAction, InputGuardrailConfig, InputRuleSpec, InputScope};
+    use bitrouter_guardrails::config::{
+        InputAction, InputGuardrailConfig, InputRuleSpec, InputScope,
+    };
 
     fn input(fragments: &[&str]) -> Input {
         Input {

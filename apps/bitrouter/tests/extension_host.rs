@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
+use bitrouter::gateway::extensions::request_check::Decision;
 use bitrouter::paths::ConfigSource;
 use bitrouter_ai::control::reload::RunningConfigState;
-use bitrouter_ai::extension::request_check::Decision;
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path};

@@ -91,7 +91,7 @@ impl HarnessPort for Port {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, CoreError> {
         self.authorize_dispatch().await?;
         self.resources
             .as_ref()

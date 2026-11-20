@@ -66,11 +66,11 @@ pub fn native_default_model(config: &Config) -> Option<&str> {
 pub fn native_model_mode(
     config: &Config,
     model: &str,
-) -> Result<bitrouter_ai::harness::agent::ModelMode> {
+) -> Result<crate::managed_contract::harness::agent::ModelMode> {
     Ok(if config.resolve_router(model)?.policy.is_some() {
-        bitrouter_ai::harness::agent::ModelMode::Policy
+        crate::managed_contract::harness::agent::ModelMode::Policy
     } else {
-        bitrouter_ai::harness::agent::ModelMode::Fixed
+        crate::managed_contract::harness::agent::ModelMode::Fixed
     })
 }
 /// Parsed source plus its runtime-computed identity.

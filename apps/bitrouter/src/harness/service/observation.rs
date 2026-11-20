@@ -20,21 +20,21 @@ use super::threads;
 use crate::harness::storage::ExecutionRecord;
 use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::thread::ThreadTarget;
-use bitrouter_ai::harness::agent::AgentConfig;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::thread::ThreadChange;
+use crate::managed_contract::harness::thread::ThreadEvent;
+use crate::managed_contract::harness::thread::ThreadHistoryPage;
+use crate::managed_contract::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::thread::ThreadChange;
-use bitrouter_ai::harness::thread::ThreadEvent;
-use bitrouter_ai::harness::thread::ThreadHistoryPage;
-use bitrouter_ai::harness::thread::ThreadObservation;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::thread::ThreadView;
-use bitrouter_ai::harness::turn::TurnEvent;
 use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnReceipt;
-use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::harness::turn::VerificationStatus;
 
@@ -336,7 +336,10 @@ impl ThreadService {
         thread_id: &str,
         version: u64,
         facts: &[ExecutionRecord],
-        previous_context: Option<&(String, bitrouter_ai::harness::inspection::Inspection)>,
+        previous_context: Option<&(
+            String,
+            crate::managed_contract::harness::inspection::Inspection,
+        )>,
     ) -> Result<(Vec<ExecutionRecord>, ThreadEvent), ServiceError> {
         let framed = super::checkpoint_pages::split(facts, self.inner.limits.recovery_page_bytes)?;
         let seq = version
@@ -435,8 +438,8 @@ pub(super) fn project_with_native(
                     decoded.as_ref()
                 }
             };
-            let Some(inspection) =
-                snapshot.and_then(bitrouter_ai::harness::inspection::Inspection::capture)
+            let Some(inspection) = snapshot
+                .and_then(crate::managed_contract::harness::inspection::Inspection::capture)
             else {
                 return;
             };

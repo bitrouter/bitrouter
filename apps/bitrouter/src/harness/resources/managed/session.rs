@@ -19,6 +19,7 @@ use super::{super::HarnessConfig, NativeResources};
 use crate::core::session::{CoreSession, HarnessPort};
 use crate::harness::service::workspace::WorkspaceFence;
 use crate::managed_contract::checkpoint::{DurableHead, ToolStartFence};
+use crate::managed_contract::harness::runtime::ExecutionOwner;
 use crate::managed_contract::protocol::{
     Bind, Capabilities, CoreError, ErrorCode, OperationReceipt, OwnershipGrant, Restore,
     ServerMessage, TaskInput, ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult,
@@ -27,7 +28,6 @@ use crate::managed_contract::protocol::{
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::ExecutionOwner;
 
 #[async_trait]
 pub trait NativeApproval: Send + Sync {

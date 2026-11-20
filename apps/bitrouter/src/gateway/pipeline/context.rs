@@ -17,6 +17,7 @@ use crate::gateway::model::protocol::responses::{
     assistant_turn_commitment, extend_causal_prefix,
 };
 use crate::gateway::observability::event::EventBus;
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::settlement::{RequiredFinalizationContext, SettlementContext};
 use crate::gateway::pipeline::stream::UsageAccumulator;
 use crate::gateway::pipeline::timing::{FirstTokenKind, FirstTokenTiming, elapsed_millis};
@@ -24,7 +25,6 @@ use crate::gateway::pipeline::types::{
     ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
 };
 use crate::gateway::providers::auth::ContinuationAuthority;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::routing::RouterRequestIdentity;
 use bitrouter_ai::types::{
     ApiProtocol, ChatStreamOptions, Content, FinishReason, GenerationParams, Message,
