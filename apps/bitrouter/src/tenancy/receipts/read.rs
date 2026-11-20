@@ -125,9 +125,7 @@ pub(in crate::tenancy) async fn body(
     storage_failure: impl Fn() -> Failure,
 ) -> Result<Vec<u8>, Failure> {
     let encoded = match request {
-        Request::One(id)
-        | Request::UsageEvidence(id)
-        | Request::ProviderTechnical(id) => {
+        Request::One(id) | Request::UsageEvidence(id) | Request::ProviderTechnical(id) => {
             use super::store::format::Terminal;
             let terminal = super::store::lookup_terminal(db, installation, tenant, id)
                 .await
