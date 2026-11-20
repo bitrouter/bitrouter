@@ -1160,8 +1160,22 @@ execution, independently of prices, charges or payable quantities.
 | GET | `/tenants/{tenant_id}/executions/{execution_id}/usage-evidence` | `ExecutionUsageEvidence` |
 
 The [evidence DTOs and validators](../../../crates/bitrouter-ai/src/tenancy/usage_evidence.rs)
-describe the field catalog and cross-field constraints. The response binds
-to the exact receipt and distinguishes ordinary and ordered dispatch.
+describe the field catalog and cross-field constraints. `ExecutionReceipt` and
+`ExecutionUsageEvidence` each have one wire shape with a required `dispatch`:
+`{"mode":"strict"}` or `{"mode":"ordered","accepted_selection":{...},"attempt_limit":N}`.
+Strict attempts require `candidate_index: null`; ordered attempts carry an exact
+ordinal and form a unique subsequence of the original accepted selection.
+Both retain actual attempt order and observed HTTP status. The evidence dispatch
+must equal the receipt dispatch. `validate_against(&ExecutionReceipt)` binds
+identities, dispatch and every captured attempt's target and outcome.
+
+The SDK reads both modes through `execution(installation, tenant, execution)`
+and `usage_evidence(&receipt)`. Strict evidence is limited to 256 KiB and 512
+frames; ordered evidence reserves one such block per eight accepted candidates,
+up to 2 MiB and 4096 frames. Original response bytes, including whitespace, count
+toward these limits. Each attempt retains at most 128 frames. Ordered evidence
+requires null parent and empty child linkage. Receipt and evidence payloads have
+no integer schema-version field or alternate versioned read route.
 Discovery requires authentication and `Bitrouter-Installation-Id`. Check
 the advertised bounds, estimator and child-linkage support before consuming
 the observations.

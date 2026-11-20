@@ -8,7 +8,6 @@ pub mod authority;
 pub mod configuration;
 pub mod directory;
 pub mod execution;
-pub mod execution_v2;
 pub mod generate_content;
 pub mod generation_defaults;
 pub mod identity;
@@ -19,7 +18,6 @@ pub mod profile_observation;
 pub mod provider_technical_facts;
 pub mod resources;
 pub mod usage_evidence;
-pub mod usage_evidence_v2;
 pub mod validation;
 
 mod json;

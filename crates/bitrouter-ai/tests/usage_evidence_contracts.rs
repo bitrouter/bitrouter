@@ -1,21 +1,21 @@
 use bitrouter_ai::tenancy::{
     execution::ExecutionReceipt,
-    usage_evidence::{ExecutionUsageEvidenceV1, UsageEvidenceCapabilitiesV1},
+    usage_evidence::{ExecutionUsageEvidence, UsageEvidenceCapabilities},
     validation::Validate,
 };
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn document() -> Value {
-    json!({"schema_version":1,"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[{"attempt_id":"attempt","target":null,"outcome":"unknown","terminal_observed":false}],"frames":[{"sequence":0,"attempt_id":"attempt","protocol":"messages","source":"message_delta","semantics":"snapshot","quantities":[{"dimension":"output_tokens","value":0}],"unsupported":false,"invalid":false}],"truncated":false,"dropped_frames":0})
+    json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[{"attempt_id":"attempt","target":null,"outcome":"unknown","terminal_observed":false}],"frames":[{"sequence":0,"attempt_id":"attempt","protocol":"messages","source":"message_delta","semantics":"snapshot","quantities":[{"dimension":"output_tokens","value":0}],"unsupported":false,"invalid":false}],"truncated":false,"dropped_frames":0})
 }
 fn valid(value: Value) -> bool {
-    serde_json::from_value::<ExecutionUsageEvidenceV1>(value)
+    serde_json::from_value::<ExecutionUsageEvidence>(value)
         .is_ok_and(|value| value.validate().is_ok())
 }
 
 #[test]
 fn validated_json_preserves_the_wire_bytes_and_validation_errors() -> TestResult {
-    let mut evidence: ExecutionUsageEvidenceV1 = serde_json::from_value(document())?;
+    let mut evidence: ExecutionUsageEvidence = serde_json::from_value(document())?;
     assert_eq!(
         evidence.to_validated_json()?,
         serde_json::to_string(&evidence)?
@@ -31,7 +31,9 @@ fn validated_json_preserves_the_wire_bytes_and_validation_errors() -> TestResult
 
 #[test]
 fn validated_json_rejects_an_oversized_document_with_valid_frame_counts() -> TestResult {
-    use bitrouter_ai::tenancy::usage_evidence::{MAX_ATTEMPT_FRAMES, MAX_BYTES, MAX_FRAMES};
+    use bitrouter_ai::tenancy::usage_evidence::MAX_ATTEMPT_FRAMES;
+    const MAX_FRAMES: usize = 512;
+    const MAX_BYTES: usize = 256 * 1024;
     let mut input = document();
     let quantities = [
         "input_tokens",
@@ -45,7 +47,7 @@ fn validated_json_rejects_an_oversized_document_with_valid_frame_counts() -> Tes
     ]
     .map(|dimension| json!({"dimension": dimension, "value": 9007199254740991_u64}));
     input["frames"][0]["quantities"] = json!(quantities);
-    let mut evidence: ExecutionUsageEvidenceV1 = serde_json::from_value(input)?;
+    let mut evidence: ExecutionUsageEvidence = serde_json::from_value(input)?;
     let attempt = evidence.attempts.remove(0);
     let frame = evidence.frames.remove(0);
     for i in 0..MAX_FRAMES / MAX_ATTEMPT_FRAMES {
@@ -95,10 +97,10 @@ fn required_fields_zero_absence_and_exact_numbers() -> TestResult {
     for token in ["-1", "9007199254740992", "9007199254740990.9", "0.1"] {
         let raw = serde_json::to_string(&document())?
             .replace("\"value\":0", &format!("\"value\":{token}"));
-        assert!(serde_json::from_str::<ExecutionUsageEvidenceV1>(&raw).is_err());
+        assert!(serde_json::from_str::<ExecutionUsageEvidence>(&raw).is_err());
     }
     let raw = serde_json::to_string(&document())?.replace("\"value\":0", "\"value\":0e0");
-    serde_json::from_str::<ExecutionUsageEvidenceV1>(&raw)?.validate()?;
+    serde_json::from_str::<ExecutionUsageEvidence>(&raw)?.validate()?;
     let mut absent = document();
     absent["frames"][0]["quantities"] = json!([]);
     assert!(valid(absent));
@@ -112,7 +114,7 @@ fn required_fields_zero_absence_and_exact_numbers() -> TestResult {
 #[test]
 fn rejects_forged_order_duplicate_dimensions_unknown_fields_and_unsupported_versions() {
     for (pointer, replacement) in [
-        ("/schema_version", json!(2)),
+        ("/dispatch/mode", json!("unknown")),
         ("/extractor_version", json!(2)),
         ("/frames/0/sequence", json!(1)),
         ("/frames/0/attempt_id", json!("foreign")),
@@ -143,9 +145,9 @@ fn rejects_forged_order_duplicate_dimensions_unknown_fields_and_unsupported_vers
 }
 #[test]
 fn v1_receipt_rejects_evidence_fields_and_new_capabilities_are_separate() -> TestResult {
-    let capabilities = UsageEvidenceCapabilitiesV1::new("installation".try_into()?);
+    let capabilities = UsageEvidenceCapabilities::new("installation".try_into()?);
     capabilities.validate()?;
-    let receipt = json!({"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false},"recorded_at":"2026-10-25T00:00:00Z"});
+    let receipt = json!({"dispatch":{"mode":"strict"},"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"unknown","outcome":"unknown","attempts":[],"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false},"recorded_at":"2026-10-25T00:00:00Z"});
     serde_json::from_value::<ExecutionReceipt>(receipt.clone())?.validate()?;
     let mut widened = receipt;
     widened["usage_evidence"] = document();
@@ -163,11 +165,11 @@ fn v1_receipt_rejects_evidence_fields_and_new_capabilities_are_separate() -> Tes
 fn dedicated_packaged_schemas_are_the_exported_schemas() -> TestResult {
     for (exported, packaged) in [
         (
-            serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidenceV1))?,
+            serde_json::to_value(schemars::schema_for!(ExecutionUsageEvidence))?,
             include_str!("../src/tenancy/usage_evidence/execution.schema.json"),
         ),
         (
-            serde_json::to_value(schemars::schema_for!(UsageEvidenceCapabilitiesV1))?,
+            serde_json::to_value(schemars::schema_for!(UsageEvidenceCapabilities))?,
             include_str!("../src/tenancy/usage_evidence/capabilities.schema.json"),
         ),
     ] {
@@ -210,7 +212,7 @@ fn unavailable_capture_is_distinct_and_cannot_claim_observations() -> TestResult
     value["attempts"] = json!([]);
     value["frames"] = json!([]);
     assert!(valid(value.clone()));
-    let decoded: ExecutionUsageEvidenceV1 = serde_json::from_value(value.clone())?;
+    let decoded: ExecutionUsageEvidence = serde_json::from_value(value.clone())?;
     assert_eq!(
         decoded.capture,
         bitrouter_ai::tenancy::usage_evidence::Capture::Unavailable

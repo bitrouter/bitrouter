@@ -2360,7 +2360,10 @@
         "provenance": "unknown",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -2387,7 +2390,10 @@
         "complete": false
       },
       "recorded_at": "2026-10-25T00:00:00Z",
-      "secret": "forbidden"
+      "secret": "forbidden",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -2413,7 +2419,10 @@
         "provenance": "unknown",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7204,7 +7213,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -7234,7 +7245,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7246,7 +7259,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7292,7 +7308,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-a",
@@ -7322,7 +7340,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7334,7 +7354,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7384,7 +7407,9 @@
               "name": "input_tokens",
               "value": 12
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -7414,7 +7439,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7426,7 +7453,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7475,7 +7505,9 @@
               "name": "arbitrary_provider_blob",
               "value": 0
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -7505,7 +7537,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7517,7 +7551,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7562,7 +7599,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -7586,7 +7625,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7598,7 +7639,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7624,7 +7668,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7650,7 +7697,10 @@
         "provenance": "unknown",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -7695,7 +7745,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -7725,7 +7777,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -7737,7 +7791,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -9825,7 +9882,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -9855,7 +9914,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -9867,7 +9928,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -9913,7 +9977,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -9943,7 +10009,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -9955,7 +10023,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -10054,7 +10125,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10084,7 +10157,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10096,7 +10171,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     },
     "semantic_valid": false
   },
@@ -10142,7 +10220,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10172,7 +10252,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10184,7 +10266,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     },
     "semantic_valid": false
   },
@@ -10230,7 +10315,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10260,7 +10347,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10272,7 +10361,10 @@
         "provenance": "estimated",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -10317,7 +10409,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10347,7 +10441,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10359,7 +10455,10 @@
         "provenance": "provider",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -10404,7 +10503,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10434,7 +10535,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10446,7 +10549,10 @@
         "provenance": "estimated",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   },
   {
@@ -10491,7 +10597,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10521,7 +10629,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10533,7 +10643,10 @@
         "provenance": "provider",
         "complete": true
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     },
     "semantic_valid": false
   },
@@ -10579,7 +10692,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         },
         {
           "attempt_id": "attempt-b",
@@ -10609,7 +10724,9 @@
               "name": "output_tokens",
               "value": 3
             }
-          ]
+          ],
+          "candidate_index": null,
+          "observed_http_status": null
         }
       ],
       "usage": {
@@ -10621,7 +10738,10 @@
         "provenance": "unknown",
         "complete": false
       },
-      "recorded_at": "2026-10-25T00:00:00Z"
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "dispatch": {
+        "mode": "strict"
+      }
     }
   }
 ]

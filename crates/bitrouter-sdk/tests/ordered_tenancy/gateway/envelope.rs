@@ -5,7 +5,7 @@ use bitrouter_ai::tenancy::generation_defaults::{
 
 async fn send(
     client: &GatewayClient,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     defaults: GenerationDefaultsEnvelope,
     protocol: usize,
     stream: bool,

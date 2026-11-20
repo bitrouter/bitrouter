@@ -10,7 +10,7 @@ use bitrouter_ai::{
         generation_defaults::{GenerationDefaultsEnvelope, MAX_DEFAULTS_BYTES},
         identity::Digest,
         native_controls::{HEADER, OrderedNativeControlsCapabilitiesV1, PROVIDER_NATIVE_V1},
-        ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
+        ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBinding},
         validation::Validate,
     },
 };
@@ -40,7 +40,7 @@ impl std::fmt::Debug for OrderedTenantGateway<'_> {
 
 impl GatewayClient {
     /// Prepare one explicit ordered v2 call from trusted credentials and a binding.
-    /// Use `OrderedCapabilitiesV2::bind` to respect the observed attempt ceiling.
+    /// Use `OrderedCapabilities::bind` to respect the observed attempt ceiling.
     /// The server rechecks that ceiling, retained membership and current authority.
     /// This helper never discovers capabilities, truncates selection, or falls back to v1.
     ///
@@ -49,7 +49,7 @@ impl GatewayClient {
     pub fn ordered_tenant(
         &self,
         credential: &str,
-        binding: &OrderedDispatchBindingV2,
+        binding: &OrderedDispatchBinding,
     ) -> Result<OrderedTenantGateway<'_>, Error> {
         binding
             .validate()

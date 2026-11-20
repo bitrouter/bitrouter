@@ -48,7 +48,7 @@ pub enum GenerationProtocol {
 /// Ordered subset of a retained protocol root; indices are stable root ordinals.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OrderedCandidateSelectionV1 {
+pub struct OrderedCandidateSelection {
     /// Selection format, exactly one.
     #[serde(deserialize_with = "super::number::integer")]
     pub schema_version: u8,
@@ -64,13 +64,13 @@ pub struct OrderedCandidateSelectionV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_defaults_digest: Option<Digest>,
 }
-impl Validate for OrderedCandidateSelectionV1 {
+impl Validate for OrderedCandidateSelection {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.schema_version == 1, "ordered selection version")?;
         validate_selection(&self.route, &self.candidate_indices)
     }
 }
-impl OrderedCandidateSelectionV1 {
+impl OrderedCandidateSelection {
     /// Record the ingress protocol observed by the accepting service.
     ///
     /// # Errors
@@ -79,9 +79,9 @@ impl OrderedCandidateSelectionV1 {
     pub fn accept(
         &self,
         inbound_protocol: GenerationProtocol,
-    ) -> Result<AcceptedSelectionV2, ValidationError> {
+    ) -> Result<AcceptedSelection, ValidationError> {
         self.validate()?;
-        Ok(AcceptedSelectionV2 {
+        Ok(AcceptedSelection {
             admission_mode: self.admission_mode,
             route: self.route.clone(),
             inbound_protocol,
@@ -94,7 +94,7 @@ impl OrderedCandidateSelectionV1 {
 /// Accepted selection bound to the actual ingress endpoint, not a caller guess.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AcceptedSelectionV2 {
+pub struct AcceptedSelection {
     /// Enforcement mode accepted without downgrade.
     pub admission_mode: AdmissionMode,
     /// Exact retained route revision.
@@ -109,7 +109,7 @@ pub struct AcceptedSelectionV2 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_defaults_digest: Option<Digest>,
 }
-impl Validate for AcceptedSelectionV2 {
+impl Validate for AcceptedSelection {
     fn validate(&self) -> Result<(), ValidationError> {
         validate_selection(&self.route, &self.candidate_indices)
     }
@@ -150,7 +150,7 @@ fn indices<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u16>
 /// Operator-visible identity of a persisted protocol-root entry, without secrets.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CandidateDescriptorV1 {
+pub struct CandidateDescriptor {
     /// Persisted root ordinal, not a deduplicated runtime-vector index.
     #[serde(deserialize_with = "super::number::integer")]
     pub candidate_index: u16,
@@ -162,7 +162,7 @@ pub struct CandidateDescriptorV1 {
     #[serde(deserialize_with = "nullable")]
     pub admission_profile: Option<ResourceRef>,
 }
-impl Validate for CandidateDescriptorV1 {
+impl Validate for CandidateDescriptor {
     fn validate(&self) -> Result<(), ValidationError> {
         require(
             usize::from(self.candidate_index) < MAX_CANDIDATES,
@@ -186,7 +186,7 @@ impl Validate for CandidateDescriptorV1 {
 /// Operator-only readback of one retained root. A manifest is not an execution grant.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CandidateManifestV1 {
+pub struct CandidateManifest {
     /// Manifest format, exactly one.
     #[serde(deserialize_with = "super::number::integer")]
     pub schema_version: u8,
@@ -206,12 +206,12 @@ pub struct CandidateManifestV1 {
     pub inbound_protocol: GenerationProtocol,
     /// At most 256 entries in strictly increasing root-ordinal order.
     /// Sparse ordinals retain their original meaning; duplicate targets may occur.
-    pub candidates: Vec<CandidateDescriptorV1>,
+    pub candidates: Vec<CandidateDescriptor>,
     /// Advisory process-local facts; absent runtime data is explicit null.
     #[serde(deserialize_with = "nullable")]
     pub runtime_observation: Option<RuntimeObservationV1>,
 }
-impl Validate for CandidateManifestV1 {
+impl Validate for CandidateManifest {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.schema_version == 1, "candidate manifest version")?;
         require(
@@ -286,7 +286,7 @@ impl Validate for CandidateManifestV1 {
 /// Separate discovery for format two; the version-one capabilities remain frozen.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OrderedCapabilitiesV2 {
+pub struct OrderedCapabilities {
     /// Supported ordered tenancy contract, exactly two.
     #[serde(deserialize_with = "super::number::integer")]
     pub contract_version: u32,
@@ -308,13 +308,13 @@ pub struct OrderedCapabilitiesV2 {
     /// New dispatch is currently enabled under authority and storage fences.
     pub dispatch_enabled: bool,
 }
-impl Validate for OrderedCapabilitiesV2 {
+impl Validate for OrderedCapabilities {
     fn validate(&self) -> Result<(), ValidationError> {
         require(self.contract_version == 2, "ordered contract version")?;
         validate_attempt_limit(self.attempt_limit)
     }
 }
-impl OrderedCapabilitiesV2 {
+impl OrderedCapabilities {
     /// Bind an explicit selection without downgrade, replay or automatic retry.
     ///
     /// # Errors
@@ -324,8 +324,8 @@ impl OrderedCapabilitiesV2 {
         &self,
         execution_revision: RevisionId,
         correlation_id: CorrelationId,
-        selection: OrderedCandidateSelectionV1,
-    ) -> Result<OrderedDispatchBindingV2, ValidationError> {
+        selection: OrderedCandidateSelection,
+    ) -> Result<OrderedDispatchBinding, ValidationError> {
         self.validate()?;
         selection.validate()?;
         require(
@@ -336,7 +336,7 @@ impl OrderedCapabilitiesV2 {
             selection.candidate_indices.len() <= usize::from(self.attempt_limit),
             "ordered attempt capacity",
         )?;
-        Ok(OrderedDispatchBindingV2 {
+        Ok(OrderedDispatchBinding {
             contract_version: "2".into(),
             installation_id: self.installation_id.clone(),
             instance_id: self.instance_id.clone(),
@@ -352,7 +352,7 @@ impl OrderedCapabilitiesV2 {
 /// Strict version-two submission metadata with an unencoded typed selection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OrderedDispatchBindingV2 {
+pub struct OrderedDispatchBinding {
     /// Tenancy contract, exactly `2`.
     #[serde(rename = "Bitrouter-Tenancy-Version")]
     pub contract_version: String,
@@ -375,9 +375,9 @@ pub struct OrderedDispatchBindingV2 {
     #[serde(rename = "Bitrouter-Receipt-Mode")]
     pub receipt_mode: String,
     /// Transport encodes this value in the bounded candidate-selection header.
-    pub selection: OrderedCandidateSelectionV1,
+    pub selection: OrderedCandidateSelection,
 }
-impl OrderedDispatchBindingV2 {
+impl OrderedDispatchBinding {
     /// Bind defaults and their configuration-layer choice before retaining
     /// this submission identity. Uses the existing digest slot with a distinct
     /// domain; supply the same envelope to the ordered gateway for this call.
@@ -394,7 +394,7 @@ impl OrderedDispatchBindingV2 {
         Ok(self)
     }
 }
-impl Validate for OrderedDispatchBindingV2 {
+impl Validate for OrderedDispatchBinding {
     fn validate(&self) -> Result<(), ValidationError> {
         require(
             self.contract_version == "2" && self.receipt_mode == "strict",

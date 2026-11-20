@@ -5,12 +5,11 @@ use std::{error::Error as StdError, time::Duration};
 use axum::{body::Body as HttpBody, http::Version, response::Response};
 use bitrouter_ai::tenancy::{
     configuration::ResourceRef,
-    execution_v2::ExecutionReceiptV2,
+    execution::ExecutionReceipt,
     ordered::{
-        GenerationProtocol, OrderedCandidateSelectionV1, OrderedCapabilitiesV2,
-        OrderedDispatchBindingV2,
+        GenerationProtocol, OrderedCandidateSelection, OrderedCapabilities, OrderedDispatchBinding,
     },
-    usage_evidence_v2::ExecutionUsageEvidenceV2,
+    usage_evidence::ExecutionUsageEvidence,
     validation::Validate,
 };
 use bitrouter_sdk::{
@@ -39,7 +38,7 @@ fn versions() -> Vec<(HttpVersion, Version)> {
     ]
 }
 
-fn capabilities(limit: u8) -> TestResult<OrderedCapabilitiesV2> {
+fn capabilities(limit: u8) -> TestResult<OrderedCapabilities> {
     Ok(serde_json::from_value(
         json!({"contract_version":2,"installation_id":"installation",
         "instance_id":"instance","capability_revision":"capability","authority_revision":7,
@@ -52,8 +51,8 @@ fn route() -> TestResult<ResourceRef> {
         "resource_kind":"route","resource_id":"route","revision_id":"route-revision"}),
     )?)
 }
-fn selection(indices: Vec<u16>) -> TestResult<OrderedCandidateSelectionV1> {
-    Ok(OrderedCandidateSelectionV1 {
+fn selection(indices: Vec<u16>) -> TestResult<OrderedCandidateSelection> {
+    Ok(OrderedCandidateSelection {
         generation_defaults_digest: None,
         admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
         schema_version: 1,
@@ -61,7 +60,7 @@ fn selection(indices: Vec<u16>) -> TestResult<OrderedCandidateSelectionV1> {
         candidate_indices: indices,
     })
 }
-fn binding(indices: Vec<u16>) -> TestResult<OrderedDispatchBindingV2> {
+fn binding(indices: Vec<u16>) -> TestResult<OrderedDispatchBinding> {
     Ok(capabilities(64)?.bind(
         "revision".try_into()?,
         "correlation".try_into()?,
@@ -106,12 +105,12 @@ fn unknown_usage() -> Value {
     json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,
         "reasoning_tokens":null,"provenance":"unknown","complete":false})
 }
-fn receipt(count: u16) -> TestResult<ExecutionReceiptV2> {
-    let value = serde_json::from_value::<ExecutionReceiptV2>(
-        json!({"schema_version":2,"installation_id":"installation",
+fn receipt(count: u16) -> TestResult<ExecutionReceipt> {
+    let value = serde_json::from_value::<ExecutionReceipt>(
+        json!({"installation_id":"installation",
         "tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation",
-        "execution_revision":"revision","accepted_selection":selection((0..count).collect())?.accept(GenerationProtocol::ChatCompletions)?,
-        "attempt_limit":64,"state":"committed","outcome":"failed","attempts":(0..count).map(|index| json!({
+        "execution_revision":"revision","dispatch":{"mode":"ordered","accepted_selection":selection((0..count).collect())?.accept(GenerationProtocol::ChatCompletions)?,
+        "attempt_limit":64},"state":"committed","outcome":"failed","attempts":(0..count).map(|index| json!({
             "attempt_id":format!("attempt-{index}"),"candidate_index":index,"target":null,"outcome":"failed",
             "observed_http_status":429,"usage":unknown_usage(),"native_usage":[]
         })).collect::<Vec<_>>(),"usage":unknown_usage(),"recorded_at":"2026-11-02T00:00:00Z"}),
@@ -119,10 +118,10 @@ fn receipt(count: u16) -> TestResult<ExecutionReceiptV2> {
     value.validate()?;
     Ok(value)
 }
-fn evidence(receipt: &ExecutionReceiptV2) -> TestResult<ExecutionUsageEvidenceV2> {
-    let value = serde_json::from_value::<ExecutionUsageEvidenceV2>(
-        json!({"schema_version":2,"installation_id":receipt.installation_id,
-        "tenant_id":receipt.tenant_id,"execution_id":receipt.execution_id,"accepted_selection":receipt.accepted_selection,
+fn evidence(receipt: &ExecutionReceipt) -> TestResult<ExecutionUsageEvidence> {
+    let value = serde_json::from_value::<ExecutionUsageEvidence>(
+        json!({"dispatch":receipt.dispatch,"parent_execution_id":null,"child_execution_ids":[],"installation_id":receipt.installation_id,
+        "tenant_id":receipt.tenant_id,"execution_id":receipt.execution_id,
         "capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,
         "attempts":receipt.attempts.iter().map(|attempt| json!({"attempt_id":attempt.attempt_id,"target":attempt.target,
             "outcome":attempt.outcome,"terminal_observed":false})).collect::<Vec<_>>(),

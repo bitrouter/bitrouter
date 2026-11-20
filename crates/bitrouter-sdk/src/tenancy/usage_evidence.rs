@@ -1,21 +1,23 @@
-//! Versioned execution observations through the existing bounded tenancy transport.
+//! Original execution observations through the existing bounded tenancy transport.
 use super::TenancyClient;
 use crate::error::{Error, Result};
 use bitrouter_ai::tenancy::{
-    identity::{ExecutionId, InstallationId, TenantId},
-    usage_evidence::{ExecutionUsageEvidenceV1, MAX_BYTES, UsageEvidenceCapabilitiesV1},
+    execution::ExecutionReceipt,
+    identity::InstallationId,
+    usage_evidence::{EvidenceBudget, ExecutionUsageEvidence, UsageEvidenceCapabilities},
+    validation::Validate,
 };
 
 impl TenancyClient {
-    /// Discover bounded usage evidence independently of frozen v1 capabilities.
+    /// Discover bounded usage evidence for strict and ordered dispatch.
     ///
     /// # Errors
     /// Returns authentication, installation, transport or contract errors.
     pub async fn usage_evidence_capabilities(
         &self,
         installation: &InstallationId,
-    ) -> Result<UsageEvidenceCapabilitiesV1> {
-        let result: UsageEvidenceCapabilitiesV1 = self
+    ) -> Result<UsageEvidenceCapabilities> {
+        let result: UsageEvidenceCapabilities = self
             .get("tenancy/usage-evidence/capabilities", Some(installation))
             .await?;
         if &result.installation_id != installation {
@@ -26,34 +28,36 @@ impl TenancyClient {
         Ok(result)
     }
 
-    /// Read immutable original numeric observations for one exact execution.
-    /// Historical absence is explicit; this method never reconstructs usage.
-    /// Chat advisory cost, zero-only cache-creation metadata and null multimodal
-    /// metadata do not add quantities. Existing unsupported flags are never
-    /// reinterpreted by this reader; consumers must honor retained refusals.
+    /// Read original evidence bound to the observed receipt and its dispatch.
+    /// The accepted count bounds original response bytes before decoding; validated
+    /// evidence must agree with the receipt's identity, selection and actual attempts.
+    /// No receipt discovery, format fallback, reconstruction or retry is performed.
     ///
     /// # Errors
-    /// Returns authorization, missing execution, transport or binding errors.
+    /// Rejects invalid receipts locally; returns authority, format, bounds or binding errors.
     pub async fn usage_evidence(
         &self,
-        installation: &InstallationId,
-        tenant: &TenantId,
-        execution: &ExecutionId,
-    ) -> Result<ExecutionUsageEvidenceV1> {
+        receipt: &ExecutionReceipt,
+    ) -> Result<ExecutionUsageEvidence> {
+        receipt
+            .validate()
+            .map_err(|_| Error::Request("invalid receipt"))?;
+        let budget = EvidenceBudget::for_attempts(receipt.dispatch.accepted_count())
+            .map_err(|_| Error::Request("invalid evidence budget"))?;
         let request = self
             .http
             .get(self.url(&format!(
-                "tenants/{tenant}/executions/{execution}/usage-evidence"
+                "tenants/{}/executions/{}/usage-evidence",
+                receipt.tenant_id, receipt.execution_id
             ))?)
-            .header("Bitrouter-Installation-Id", installation.as_str());
-        // Bound the original bytes, including whitespace, before typed decoding.
-        let result: ExecutionUsageEvidenceV1 = self.send_bounded(request, MAX_BYTES).await?;
-        if &result.installation_id != installation
-            || &result.tenant_id != tenant
-            || &result.execution_id != execution
-        {
-            return Err(Error::Response("usage evidence identity mismatch"));
-        }
+            .header(
+                "Bitrouter-Installation-Id",
+                receipt.installation_id.as_str(),
+            );
+        let result: ExecutionUsageEvidence = self.send_bounded(request, budget.max_bytes).await?;
+        result
+            .validate_against(receipt)
+            .map_err(|_| Error::Response("evidence differs from receipt"))?;
         Ok(result)
     }
 }

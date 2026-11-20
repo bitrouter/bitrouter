@@ -18,38 +18,39 @@ fn actual_attempts_are_a_unique_ordered_subsequence() -> TestResult {
     for count in [1, 8, 9, 64] {
         let receipt = receipt(count)?;
         receipt.validate()?;
-        assert_eq!(legacy_receipt(&receipt)?.validate().is_ok(), count <= 8);
+        assert_eq!(strict_receipt(&receipt)?.validate().is_ok(), count <= 8);
     }
     let mut value = receipt(3)?;
-    value.accepted_selection =
+    *selection_mut(&mut value.dispatch)? =
         selected(vec![255, 30, 1, 128, 0])?.accept(GenerationProtocol::Messages)?;
     for (attempt, index) in value.attempts.iter_mut().zip([255, 1, 0]) {
-        attempt.candidate_index = index;
+        attempt.candidate_index = Some(index);
     }
     value.validate()?;
     value.attempts.swap(0, 1);
     assert!(value.validate().is_err());
     value.attempts.swap(0, 1);
-    value.attempts[1].candidate_index = 255;
+    value.attempts[1].candidate_index = Some(255);
     assert!(value.validate().is_err());
-    value.attempts[1].candidate_index = 2;
+    value.attempts[1].candidate_index = Some(2);
     assert!(value.validate().is_err());
-    value.attempts[1].candidate_index = 1;
+    value.attempts[1].candidate_index = Some(1);
     value.attempts[1].attempt_id = value.attempts[0].attempt_id.clone();
     assert!(value.validate().is_err());
     let mut value = receipt(1)?;
     value.attempts.push(value.attempts[0].clone());
     assert!(value.validate().is_err());
     let mut value = receipt(64)?;
-    value.attempt_limit = 63;
+    *limit_mut(&mut value.dispatch)? = 63;
     assert!(value.validate().is_err());
     for limit in [0, 65, 255] {
-        value.attempt_limit = limit;
+        *limit_mut(&mut value.dispatch)? = limit;
         assert!(value.validate().is_err());
     }
     let mut value = serde_json::to_value(receipt(64)?)?;
-    value["accepted_selection"]["candidate_indices"] = json!((0..65).collect::<Vec<_>>());
-    assert!(!valid::<ExecutionReceiptV2>(value));
+    value["dispatch"]["accepted_selection"]["candidate_indices"] =
+        json!((0..65).collect::<Vec<_>>());
+    assert!(!valid::<ExecutionReceipt>(value));
     Ok(())
 }
 
@@ -69,32 +70,28 @@ fn strict_receipt_wire_status_and_schema() -> TestResult {
     }
     receipt.attempts[0].observed_http_status = Some(503);
     let raw = serde_json::to_string(&receipt)?;
-    serde_json::from_str::<ExecutionReceiptV2>(&raw.replace(
+    serde_json::from_str::<ExecutionReceipt>(&raw.replace(
         "\"observed_http_status\":503",
         "\"observed_http_status\":503e0",
     ))?
     .validate()?;
     for invalid in ["-1", "503.00000000000001", "65536", "\"503\""] {
         assert!(
-            serde_json::from_str::<ExecutionReceiptV2>(&raw.replace(
+            serde_json::from_str::<ExecutionReceipt>(&raw.replace(
                 "\"observed_http_status\":503",
                 &format!("\"observed_http_status\":{invalid}")
             ))
             .is_err()
         );
     }
-    for version in [0, 1, 3, 255] {
-        receipt.schema_version = version;
-        assert!(receipt.validate().is_err());
+    for mode in ["legacy", "unknown", "v2"] {
+        let mut invalid = serde_json::to_value(&receipt)?;
+        invalid["dispatch"]["mode"] = json!(mode);
+        assert!(!valid::<ExecutionReceipt>(invalid));
     }
-    receipt.schema_version = 2;
-    assert!(serde_json::from_value::<ExecutionReceipt>(serde_json::to_value(&receipt)?).is_err());
-    assert!(
-        serde_json::from_value::<ExecutionReceiptV2>(serde_json::to_value(legacy_receipt(
-            &receipt
-        )?)?)
-        .is_err()
-    );
+    let strict = strict_receipt(&receipt)?;
+    strict.validate()?;
+    assert!(matches!(strict.dispatch, Dispatch::Strict));
     Ok(())
 }
 
@@ -211,7 +208,8 @@ fn maximum_receipt_fits_and_byte_limit_is_exact() -> TestResult {
     let length = serde_json::to_vec(&receipt)?.len();
     assert!(length > 128 * 1024 && length < 1024 * 1024, "{length}");
     let mut bound = receipt.clone();
-    bound.accepted_selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
+    selection_mut(&mut bound.dispatch)?.generation_defaults_digest =
+        Some("a".repeat(64).try_into()?);
     bound.validate()?;
     assert_eq!(serde_json::to_vec(&bound)?.len(), length + 96);
     // Timestamp fractions are valid arbitrary precision in the frozen primitive.
@@ -229,15 +227,10 @@ fn maximum_receipt_fits_and_byte_limit_is_exact() -> TestResult {
 }
 
 #[test]
-fn v1_golden_bytes_and_validation_errors_remain_frozen() -> TestResult {
-    const GOLDEN: &str = r#"{"installation_id":"installation","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"committed","outcome":"failed","attempts":[{"attempt_id":"attempt-0","target":null,"outcome":"failed","usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false},"native_usage":[]}],"usage":{"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false},"recorded_at":"2026-11-02T00:00:00Z"}"#;
-    let legacy = legacy_receipt(&receipt(1)?)?;
+fn strict_dispatch_preserves_conservative_validation_and_limits() -> TestResult {
+    let mut legacy = strict_receipt(&receipt(1)?)?;
+    legacy.attempts[0].observed_http_status = None;
     legacy.validate()?;
-    assert_eq!(serde_json::to_string(&legacy)?, GOLDEN);
-    assert_eq!(
-        serde_json::to_string(&serde_json::from_str::<ExecutionReceipt>(GOLDEN)?)?,
-        GOLDEN
-    );
     let cases = [
         (
             "/outcome",
@@ -271,7 +264,7 @@ fn v1_golden_bytes_and_validation_errors_remain_frozen() -> TestResult {
     }
     for count in [9, 64] {
         assert_eq!(
-            legacy_receipt(&receipt(count)?)?
+            strict_receipt(&receipt(count)?)?
                 .validate()
                 .err()
                 .ok_or("error")?
@@ -306,7 +299,7 @@ fn terminal_attempts_never_allow_a_following_attempt() -> TestResult {
                 value.state = state;
                 value.outcome = following;
                 // This ordering restriction belongs only to ordered v2 execution.
-                legacy_receipt(&value)?.validate()?;
+                strict_receipt(&value)?.validate()?;
                 assert!(
                     value.validate().is_err(),
                     "{terminal:?} -> {following:?}, {state:?}"
@@ -416,14 +409,63 @@ fn receipt_route_owner_must_match_tenant_but_operator_pools_remain_eligible() ->
     use bitrouter_ai::tenancy::authority::OwnerKind;
     let mut value = receipt(1)?;
     value.validate()?;
-    value.accepted_selection.route.owner_id = "foreign-tenant".try_into()?;
+    selection_mut(&mut value.dispatch)?.route.owner_id = "foreign-tenant".try_into()?;
     assert!(value.validate().is_err());
     assert!(evidence(&value).validate_against(&value).is_err());
-    value.accepted_selection.route.owner_kind = OwnerKind::OperatorPool;
+    selection_mut(&mut value.dispatch)?.route.owner_kind = OwnerKind::OperatorPool;
     value.validate()?;
     evidence(&value).validate_against(&value)?;
-    value.accepted_selection.route.owner_kind = OwnerKind::Tenant;
+    selection_mut(&mut value.dispatch)?.route.owner_kind = OwnerKind::Tenant;
     value.tenant_id = "foreign-tenant".try_into()?;
     value.validate()?;
+    Ok(())
+}
+
+#[test]
+fn dispatch_decodes_original_numeric_tokens_and_rejects_mixed_modes() -> TestResult {
+    let ordered = receipt(1)?;
+    strict_object(&ordered.dispatch)?;
+    let raw = serde_json::to_string(&ordered)?;
+    for (field, original, exact, fractional) in [
+        ("attempt_limit", "64", "6.4e1", "64.000000000000000001"),
+        ("candidate_index", "0", "0e1000", "0.000000000000000001"),
+    ] {
+        let needle = format!("\"{field}\":{original}");
+        serde_json::from_str::<ExecutionReceipt>(
+            &raw.replace(&needle, &format!("\"{field}\":{exact}")),
+        )?
+        .validate()?;
+        assert!(
+            serde_json::from_str::<ExecutionReceipt>(
+                &raw.replace(&needle, &format!("\"{field}\":{fractional}"))
+            )
+            .is_err()
+        );
+    }
+    let duplicate = raw.replace(
+        "\"attempt_limit\":64",
+        "\"attempt_limit\":64,\"attempt_limit\":1",
+    );
+    assert!(serde_json::from_str::<ExecutionReceipt>(&duplicate).is_err());
+    let duplicate = raw.replace(
+        "\"candidate_indices\":[0]",
+        "\"candidate_indices\":[0],\"candidate_indices\":[1]",
+    );
+    assert!(serde_json::from_str::<ExecutionReceipt>(&duplicate).is_err());
+    let exact = raw.replace("\"candidate_indices\":[0]", "\"candidate_indices\":[0e0]");
+    serde_json::from_str::<ExecutionReceipt>(&exact)?.validate()?;
+    let fractional = raw.replace(
+        "\"candidate_indices\":[0]",
+        "\"candidate_indices\":[0.000000000000000001]",
+    );
+    assert!(serde_json::from_str::<ExecutionReceipt>(&fractional).is_err());
+    let mut strict = strict_receipt(&ordered)?;
+    strict_object(&strict.dispatch)?;
+    strict.validate()?;
+    strict.attempts[0].candidate_index = Some(0);
+    assert!(strict.validate().is_err());
+    let mut mixed = serde_json::to_value(&ordered)?;
+    mixed["dispatch"]["mode"] = json!("strict");
+    assert!(serde_json::from_value::<ExecutionReceipt>(mixed).is_err());
     Ok(())
 }

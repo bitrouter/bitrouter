@@ -23,9 +23,9 @@ fn dimensions() -> [Dimension; 13] {
 }
 
 #[test]
-fn budgets_follow_accepted_count_and_legacy_stays_at_eight() -> TestResult {
+fn budgets_follow_accepted_count_and_strict_stays_at_eight() -> TestResult {
     for (count, blocks) in [(1, 1), (8, 1), (9, 2), (64, 8)] {
-        let budget = EvidenceBudgetV2::for_attempts(count)?;
+        let budget = EvidenceBudget::for_attempts(count)?;
         assert_eq!(budget.max_bytes, 256 * 1024 * blocks);
         assert_eq!(budget.max_frame_bytes, 192 * 1024 * blocks);
         assert_eq!(budget.reserved_bytes, 64 * 1024 * blocks);
@@ -33,17 +33,17 @@ fn budgets_follow_accepted_count_and_legacy_stays_at_eight() -> TestResult {
         let mut receipt = receipt(count as u16)?;
         let evidence = evidence(&receipt);
         evidence.validate_against(&receipt)?;
-        assert_eq!(legacy_evidence(&evidence)?.validate().is_ok(), count <= 8);
+        assert_eq!(strict_evidence(&evidence)?.validate().is_ok(), count <= 8);
         // Local refusals can leave no attempts; the accepted reservation survives.
         receipt.attempts.clear();
         evidence::evidence_for_empty(&receipt)?;
     }
     for count in [0, 65, usize::MAX] {
-        assert!(EvidenceBudgetV2::for_attempts(count).is_err());
+        assert!(EvidenceBudget::for_attempts(count).is_err());
     }
     Ok(())
 }
-fn evidence_for_empty(receipt: &ExecutionReceiptV2) -> TestResult {
+fn evidence_for_empty(receipt: &ExecutionReceipt) -> TestResult {
     evidence(receipt).validate_against(receipt)?;
     Ok(())
 }
@@ -61,17 +61,12 @@ fn strict_evidence_fields_schema_and_no_auxiliary_linkage() -> TestResult {
     for version in [0, 1, 3, 255] {
         let mut value = baseline.clone();
         value["schema_version"] = json!(version);
-        assert!(!valid::<ExecutionUsageEvidenceV2>(value));
+        assert!(!valid::<ExecutionUsageEvidence>(value));
     }
-    for field in [
-        "parent_execution_id",
-        "child_execution_ids",
-        "auxiliary",
-        "children",
-    ] {
+    for field in ["auxiliary", "children"] {
         let mut value = baseline.clone();
         value[field] = Value::Null;
-        assert!(!valid::<ExecutionUsageEvidenceV2>(value));
+        assert!(!valid::<ExecutionUsageEvidence>(value));
     }
     for (pointer, replacement) in [
         ("/extractor_version", json!(2)),
@@ -91,23 +86,19 @@ fn strict_evidence_fields_schema_and_no_auxiliary_linkage() -> TestResult {
     ] {
         let mut value = baseline.clone();
         *value.pointer_mut(pointer).ok_or("pointer")? = replacement;
-        assert!(!valid::<ExecutionUsageEvidenceV2>(value), "{pointer}");
+        assert!(!valid::<ExecutionUsageEvidence>(value), "{pointer}");
     }
     let mut missing = baseline.clone();
     missing["frames"][0]["quantities"][0]
         .as_object_mut()
         .ok_or("object")?
         .remove("value");
-    assert!(!valid::<ExecutionUsageEvidenceV2>(missing));
+    assert!(!valid::<ExecutionUsageEvidence>(missing));
     let raw = serde_json::to_string(&evidence)?.replace("\"value\":0", "\"value\":0,\"value\":1");
-    assert!(serde_json::from_str::<ExecutionUsageEvidenceV2>(&raw).is_err());
-    assert!(serde_json::from_value::<ExecutionUsageEvidenceV1>(baseline).is_err());
-    assert!(
-        serde_json::from_value::<ExecutionUsageEvidenceV2>(serde_json::to_value(legacy_evidence(
-            &evidence
-        )?)?)
-        .is_err()
-    );
+    assert!(serde_json::from_str::<ExecutionUsageEvidence>(&raw).is_err());
+    let mut linked = baseline;
+    linked["parent_execution_id"] = json!("parent");
+    assert!(!valid::<ExecutionUsageEvidence>(linked));
     Ok(())
 }
 
@@ -131,7 +122,7 @@ fn observation_absence_invalid_null_and_explicit_zero_round_trip_without_inventi
     evidence.frames[0].invalid = true;
     evidence.validate_against(&receipt)?;
     let raw = serde_json::to_string(&evidence)?;
-    let decoded: ExecutionUsageEvidenceV2 = serde_json::from_str(&raw)?;
+    let decoded: ExecutionUsageEvidence = serde_json::from_str(&raw)?;
     assert_eq!(decoded.frames[0].quantities, evidence.frames[0].quantities);
     assert_eq!(decoded.frames[0].quantities.len(), 2);
     evidence.frames[0].quantities.clear();
@@ -161,9 +152,18 @@ fn evidence_binding_rejects_changed_selection_protocol_and_actual_attempts() -> 
         ("/installation_id", json!("other")),
         ("/tenant_id", json!("other")),
         ("/execution_id", json!("other")),
-        ("/accepted_selection/inbound_protocol", json!("responses")),
-        ("/accepted_selection/route/revision_id", json!("other")),
-        ("/accepted_selection/candidate_indices", json!([2, 1, 0])),
+        (
+            "/dispatch/accepted_selection/inbound_protocol",
+            json!("responses"),
+        ),
+        (
+            "/dispatch/accepted_selection/route/revision_id",
+            json!("other"),
+        ),
+        (
+            "/dispatch/accepted_selection/candidate_indices",
+            json!([2, 1, 0]),
+        ),
         ("/attempts/0/attempt_id", json!("other")),
         ("/attempts/0/outcome", json!("unknown")),
         ("/attempts/0/target/provider_id", json!("other")),
@@ -177,9 +177,10 @@ fn evidence_binding_rejects_changed_selection_protocol_and_actual_attempts() -> 
         *value.pointer_mut(pointer).ok_or("pointer")? = replacement;
         if pointer == "/tenant_id" {
             // Keep this a valid standalone document with a different owner.
-            value["accepted_selection"]["route"]["owner_id"] = value["tenant_id"].clone();
+            value["dispatch"]["accepted_selection"]["route"]["owner_id"] =
+                value["tenant_id"].clone();
         }
-        let value: ExecutionUsageEvidenceV2 = serde_json::from_value(value)?;
+        let value: ExecutionUsageEvidence = serde_json::from_value(value)?;
         value.validate()?;
         assert!(value.validate_against(&receipt).is_err(), "{pointer}");
     }
@@ -305,8 +306,9 @@ fn maximum_identities_and_dense_quantities_preserve_all_64_attempts() -> TestRes
     for (index, attempt) in receipt.attempts.iter_mut().enumerate() {
         attempt.attempt_id = format!("{:0>128}", index).try_into()?;
     }
-    receipt.accepted_selection.generation_defaults_digest = Some("a".repeat(64).try_into()?);
-    let budget = EvidenceBudgetV2::for_attempts(64)?;
+    selection_mut(&mut receipt.dispatch)?.generation_defaults_digest =
+        Some("a".repeat(64).try_into()?);
+    let budget = EvidenceBudget::for_attempts(64)?;
     let mut evidence = evidence(&receipt);
     evidence.frames = (0..4096)
         .map(|index| {
@@ -345,7 +347,7 @@ fn maximum_identities_and_dense_quantities_preserve_all_64_attempts() -> TestRes
             .all(|frame| frame.quantities.len() == 13)
     );
     assert_eq!(
-        legacy_evidence(&evidence)?
+        strict_evidence(&evidence)?
             .validate()
             .err()
             .ok_or("error")?
@@ -356,26 +358,19 @@ fn maximum_identities_and_dense_quantities_preserve_all_64_attempts() -> TestRes
 }
 
 #[test]
-fn v1_evidence_golden_bytes_and_extractor_semantics_remain_frozen() -> TestResult {
-    const GOLDEN: &str = r#"{"schema_version":1,"installation_id":"installation","tenant_id":"tenant","execution_id":"execution","capture":"captured","extractor_version":1,"estimation":"not_captured","estimate":null,"parent_execution_id":null,"child_execution_ids":[],"attempts":[{"attempt_id":"attempt-0","target":null,"outcome":"failed","terminal_observed":false}],"frames":[],"truncated":false,"dropped_frames":0}"#;
+fn strict_and_ordered_evidence_protocol_rules_remain_distinct() -> TestResult {
     let receipt = receipt(1)?;
     let mut evidence = evidence(&receipt);
-    let legacy = legacy_evidence(&evidence)?;
-    legacy.validate()?;
-    assert_eq!(serde_json::to_string(&legacy)?, GOLDEN);
-    assert_eq!(
-        serde_json::to_string(&serde_json::from_str::<ExecutionUsageEvidenceV1>(GOLDEN)?)?,
-        GOLDEN
-    );
+    strict_evidence(&evidence)?.validate()?;
     evidence.frames.push(frame(&receipt, 0, 0));
     evidence.frames[0].protocol = Protocol::Decisions;
     evidence.frames[0].semantics = Semantics::Unknown;
     evidence.frames[0].source = Source::Json;
-    legacy_evidence(&evidence)?.validate()?;
+    strict_evidence(&evidence)?.validate()?;
     assert!(evidence.validate().is_err());
     evidence.frames[0].semantics = Semantics::Snapshot;
     assert_eq!(
-        legacy_evidence(&evidence)?
+        strict_evidence(&evidence)?
             .validate()
             .err()
             .ok_or("error")?
@@ -399,11 +394,11 @@ fn standalone_evidence_checks_tenant_route_ownership_even_without_capture() -> T
             value.attempts.clear();
         }
         value.validate()?;
-        value.accepted_selection.route.owner_id = "foreign-tenant".try_into()?;
+        selection_mut(&mut value.dispatch)?.route.owner_id = "foreign-tenant".try_into()?;
         assert!(value.validate().is_err(), "{capture:?}");
-        value.accepted_selection.route.owner_kind = OwnerKind::OperatorPool;
+        selection_mut(&mut value.dispatch)?.route.owner_kind = OwnerKind::OperatorPool;
         value.validate()?;
-        value.accepted_selection.route.owner_kind = OwnerKind::Tenant;
+        selection_mut(&mut value.dispatch)?.route.owner_kind = OwnerKind::Tenant;
         value.tenant_id = "foreign-tenant".try_into()?;
         value.validate()?;
     }
