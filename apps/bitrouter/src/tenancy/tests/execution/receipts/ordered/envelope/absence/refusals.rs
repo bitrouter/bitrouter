@@ -84,18 +84,14 @@ async fn envelope_v2_invalid_binding_and_raw_decoding_never_charge_arm_or_send()
         let defaults = defaults(json!({"vendor_knob":{"k":1}}))?;
         let bound = original
             .clone()
-            .with_generation_defaults_envelope_v2(&defaults)?;
+            .with_generation_defaults_envelope(&defaults)?;
         let (path, body) = request(protocol)?;
         let raw = body.to_string();
         let payload = serde_json::to_string(&defaults)?;
         let valid = format!("{{\"{ENVELOPE_BODY_MEMBER}\":{payload},{}", &raw[1..]);
-        let canonical_hash = original
-            .clone()
-            .with_generation_defaults(defaults.canonical.as_ref().context("canonical")?)?;
         for (binding, body) in [
             (&bound, raw),
             (&original, valid.clone()),
-            (&canonical_hash, valid.clone()),
             (&bound, valid.replace("\"k\":1", "\"k\":2")),
             (&bound, valid.replace("preserve_absence", "apply")),
             (&bound, valid.replace("preserve_absence", "unknown")),
@@ -117,7 +113,7 @@ async fn envelope_v2_invalid_binding_and_raw_decoding_never_charge_arm_or_send()
             (
                 &bound,
                 format!(
-                    "{{\"{BODY_MEMBER}\":{{\"schema_version\":1}},{}",
+                    "{{\"bitrouter_generation_defaults\":{{\"schema_version\":1}},{}",
                     &valid[1..]
                 ),
             ),
@@ -165,7 +161,7 @@ async fn envelope_v2_all_nonnull_continuation_values_refuse_without_charge_or_ar
                 let binding = harness
                     .binding(vec![0], protocol)
                     .await?
-                    .with_generation_defaults_envelope_v2(&defaults)?;
+                    .with_generation_defaults_envelope(&defaults)?;
                 let (path, mut body) = request(protocol)?;
                 body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(defaults)?;
                 let response = send(&harness, &binding, path, body.to_string()).await?;
@@ -196,7 +192,7 @@ async fn envelope_v2_null_continuation_and_opaque_caller_null_keep_existing_guar
         let binding = harness
             .binding(vec![0], protocol)
             .await?
-            .with_generation_defaults_envelope_v2(&defaults)?;
+            .with_generation_defaults_envelope(&defaults)?;
         let id = invoke(
             &harness,
             &binding,
@@ -215,7 +211,7 @@ async fn envelope_v2_null_continuation_and_opaque_caller_null_keep_existing_guar
     let binding = harness
         .binding(vec![0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&defaults)?;
+        .with_generation_defaults_envelope(&defaults)?;
     let id = invoke(
         &harness,
         &binding,
@@ -243,7 +239,7 @@ async fn envelope_v2_store_true_messages_refuses_before_provider_send() -> Resul
         let binding = harness
             .binding(vec![0], protocol)
             .await?
-            .with_generation_defaults_envelope_v2(&defaults)?;
+            .with_generation_defaults_envelope(&defaults)?;
         let (path, mut body) = request(protocol)?;
         body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(defaults)?;
         let response = send(&harness, &binding, path, body.to_string()).await?;
@@ -287,7 +283,7 @@ async fn envelope_v2_policy_lock_stays_unsupported_with_valid_binding_and_no_sen
                     generation_defaults_digest: None,
                 },
             )?
-            .with_generation_defaults_envelope_v2(&values)?;
+            .with_generation_defaults_envelope(&values)?;
         let (path, mut body) = request(GenerationProtocol::ChatCompletions)?;
         body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(values)?;
         let reply = send(&harness, &binding, path, body.to_string()).await?;
@@ -335,7 +331,7 @@ async fn envelope_v2_preserve_absence_keeps_target_store_compatibility_refusal()
         let values = values(mode, Value::Null, json!({"store":true}))?;
         let binding = original
             .clone()
-            .with_generation_defaults_envelope_v2(&values)?;
+            .with_generation_defaults_envelope(&values)?;
         let (path, mut body) = request(GenerationProtocol::ChatCompletions)?;
         body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(values)?;
         let reply = send(&harness, &binding, path, body.to_string()).await?;
@@ -348,7 +344,7 @@ async fn envelope_v2_preserve_absence_keeps_target_store_compatibility_refusal()
         Value::Null,
         json!({"store":false}),
     )?;
-    let binding = original.with_generation_defaults_envelope_v2(&values)?;
+    let binding = original.with_generation_defaults_envelope(&values)?;
     let id = invoke(
         &harness,
         &binding,
@@ -382,7 +378,7 @@ async fn envelope_v2_ingress_budget_precedes_validation_and_releases_after_refus
     let binding = harness
         .binding(vec![0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     let (path, mut body) = request(GenerationProtocol::ChatCompletions)?;
     body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(&values)?;
     let mut held = Vec::new();
@@ -471,7 +467,7 @@ async fn envelope_v2_retains_supported_model_facts_and_refuses_required_counting
                     generation_defaults_digest: None,
                 },
             )?
-            .with_generation_defaults_envelope_v2(&values)?;
+            .with_generation_defaults_envelope(&values)?;
         if counting {
             let (path, mut body) = request(GenerationProtocol::ChatCompletions)?;
             body[ENVELOPE_BODY_MEMBER] = serde_json::to_value(values)?;

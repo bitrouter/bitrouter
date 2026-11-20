@@ -66,11 +66,11 @@ pub fn native_default_model(config: &Config) -> Option<&str> {
 pub fn native_model_mode(
     config: &Config,
     model: &str,
-) -> Result<bitrouter_ai::core::protocol::ModelMode> {
+) -> Result<bitrouter_ai::harness::agent::ModelMode> {
     Ok(if config.resolve_router(model)?.policy.is_some() {
-        bitrouter_ai::core::protocol::ModelMode::Policy
+        bitrouter_ai::harness::agent::ModelMode::Policy
     } else {
-        bitrouter_ai::core::protocol::ModelMode::Fixed
+        bitrouter_ai::harness::agent::ModelMode::Fixed
     })
 }
 /// Parsed source plus its runtime-computed identity.
@@ -241,7 +241,7 @@ pub fn diff_documents(active: &Document, candidate: &Document) -> Vec<PolicyRout
             if active_tier != candidate_tier {
                 differences.push(PolicyRouteDiff {
                     policy: policy_name.clone(),
-                    request_key,
+                    request_key: request_key.to_string(),
                     active_tier,
                     candidate_tier,
                 });
@@ -1619,7 +1619,9 @@ impl ModelSelector for PolicyRuntime {
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
         let snapshot = self.routing_snapshot();
-        ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
+        ctx.insert_extension(Arc::new(
+            crate::gateway::routing::ContextTreatment::Preserve,
+        ));
         if !snapshot.0.routers.contains_key(policy) {
             return Err(crate::gateway::error::BitrouterError::bad_request(format!(
                 "router references unavailable policy '{policy}'"
@@ -1646,7 +1648,9 @@ impl ModelSelector for PolicyRuntime {
             Some(snapshot) => snapshot.0.clone(),
             None => self.routing_snapshot().0,
         };
-        ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
+        ctx.insert_extension(Arc::new(
+            crate::gateway::routing::ContextTreatment::Preserve,
+        ));
         let router = snapshot.routers.get(policy).ok_or_else(|| {
             crate::gateway::error::BitrouterError::bad_request(format!(
                 "router references unavailable policy '{policy}'"

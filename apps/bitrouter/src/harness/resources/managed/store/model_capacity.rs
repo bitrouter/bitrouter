@@ -1,7 +1,7 @@
 //! A replacement projection, never current checkpoint plus the same future growth.
 use super::local::Journal;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::{core::session::native_capacity::Projection, storage::checkpoint::serialized_bytes};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 fn exhausted() -> CoreError {
     CoreError::rejected(
@@ -38,7 +38,7 @@ pub(super) fn check(journal: &Journal, projection: &Projection) -> Result<(), Co
         match journal.starts.get(id) {
             Some(started)
                 if started.result.as_ref().is_some_and(|result| {
-                    result.status != bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown
+                    result.status != crate::managed_contract::protocol::ToolOutcome::EffectUnknown
                 }) => {}
             Some(started) => {
                 let current = serialized_bytes(&started.result)?;
@@ -58,7 +58,7 @@ pub(super) fn check(journal: &Journal, projection: &Projection) -> Result<(), Co
     }
     for (id, started) in &journal.starts {
         if started.result.as_ref().is_none_or(|result| {
-            result.status == bitrouter_ai::core::protocol::ToolOutcome::EffectUnknown
+            result.status == crate::managed_contract::protocol::ToolOutcome::EffectUnknown
         }) && !projection.tools.contains_key(id)
         {
             return Err(CoreError::rejected(

@@ -40,7 +40,7 @@ async fn native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_js
                 .ordered
                 .binding(vec![1, 0], GenerationProtocol::GenerateContent)
                 .await?
-                .with_generation_defaults_envelope_v2(&layer)?;
+                .with_generation_defaults_envelope(&layer)?;
             let control = harness.ordered.control(true, HttpVersion::Http1Only)?;
             let capabilities = control.ordered_generate_content_capabilities().await?;
             let content = json!({"role":"model","parts":[{"inlineData":{"mimeType":"image/png","data":"AA=="}}]});

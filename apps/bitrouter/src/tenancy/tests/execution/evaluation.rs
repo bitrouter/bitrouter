@@ -294,7 +294,7 @@ async fn policy_settlement_uses_owned_store_for_success_error_and_stream_only_wh
             ensure!(subjects.len() == usize::from(mode != LearningMode::Off));
             ensure!(crate::eval::store::EvalStore::new(fixture.db.clone()).list_subjects().await?.is_empty());
             if let Some(subject) = subjects.first() {
-                ensure!(subject.schema_version == bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION);
+                ensure!(subject.spec_version == bitrouter_ai::eval::SpecVersion::Beta1);
                 let bitrouter_ai::eval::EvalSubjectIdentity::TenantModelPolicy {
                     installation_id, tenant_id, configuration_revision, policy, name, source_digest, ..
                 } = &subject.identity else {

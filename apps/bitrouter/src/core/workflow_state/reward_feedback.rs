@@ -12,12 +12,11 @@ use crate::eval::admission::SubmissionPrincipal;
 use crate::gateway::routing::workflow::predictive::PredictiveRouteProjection;
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::evidence_digest,
-    bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalDecisionRef,
-    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
-    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
-    bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
-    bitrouter_ai::eval::EvidenceItem, bitrouter_ai::eval::MetricUnit,
-    bitrouter_ai::eval::MetricValue,
+    bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+    bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::EvidenceItem,
+    bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,7 +96,7 @@ pub async fn import_semantic_reward_feedback(
             attributes,
         }];
         let subject = EvalSubject {
-            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: eval_id.clone(),
             scope: EvalScope::Task,
@@ -107,14 +106,14 @@ pub async fn import_semantic_reward_feedback(
             decisions: vec![EvalDecisionRef {
                 decision_id,
                 policy,
-                route_projection,
-                request_key: candidate.request_key.clone(),
+                route_projection: route_projection.parse()?,
+                request_key: candidate.request_key.parse()?,
                 selected_tier: selected_tier.to_string(),
                 selected_effort: candidate.selected_effort,
                 baseline_tier: Some(baseline_tier.to_string()),
                 baseline_effort: candidate.static_effort,
                 policy_digest,
-                experiment: None,
+
                 route_measurement: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
@@ -125,7 +124,7 @@ pub async fn import_semantic_reward_feedback(
         service.store().insert_subject(&subject).await?;
         let passed = candidate.reward >= 1.0;
         let result = EvaluationResult {
-            schema_version: EVAL_RESULT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: eval_id.clone(),
             evidence_digest: subject.evidence_digest,
             evaluator: EvaluatorIdentity {
@@ -194,7 +193,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
 
-    const IMPLEMENT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
+    const IMPLEMENT_KEY: &str = "unknown|implement|normal";
 
     fn candidate(reward: f64) -> SemanticPolicyTransitionCandidate {
         SemanticPolicyTransitionCandidate {
@@ -297,8 +296,8 @@ mod tests {
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut predictive = candidate(1.0);
         predictive.policy = None;
-        predictive.request_key = "semantic_route/v1|unknown|implement|normal".into();
-        predictive.ledger_key = Some("auto\0semantic_route/v1|unknown|implement|normal".into());
+        predictive.request_key = "unknown|implement|normal".into();
+        predictive.ledger_key = Some("auto\0unknown|implement|normal".into());
 
         let summary = import_semantic_reward_feedback(&service, &[predictive]).await?;
 
@@ -313,7 +312,7 @@ mod tests {
         db::run_migrations(&db).await?;
         let service = EvalService::new(EvalStore::new(db), Default::default());
         let mut malformed = candidate(1.0);
-        malformed.request_key = "semantic_route/v1|developer|normal".into();
+        malformed.request_key = "developer|normal".into();
 
         let summary = import_semantic_reward_feedback(&service, &[malformed]).await?;
 

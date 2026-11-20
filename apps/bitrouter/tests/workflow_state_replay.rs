@@ -37,7 +37,7 @@ use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
 use bitrouter_ai::eval::AdmissionStatus;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use bitrouter_ai::types::{NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderValue;
 use serde_json::json;
@@ -464,7 +464,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 
 #[tokio::test]
 async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
-    let canonical_key = "semantic_route/v1|unknown|implement|normal";
+    let canonical_key = "unknown|implement|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
     generic.headers.insert(
@@ -614,7 +614,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
     assert!(subjects.iter().all(|subject| {
         subject.decisions.len() == 1
             && subject.decisions[0].policy == "coding"
-            && subject.decisions[0].request_key == canonical_key
+            && subject.decisions[0].request_key.to_string() == canonical_key
     }));
     let admissions = eval_store.latest_admissions().await.unwrap();
     assert_eq!(admissions.len(), 2);
@@ -1040,35 +1040,35 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-near-done-finalize-001",
                 "agent_trace/v2|test|normal".to_string(),
-                "semantic_route/v1|unknown|finalize|normal".to_string(),
+                "unknown|finalize|normal".to_string(),
                 NextActionClass::AnswerOrSummarize,
                 Some(true),
             ),
             (
                 "predictive-opening-plan-001",
                 "agent_trace/v2|opening|normal".to_string(),
-                "semantic_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
+                "agent:multi_step_planning|orchestrate|normal".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "semantic_route/v1|code:debugging|verify|normal".to_string(),
+                "code:debugging|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
             (
                 "predictive-post-read-implement-001",
                 "agent_trace/v2|tool_followup|normal".to_string(),
-                "semantic_route/v1|unknown|implement|normal".to_string(),
+                "unknown|implement|normal".to_string(),
                 NextActionClass::Mutate,
                 Some(true),
             ),
             (
                 "predictive-repeated-failure-replan-001",
                 "agent_trace/v2|test|guarded".to_string(),
-                "semantic_route/v1|unknown|orchestrate|guarded".to_string(),
+                "unknown|orchestrate|guarded".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
@@ -1106,11 +1106,11 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_projection.next_step_role,
-        NextStepRole::Orchestrate
+        NextStep::Orchestrate
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "semantic_route/v1|unknown|orchestrate|normal"
+        "unknown|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -1149,7 +1149,7 @@ fn new_fixture_prediction_is_compared_exactly() {
     assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
     assert_eq!(
         summary.records[0].predictive_route_key,
-        "semantic_route/v1|unknown|orchestrate|normal"
+        "unknown|orchestrate|normal"
     );
 }
 
@@ -2042,8 +2042,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2185,8 +2185,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2322,9 +2322,9 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
-        ledger_key: Some("coding\0semantic_route/v1|unknown|implement|normal".to_string()),
+        route_projection: Some("code:generation|implement|normal".to_string()),
+        request_key: "unknown|implement|normal".to_string(),
+        ledger_key: Some("coding\0unknown|implement|normal".to_string()),
         policy: Some("coding".to_string()),
         policy_digest: Some(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
@@ -2404,15 +2404,12 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
     );
     assert_eq!(
         candidate.route_projection,
-        "semantic_route/v1|code:generation|implement|normal"
+        "code:generation|implement|normal"
     );
-    assert_eq!(
-        candidate.request_key,
-        "semantic_route/v1|unknown|implement|normal"
-    );
+    assert_eq!(candidate.request_key, "unknown|implement|normal");
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0semantic_route/v1|unknown|implement|normal")
+        Some("coding\0unknown|implement|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),

@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
 #[cfg(all(feature = "core", feature = "harness"))]
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
+use anyhow::{Context, Result, ensure};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 #[cfg(all(feature = "core", feature = "harness"))]
 use tokio::io::{AsyncRead, AsyncWrite};

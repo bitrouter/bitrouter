@@ -175,10 +175,10 @@ fn unauthorized<T>(result: std::result::Result<T, CoreError>) -> Result<()> {
         .err()
         .context("revoked runtime skill work succeeded")?;
     ensure!(
-        error.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+        error.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
         "authority rejection was lost: {error}"
     );
-    ensure!(error.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+    ensure!(error.commit_status == crate::managed_contract::protocol::CommitStatus::NotCommitted);
     Ok(())
 }
 
@@ -328,11 +328,12 @@ async fn runtime_mcp_skills_recheck_after_connection_mutex_waits() -> Result<()>
                 for failure in failures {
                     let error = failure.err().context("server failure was hidden")?;
                     ensure!(
-                        error.code == bitrouter_ai::core::protocol::ErrorCode::ArtifactUnavailable
+                        error.code
+                            == crate::managed_contract::protocol::ErrorCode::ArtifactUnavailable
                     );
                     ensure!(
                         error.commit_status
-                            == bitrouter_ai::core::protocol::CommitStatus::NotCommitted
+                            == crate::managed_contract::protocol::CommitStatus::NotCommitted
                     );
                 }
                 ensure!(endpoint.wire.gets.load(Ordering::SeqCst) == 3);

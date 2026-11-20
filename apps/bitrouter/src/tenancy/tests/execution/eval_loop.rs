@@ -70,7 +70,7 @@ pub(super) async fn run(input: Input<'_>) -> Result<()> {
         attributes: Default::default(),
     }];
     let subject = EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: EvalSubjectIdentity::TenantModelPolicy {
             installation_id: fixture.installation.clone(),
             tenant_id: fixture.tenant.clone(),
@@ -99,7 +99,7 @@ pub(super) async fn run(input: Input<'_>) -> Result<()> {
         .put_eval_subject(&fixture.installation, &fixture.tenant, &subject)
         .await?;
     let result = EvaluationResult {
-        schema_version: bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id: subject.eval_id.clone(),
         evidence_digest: subject.evidence_digest.clone(),
         evaluator: EvaluatorIdentity {

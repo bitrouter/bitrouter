@@ -291,7 +291,7 @@ fn shared_policy_and_source_allocations_are_counted_once_per_revision() -> TestR
         serde_json::from_value(json!({"tiers": {}, "default_tier": "safe"}))?;
     definition
         .routes
-        .insert("evidence".into(), "p".repeat(64 * 1024));
+        .insert("unknown|unknown|normal".parse()?, "p".repeat(64 * 1024));
     let mut document = Document {
         spec_version: bitrouter_ai::policy::SpecVersion::Beta1,
         policies: BTreeMap::new(),

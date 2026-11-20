@@ -1,12 +1,12 @@
 //! Crash the shipped CLI, retaining only the independent harness's journal.
 
 use super::*;
+use bitrouter::managed_contract::protocol::{
+    RunActivityReconciliation, ToolEffect, ToolObservation, ToolStatus,
+};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::protocol::{
-    RunActivityReconciliation, ToolEffect, ToolObservation, ToolStatus,
-};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;

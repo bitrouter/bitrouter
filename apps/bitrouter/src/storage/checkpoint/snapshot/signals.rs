@@ -1,7 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::core::protocol::MaterialRef;
+use crate::managed_contract::protocol::MaterialRef;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;

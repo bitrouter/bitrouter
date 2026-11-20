@@ -318,6 +318,7 @@ impl EvalStore {
                 })
                 .collect::<Vec<_>>();
             let snapshot = EvalSnapshot {
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 evidence_root: self.snapshot_root(None, frozen_at, &entries)?,
                 frozen_at: frozen_at.into(),
                 entries,

@@ -16,12 +16,14 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::core::session::HarnessPort;
-use crate::storage::checkpoint::sha256;
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::checkpoint::{
+    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence,
+};
+use crate::managed_contract::protocol::{
     ArtifactRef, CoreError, ErrorCode, HarnessManifest, Limits, OwnershipGrant, ServerMessage,
     ToolExecute, ToolResult,
 };
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::harness::agent::ToolMode;
 
 #[cfg(test)]
@@ -233,7 +235,7 @@ impl NativePort {
 
     pub(super) async fn preflight_choices(
         &self,
-        payload: &bitrouter_ai::core::checkpoint::CheckpointPayload,
+        payload: &crate::managed_contract::checkpoint::CheckpointPayload,
         head: &DurableHead,
     ) -> Result<(), CoreError> {
         let state = self.state.lock().await;
@@ -323,7 +325,8 @@ impl NativePort {
         #[cfg(test)]
         timing.mark_persist(timing::PersistStage::Encode);
         if let Err(error) = self.store.save(state.revision, bytes).await {
-            if error.commit_status != bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+            if error.commit_status != crate::managed_contract::protocol::CommitStatus::NotCommitted
+            {
                 self.failed.store(true, Ordering::SeqCst);
             }
             return Err(error);

@@ -1,0 +1,519 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EvalSubject",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "description": "Exact evaluation exchange contract.",
+      "$ref": "#/$defs/SpecVersion"
+    },
+    "identity": {
+      "description": "Exact service-validated profile and resource ownership.",
+      "$ref": "#/$defs/EvalSubjectIdentity"
+    },
+    "eval_id": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/EvalScope"
+    },
+    "subject_id": {
+      "type": "string"
+    },
+    "cohort": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "holdout": {
+      "type": "boolean"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvalDecisionRef"
+      },
+      "default": []
+    },
+    "requested_dimensions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceItem"
+      },
+      "default": []
+    },
+    "evidence_digest": {
+      "type": "string"
+    },
+    "observed_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "identity",
+    "eval_id",
+    "scope",
+    "subject_id",
+    "holdout",
+    "evidence_digest",
+    "observed_at"
+  ],
+  "$defs": {
+    "SpecVersion": {
+      "description": "Closed discriminator for evaluation exchange documents.",
+      "oneOf": [
+        {
+          "description": "The model-routing evaluation exchange.",
+          "type": "string",
+          "const": "eval/1.0.0-beta.1"
+        }
+      ]
+    },
+    "EvalSubjectIdentity": {
+      "description": "Closed identity profiles. Digests and policy names alone grant no identity.",
+      "oneOf": [
+        {
+          "description": "Model-policy evidence for one exact immutable route binding.",
+          "type": "object",
+          "properties": {
+            "installation_id": {
+              "description": "Persistent service installation.",
+              "$ref": "#/$defs/InstallationId"
+            },
+            "tenant_id": {
+              "description": "Authenticated tenant namespace.",
+              "$ref": "#/$defs/TenantId"
+            },
+            "configuration_revision": {
+              "description": "Immutable configuration containing the bound route.",
+              "$ref": "#/$defs/RevisionId"
+            },
+            "policy": {
+              "description": "Full owner/kind/resource/revision identity of the selected Policy.",
+              "$ref": "#/$defs/ResourceRef"
+            },
+            "name": {
+              "description": "Literal selected name in that Policy document.",
+              "type": "string"
+            },
+            "source_digest": {
+              "description": "Optional source evidence; never a resource revision or authority.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "classifier_digest": {
+              "description": "Optional classifier evidence, distinct from the source digest.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "description": "Optional actual invocation; the service verifies its receipt.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EvalExecutionRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "profile": {
+              "type": "string",
+              "const": "tenant_model_policy"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "profile",
+            "installation_id",
+            "tenant_id",
+            "configuration_revision",
+            "policy",
+            "name"
+          ]
+        },
+        {
+          "description": "Policy-free tenant evidence, never eligible as model-policy evidence.",
+          "type": "object",
+          "properties": {
+            "installation_id": {
+              "description": "Persistent service installation.",
+              "$ref": "#/$defs/InstallationId"
+            },
+            "tenant_id": {
+              "description": "Authenticated tenant namespace.",
+              "$ref": "#/$defs/TenantId"
+            },
+            "execution": {
+              "description": "Optional actual invocation, including its configuration revision.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EvalExecutionRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "profile": {
+              "type": "string",
+              "const": "tenant_generic"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "profile",
+            "installation_id",
+            "tenant_id"
+          ]
+        },
+        {
+          "description": "Gateway evidence using the gateway's independent authentication authority.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "type": "string",
+              "const": "gateway_generic"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "profile"
+          ]
+        }
+      ]
+    },
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "TenantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "EvalExecutionRef": {
+      "description": "Explicit association with an actual immutable execution receipt.",
+      "type": "object",
+      "properties": {
+        "execution_id": {
+          "description": "Invocation being evaluated, in the enclosing tenant namespace.",
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "configuration_revision": {
+          "description": "Configuration revision used by that invocation.",
+          "$ref": "#/$defs/RevisionId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "execution_id",
+        "configuration_revision"
+      ]
+    },
+    "ExecutionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "EvalScope": {
+      "type": "string",
+      "enum": [
+        "request",
+        "episode",
+        "task"
+      ]
+    },
+    "EvalDecisionRef": {
+      "type": "object",
+      "properties": {
+        "decision_id": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "string"
+        },
+        "route_projection": {
+          "$ref": "#/$defs/RouteClass"
+        },
+        "request_key": {
+          "$ref": "#/$defs/RouteClass"
+        },
+        "selected_tier": {
+          "type": "string"
+        },
+        "selected_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseline_tier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseline_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_digest": {
+          "type": "string"
+        },
+        "route_measurement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecisionMeasurement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "policy",
+        "route_projection",
+        "request_key",
+        "selected_tier",
+        "policy_digest"
+      ]
+    },
+    "RouteClass": {
+      "type": "string",
+      "pattern": "^(code:generation|code:debugging|code:review|code:sql_database|code:frontend_ui|code:devops_config|code:repository_analysis|agent:multi_step_planning|agent:workflow_execution|agent:web_research|agent:memory_operations|agent:general|unknown)[|](orchestrate|implement|mechanical|verify|finalize|unknown)[|](normal|guarded)$"
+    },
+    "ReasoningEffort": {
+      "description": "Qualitative reasoning-effort levels understood by BitRouter's built-in\nOpenAI, Anthropic, and Gemini protocol adapters.\n\nThis is the cross-provider superset, not a claim that every model supports\nevery value. Exact provider/model routes advertise their supported subset\nseparately and policy-owned effort targets are validated against it before\ndispatch.",
+      "oneOf": [
+        {
+          "description": "Disable reasoning where the selected model supports doing so.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Use the smallest non-zero reasoning setting exposed by the model.",
+          "type": "string",
+          "const": "minimal"
+        },
+        {
+          "description": "Prefer low reasoning cost and latency.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Balance reasoning depth with cost and latency.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "Prefer deeper reasoning over cost and latency.",
+          "type": "string",
+          "const": "high"
+        },
+        {
+          "description": "Use the provider's extra-high reasoning setting.",
+          "type": "string",
+          "const": "xhigh"
+        },
+        {
+          "description": "Use the provider's maximum reasoning setting.",
+          "type": "string",
+          "const": "max"
+        }
+      ]
+    },
+    "RouteDecisionMeasurement": {
+      "description": "Replayable evidence for the semantic action distribution seen by one\npolicy decision. This is diagnostic evidence and never controls routing.",
+      "type": "object",
+      "properties": {
+        "logging_action_tier": {
+          "type": "string"
+        },
+        "logging_action_model": {
+          "type": "string"
+        },
+        "logging_action_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logging_action_probability_ppm": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "candidate_set_digest": {
+          "type": "string"
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RouteActionCandidate"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "logging_action_tier",
+        "logging_action_model",
+        "logging_action_probability_ppm",
+        "candidate_set_digest",
+        "candidates"
+      ]
+    },
+    "RouteActionCandidate": {
+      "description": "One semantic policy action declared by the immutable routing snapshot.\n\nProbabilities describe the logging policy before deterministic tool or\ncontinuation guards. The effective action remains\n[`EvalDecisionRef::selected_tier`].",
+      "type": "object",
+      "properties": {
+        "tier": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logging_probability_ppm": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tier",
+        "model",
+        "logging_probability_ppm"
+      ]
+    },
+    "EvidenceItem": {
+      "type": "object",
+      "properties": {
+        "evidence_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "kind",
+        "digest",
+        "redacted"
+      ]
+    }
+  }
+}

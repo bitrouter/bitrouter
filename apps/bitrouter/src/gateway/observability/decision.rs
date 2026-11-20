@@ -2,11 +2,12 @@
 
 use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
 use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::routing::exploration::RouteAssignment;
 use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::storage::evaluation::canonical_digest;
-use bitrouter_ai::eval::{EvalExperimentRef, EvidenceItem, RouteDecisionMeasurement};
+use bitrouter_ai::eval::{EvidenceItem, RouteDecisionMeasurement};
 use bitrouter_ai::event::PipelineEvent;
-use bitrouter_ai::harness::inspection::TaskFamily;
+use bitrouter_ai::policy::TaskFamily;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
@@ -119,7 +120,7 @@ pub struct PendingEvalDecision {
     pub selected_effort: Option<ReasoningEffort>,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<ReasoningEffort>,
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
     pub preset: Option<String>,
     pub holdout: bool,

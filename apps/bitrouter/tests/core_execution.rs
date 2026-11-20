@@ -71,15 +71,15 @@ use bitrouter::gateway::pipeline::hooks::{ObserveHook, Phase, RequestOutcome};
 use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
-use bitrouter::storage::checkpoint::sha256;
-use bitrouter::storage::checkpoint::snapshot::collaboration::{Action, Work};
-use bitrouter::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter::managed_contract::protocol::{
     ArtifactRef, Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest,
     HarnessTool, Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate,
     TaskInput, ToolEffect, ToolExecute, ToolOutcome, ToolResult, Verification,
 };
+use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::collaboration::{Action, Work};
+use bitrouter::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, Prompt, StreamPart, ToolChoice, Usage,
 };
@@ -411,7 +411,7 @@ impl HarnessPort for Harness {
                 }
             }
             if !self.wait_for_approval {
-                store.try_start_tool(bitrouter_ai::core::checkpoint::ToolStartFence {
+                store.try_start_tool(bitrouter::managed_contract::checkpoint::ToolStartFence {
                     invocation_id: command.invocation_id.clone(),
                     attempt_id: command.attempt_id.clone(),
                 });
@@ -2238,7 +2238,7 @@ async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestRe
         .await?;
     assert_eq!(
         receipt.disposition,
-        bitrouter_ai::core::protocol::OperationDisposition::Accepted
+        bitrouter::managed_contract::protocol::OperationDisposition::Accepted
     );
     assert_eq!(
         session
@@ -2367,7 +2367,8 @@ async fn idle_workers(
 
 #[tokio::test]
 async fn delegate_reuses_the_stable_idle_candidate_and_joins_its_model_receipts() -> TestResult {
-    use bitrouter_ai::core::protocol::{ContextMode, ModelMode};
+    use bitrouter::managed_contract::protocol::ContextMode;
+    use bitrouter_ai::harness::agent::ModelMode;
     for mode in [ContextMode::Fixed, ContextMode::Auto] {
         let (session, executor, harness, root, workers) = idle_workers(2, true).await?;
         let mut second = input();
@@ -3960,7 +3961,7 @@ async fn graph_capacity_and_ancestor_wait_reject_without_partial_acceptance() ->
             .await
             .ok_or("missing rejection")?
             .disposition,
-        bitrouter_ai::core::protocol::OperationDisposition::Rejected
+        bitrouter::managed_contract::protocol::OperationDisposition::Rejected
     );
     assert_eq!(
         session

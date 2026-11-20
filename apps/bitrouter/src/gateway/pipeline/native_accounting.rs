@@ -1,10 +1,10 @@
 //! Accounting evidence for individual managed provider attempts. Configured
 //! token estimates are separate from authoritative invoices and cache evidence.
 
-use bitrouter_ai::core::evidence::{NativeCacheObservation, NativeTokenCost};
+use crate::managed_contract::evidence::{NativeCacheObservation, NativeTokenCost};
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::core::evidence::NativeAttemptReport;
+use crate::managed_contract::evidence::NativeAttemptReport;
 use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, Usage, UsageOrigin};
 
 /// Distinct observations of the same bill; never add these bases together.

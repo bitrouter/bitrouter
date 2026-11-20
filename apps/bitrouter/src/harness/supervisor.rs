@@ -2950,7 +2950,7 @@ fn validate_start(request: &StartRunRequest) -> Result<()> {
         anyhow::ensure!(
             !skills.include.iter().any(|selector| matches!(
                 selector,
-                bitrouter_ai::core::skills::SkillSelector::Mcp { .. }
+                bitrouter_ai::harness::skills::SkillSelector::Mcp { .. }
             )),
             "unsupported: ACP skill delivery cannot preserve MCP-origin manifest/consent/cache/execution boundaries"
         );

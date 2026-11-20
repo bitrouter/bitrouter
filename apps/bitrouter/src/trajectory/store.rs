@@ -19,7 +19,10 @@ use super::types::{
     validate_event, validate_keyed_component, validate_outbox_payload,
 };
 use crate::gateway::routing::workflow::ir::RouteProjection;
-use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
+use {
+    crate::gateway::routing::exploration::RouteAssignment,
+    bitrouter_ai::eval::RouteDecisionMeasurement,
+};
 
 pub(super) mod episode_entity {
     use sea_orm::entity::prelude::*;
@@ -222,7 +225,7 @@ pub(crate) struct GuardedRouteInput {
     pub projection: RouteProjection,
     pub candidate_tier: Option<String>,
     pub policy_digest: String,
-    pub experiment: Option<EvalExperimentRef>,
+    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
     pub policy: ProgressGuardPolicy,
     pub carries_tools: bool,
@@ -2407,16 +2410,16 @@ pub(super) fn build_guarded_route_batch(
         categorical.insert(
             "route.experiment_arm".to_owned(),
             match experiment.arm {
-                bitrouter_ai::eval::ExperimentArm::Control => "control",
-                bitrouter_ai::eval::ExperimentArm::Challenger => "challenger",
+                crate::gateway::routing::exploration::AssignmentArm::Control => "control",
+                crate::gateway::routing::exploration::AssignmentArm::Challenger => "challenger",
             }
             .to_owned(),
         );
         categorical.insert(
             "route.experiment_assignment_unit".to_owned(),
             match experiment.assignment_unit {
-                bitrouter_ai::eval::ExperimentAssignmentUnit::Task => "task",
-                bitrouter_ai::eval::ExperimentAssignmentUnit::Episode => "episode",
+                crate::gateway::routing::exploration::AssignmentUnit::Task => "task",
+                crate::gateway::routing::exploration::AssignmentUnit::Episode => "episode",
             }
             .to_owned(),
         );
@@ -5840,7 +5843,7 @@ mod tests {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
-            route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
+            route_projection: "code:generation|implement|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,

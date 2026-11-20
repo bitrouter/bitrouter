@@ -20,9 +20,9 @@ async fn archive_case(envelope: bool) -> Result<()> {
     let binding = harness
         .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
         .await?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+            json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"request-only-secret"}}),
         )?;
     let id = if envelope {
         let binding = binding.with_generation_defaults_envelope(&values)?;
@@ -57,14 +57,14 @@ async fn archive_case(envelope: bool) -> Result<()> {
 #[tokio::test]
 async fn envelope_v2_choice_digest_survives_archive_without_payload_or_dispatch() -> Result<()> {
     let harness = OrderedHarness::new(9, 64, None).await?;
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
             json!({"schema_version":2,"supplemental":{"vendor_knob":"request-only-secret"},"configuration_defaults":"preserve_absence"}),
         )?;
     let binding = harness
         .binding((0..9).rev().collect(), GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     let id = super::envelope::absence::invoke(
         &harness,
         &binding,

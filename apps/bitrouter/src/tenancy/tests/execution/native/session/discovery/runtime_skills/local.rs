@@ -172,7 +172,9 @@ async fn runtime_local_skills_recheck_before_resuming_custom_directory_io() -> R
                     .await
                     .err()
                     .context("missing local file was accepted")?;
-                ensure!(error.code == bitrouter_ai::core::protocol::ErrorCode::ArtifactUnavailable);
+                ensure!(
+                    error.code == crate::managed_contract::protocol::ErrorCode::ArtifactUnavailable
+                );
                 ensure!(library.reads.load(Ordering::SeqCst) == 3);
             }
             drop(port);

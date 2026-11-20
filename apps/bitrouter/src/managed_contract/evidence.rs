@@ -2,13 +2,12 @@
 //! These are observations, not authority to dispatch, restore ownership, execute
 //! tools or settle a bill. Verification and provider adaptation remain in the service.
 
-use crate::types::{ApiProtocol, Capability, GenerateResult, NormalizedUsage, UsageOrigin};
+use bitrouter_ai::types::{ApiProtocol, Capability, GenerateResult, NormalizedUsage, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
 /// Independently declared token limits. An input limit is not a combined
 /// context window, and an absent limit is unknown rather than unbounded.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelTokenLimits {
     /// Maximum input tokens, independently of the output allowance.
@@ -20,8 +19,7 @@ pub struct ModelTokenLimits {
 }
 
 /// Explicit provider support, never inferred from a compatible generation API.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputTokenCounting {
     /// POST /responses/input_tokens on the same provider endpoint.
@@ -239,7 +237,7 @@ pub struct NativeOutputUsage {
     /// Provider-reported search calls, independent of token cost.
     pub web_search_count: u64,
     /// Original canonical usage provenance.
-    pub origin: crate::types::UsageOrigin,
+    pub origin: bitrouter_ai::types::UsageOrigin,
 }
 
 /// Frozen rates used to reproduce a configured token estimate.

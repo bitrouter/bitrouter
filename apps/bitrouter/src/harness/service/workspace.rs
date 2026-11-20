@@ -160,7 +160,7 @@ impl WorkspaceFence {
     pub(crate) fn activate_stopped_native(
         &self,
         checked: &crate::tenancy::session::recovery::CheckedRecovery,
-        grant: &bitrouter_ai::core::protocol::OwnershipGrant,
+        grant: &crate::managed_contract::protocol::OwnershipGrant,
     ) -> Result<(), ServiceError> {
         if !checked.committed() {
             return Err(storage("native repair is not committed"));

@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::routing::ContextStrategy;
+use crate::gateway::routing::ContextTreatment;
 use serde_json::{Value, json};
 
 fn source() -> Value {
@@ -71,7 +71,7 @@ fn classification_requires_supported_classifier_valid_class_and_existing_target(
     assert_eq!(
         compiled.selections()["auto"]
             .routes
-            .get("semantic_route/v1|code:debugging|verify|normal")
+            .get(&"code:debugging|verify|normal".parse()?)
             .map(String::as_str),
         Some("strong")
     );
@@ -376,8 +376,8 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         runtime.select_policy("auto", &mut ctx).await?;
         assert_eq!(ctx.model(), expected_model);
         assert_eq!(
-            ctx.extension::<ContextStrategy>().as_deref(),
-            Some(&ContextStrategy::Preserve)
+            ctx.extension::<ContextTreatment>().as_deref(),
+            Some(&ContextTreatment::Preserve)
         );
         let actual = ctx.require_generation_prompt()?;
         assert_eq!(actual.messages, original.messages);
@@ -422,7 +422,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReduc
         &self,
         plan: &crate::gateway::routing::plan::Plan,
     ) -> crate::gateway::error::Result<()> {
-        assert_eq!(plan.selection.strategy, ContextStrategy::Preserve);
+        assert_eq!(plan.selection.strategy, ContextTreatment::Preserve);
         assert_eq!(plan.selection.selected_context, "full");
         Ok(())
     }
@@ -454,7 +454,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReduc
         Ok(())
     }
 
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[tokio::test]

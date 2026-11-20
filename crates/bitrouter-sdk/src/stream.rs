@@ -3,7 +3,7 @@
 use std::pin::Pin;
 
 use bitrouter_ai::gateway::GatewayErrorEnvelope;
-use bitrouter_ai::stream::{ProtocolEnd, StreamItem};
+use bitrouter_ai::stream::{ProtocolEnd, ServerEvent, StreamItem};
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
@@ -11,10 +11,6 @@ use serde::de::DeserializeOwned;
 use crate::error::{Error, Result, ServiceFailure};
 
 pub(crate) mod generate_content;
-
-/// Compatibility name for the shared public event contract.
-/// New consumers may import its owning type from `bitrouter_ai::stream`.
-pub type ServerEvent<T> = bitrouter_ai::stream::ServerEvent<T>;
 
 /// Dropping the stream closes local consumption; it does not prove upstream cancellation.
 pub type EventStream<T> = Pin<Box<dyn Stream<Item = Result<ServerEvent<T>>> + Send>>;
@@ -28,7 +24,6 @@ pub(crate) enum Protocol {
     Chat,
     Messages,
     Responses,
-    ManagedResponses,
     GenerateContent,
 }
 
@@ -80,7 +75,7 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                     .map_err(|_| {
                         let error = Error::Response("SSE data is not JSON");
                         if event.event == "error" {
-                            error_event(Err(error), protocol, status, &headers)
+                            error_event(Err(error), status, &headers)
                         } else {
                             error
                         }
@@ -90,7 +85,7 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                     !matches!(protocol, Protocol::GenerateContent) || !error.is_null()
                 });
                 if has_error || event.event == "error" || kind == Some("error") {
-                    Err(error_event(Ok(data.clone()), protocol, status, &headers))?;
+                    Err(error_event(Ok(data.clone()), status, &headers))?;
                 }
                 if matches!(protocol, Protocol::GenerateContent) && event.event != "message" {
                     Err(Error::Response("unexpected native SSE event name"))?;
@@ -102,9 +97,9 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
                     Protocol::Chat => false,
                     Protocol::GenerateContent => false,
                     Protocol::Messages => kind == Some("message_stop"),
-                    Protocol::Responses | Protocol::ManagedResponses => matches!(kind, Some("response.completed" | "response.incomplete" | "response.failed")),
+                    Protocol::Responses => matches!(kind, Some("response.completed" | "response.incomplete" | "response.failed")),
                 };
-                if terminal && matches!(protocol, Protocol::Responses | Protocol::ManagedResponses) {
+                if terminal && matches!(protocol, Protocol::Responses) {
                     let response = data.get("response").and_then(serde_json::Value::as_object);
                     let expected = kind.and_then(|kind| kind.strip_prefix("response."));
                     if response.and_then(|value| value.get("status")).and_then(serde_json::Value::as_str) != expected {
@@ -158,7 +153,6 @@ pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
 
 fn error_event(
     data: Result<serde_json::Value>,
-    protocol: Protocol,
     status: u16,
     headers: &reqwest::header::HeaderMap,
 ) -> Error {
@@ -175,37 +169,20 @@ fn error_event(
             data
         }
     });
-    if matches!(protocol, Protocol::ManagedResponses) {
-        let decoded = envelope.and_then(|envelope| {
-            serde_json::from_value::<bitrouter_ai::core::protocol::ErrorEnvelope>(envelope)
-                .map_err(|_| Error::Response("invalid core stream error envelope"))
-        });
-        let (body, body_error) = match decoded {
-            Ok(body) => (Some(body), None),
-            Err(error) => (None, Some(error)),
-        };
-        Error::CoreStream(Box::new(ServiceFailure {
-            status,
-            headers: headers.clone(),
-            body,
-            body_error,
-        }))
-    } else {
-        let decoded = envelope.and_then(|envelope| {
-            serde_json::from_value::<GatewayErrorEnvelope>(envelope)
-                .map_err(|_| Error::Response("invalid stream error envelope"))
-        });
-        let (body, body_error) = match decoded {
-            Ok(body) => (Some(body), None),
-            Err(error) => (None, Some(error)),
-        };
-        Error::Stream(Box::new(ServiceFailure {
-            status,
-            headers: headers.clone(),
-            body,
-            body_error,
-        }))
-    }
+    let decoded = envelope.and_then(|envelope| {
+        serde_json::from_value::<GatewayErrorEnvelope>(envelope)
+            .map_err(|_| Error::Response("invalid stream error envelope"))
+    });
+    let (body, body_error) = match decoded {
+        Ok(body) => (Some(body), None),
+        Err(error) => (None, Some(error)),
+    };
+    Error::Stream(Box::new(ServiceFailure {
+        status,
+        headers: headers.clone(),
+        body,
+        body_error,
+    }))
 }
 
 pub(crate) struct SseEvent {

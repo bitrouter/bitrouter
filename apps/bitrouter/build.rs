@@ -92,13 +92,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     println!("cargo::rustc-env=BITROUTER_HANDOFF_BUILD_ID={handoff_build_id}");
-    std::fs::write(
-        dest.join("artifact_generated.rs"),
-        metadata.render(&handoff_build_id),
-    )?;
+    std::fs::write(dest.join("artifact_generated.rs"), metadata.render())?;
     std::fs::write(
         dest.join("artifact.json"),
-        serde_json::to_vec_pretty(&metadata.artifact_json(&handoff_build_id))?,
+        serde_json::to_vec_pretty(&metadata.artifact_json())?,
     )?;
     // The package-local snapshot is generated together with `dist/registry`.
     // Keeping the build input inside the crate is required by `cargo package`,

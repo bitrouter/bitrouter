@@ -3,7 +3,7 @@
 
 use super::SessionSnapshot;
 use super::allocation::ContextSource;
-use bitrouter_ai::core::protocol::TaskInput;
+use crate::managed_contract::protocol::TaskInput;
 use bitrouter_ai::harness::inspection::AgentStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

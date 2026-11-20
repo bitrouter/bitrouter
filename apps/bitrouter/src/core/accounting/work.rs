@@ -5,10 +5,10 @@ use crate::storage::checkpoint::snapshot::accounting::work::{
     CostWork, CostWorkKind, CostWorkState, ProviderAttemptSource, RunCostWork,
 };
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::AgentTurn;
 use crate::storage::checkpoint::snapshot::ModelStep;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use bitrouter_ai::harness::inspection::AgentStatus;
 
 impl RunCostWork {
@@ -311,7 +311,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
 }
 
 pub(crate) fn report_digest(
-    report: &bitrouter_ai::core::evidence::NativeAttemptReport,
+    report: &crate::managed_contract::evidence::NativeAttemptReport,
 ) -> Result<String, CoreError> {
     serde_json::to_vec(report)
         .map(|bytes| crate::storage::checkpoint::sha256(&bytes))

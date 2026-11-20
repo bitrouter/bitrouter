@@ -16,3 +16,5 @@ pub mod routing;
 #[cfg(feature = "multi-instance")]
 pub(crate) mod shared;
 pub(crate) mod transport;
+
+pub mod conversion_report;

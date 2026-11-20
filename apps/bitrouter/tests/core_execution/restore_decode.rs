@@ -1,7 +1,7 @@
 use super::*;
 use bitrouter::core::session::restoration_activity::RestorationActivity;
+use bitrouter::managed_contract::protocol::{Restore, ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::protocol::{Restore, ToolObservation, ToolStatus};
 
 struct ObservedPort {
     harness: Arc<Harness>,

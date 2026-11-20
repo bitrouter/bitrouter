@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode as CoreCode, OwnershipGrant};
+use crate::managed_contract::protocol::{CoreError, ErrorCode as CoreCode, OwnershipGrant};
 use bitrouter_ai::tenancy::{
     authority::{GrantScope, Permission},
     configuration::ResourceRef,

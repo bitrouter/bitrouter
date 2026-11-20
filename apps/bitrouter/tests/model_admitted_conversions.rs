@@ -1,12 +1,12 @@
 //! Equivalent-effect reports cannot waive refusals or expose source payloads.
+use bitrouter::gateway::conversion_report::{
+    ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
+};
 use bitrouter::gateway::model::client::{HttpTimeouts, ModelClient};
 use bitrouter::gateway::model::conversion::{ReportAdmission, request_admission};
 use bitrouter::gateway::model::protocol::InboundAdapter;
 use bitrouter::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use bitrouter::gateway::model::target::ModelTarget;
-use bitrouter_ai::conversion::{
-    ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
-};
 use bitrouter_ai::types::{
     ApiProtocol, Content, Message, NativeReasoning, Prompt, ProviderMetadata, Role,
     ToolResultOutput,

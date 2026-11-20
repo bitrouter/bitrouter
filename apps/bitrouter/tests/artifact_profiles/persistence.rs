@@ -167,7 +167,6 @@ fn artifacts(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<[ArtifactIde
                 && other.version == full.version
                 && other.target == full.target
         );
-        ensure!(other.handoff_build_id != full.handoff_build_id);
     }
     Ok([full, minimum, harness])
 }

@@ -62,7 +62,7 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
     tx.commit().await?;
     crate::storage::evaluation::validate_result_for_subject(
         &EvaluationResult {
-            schema_version: 1,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: isolated.eval_id.clone(),
             evidence_digest: isolated.evidence_digest.clone(),
             evaluator: EvaluatorIdentity {
@@ -161,16 +161,14 @@ fn subject(id: &str) -> Result<EvalSubject> {
         "mock:model",
         None,
         vec![RouteActionCandidate {
-            context: bitrouter_ai::routing::ContextStrategy::Preserve,
             tier: "standard".into(),
             model: "mock:model".into(),
             effort: None,
             logging_probability_ppm: 1_000_000,
         }],
     )?;
-    ensure!(measurement.schema_version == 2);
     let subject = EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: EvalSubjectIdentity::GatewayGeneric {},
         eval_id: id.into(),
         scope: EvalScope::Request,
@@ -180,14 +178,14 @@ fn subject(id: &str) -> Result<EvalSubject> {
         decisions: vec![EvalDecisionRef {
             decision_id: format!("decision-{id}"),
             policy: "auto".into(),
-            route_projection: "opening".into(),
-            request_key: id.into(),
+            route_projection: "unknown|unknown|normal".parse().expect("valid route class"),
+            request_key: "unknown|unknown|normal".parse()?,
             selected_tier: "standard".into(),
             selected_effort: None,
             baseline_tier: None,
             baseline_effort: None,
             policy_digest: canonical_digest(&"current-model-only-source")?,
-            experiment: None,
+
             route_measurement: Some(measurement),
         }],
         requested_dimensions: Default::default(),

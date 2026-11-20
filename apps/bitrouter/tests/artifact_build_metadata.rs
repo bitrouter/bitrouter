@@ -137,12 +137,12 @@ fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Resul
         assert_eq!(selected.profile, "GatewayShared");
         assert_eq!(selected.wire_profile, "gateway-shared");
         let built = metadata(&roots)?;
-        let identity: ArtifactIdentity = serde_json::from_value(built.artifact_json("fixture"))?;
+        let identity: ArtifactIdentity = serde_json::from_value(built.artifact_json())?;
         assert_eq!(identity.profile, DistributionProfile::GatewayShared);
         assert_eq!(identity.features, selected.features);
         assert!(
             built
-                .render("fixture")
+                .render()
                 .contains("DistributionProfile::GatewayShared")
         );
         assert_ne!(
@@ -225,8 +225,6 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
     let identity = bitrouter::artifact::current();
     assert_eq!(identity, bitrouter::artifact::current());
     assert_eq!(identity.version, bitrouter::VERSION);
-    assert_eq!(identity.handoff_build_id, bitrouter::HANDOFF_BUILD_ID);
-    assert_eq!(identity.handoff_build_id.len(), 64);
     assert!(!identity.target.is_empty());
     assert!(!identity.target.contains(['/', '\\']));
     assert!(identity.features.windows(2).all(|pair| pair[0] < pair[1]));
@@ -262,10 +260,7 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
         target: identity.target.clone(),
         selection: replay,
     };
-    assert_eq!(
-        metadata.artifact_json(&identity.handoff_build_id),
-        serde_json::to_value(&identity)?
-    );
+    assert_eq!(metadata.artifact_json(), serde_json::to_value(&identity)?);
     let packaged: bitrouter_ai::artifact::ArtifactIdentity =
         serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/artifact.json")))?;
     assert_eq!(packaged, identity);
@@ -538,14 +533,10 @@ fn extracted_packages_use_their_vcs_data_and_archives_do_not_inherit_parent_git(
     assert_eq!(packaged.rerun_paths, [vcs_path]);
     let mut metadata = metadata(&[])?;
     metadata.source_revision = packaged.value;
-    let rendered = metadata.render("fixture-handoff");
+    let rendered = metadata.render();
     assert!(!rendered.contains("private/source/path"));
     assert!(!rendered.contains(package.to_str().ok_or("non-UTF8 fixture path")?));
     metadata.source_revision = None;
-    assert!(
-        metadata
-            .render("fixture-handoff")
-            .contains("source_revision: None")
-    );
+    assert!(metadata.render().contains("source_revision: None"));
     Ok(())
 }

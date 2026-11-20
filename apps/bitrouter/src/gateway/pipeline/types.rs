@@ -334,7 +334,7 @@ pub struct RoutingTarget {
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
     /// Authoritative limits for managed model execution.
-    pub model_constraints: bitrouter_ai::core::evidence::NativeRouteConstraints,
+    pub model_constraints: crate::managed_contract::evidence::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a

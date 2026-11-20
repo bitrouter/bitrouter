@@ -100,7 +100,7 @@ async fn envelope_v2_absence_apply_caller_canonical_h1_h2_json_sse_matrix() -> R
                             let binding = harness
                                 .binding(vec![0], protocol)
                                 .await?
-                                .with_generation_defaults_envelope_v2(&values)?;
+                                .with_generation_defaults_envelope(&values)?;
                             let id = invoke(&harness, &binding, values, protocol, stream, version, caller.clone()).await
                                 .with_context(||format!("{protocol:?}->{wire} {version:?} stream={stream} mode={mode:?} caller={caller}"))?;
                             completed(&harness, &id, &binding).await?;
@@ -168,7 +168,7 @@ async fn envelope_v2_absent_typed_tokens_do_not_promote_supplemental_aliases() -
                     let binding = harness
                         .binding(vec![0], protocol)
                         .await?
-                        .with_generation_defaults_envelope_v2(&values)?;
+                        .with_generation_defaults_envelope(&values)?;
                     let id = invoke(
                         &harness,
                         &binding,

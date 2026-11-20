@@ -7,10 +7,7 @@ use bitrouter_ai::{
         responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse},
     },
     tenancy::{
-        generation_defaults::{
-            BODY_MEMBER, CanonicalGenerationDefaultsV1, GenerationDefaultsEnvelopeV1,
-            GenerationDefaultsEnvelopeV2, MAX_DEFAULTS_BYTES,
-        },
+        generation_defaults::{GenerationDefaultsEnvelope, MAX_DEFAULTS_BYTES},
         identity::Digest,
         native_controls::{HEADER, OrderedNativeControlsCapabilitiesV1, PROVIDER_NATIVE_V1},
         ordered::{MAX_SELECTION_HEADER_BYTES, OrderedDispatchBindingV2},
@@ -20,8 +17,7 @@ use bitrouter_ai::{
 use reqwest::header::HeaderValue;
 
 use super::{
-    Body, Defaults, Error, GatewayClient, Reply, TenantGateway, bearer_headers,
-    reject_stream_shadow,
+    Body, Error, GatewayClient, Reply, TenantGateway, bearer_headers, reject_stream_shadow,
 };
 
 mod generate_content;
@@ -150,27 +146,7 @@ impl OrderedTenantGateway<'_> {
         Ok(self)
     }
 
-    /// Attach the canonical defaults already bound to this submission.
-    /// Typed caller values win; typed null and an empty stop list permit default
-    /// filling. Opaque source extras are never promoted across protocols.
-    ///
-    /// # Errors
-    /// Rejects invalid defaults or a digest different from the frozen binding.
-    pub fn with_generation_defaults(
-        mut self,
-        defaults: CanonicalGenerationDefaultsV1,
-    ) -> Result<Self, Error> {
-        let digest = defaults
-            .digest()
-            .map_err(|_| Error::Request("invalid canonical defaults"))?;
-        if self.generation_defaults_digest.as_ref() != Some(&digest) {
-            return Err(Error::Request("canonical defaults differ from binding"));
-        }
-        self.inner.generation_defaults = Some(Defaults::Canonical(defaults));
-        Ok(self)
-    }
-
-    /// Attach the complete request-local defaults already bound to this call.
+    /// Attach defaults with their bound configuration-layer choice.
     /// Supplemental values merge after caller parsing, retaining their independent
     /// outbound provenance. This never changes routing or continuation authority.
     ///
@@ -178,7 +154,7 @@ impl OrderedTenantGateway<'_> {
     /// Rejects invalid defaults, a competing attachment or a different bound digest.
     pub fn with_generation_defaults_envelope(
         mut self,
-        defaults: GenerationDefaultsEnvelopeV1,
+        defaults: GenerationDefaultsEnvelope,
     ) -> Result<Self, Error> {
         let digest = match defaults.digest() {
             Ok(digest) => digest,
@@ -204,45 +180,7 @@ impl OrderedTenantGateway<'_> {
                 "generation defaults envelope differs from binding or competes with attachment",
             ));
         }
-        self.inner.generation_defaults = Some(Defaults::Envelope(defaults));
-        Ok(self)
-    }
-
-    /// Attach version-two defaults, including their bound configuration-layer choice.
-    /// Supplemental values merge after caller parsing, retaining their independent
-    /// outbound provenance. This never changes routing or continuation authority.
-    ///
-    /// # Errors
-    /// Rejects invalid defaults, a competing attachment or a different bound digest.
-    pub fn with_generation_defaults_envelope_v2(
-        mut self,
-        defaults: GenerationDefaultsEnvelopeV2,
-    ) -> Result<Self, Error> {
-        let digest = match defaults.digest() {
-            Ok(digest) => digest,
-            Err(_) => {
-                // Invalid programmatic Values may exceed the JSON depth budget.
-                // Dispose of their children iteratively rather than recursively
-                // dropping the rejected tree on this consuming API's error path.
-                let mut pending: Vec<_> = defaults.supplemental.into_values().collect();
-                while let Some(value) = pending.pop() {
-                    match value {
-                        serde_json::Value::Array(values) => pending.extend(values),
-                        serde_json::Value::Object(values) => pending.extend(values.into_values()),
-                        _ => {}
-                    }
-                }
-                return Err(Error::Request("invalid generation defaults envelope"));
-            }
-        };
-        if self.inner.generation_defaults.is_some()
-            || self.generation_defaults_digest.as_ref() != Some(&digest)
-        {
-            return Err(Error::Request(
-                "generation defaults envelope differs from binding or competes with attachment",
-            ));
-        }
-        self.inner.generation_defaults = Some(Defaults::EnvelopeV2(defaults));
+        self.inner.generation_defaults = Some(defaults);
         Ok(self)
     }
 
@@ -263,10 +201,8 @@ impl OrderedTenantGateway<'_> {
         extra: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(), Error> {
         reject_stream_shadow(extra)?;
-        if extra.contains_key(BODY_MEMBER)
-            || self.generation_defaults_digest.is_some() != self.inner.generation_defaults.is_some()
-        {
-            return Err(Error::Request("missing or competing canonical defaults"));
+        if self.generation_defaults_digest.is_some() != self.inner.generation_defaults.is_some() {
+            return Err(Error::Request("missing or competing generation defaults"));
         }
         if model != self.route_id || extra.contains_key("model") {
             return Err(Error::Request("ordered route differs from request model"));
@@ -313,21 +249,7 @@ impl OrderedTenantGateway<'_> {
 
 pub(super) fn envelope_body(
     request: &impl serde::Serialize,
-    defaults: &GenerationDefaultsEnvelopeV1,
-) -> Result<Vec<u8>, Error> {
-    bounded_envelope_body(request, defaults)
-}
-
-pub(super) fn envelope_v2_body(
-    request: &impl serde::Serialize,
-    defaults: &GenerationDefaultsEnvelopeV2,
-) -> Result<Vec<u8>, Error> {
-    bounded_envelope_body(request, defaults)
-}
-
-fn bounded_envelope_body(
-    request: &impl serde::Serialize,
-    defaults: &impl serde::Serialize,
+    defaults: &GenerationDefaultsEnvelope,
 ) -> Result<Vec<u8>, Error> {
     #[derive(serde::Serialize)]
     struct Request<'a, T, D> {
@@ -432,7 +354,9 @@ mod tests {
     fn envelope_body_bounds_whole_request_depth_bytes_and_escaped_strings()
     -> Result<(), Box<dyn std::error::Error>> {
         use serde_json::{Value, json};
-        let defaults = serde_json::from_value(json!({"schema_version":1,"supplemental":{}}))?;
+        let defaults = serde_json::from_value(
+            json!({"schema_version":2,"supplemental":{},"configuration_defaults":"apply"}),
+        )?;
         let mut nested = Value::Null;
         for _ in 0..126 {
             nested = json!([nested]);

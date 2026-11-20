@@ -7,11 +7,11 @@ use crate::gateway::model::decision::{
         Question,
     },
 };
-use crate::storage::checkpoint::snapshot::context::view::{CandidateSet, SourceRevision};
-use bitrouter_ai::core::{
+use crate::managed_contract::{
     checkpoint::{BatchIdentity, Checkpoint, CheckpointPayload},
     protocol::CommitStatus,
 };
+use crate::storage::checkpoint::snapshot::context::view::{CandidateSet, SourceRevision};
 use serde_json::json;
 
 type Result<T> = anyhow::Result<T>;

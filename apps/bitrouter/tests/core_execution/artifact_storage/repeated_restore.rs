@@ -1,6 +1,6 @@
 use super::*;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
 use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 pub(super) async fn full_result(
     harness: &Harness,

@@ -1,5 +1,5 @@
-use bitrouter_ai::core::evidence::NativeTokenRates;
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::evidence::NativeTokenRates;
+use bitrouter::managed_contract::protocol::{
     ClientMessage, Command, CommitStatus, ErrorCode, ErrorEnvelope, ServerMessage,
 };
 use serde_json::json;

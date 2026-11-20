@@ -113,7 +113,7 @@ async fn explicit_native_discovery_and_json_sse_keep_h1_h2_binding_and_media() -
 
 #[tokio::test]
 async fn native_opt_in_and_bound_defaults_refuse_mismatches_before_send() -> TestResult {
-    use bitrouter_ai::tenancy::generation_defaults::CanonicalGenerationDefaultsV1;
+    use bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope;
 
     let server = server::serve(Version::HTTP_11, vec![]).await?;
     let client = gateway_client(&server, HttpVersion::Http1Only)?;
@@ -175,8 +175,7 @@ async fn native_opt_in_and_bound_defaults_refuse_mismatches_before_send() -> Tes
             .await
             .is_err()
     );
-    let defaults: CanonicalGenerationDefaultsV1 =
-        serde_json::from_value(json!({"schema_version":1,
+    let defaults: GenerationDefaultsEnvelope = serde_json::from_value(json!({"schema_version":1,
         "max_tokens":8}))?;
     binding.selection.generation_defaults_digest = Some(defaults.digest()?);
     assert!(
@@ -193,19 +192,21 @@ async fn native_opt_in_and_bound_defaults_refuse_mismatches_before_send() -> Tes
 
 #[tokio::test]
 async fn native_bound_defaults_keep_dedicated_request_content_type() -> TestResult {
-    use bitrouter_ai::tenancy::generation_defaults::{BODY_MEMBER, CanonicalGenerationDefaultsV1};
+    use bitrouter_ai::tenancy::generation_defaults::{
+        ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelope,
+    };
     for (version, wire) in versions() {
         let server = server::serve(wire, vec![Some(native_response(false)?)]).await?;
         let client = gateway_client(&server, version)?;
-        let defaults: CanonicalGenerationDefaultsV1 =
-            serde_json::from_value(json!({"schema_version":1,
-            "max_tokens":8}))?;
+        let defaults: GenerationDefaultsEnvelope = serde_json::from_value(
+            json!({"schema_version":2, "canonical":{"schema_version":1,"max_tokens":8}, "supplemental":{}, "configuration_defaults":"apply"}),
+        )?;
         let mut binding = binding(vec![0])?;
         binding.selection.generation_defaults_digest = Some(defaults.digest()?);
         client
             .ordered_tenant("scoped-token", &binding)?
             .with_generate_content(&caps()?)?
-            .with_generation_defaults(defaults.clone())?
+            .with_generation_defaults_envelope(defaults.clone())?
             .generate_content_reply(&input(false)?)
             .await?;
         let records = server.records.lock().await;
@@ -213,7 +214,7 @@ async fn native_bound_defaults_keep_dedicated_request_content_type() -> TestResu
         assert_eq!(records[0].headers["content-type"], generate_content::MIME);
         assert_eq!(records[0].headers.get_all("content-type").iter().count(), 1);
         let body: Value = serde_json::from_slice(&records[0].body)?;
-        assert_eq!(body[BODY_MEMBER], serde_json::to_value(defaults)?);
+        assert_eq!(body[ENVELOPE_BODY_MEMBER], serde_json::to_value(defaults)?);
         assert_eq!(body["request"]["cachedContent"], Value::Null);
     }
     Ok(())

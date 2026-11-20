@@ -20,10 +20,10 @@ mod tools;
 #[cfg(test)]
 mod replay_tests;
 
+use crate::managed_contract::checkpoint::CheckpointBatch;
+use crate::managed_contract::protocol::{Limits, OwnershipGrant};
 use crate::storage::checkpoint::VerifiedBatch;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::checkpoint::CheckpointBatch;
-use bitrouter_ai::core::protocol::{Limits, OwnershipGrant};
 use std::sync::Arc;
 
 /// Published only after the native driver and all workspace workers joined.

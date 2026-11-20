@@ -699,7 +699,6 @@ mod tests {
                 "vendor/economy",
                 None,
                 vec![RouteActionCandidate {
-                    context: Default::default(),
                     tier: "economy".into(),
                     model: "vendor/economy".into(),
                     effort: None,

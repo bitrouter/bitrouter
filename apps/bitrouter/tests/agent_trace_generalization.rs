@@ -64,7 +64,7 @@ async fn fixture(
                         },
                     ),
                 ]),
-                routes: BTreeMap::from([("code:debugging|verify|normal".into(), "cheap".into())]),
+                routes: BTreeMap::from([("code:debugging|verify|normal".parse()?, "cheap".into())]),
                 classifier_digest: None,
                 default_tier: "strong".into(),
                 tool_use_tier: Some("strong".into()),

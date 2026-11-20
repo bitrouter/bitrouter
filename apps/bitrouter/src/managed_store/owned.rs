@@ -4,9 +4,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
+use crate::managed_contract::protocol::{CoreError, OwnershipGrant};
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::core::protocol::{CoreError, OwnershipGrant};
 use sea_orm::sea_query::{Alias, Expr, ExprTrait, Func};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QueryFilter,
@@ -214,7 +214,9 @@ impl NativeStore for Store {
             }
             Err(failure) => {
                 let error = failure.core();
-                if error.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                if error.commit_status
+                    == crate::managed_contract::protocol::CommitStatus::NotCommitted
+                {
                     self.load_unconfirmed.store(false, Ordering::Release);
                 }
                 return Err(error);
@@ -346,7 +348,9 @@ impl NativeStore for Store {
                     error.commit_status,
                     started.elapsed().as_millis()
                 );
-                if error.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                if error.commit_status
+                    == crate::managed_contract::protocol::CommitStatus::NotCommitted
+                {
                     self.last_write.store(0, Ordering::Release);
                 }
                 Err(error)

@@ -2,7 +2,7 @@
 
 use super::*;
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind;
-use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
+use bitrouter::managed_contract::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter_ai::types::{Message, Role};
 
 const EXPANSION_BYTES: usize = 512 * 1024;

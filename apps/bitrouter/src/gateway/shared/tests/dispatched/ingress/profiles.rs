@@ -1,7 +1,7 @@
 //! Unsupported managed intent must never bind or reuse an ordinary execution.
 
 use super::*;
-use bitrouter_ai::core::protocol::{ErrorCode, ErrorEnvelope};
+use crate::managed_contract::protocol::{ErrorCode, ErrorEnvelope};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 pub(super) async fn exercise(

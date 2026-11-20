@@ -1,5 +1,5 @@
 use super::{HarnessManifestExt, limits_within, negotiate_capabilities};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, VERSION,
 };
 use serde_json::json;

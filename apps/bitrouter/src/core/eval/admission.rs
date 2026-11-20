@@ -325,8 +325,7 @@ mod tests {
 
     use super::*;
     use {
-        crate::storage::evaluation::evidence_digest,
-        bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalScope,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalScope,
         bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvaluatorIdentity,
     };
 
@@ -338,7 +337,7 @@ mod tests {
         store
             .insert_subject_owned(
                 &EvalSubject {
-                    schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                     identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: "eval-1".into(),
                     scope: EvalScope::Task,
@@ -388,7 +387,7 @@ mod tests {
         idempotency_key: &str,
     ) -> EvaluationResult {
         EvaluationResult {
-            schema_version: EVAL_RESULT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: "eval-1".into(),
             evidence_digest:
                 "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945".into(),
@@ -429,7 +428,7 @@ mod tests {
         store
             .insert_subject_owned(
                 &EvalSubject {
-                    schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                     identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: "trajectory:episode-1:3".into(),
                     scope: EvalScope::Episode,
@@ -644,7 +643,7 @@ mod tests {
         let evidence = Vec::new();
         store
             .insert_subject(&EvalSubject {
-                schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                 eval_id: "eval-1".into(),
                 scope: EvalScope::Task,

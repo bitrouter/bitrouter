@@ -171,7 +171,7 @@ impl Service {
     }
     pub(crate) async fn host_resources_ready(
         &self,
-    ) -> Result<(), bitrouter_ai::core::protocol::CoreError> {
+    ) -> Result<(), crate::managed_contract::protocol::CoreError> {
         let gate = self.take_host_gate(HostBoundary::Resources)?;
         if let Some(gate) = gate {
             gate.reached().await;
@@ -181,7 +181,7 @@ impl Service {
     pub(crate) fn take_host_gate(
         &self,
         boundary: HostBoundary,
-    ) -> Result<Option<Arc<HostGate>>, bitrouter_ai::core::protocol::CoreError> {
+    ) -> Result<Option<Arc<HostGate>>, crate::managed_contract::protocol::CoreError> {
         let mut slot = self.hosts.resources_gate.lock().map_err(|_| {
             super::execution::session::core_error(ErrorCode::AuthorityUnavailable.into())
         })?;

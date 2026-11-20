@@ -1,8 +1,8 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::core::evidence::NativeAttemptReport;
-use bitrouter_ai::core::protocol::{CoreError, MaterialRef, RoutingSettings};
+use crate::managed_contract::evidence::NativeAttemptReport;
+use crate::managed_contract::protocol::{CoreError, MaterialRef, RoutingSettings};
 use bitrouter_ai::types::{ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 

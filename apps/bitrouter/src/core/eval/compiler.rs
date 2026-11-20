@@ -1,8 +1,5 @@
 //! Frozen evidence export preserves exact subject identity; it never compiles Policy.
 
-#[cfg(feature = "core")]
-use std::collections::BTreeSet;
-
 use anyhow::Result;
 use serde::Serialize;
 
@@ -22,6 +19,7 @@ pub struct EvalEvidenceRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvalEvidenceSnapshot {
+    pub spec_version: bitrouter_ai::eval::SpecVersion,
     pub evidence_root: String,
     pub frozen_at: String,
     pub records: Vec<EvalEvidenceRecord>,
@@ -64,23 +62,10 @@ impl EvalEvidenceSnapshot {
         }
         records.sort_by(|left, right| left.result_id.cmp(&right.result_id));
         Ok(Self {
+            spec_version: snapshot.spec_version,
             evidence_root: snapshot.evidence_root,
             frozen_at: snapshot.frozen_at,
             records,
         })
     }
-}
-
-#[cfg(feature = "core")]
-pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
-    let mut cohorts = subject
-        .evidence
-        .iter()
-        .filter(|item| item.kind == "routing.assessment")
-        .filter_map(|item| item.attributes.get("classifier_digest").cloned())
-        .collect::<BTreeSet<_>>();
-    if cohorts.is_empty() {
-        cohorts.insert("unassessed".into());
-    }
-    cohorts
 }

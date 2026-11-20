@@ -67,7 +67,7 @@ Never include credentials or raw private material.
 Seal a JSON or YAML draft locally:
 
 ```bash
-bro eval subject seal subject-draft.json --output subject.json
+bitrouter eval subject seal subject-draft.json --output subject.json
 ```
 
 The command sorts evidence, computes the canonical digest, validates the subject
@@ -147,11 +147,11 @@ Local CLI submission is an explicit local operator operation; it does not confer
 remote tenant authority. Current CLI operations address that gateway ledger:
 
 ```bash
-bro eval subject put subject.json --config bitrouter.yaml
-bro eval subject get eval-1 --config bitrouter.yaml
-bro eval subject list --config bitrouter.yaml
-bro eval result submit result.json --config bitrouter.yaml
-bro eval status --config bitrouter.yaml
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval subject get eval-1 --config bitrouter.yaml
+bitrouter eval subject list --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
+bitrouter eval status --config bitrouter.yaml
 ```
 
 Gateway endpoints use `/v1/evals`. Tenant endpoints use

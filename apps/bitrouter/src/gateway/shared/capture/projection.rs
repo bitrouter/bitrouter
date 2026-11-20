@@ -117,7 +117,7 @@ impl Inputs {
                     });
                 }
                 let subject = EvalSubject {
-                    schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+                    spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                     identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
                     eval_id: format!("request:{}", self.execution_id),
                     scope: EvalScope::Request,

@@ -13,9 +13,9 @@ use crate::gateway::pipeline::native_context::{
 };
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::providers::auth::ContinuationAuthority;
+use crate::managed_contract::evidence::PrivateContextFailure;
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use bitrouter_ai::core::evidence::PrivateContextFailure;
 use bitrouter_ai::types::{Content, Prompt, Role};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};

@@ -108,9 +108,9 @@ impl OnlineWorkflowState {
         use crate::gateway::routing::workflow::predictive::{
             NextActionClass, PredictiveHistoryCompleteness, TaskComplexity,
         };
-        use bitrouter_ai::harness::inspection::NextStepRole;
         use bitrouter_ai::harness::inspection::ProgressState;
-        use bitrouter_ai::harness::inspection::TaskFamily;
+        use bitrouter_ai::policy::NextStep;
+        use bitrouter_ai::policy::TaskFamily;
         let (harness_hint, protocol_hint) = infer_online_context(headers, prompt);
         let raw_body = serde_json::Value::Object(
             prompt
@@ -132,7 +132,7 @@ impl OnlineWorkflowState {
         let predictive = PredictiveRouteIR {
             schema_version: 3,
             observed: ir.route_projection(),
-            next_step_role: NextStepRole::Unknown,
+            next_step_role: NextStep::Unknown,
             next_action_class: NextActionClass::Unknown,
             task_complexity: TaskComplexity::Ambiguous,
             progress_state: ProgressState::Unknown,
@@ -141,7 +141,7 @@ impl OnlineWorkflowState {
                 Some(value) if value.history_complete => PredictiveHistoryCompleteness::Complete,
                 _ => PredictiveHistoryCompleteness::Ambiguous,
             },
-            route_risk: crate::gateway::routing::workflow::ir::RouteRisk::Guarded,
+            route_risk: bitrouter_ai::policy::Risk::Guarded,
             confidence: 0.0,
             evidence: Vec::new(),
             predictor_contract_digest: String::new(),
@@ -167,29 +167,27 @@ impl OnlineWorkflowState {
         mut self,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> Self {
-        use bitrouter_ai::harness::inspection::NextStepRole;
         use bitrouter_ai::harness::inspection::ProgressState;
-        use bitrouter_ai::harness::inspection::TaskFamily;
+        use bitrouter_ai::policy::NextStep;
+        use bitrouter_ai::policy::TaskFamily;
         self.predictive.task_family =
             assessment.map_or(TaskFamily::Unknown, |value| value.task_family);
         self.predictive.next_step_role =
-            assessment.map_or(NextStepRole::Unknown, |value| value.next_step_role);
+            assessment.map_or(NextStep::Unknown, |value| value.next_step_role);
         self.predictive.progress_state =
             assessment.map_or(ProgressState::Unknown, |value| value.progress_state);
         self.predictive.route_risk = match assessment {
-            Some(value) if value.history_truncated => {
-                crate::gateway::routing::workflow::ir::RouteRisk::Context
-            }
+            Some(value) if value.history_truncated => bitrouter_ai::policy::Risk::Guarded,
             Some(value)
                 if matches!(
                     value.progress_state,
                     ProgressState::Stalled | ProgressState::Recovering
                 ) =>
             {
-                crate::gateway::routing::workflow::ir::RouteRisk::Guarded
+                bitrouter_ai::policy::Risk::Guarded
             }
-            Some(_) => crate::gateway::routing::workflow::ir::RouteRisk::Normal,
-            None => crate::gateway::routing::workflow::ir::RouteRisk::Guarded,
+            Some(_) => bitrouter_ai::policy::Risk::Normal,
+            None => bitrouter_ai::policy::Risk::Guarded,
         };
         self.predictive.next_action_class =
             crate::gateway::routing::workflow::predictive::NextActionClass::Unknown;
@@ -354,10 +352,7 @@ mod tests {
         );
 
         assert_eq!(state.legacy_fingerprint(), "after_Bash");
-        assert_eq!(
-            state.routing_key(),
-            "semantic_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"
@@ -376,10 +371,7 @@ mod tests {
             ProtocolKind::Messages,
         );
 
-        assert_eq!(
-            state.routing_key(),
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(state.routing_key(), "unknown|implement|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"
@@ -405,14 +397,8 @@ mod tests {
         };
         let state = OnlineWorkflowState::from_headers(&HeaderMap::new(), &prompt);
 
-        assert_eq!(
-            state.routing_key(),
-            "semantic_route/v1|code:debugging|implement|normal"
-        );
-        assert_eq!(
-            state.baseline_routing_key(),
-            "semantic_route/v1|unknown|implement|normal"
-        );
+        assert_eq!(state.routing_key(), "code:debugging|implement|normal");
+        assert_eq!(state.baseline_routing_key(), "unknown|implement|normal");
 
         let mut private_headers = HeaderMap::new();
         private_headers.insert("x-bitrouter-harness", HeaderValue::from_static("smithers"));
@@ -447,10 +433,7 @@ mod tests {
 
         assert_eq!(state.ir.harness_id, HarnessId::Generic);
         assert_eq!(state.ir.protocol, ProtocolKind::Responses);
-        assert_eq!(
-            state.routing_key(),
-            "semantic_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"
@@ -475,10 +458,7 @@ mod tests {
         assert_eq!(state.ir.harness_id, HarnessId::Smithers);
         assert_eq!(state.ir.active_workflow.as_deref(), Some("release-review"));
         assert_eq!(state.ir.subagent_role.as_deref(), Some("analyze-risk"));
-        assert_eq!(
-            state.routing_key(),
-            "semantic_route/v1|unknown|unknown|normal"
-        );
+        assert_eq!(state.routing_key(), "unknown|unknown|normal");
         assert_eq!(
             state.observed_routing_key(),
             "agent_trace/v2|tool_followup|normal"

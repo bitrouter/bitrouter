@@ -12,9 +12,9 @@ use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionRequest;
 use crate::gateway::model::decision::types::DecisionResponse;
 use crate::gateway::model::decision::types::Question;
-use bitrouter_ai::harness::inspection::NextStepRole;
 use bitrouter_ai::harness::inspection::ProgressState;
-use bitrouter_ai::harness::inspection::TaskFamily;
+use bitrouter_ai::policy::NextStep;
+use bitrouter_ai::policy::TaskFamily;
 
 /// Task-family classification question identifier.
 pub const TASK: &str = "routing_task_family";
@@ -60,7 +60,7 @@ pub struct Assessment {
     /// Accepted task label, otherwise unknown.
     pub task_family: TaskFamily,
     /// Accepted next-step role, otherwise unknown.
-    pub next_step_role: NextStepRole,
+    pub next_step_role: NextStep,
     /// Accepted progress label, otherwise unknown.
     pub progress_state: ProgressState,
     /// Original class distributions and acceptance decisions.
@@ -202,7 +202,7 @@ pub fn decode(
         history_complete: normalized.complete,
         history_truncated: normalized.truncated,
         task_family: TaskFamily::parse_key(accepted(TASK)).unwrap_or_default(),
-        next_step_role: NextStepRole::parse_key(accepted(ROLE)).unwrap_or(NextStepRole::Unknown),
+        next_step_role: NextStep::parse_key(accepted(ROLE)).unwrap_or(NextStep::Unknown),
         progress_state: match accepted(PROGRESS) {
             "opening" => ProgressState::Opening,
             "progressing" => ProgressState::Progressing,

@@ -36,7 +36,7 @@ fn router(fixture: &Fixture) -> Result<Router> {
 }
 fn subject(fixture: &Fixture) -> Result<EvalSubject> {
     Ok(serde_json::from_value(serde_json::json!({
-        "schema_version":2,"identity":{"profile":"tenant_generic","installation_id":fixture.installation,"tenant_id":fixture.tenant},"eval_id":"owned-subject","scope":"request","subject_id":"request-1",
+        "spec_version":bitrouter_ai::eval::SPEC_VERSION,"identity":{"profile":"tenant_generic","installation_id":fixture.installation,"tenant_id":fixture.tenant},"eval_id":"owned-subject","scope":"request","subject_id":"request-1",
         "holdout":false,"decisions":[],"requested_dimensions":[],"evidence":[],
         "evidence_digest":crate::storage::evaluation::evidence_digest(&[])?,"observed_at":"2026-10-25T00:00:00Z"
     }))?)
@@ -44,7 +44,7 @@ fn subject(fixture: &Fixture) -> Result<EvalSubject> {
 fn evaluation(fixture: &Fixture, verdict: EvalVerdict, key: &str) -> Result<EvaluationResult> {
     let subject = subject(fixture)?;
     Ok(serde_json::from_value(serde_json::json!({
-        "schema_version":1,"eval_id":subject.eval_id,"evidence_digest":subject.evidence_digest,
+        "spec_version":"eval/1.0.0-beta.1","eval_id":subject.eval_id,"evidence_digest":subject.evidence_digest,
         "evaluator":{"authority_id":fixture.principal,"evaluator_id":"generic-fixture","kind":"generic","version":"1","config_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
         "verdict":verdict,"metrics":{},"hard_violations":[],"evidence_refs":[],"decision_credit":{},"idempotency_key":key,"submitted_at":"2026-10-25T00:01:00Z"
     }))?)
@@ -70,7 +70,7 @@ async fn subject_profiles_refuse_old_mixed_foreign_and_wrong_endpoint_identity_b
     ] {
         let mut input = original.clone();
         match probe {
-            "old" => input["schema_version"] = 1.into(),
+            "old" => input["spec_version"] = "eval/1.0.0-beta.2".into(),
             "missing" => {
                 input
                     .as_object_mut()

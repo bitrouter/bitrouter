@@ -9,8 +9,10 @@ use crate::gateway::model::protocol::generate_content::native::stream::{
 };
 use std::sync::{Arc, OnceLock};
 
+use crate::gateway::conversion_report::{
+    ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
+};
 use bitrouter_ai::{
-    conversion::{ConversionEffect, ConversionLocation, ConversionReason, ConversionReport},
     tenancy::{generate_content::OrderedGenerateContentRequestV1, validation::Validate},
     types::{ApiProtocol, Prompt, Usage},
 };

@@ -5,7 +5,7 @@ use axum::{body::Body as HttpBody, extract::Request, http::Version};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::tenancy::{
     generate_content::{MIME, OrderedGenerateContentRequestV1},
-    generation_defaults::GenerationDefaultsEnvelopeV2,
+    generation_defaults::GenerationDefaultsEnvelope,
     private_adapter::{
         ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
         Outcome as AdapterOutcome,
@@ -376,10 +376,10 @@ impl Harness {
             .ordered
             .binding(vec![1, 0], GenerationProtocol::GenerateContent)
             .await?;
-        let defaults: GenerationDefaultsEnvelopeV2 = serde_json::from_value(
+        let defaults: GenerationDefaultsEnvelope = serde_json::from_value(
             json!({"schema_version":2,"canonical":{"schema_version":1,"max_tokens":17},"supplemental":{},"configuration_defaults":"preserve_absence"}),
         )?;
-        let binding = binding.with_generation_defaults_envelope_v2(&defaults)?;
+        let binding = binding.with_generation_defaults_envelope(&defaults)?;
         let control = self.ordered.control(true, version)?;
         let capabilities = control
             .ordered_generate_content_capabilities()
@@ -402,7 +402,7 @@ impl Harness {
         let reply = gateway
             .ordered_tenant(self.ordered.token()?, &binding)?
             .with_generate_content(&capabilities)?
-            .with_generation_defaults_envelope_v2(defaults)?
+            .with_generation_defaults_envelope(defaults)?
             .generate_content_reply(&request)
             .await?;
         let id = reply.metadata.execution_id.context("execution id")?;

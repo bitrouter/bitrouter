@@ -1,6 +1,6 @@
 //! Service-owned admission policy over credential-free provider evidence.
 
-use bitrouter_ai::core::evidence::{ModelTokenLimits, NativeProtocolValidation, NativeRoute};
+use crate::managed_contract::evidence::{ModelTokenLimits, NativeProtocolValidation, NativeRoute};
 
 /// A provider that cannot accept a request-level output cap may still fit
 /// a reservation covering its entire configured model output ceiling.
@@ -24,7 +24,7 @@ pub(crate) fn requires_input_count(route: &NativeRoute) -> bool {
 #[cfg(test)]
 mod tests {
     use super::requires_input_count;
-    use bitrouter_ai::core::evidence::{
+    use crate::managed_contract::evidence::{
         InputTokenCounting, NativeProtocolValidation, NativeRoute, NativeRouteConstraints,
     };
     use bitrouter_ai::types::ApiProtocol;

@@ -4,8 +4,8 @@
 use crate::storage::checkpoint::snapshot::steering::{SteeringDisposition, SteeringRecord};
 
 use super::*;
+use crate::managed_contract::checkpoint::ToolStartFence;
 use crate::storage::checkpoint::validate_tool_start_fences;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 pub(super) struct SteeringTarget {
     pub agent_id: String,

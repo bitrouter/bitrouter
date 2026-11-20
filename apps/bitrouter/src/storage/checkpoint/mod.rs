@@ -5,7 +5,7 @@
 pub mod snapshot;
 pub mod validation;
 
-use bitrouter_ai::core::checkpoint::{
+use crate::managed_contract::checkpoint::{
     BatchIdentity, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableHead, ToolStartFence,
     validate_digest,
 };
@@ -16,7 +16,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant, VERSION, validate_id,
 };
 

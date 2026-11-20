@@ -56,7 +56,7 @@ fn port(principal: Principal) -> Result<RemotePort, CoreError> {
     let limits = Limits::default();
     Ok(RemotePort::new(
         principal,
-        bitrouter_ai::core::protocol::OwnershipGrant {
+        crate::managed_contract::protocol::OwnershipGrant {
             session_id: "session".into(),
             harness_id: "harness".into(),
             core_instance_id: "core".into(),

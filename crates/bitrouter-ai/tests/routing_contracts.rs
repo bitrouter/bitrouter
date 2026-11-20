@@ -1,4 +1,5 @@
-use bitrouter_ai::routing::{RoutingConfig, SortOrder};
+use bitrouter_ai::control::models::RoutingOptions;
+use bitrouter_ai::routing::SortOrder;
 
 #[test]
 fn routing_sort_wire_values_and_legacy_default() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,8 +15,8 @@ fn routing_sort_wire_values_and_legacy_default() -> Result<(), Box<dyn std::erro
         );
         assert_eq!(serde_json::to_value(value)?, serde_json::json!(wire));
     }
-    let legacy: RoutingConfig = serde_json::from_str("{}")?;
-    assert_eq!(legacy.sort, None);
+    let options: RoutingOptions = serde_json::from_str("{}")?;
+    assert_eq!(options.sort, None);
     assert_eq!(SortOrder::default(), SortOrder::Alphabetical);
     Ok(())
 }

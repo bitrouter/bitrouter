@@ -1,7 +1,7 @@
 //! Inert record/validator checks; these fixtures grant no live authority.
 use super::*;
+use crate::managed_contract::protocol::{ArtifactRef, ToolObservation, ToolStatus};
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
-use bitrouter_ai::core::protocol::{ArtifactRef, ToolObservation, ToolStatus};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 

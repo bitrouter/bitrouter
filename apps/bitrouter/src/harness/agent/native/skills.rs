@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::core::session::CoreSession;
 use crate::harness::agent::ApprovalRequest;
-use bitrouter_ai::core::skills::SkillConsentRequest;
+use crate::managed_contract::skills::SkillConsentRequest;
 
 use super::port::Port;
 
@@ -62,9 +62,9 @@ pub(super) async fn consent(
         .await
         && (!matches!(
             error.code,
-            bitrouter_ai::core::protocol::ErrorCode::StaleRevision
-                | bitrouter_ai::core::protocol::ErrorCode::StaleEpoch
-                | bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
+            crate::managed_contract::protocol::ErrorCode::StaleRevision
+                | crate::managed_contract::protocol::ErrorCode::StaleEpoch
+                | crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
         ) || core.skill_consent_pending(&request).await)
     {
         return Err(error.message);

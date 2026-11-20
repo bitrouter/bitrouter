@@ -131,9 +131,13 @@ pub(crate) async fn router_statuses(
 
     for entry in inventory {
         let (selection, bound_policy) = match entry.selection {
-            RouterInventorySelection::Model { model, routing } => {
-                (RouterSelectionStatus::Model { model, routing }, None)
-            }
+            RouterInventorySelection::Model { model, routing } => (
+                RouterSelectionStatus::Model {
+                    model,
+                    routing: routing.into(),
+                },
+                None,
+            ),
             RouterInventorySelection::Policy {
                 policy,
                 base_model,
@@ -142,7 +146,7 @@ pub(crate) async fn router_statuses(
                 RouterSelectionStatus::Policy {
                     policy: policy.clone(),
                     base_model,
-                    routing,
+                    routing: routing.into(),
                 },
                 Some(policy),
             ),

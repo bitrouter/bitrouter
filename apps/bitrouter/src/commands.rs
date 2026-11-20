@@ -551,7 +551,7 @@ pub async fn login_provider_with_options(
 
 /// Onboarding uses the exact registry entry shown in its provider list.
 pub(crate) async fn login_registry_provider(
-    provider: &bitrouter_ai::catalog::types::RegistryProvider,
+    provider: &crate::gateway::catalog::types::RegistryProvider,
 ) -> Result<LoginOutcome> {
     let entry = crate::providers::builtin::entry_from_registry(provider)?;
     login_entry(
@@ -1223,7 +1223,7 @@ mod tests {
     /// and openai-codex are no longer compiled-in built-ins, so `login` resolves
     /// their auth shape from the fetched registry via `entry_from_registry`.
     fn entry_for(json: serde_json::Value) -> crate::providers::entry::ProviderEntry {
-        let p: bitrouter_ai::catalog::types::RegistryProvider =
+        let p: crate::gateway::catalog::types::RegistryProvider =
             serde_json::from_value(json).expect("valid registry-provider fixture");
         crate::providers::builtin::entry_from_registry(&p).expect("maps to an entry")
     }

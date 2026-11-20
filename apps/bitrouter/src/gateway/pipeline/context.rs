@@ -636,9 +636,9 @@ impl PipelineContext {
                     .contains(&crate::gateway::routing::ContextCapability::OmitPrivateReasoning)
             })
             && self
-                .extension::<bitrouter_ai::routing::ContextStrategy>()
+                .extension::<crate::gateway::routing::ContextTreatment>()
                 .is_none_or(|strategy| {
-                    *strategy != bitrouter_ai::routing::ContextStrategy::Preserve
+                    *strategy != crate::gateway::routing::ContextTreatment::Preserve
                 });
         let authenticated = self
             .extension::<super::native_context::NativePrivateContextRuntime>()

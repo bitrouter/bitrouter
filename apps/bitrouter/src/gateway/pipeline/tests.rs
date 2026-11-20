@@ -853,7 +853,7 @@ impl native::NativeExecutionControl for AdmittedRoutes {
         Ok(())
     }
 
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[tokio::test]
@@ -881,7 +881,7 @@ async fn managed_admission_cannot_add_duplicate_or_reorder_frozen_routes() -> Re
 struct ManagedSelectionControl {
     selection: native::NativeModelSelection,
     plans: tokio::sync::Mutex<Vec<native::NativePlan>>,
-    reports: tokio::sync::Mutex<Vec<bitrouter_ai::core::evidence::NativeAttemptReport>>,
+    reports: tokio::sync::Mutex<Vec<crate::managed_contract::evidence::NativeAttemptReport>>,
 }
 
 #[async_trait]
@@ -900,7 +900,7 @@ impl native::NativeExecutionControl for ManagedSelectionControl {
         Ok(())
     }
 
-    async fn after_attempt(&self, report: bitrouter_ai::core::evidence::NativeAttemptReport) {
+    async fn after_attempt(&self, report: crate::managed_contract::evidence::NativeAttemptReport) {
         self.reports.lock().await.push(report);
     }
 }
@@ -916,7 +916,7 @@ impl Executor for FailedCounter {
         _: &RoutingTarget,
         _: &Prompt,
         _: &PipelineContext,
-    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
+    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
         Err(BitrouterError::bad_request(
             "SECRET_RAW_CREDENTIAL and NATIVE_CONTINUATION_ID",
         ))
@@ -948,7 +948,7 @@ async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result
     let table = Arc::new(StaticRoutingTable::new());
     let mut route = target("first");
     route.model_constraints.input_token_counting =
-        Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
+        Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
     table.insert("test-model", vec![route]);
     let mut builder = PipelineBuilder::new();
     builder
@@ -4057,7 +4057,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
     };
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ResponseFormatUnsupported
+        crate::gateway::conversion_report::ConversionReason::ResponseFormatUnsupported
     );
     Ok(())
 }
@@ -5833,7 +5833,7 @@ impl ObserveHook for Arc<AdmissionObserver> {
         &self,
         _: &PipelineContext,
         _: &RoutingTarget,
-        report: &bitrouter_ai::conversion::ConversionReport,
+        report: &crate::gateway::conversion_report::ConversionReport,
     ) {
         assert!(!report.issues.is_empty());
         self.excluded.fetch_add(1, Ordering::SeqCst);
@@ -5964,7 +5964,7 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
         };
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::ResponseFormatUnsupported
+            crate::gateway::conversion_report::ConversionReason::ResponseFormatUnsupported
         );
         let observer = Arc::new(AdmissionObserver::default());
         let table = Arc::new(StaticRoutingTable::new());
@@ -6022,9 +6022,9 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
 #[tokio::test]
 async fn conversion_admission_all_excluded_returns_reports_without_attempting_or_resetting_history()
 -> Result<()> {
+    use crate::gateway::conversion_report::ConversionLocation;
     use crate::gateway::model::protocol::InboundAdapter;
     use crate::gateway::model::protocol::responses::ResponsesAdapter;
-    use bitrouter_ai::conversion::ConversionLocation;
     for streamed in [false, true] {
         let mut req = request();
         *req.input.generation_prompt_mut().ok_or_else(|| crate::gateway::error::BitrouterError::internal("expected generation fixture"))? = ResponsesAdapter.parse_request(serde_json::json!({"model":"test-model","stream":streamed,"input":[{"type":"reasoning","id":"rs-secret","summary":[],"encrypted_content":"opaque-secret"},{"role":"user","content":"keep original history"}]}))?;
@@ -6131,7 +6131,7 @@ async fn projection_admission_routes_file_results_without_asset_loss_or_failure_
         };
         assert_eq!(
             report.issues[0].location,
-            bitrouter_ai::conversion::ConversionLocation::ToolResultContent {
+            crate::gateway::conversion_report::ConversionLocation::ToolResultContent {
                 message: 1,
                 block: 0,
                 part: 1
@@ -6183,13 +6183,13 @@ impl ObserveHook for Arc<ConversionEvents> {
         &self,
         _: &PipelineContext,
         target: &RoutingTarget,
-        report: &bitrouter_ai::conversion::ConversionReport,
+        report: &crate::gateway::conversion_report::ConversionReport,
     ) {
         assert!(report.issues.is_empty());
         assert_eq!(report.admitted.len(), 1);
         assert_eq!(
             report.admitted[0].effect,
-            bitrouter_ai::conversion::ConversionEffect::EquivalentRepresentation
+            crate::gateway::conversion_report::ConversionEffect::EquivalentRepresentation
         );
         assert!(!format!("{report:?}").contains("secret"));
         self.0
@@ -6201,7 +6201,7 @@ impl ObserveHook for Arc<ConversionEvents> {
         &self,
         _: &PipelineContext,
         target: &RoutingTarget,
-        report: &bitrouter_ai::conversion::ConversionReport,
+        report: &crate::gateway::conversion_report::ConversionReport,
     ) {
         assert!(!report.issues.is_empty());
         self.0
@@ -6279,7 +6279,7 @@ impl Executor for MisreportedAdmission {
         target: &RoutingTarget,
         prompt: &Prompt,
         _: bool,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         Ok(crate::gateway::model::conversion::request_admission(
             prompt,
             &target.api_protocol,
@@ -6307,10 +6307,12 @@ impl Executor for MisreportedAdmission {
 
 #[tokio::test]
 async fn projection_admission_preserves_tool_constraints_during_http_fallback() -> Result<()> {
+    use crate::gateway::conversion_report::{
+        ConversionEffect, ConversionLocation, ConversionReason,
+    };
     use crate::gateway::model::client::{HttpTimeouts, ModelClient};
     use crate::gateway::model::protocol::InboundAdapter;
     use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
-    use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation, ConversionReason};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

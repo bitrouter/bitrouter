@@ -16,5 +16,4 @@ pub mod signals;
 
 pub mod adequacy;
 pub mod evolution;
-pub mod optimization;
 pub mod workflow_state;

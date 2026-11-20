@@ -68,6 +68,7 @@ pub mod harness;
 pub mod host;
 #[cfg(feature = "harness")]
 mod local_cli;
+pub mod managed_contract;
 #[cfg(feature = "harness")]
 pub mod managed_store;
 pub mod managed_task;

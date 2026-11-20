@@ -5,18 +5,18 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::protocol::ModelMode;
-use crate::harness::runtime::{ErrorCode, RuntimeCapabilities};
-use crate::harness::thread::{ThreadHistoryPage, ThreadSnapshot, ThreadView};
-use crate::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot};
-use crate::types::ReasoningEffort;
+use bitrouter_ai::harness::agent::ModelMode;
+use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
+use bitrouter_ai::harness::thread::{ThreadHistoryPage, ThreadSnapshot, ThreadView};
+use bitrouter_ai::harness::turn::{SteeringReceipt, TurnReceipt, TurnSnapshot};
+use bitrouter_ai::types::ReasoningEffort;
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CreateThreadRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<crate::core::skills::SkillConstraints>,
+    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
     pub workspace: PathBuf,
     pub model: String,
     #[serde(default)]
@@ -144,19 +144,3 @@ pub struct ObservationError {
     pub code: ErrorCode,
     pub message: String,
 }
-
-redacted_contract_debug!(
-    CreateThreadRequest,
-    TurnRequest,
-    InputRequest,
-    SteeringRequest,
-    CapabilitiesResponse,
-    ThreadResponse,
-    ThreadViewResponse,
-    TurnResponse,
-    TurnReceiptResponse,
-    SteeringReceiptResponse,
-    HistoryResponse,
-    ErrorResponse,
-    ObservationError,
-);

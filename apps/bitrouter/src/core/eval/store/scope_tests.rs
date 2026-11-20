@@ -341,6 +341,7 @@ async fn missing_closure_and_forged_physical_projections_are_rejected() -> Resul
     admitted(&b).await?;
     let foreign = b.freeze_snapshot(FROZEN).await?;
     let claimed = EvalSnapshot {
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         evidence_root: a.snapshot_root(None, FROZEN, &foreign.entries)?,
         frozen_at: FROZEN.into(),
         entries: foreign.entries,

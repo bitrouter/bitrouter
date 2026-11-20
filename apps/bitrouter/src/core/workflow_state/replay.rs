@@ -283,7 +283,7 @@ mod tests {
 
         assert_eq!(
             summary.records[0].predictive_route_key,
-            "semantic_route/v1|code:debugging|implement|normal"
+            "code:debugging|implement|normal"
         );
         assert_eq!(summary.records[0].prediction_matches_expected, Some(true));
     }

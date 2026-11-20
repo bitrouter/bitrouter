@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+#[cfg(feature = "core")]
+use crate::managed_contract::checkpoint::CheckpointPayload;
+use crate::managed_contract::protocol::CoreError;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::context::view::ContextRepresentation;
 use crate::storage::checkpoint::snapshot::context::{ContextStore, FEATURE, digest, invalid};
-#[cfg(feature = "core")]
-use bitrouter_ai::core::checkpoint::CheckpointPayload;
-use bitrouter_ai::core::protocol::CoreError;
 
 pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
     crate::storage::skills::state::validate(state)?;
@@ -77,7 +77,7 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
         }
     }
     for (id, artifact) in &store.artifacts {
-        bitrouter_ai::core::checkpoint::validate_digest(&artifact.reference.sha256)?;
+        crate::managed_contract::checkpoint::validate_digest(&artifact.reference.sha256)?;
         if *id
             != format!(
                 "{}:{}",

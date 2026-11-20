@@ -8,11 +8,11 @@ use super::*;
 use bitrouter::gateway::pipeline::native_context::metadata;
 use bitrouter::gateway::pipeline::native_continuation::CONTINUATION_FIELD;
 use bitrouter::gateway::pipeline::native_continuation::REQUIRED_STATE_FIELD;
+use bitrouter::managed_contract::evidence::FullHistoryReason;
+use bitrouter::managed_contract::evidence::NativeContinuationInput;
+use bitrouter::managed_contract::evidence::NativeContinuationOutput;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::evidence::FullHistoryReason;
-use bitrouter_ai::core::evidence::NativeContinuationInput;
-use bitrouter_ai::core::evidence::NativeContinuationOutput;
 
 async fn stored_fixture(private: bool, replayable: bool, counting: bool) -> Result<PrivateFixture> {
     let mut fixture = PrivateFixture::new("responses").await?;
@@ -395,7 +395,7 @@ async fn native_continuation_never_replays_unrepresented_state_without_coverage(
         assert_eq!(
             capture.plans.lock().await[0].routes[0].continuation,
             NativeContinuationInput::Rejected {
-                reason: bitrouter_ai::core::evidence::ContinuationFailure::Required
+                reason: bitrouter::managed_contract::evidence::ContinuationFailure::Required
             }
         );
     }
@@ -687,7 +687,8 @@ async fn native_continuation_failed_seal_or_storage_preserves_billed_output_and_
             report.continuation.output,
             if key_failure {
                 NativeContinuationOutput::Unverified {
-                    reason: bitrouter_ai::core::evidence::ContinuationFailure::KeyUnavailable,
+                    reason:
+                        bitrouter::managed_contract::evidence::ContinuationFailure::KeyUnavailable,
                 }
             } else {
                 NativeContinuationOutput::NotStored

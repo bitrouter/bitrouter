@@ -7,13 +7,13 @@ use crate::gateway::model::protocol::values::extras_for_protocol;
 use base64::Engine;
 use futures::{Stream, StreamExt};
 
-use crate::gateway::model::error::{ModelError, Result};
-use crate::gateway::model::target::ModelTarget;
-use crate::gateway::providers::auth::CredentialAuthority;
-use bitrouter_ai::conversion::{
+use crate::gateway::conversion_report::{
     ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation, ConversionReason,
     ConversionReport, ConversionStage,
 };
+use crate::gateway::model::error::{ModelError, Result};
+use crate::gateway::model::target::ModelTarget;
+use crate::gateway::providers::auth::CredentialAuthority;
 use bitrouter_ai::types::{
     ApiProtocol, Content, GenerateResult, Prompt, ReasoningEffort, ResponseFormat, StreamPart,
     Tool, provider_namespace, set_provider_metadata,

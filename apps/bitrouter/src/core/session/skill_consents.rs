@@ -2,9 +2,9 @@
 //! Metadata delivery never fetches instructions or authorizes a workspace tool.
 
 use super::*;
+use crate::managed_contract::skills::{SkillConsent, SkillConsentAnswer, SkillConsentRequest};
 use crate::storage::skills::SkillConsentAnswerExt;
 use crate::storage::skills::SkillSource;
-use bitrouter_ai::core::skills::{SkillConsent, SkillConsentAnswer, SkillConsentRequest};
 
 impl CoreSession {
     pub async fn skill_consent_pending(&self, request: &SkillConsentRequest) -> bool {
@@ -270,7 +270,7 @@ impl CoreSession {
         ] {
             validate_id(identity)?;
         }
-        bitrouter_ai::core::checkpoint::validate_digest(&answer.entry_digest)?;
+        crate::managed_contract::checkpoint::validate_digest(&answer.entry_digest)?;
         let fingerprint = answer.fingerprint()?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);

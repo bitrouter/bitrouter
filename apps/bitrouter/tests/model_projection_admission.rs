@@ -4,10 +4,10 @@
 mod conversion;
 use conversion::{adapters, prompt, refusal};
 
+use bitrouter::gateway::conversion_report::{ConversionEffect, ConversionLocation};
 use bitrouter::gateway::model::protocol::messages::MessagesAdapter;
 use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
 use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
-use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
 use bitrouter_ai::types::{
     ApiProtocol, Content, Message, ProviderMetadata, Role, Tool, ToolResultContentPart,
     ToolResultOutput,
@@ -198,7 +198,7 @@ fn denial_suppression_requires_a_matching_denied_approval_response() -> TestResu
     let report = refusal(&ResponsesAdapter, &source)?;
     assert_eq!(
         report.issues[0].reason,
-        bitrouter_ai::conversion::ConversionReason::ApprovalDenialUnpaired
+        bitrouter::gateway::conversion_report::ConversionReason::ApprovalDenialUnpaired
     );
     Ok(())
 }
@@ -225,7 +225,7 @@ fn provider_tool_arguments_cannot_be_silently_replaced_by_an_empty_object() -> T
         let report = refusal(adapter, &source)?;
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::ProviderToolArgumentsUnrepresentable
+            bitrouter::gateway::conversion_report::ConversionReason::ProviderToolArgumentsUnrepresentable
         );
     }
     Ok(())
@@ -243,7 +243,7 @@ fn output_only_approval_requests_need_an_explicit_replay_representation() -> Tes
         let report = refusal(adapter.as_ref(), &source)?;
         assert_eq!(
             report.issues[0].reason,
-            bitrouter_ai::conversion::ConversionReason::ApprovalUnrepresentable
+            bitrouter::gateway::conversion_report::ConversionReason::ApprovalUnrepresentable
         );
     }
     Ok(())

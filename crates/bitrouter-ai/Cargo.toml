@@ -13,6 +13,10 @@ exclude = ["public-api-deps.txt"]
 name = "policy_schema"
 required-features = ["schema"]
 
+[[example]]
+name = "eval_schema"
+required-features = ["schema"]
+
 [features]
 default = []
 # Pure observation-schema helpers for exporter conformance suites.

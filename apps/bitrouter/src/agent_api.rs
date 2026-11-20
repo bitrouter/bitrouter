@@ -22,14 +22,16 @@ use axum::response::{IntoResponse, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::api::{
-    self, CancelMode, CancelRequest, CapabilitiesResponse, CreateThreadRequest, ErrorResponse,
+mod contract;
+
+use bitrouter_ai::harness::runtime::ErrorCode;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use contract::{
+    CancelMode, CancelRequest, CapabilitiesResponse, CreateThreadRequest, ErrorResponse,
     HistoryQuery, HistoryResponse, InputRequest, ObservationError, ObserveQuery, PROTOCOL_VERSION,
     SteeringReceiptResponse, ThreadResponse, ThreadViewResponse, TurnMode, TurnReceiptResponse,
     TurnResponse,
 };
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
 use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
@@ -369,7 +371,7 @@ async fn turn(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<api::TurnRequest>,
+    Json(body): Json<contract::TurnRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
@@ -524,7 +526,7 @@ async fn steer(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(body): Json<api::SteeringRequest>,
+    Json(body): Json<contract::SteeringRequest>,
 ) -> Result<Json<SteeringReceiptResponse>, ApiError> {
     state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
@@ -592,6 +594,3 @@ async fn observe(
     });
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
-
-#[cfg(all(test, not(feature = "core")))]
-mod core_disabled_tests;

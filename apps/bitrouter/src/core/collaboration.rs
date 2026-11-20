@@ -16,11 +16,11 @@ use super::allocation;
 use crate::storage::checkpoint::snapshot::allocation::ContextKind;
 
 use super::allocation::Intent;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::AgentState;
 use crate::storage::checkpoint::snapshot::AgentTurn;
 use crate::storage::checkpoint::snapshot::RunStatus;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use bitrouter_ai::harness::inspection::AgentStatus;
 
 impl Action {
@@ -427,7 +427,7 @@ fn assignment(
     input.text = task.text.clone();
     input.model = task.model.clone().unwrap_or(input.model);
     if task.model.is_some() {
-        input.routing.model = bitrouter_ai::core::protocol::ModelMode::Fixed;
+        input.routing.model = bitrouter_ai::harness::agent::ModelMode::Fixed;
     }
     if task.effort.is_some() {
         input.effort = task.effort.clone();

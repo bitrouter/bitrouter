@@ -256,8 +256,8 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
         .with_resources(fixture.configuration(workspace.path()))?;
         let caller = CallerContext::local();
         let config = AgentConfig::fixed("fixture-model", None).with_skill_constraints(Some(
-            bitrouter_ai::core::skills::SkillConstraints {
-                include: vec![bitrouter_ai::core::skills::SkillSelector::Mcp {
+            bitrouter_ai::harness::skills::SkillConstraints {
+                include: vec![bitrouter_ai::harness::skills::SkillSelector::Mcp {
                     server: fixture.server.name.clone(),
                     uri: ROOT.into(),
                 }],

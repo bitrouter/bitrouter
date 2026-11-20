@@ -1,7 +1,7 @@
 //! Provider-owned opaque controls use current ordered authority over real HTTP.
 use super::*;
 use bitrouter_ai::tenancy::{
-    generation_defaults::GenerationDefaultsEnvelopeV2,
+    generation_defaults::GenerationDefaultsEnvelope,
     native_controls::{HEADER, PROVIDER_NATIVE_V1},
 };
 
@@ -114,7 +114,7 @@ async fn invoke(
     binding: &OrderedDispatchBindingV2,
     protocol: GenerationProtocol,
     mut input: Value,
-    defaults: Option<GenerationDefaultsEnvelopeV2>,
+    defaults: Option<GenerationDefaultsEnvelope>,
 ) -> Result<(ExecutionId, String)> {
     let capabilities = harness
         .control(false, HttpVersion::Http1Only)?
@@ -126,7 +126,7 @@ async fn invoke(
         .ordered_tenant(harness.token()?, binding)?
         .with_native_controls(&capabilities)?;
     if let Some(defaults) = defaults {
-        call = call.with_generation_defaults_envelope_v2(defaults)?;
+        call = call.with_generation_defaults_envelope(defaults)?;
     }
     input["model"] = json!(MODEL);
     let stream = input["stream"] == true;
@@ -181,7 +181,7 @@ async fn invoke(
     })
 }
 
-fn defaults(tokens: u32, supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
+fn defaults(tokens: u32, supplemental: Value) -> Result<GenerationDefaultsEnvelope> {
     Ok(serde_json::from_value(json!({"schema_version":2,
         "configuration_defaults":"preserve_absence",
         "canonical":{"schema_version":1,"max_tokens":tokens},"supplemental":supplemental}))?)
@@ -302,7 +302,7 @@ async fn native_effective_null_precedence_skips_foreign_candidates_without_renum
             .binding(vec![1, 2, 0], GenerationProtocol::Responses)
             .await?;
         let envelope = defaults(17, json!({"previous_response_id":supplemental}))?;
-        let binding = original.with_generation_defaults_envelope_v2(&envelope)?;
+        let binding = original.with_generation_defaults_envelope(&envelope)?;
         let mut input = json!({"input":"next"});
         if let Some(value) = &source {
             input["previous_response_id"] = value.clone();

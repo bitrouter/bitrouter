@@ -108,15 +108,19 @@ async fn owned_proxy_rejects_split_driver_calls_without_poisoning_owned_run() ->
             .await
             .err()
             .context("owned proxy accepted direct start")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
-        ensure!(denied.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(
+            denied.commit_status == crate::managed_contract::protocol::CommitStatus::NotCommitted
+        );
         let denied = session
             .drive(Arc::new(Approval), CancellationToken::new())
             .await
             .err()
             .context("owned proxy accepted direct drive")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
-        ensure!(denied.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(
+            denied.commit_status == crate::managed_contract::protocol::CommitStatus::NotCommitted
+        );
         ensure!(session.core().head().await == head);
         ensure!(session.core().operation("split-input").await.is_none());
         ensure!(provider.calls() == 0);
@@ -267,7 +271,7 @@ async fn native_host_uses_credential_and_current_binding_permission_intersection
             } else {
                 ensure!(
                     opened.err().context("permission ceiling bypassed")?.code
-                        == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+                        == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
                     "{name}"
                 );
                 ensure!(
@@ -364,7 +368,7 @@ async fn native_resource_grants_require_the_exact_retained_route_and_credential_
             .await;
             ensure!(
                 denied.err().context("incomplete closure restored")?.code
-                    == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
+                    == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
             );
         }
         ensure!(rows(&fixture).await? == 1 && provider.calls() == 1);
@@ -498,7 +502,9 @@ async fn checked_host_identity_cannot_cross_two_live_services() -> Result<()> {
             .err()
             .context("cross-Service journal accepted")?
             .core();
-        ensure!(denied.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+        ensure!(
+            denied.commit_status == crate::managed_contract::protocol::CommitStatus::NotCommitted
+        );
         ensure!(foreign.service.host_slots_for_test() == 1 && rows(&foreign).await? == 0);
         ensure!(fixture.service.host_slots_for_test() == 1 && rows(&fixture).await? == 0);
         ensure!(provider.calls() == 0);
@@ -566,7 +572,9 @@ async fn postcommit_expiry_suppresses_open_but_exact_readback_releases_the_persi
             .await?
             .err()
             .context("expired opener delivered a session")?;
-        ensure!(rejection.commit_status == bitrouter_ai::core::protocol::CommitStatus::Committed);
+        ensure!(
+            rejection.commit_status == crate::managed_contract::protocol::CommitStatus::Committed
+        );
         // The reply is not a cleanup acknowledgement. Wait for the actual host
         // slot to return after exact readback, resource close and release CAS.
         while fixture.service.host_slots_for_test() == 0 {

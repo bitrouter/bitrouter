@@ -41,7 +41,7 @@ use sha2::{Digest, Sha256};
 pub struct ModelPricing {
     /// Published processing-profile provenance, retained across tier selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
     /// Micro-USD charged per prompt (input) token (base bracket). `None` =
     /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,

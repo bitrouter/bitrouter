@@ -7,7 +7,7 @@ use super::SessionSnapshot;
 use crate::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
 use crate::gateway::model::decision::types::{DecisionError, DecisionRequest, DecisionResponse};
 use crate::gateway::pipeline::native::NativePlan;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 #[cfg(any(feature = "core", feature = "harness"))]
 use bitrouter_ai::types::Content;
 use serde::{Deserialize, Serialize};

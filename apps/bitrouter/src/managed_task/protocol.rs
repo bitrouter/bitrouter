@@ -3,10 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::managed_contract::checkpoint::DurableHead;
+use crate::managed_contract::protocol::{CoreError, OperationReceipt, OwnershipGrant};
+use crate::managed_contract::skills::{SkillConsentAnswer, SkillConsentRequest};
 use crate::storage::checkpoint::snapshot::RootRun;
-use bitrouter_ai::core::checkpoint::DurableHead;
-use bitrouter_ai::core::protocol::{CoreError, OperationReceipt, OwnershipGrant};
-use bitrouter_ai::core::skills::{SkillConsentAnswer, SkillConsentRequest};
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct Submit {
     pub check: Option<String>,
     pub read_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

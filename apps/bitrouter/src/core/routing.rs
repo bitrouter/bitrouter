@@ -8,13 +8,13 @@ use crate::storage::checkpoint::snapshot::routing::{
 
 use crate::gateway::pipeline::native::NativePlan;
 use crate::gateway::pipeline::provider_admission::output_reservation_covers_model;
-use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeInputCount};
+use crate::managed_contract::evidence::{NativeAttemptReport, NativeInputCount};
 use bitrouter_ai::types::{Message, Prompt};
 use serde::Serialize;
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 impl ContextManifest {
     pub fn capture(
@@ -103,15 +103,17 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                 unverified_constraints: Vec::new(),
             };
             match &route.protocol_validation {
-                bitrouter_ai::core::evidence::NativeProtocolValidation::Compatible => {}
-                bitrouter_ai::core::evidence::NativeProtocolValidation::Unverified => assessment
-                    .unverified_constraints
-                    .push("protocol_compatibility_unknown".into()),
-                bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected { reason } => {
+                crate::managed_contract::evidence::NativeProtocolValidation::Compatible => {}
+                crate::managed_contract::evidence::NativeProtocolValidation::Unverified => {
                     assessment
-                        .rejection_reasons
-                        .push(format!("protocol_incompatible:{reason}"))
+                        .unverified_constraints
+                        .push("protocol_compatibility_unknown".into())
                 }
+                crate::managed_contract::evidence::NativeProtocolValidation::Rejected {
+                    reason,
+                } => assessment
+                    .rejection_reasons
+                    .push(format!("protocol_incompatible:{reason}")),
             }
             let input_tokens = match &route.input_count {
                 Some(NativeInputCount::Counted { input_tokens, .. }) => Some(*input_tokens),

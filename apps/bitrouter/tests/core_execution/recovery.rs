@@ -1,9 +1,9 @@
 use super::*;
-use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::protocol::{
     Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
 };
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use bitrouter_ai::harness::inspection::AgentStatus;
 
 #[path = "recovery/definite_confirmation.rs"]

@@ -19,7 +19,7 @@ impl native::NativeExecutionControl for BoundedControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 fn pipeline(

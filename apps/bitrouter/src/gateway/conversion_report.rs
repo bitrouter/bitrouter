@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::ApiProtocol;
+use bitrouter_ai::types::ApiProtocol;
 
 /// Wire category without caller-controlled custom names or target credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

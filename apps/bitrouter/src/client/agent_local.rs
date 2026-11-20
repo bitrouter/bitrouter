@@ -108,12 +108,12 @@ pub enum Operation {
         workspace: PathBuf,
         model: String,
         #[serde(default)]
-        model_mode: bitrouter_ai::core::protocol::ModelMode,
+        model_mode: bitrouter_ai::harness::agent::ModelMode,
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -767,8 +767,8 @@ mod tests {
             skill_constraints: false,
         };
         let mut config = fixture_config();
-        config.skills = Some(bitrouter_ai::core::skills::SkillConstraints {
-            include: vec![bitrouter_ai::core::skills::SkillSelector::Mcp {
+        config.skills = Some(bitrouter_ai::harness::skills::SkillConstraints {
+            include: vec![bitrouter_ai::harness::skills::SkillSelector::Mcp {
                 server: "source".into(),
                 uri: "skill://review/SKILL.md".into(),
             }],

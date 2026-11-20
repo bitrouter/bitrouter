@@ -4,13 +4,13 @@
 mod conversion;
 use conversion::{adapters, prompt, refusal, require_refusal};
 
+use bitrouter::gateway::conversion_report::{
+    ConversionEffect, ConversionLocation, ConversionReport, ConversionStage,
+};
 use bitrouter::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use bitrouter::gateway::model::protocol::messages::MessagesAdapter;
 use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
 use bitrouter::gateway::model::protocol::{InboundAdapter, OutboundAdapter};
-use bitrouter_ai::conversion::{
-    ConversionEffect, ConversionLocation, ConversionReport, ConversionStage,
-};
 use bitrouter_ai::types::{
     ApiProtocol, Content, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
 };

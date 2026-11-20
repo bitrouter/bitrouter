@@ -42,7 +42,7 @@ use crate::gateway::pipeline::settlement::{
     DeliveryAcknowledgement, RequiredDeliveryHandshake, RequiredFinalizationContext,
     RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
-use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeRoute};
+use crate::managed_contract::evidence::{NativeAttemptReport, NativeRoute};
 use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::OperationScope;
 
@@ -1297,7 +1297,7 @@ impl Pipeline {
         control: &dyn NativeExecutionControl,
     ) -> Result<crate::gateway::pipeline::native::NativePlanAdmission> {
         use crate::gateway::pipeline::native::{NativeCountedRequests, NativeInputCountReport};
-        use bitrouter_ai::core::evidence::NativeInputCount;
+        use crate::managed_contract::evidence::NativeInputCount;
         let prompt = ctx.require_generation_prompt()?;
         let can_rebuild = ctx
             .extension::<crate::gateway::pipeline::context::ProviderContinuation>()
@@ -1415,9 +1415,9 @@ impl Pipeline {
                     if rebuild_round == 0
                         && can_rebuild
                         && ctx
-                            .extension::<bitrouter_ai::routing::ContextStrategy>()
+                            .extension::<crate::gateway::routing::ContextTreatment>()
                             .as_deref()
-                            != Some(&bitrouter_ai::routing::ContextStrategy::Preserve)
+                            != Some(&crate::gateway::routing::ContextTreatment::Preserve)
                         && let Some(messages) = control.rebuild_context(&plan).await?
                     {
                         ctx.replace_managed_messages(messages)?;
@@ -1485,7 +1485,7 @@ impl Pipeline {
             if admission.route_indices.iter().any(|index| {
                 matches!(
                     routes[*index as usize].protocol_validation,
-                    bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected { .. }
+                    crate::managed_contract::evidence::NativeProtocolValidation::Rejected { .. }
                 )
             }) {
                 return Err(BitrouterError::bad_request(
@@ -2491,7 +2491,9 @@ impl Pipeline {
                 .iter()
                 .any(|selector| selector.supports(operation) && selector.preserves_context())
         {
-            ctx.insert_extension(Arc::new(bitrouter_ai::routing::ContextStrategy::Preserve));
+            ctx.insert_extension(Arc::new(
+                crate::gateway::routing::ContextTreatment::Preserve,
+            ));
         }
         if selection != Some(NativeModelSelection::Fixed)
             && let Some(policy) = resolution.policy.as_deref()
@@ -2654,7 +2656,7 @@ impl Pipeline {
                 &views,
                 crate::gateway::routing::plan::Options {
                     strategy: ctx
-                        .extension::<bitrouter_ai::routing::ContextStrategy>()
+                        .extension::<crate::gateway::routing::ContextTreatment>()
                         .as_deref()
                         .copied()
                         .unwrap_or_default(),
@@ -2915,7 +2917,7 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
-        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        let mut excluded = crate::gateway::conversion_report::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
             if target.api_protocol.operation() != ctx.operation() {
                 continue;
@@ -3058,7 +3060,7 @@ impl Pipeline {
         )>,
     ) -> Result<ControlledExecution> {
         let mut errors = Vec::new();
-        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        let mut excluded = crate::gateway::conversion_report::ConversionReport::default();
         let mut dispatched = 0;
         for (attempt_index, target) in chain.iter().enumerate() {
             let index = u32::try_from(attempt_index)
@@ -3397,7 +3399,7 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
-        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        let mut excluded = crate::gateway::conversion_report::ConversionReport::default();
         for (attempt_index, target) in chain.iter().enumerate() {
             let admitted = match ctx.input() {
                 PipelineInput::GenerateContent(input) => {
@@ -3513,7 +3515,7 @@ impl Pipeline {
         prompt: &Prompt,
         stream: bool,
         ctx: &PipelineContext,
-        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+        excluded: &mut crate::gateway::conversion_report::ConversionReport,
     ) -> Result<bool> {
         let controls = ctx
             .extension::<crate::tenancy::execution::TenantExecution>()
@@ -3545,7 +3547,7 @@ impl Pipeline {
         input: &super::types::generate_content::Input,
         stream: bool,
         ctx: &PipelineContext,
-        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+        excluded: &mut crate::gateway::conversion_report::ConversionReport,
     ) -> Result<bool> {
         let assessment = self
             .executor
@@ -3560,10 +3562,10 @@ impl Pipeline {
 
     async fn admit_assessment(
         &self,
-        assessment: Result<bitrouter_ai::conversion::ConversionReport>,
+        assessment: Result<crate::gateway::conversion_report::ConversionReport>,
         target: &RoutingTarget,
         ctx: &PipelineContext,
-        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+        excluded: &mut crate::gateway::conversion_report::ConversionReport,
     ) -> Result<bool> {
         match assessment {
             Ok(report) => {

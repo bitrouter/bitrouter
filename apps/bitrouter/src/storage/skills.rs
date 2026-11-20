@@ -1,11 +1,10 @@
 //! Native skill selection belongs to the original Turn checkpoint. A source
 //! receipt identifies content; it never grants tools or MCP execution consent.
 
+use crate::managed_contract::skills::{SkillConsent, SkillConsentAnswer, SkillConsentRequest};
 use crate::skills::library::LocalSkillExt;
 use crate::skills::mcp::HeldMcpSkillExt;
-use bitrouter_ai::core::skills::{
-    SkillConsent, SkillConsentAnswer, SkillConsentRequest, SkillConstraints, SkillSelector,
-};
+use bitrouter_ai::harness::skills::{SkillConstraints, SkillSelector};
 
 pub mod explain;
 pub mod files;
@@ -18,8 +17,8 @@ use bitrouter_ai::harness::skills::{HeldMcpSkill, McpSkillCatalog};
 use bitrouter_ai::harness::skills::{LocalSkill, LocalSkillCatalog};
 
 use super::checkpoint::sha256;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 
 /// Checkpoint/host contract for frozen skill selection and explicit MCP consent.
 /// A core without this feature must not drop these facts while restoring.

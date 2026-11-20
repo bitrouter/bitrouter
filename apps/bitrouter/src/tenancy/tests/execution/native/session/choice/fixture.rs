@@ -128,7 +128,7 @@ pub(super) fn task() -> TaskInput {
     let mut task = input();
     // The current planner emits its three real routing Choice questions even
     // when the first turn has no optional historical evidence yet.
-    task.routing.model = bitrouter_ai::core::protocol::ModelMode::Policy;
+    task.routing.model = bitrouter_ai::harness::agent::ModelMode::Policy;
     task
 }
 

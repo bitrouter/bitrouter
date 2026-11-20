@@ -282,21 +282,14 @@ fn resolve_tier<'policy, 'key>(
     baseline_request_key: &'key str,
     carries_tools: bool,
 ) -> Option<(&'policy str, &'key str)> {
-    let (raw, matched_request_key) = if let Some(tier) = policy.routes.get(
-        primary_request_key
-            .strip_prefix("semantic_route/v1|")
-            .unwrap_or(primary_request_key),
-    ) {
-        (tier.as_str(), primary_request_key)
-    } else if let Some(tier) = policy.routes.get(
-        baseline_request_key
-            .strip_prefix("semantic_route/v1|")
-            .unwrap_or(baseline_request_key),
-    ) {
-        (tier.as_str(), baseline_request_key)
-    } else {
-        (policy.default_tier.as_str(), primary_request_key)
-    };
+    let (raw, matched_request_key) =
+        if let Some(tier) = policy.routes.get(&primary_request_key.parse().ok()?) {
+            (tier.as_str(), primary_request_key)
+        } else if let Some(tier) = policy.routes.get(&baseline_request_key.parse().ok()?) {
+            (tier.as_str(), baseline_request_key)
+        } else {
+            (policy.default_tier.as_str(), primary_request_key)
+        };
     if carries_tools
         && !policy.tool_safe_tiers.iter().any(|tier| tier == raw)
         && let Some(floor) = policy.tool_use_tier.as_deref()
@@ -449,7 +442,10 @@ mod tests {
                     },
                 ),
             ]),
-            routes: BTreeMap::from([("unknown|verify|normal".to_string(), "economy".to_string())]),
+            routes: BTreeMap::from([(
+                "unknown|verify|normal".parse().expect("valid route class"),
+                "economy".to_string(),
+            )]),
             default_tier: "strong".to_string(),
             tool_use_tier: Some("strong".to_string()),
             tool_safe_tiers: vec!["strong".to_string(), "economy".to_string()],
@@ -488,7 +484,7 @@ mod tests {
         assert_eq!(report.uncovered_routes.len(), 1);
         assert_eq!(
             report.uncovered_routes[0].request_key,
-            "semantic_route/v1|unknown|unknown|normal"
+            "unknown|unknown|normal"
         );
         assert_eq!(report.uncovered_routes[0].baseline_cost_micro_usd, 1_000);
         assert_eq!(report.ranked_uncovered_requests[0].request_id, "opening");

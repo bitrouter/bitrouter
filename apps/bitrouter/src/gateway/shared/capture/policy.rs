@@ -52,14 +52,17 @@ impl Capture {
                         decision_id: pending.decision_id.clone(),
                         policy: pending.policy.clone(),
                         policy_digest: pending.policy_digest.clone(),
-                        route_projection: pending.route_projection.clone(),
-                        request_key: pending.request_key.clone(),
+                        route_projection: pending.route_projection.parse()?,
+                        request_key: pending.request_key.parse()?,
                         selected_tier: pending.selected_tier.clone(),
                         selected_effort: pending.selected_effort,
                         baseline_tier: pending.baseline_tier.clone(),
                         baseline_effort: pending.baseline_effort,
-                        experiment: pending.experiment.clone(),
-                        route_measurement: pending.route_measurement.clone(),
+
+                        route_measurement: pending
+                            .route_measurement
+                            .clone()
+                            .filter(|_| pending.experiment.is_none()),
                     },
                     preset: pending.preset.clone(),
                     holdout: pending.holdout,

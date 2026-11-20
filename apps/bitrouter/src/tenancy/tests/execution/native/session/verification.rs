@@ -1,13 +1,13 @@
 //! Actual workspace consumers, including the distinct verification admission.
 use super::*;
+use crate::managed_contract::protocol::{ToolOutcome, Verification};
 use crate::storage::checkpoint::snapshot::{Invocation, RunStatus, SessionSnapshot};
-use bitrouter_ai::core::protocol::{ToolOutcome, Verification};
 
 const CONTENT: &str = "actual-owned-workspace-proof";
 
 fn bounded_task(outstanding: u32, verification: bool) -> Result<TaskInput> {
     let mut value = input();
-    value.limits = Some(bitrouter_ai::core::protocol::Limits {
+    value.limits = Some(crate::managed_contract::protocol::Limits {
         active_models: 1,
         agents: 1,
         child_depth: 1,

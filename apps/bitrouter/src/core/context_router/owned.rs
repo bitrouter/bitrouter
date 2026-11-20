@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, HarnessManifest};
+use crate::managed_contract::protocol::{CoreError, ErrorCode, HarnessManifest};
 use bitrouter_ai::types::{Message, Prompt, Role};
 use serde_json::json;
 

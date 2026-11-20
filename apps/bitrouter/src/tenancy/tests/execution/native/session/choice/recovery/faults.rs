@@ -1,6 +1,6 @@
 //! Real mutation/COMMIT failures on the same production repair transaction.
 use super::*;
-use bitrouter_ai::core::protocol::CommitStatus;
+use crate::managed_contract::protocol::CommitStatus;
 
 async fn state(db: &sea_orm::DatabaseConnection) -> Result<(String, i64)> {
     let row=db.query_one(Statement::from_string(DatabaseBackend::Sqlite,

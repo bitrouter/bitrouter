@@ -13,8 +13,33 @@ use crate::gateway::error::Result;
 use crate::gateway::pipeline::request_checks::MAX_REQUEST_CHECKS_PER_ROUTER;
 use crate::gateway::pipeline::request_checks::RequestCheckBinding;
 use crate::gateway::pipeline::routing::PromptOverrides;
-use bitrouter_ai::routing::RoutingConfig;
 use bitrouter_ai::routing::SortOrder;
+
+/// Provider routing preferences accepted by a named router.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(rename = "RouterRoutingConfig")]
+pub struct RoutingConfig {
+    /// Cascade-chain ordering.
+    pub sort: Option<SortOrder>,
+    /// Provider tags required by the router.
+    pub require_tags: Vec<String>,
+    /// Providers allowed by the router.
+    pub only: Vec<String>,
+    /// Providers excluded by the router.
+    pub ignore: Vec<String>,
+}
+
+impl From<RoutingConfig> for bitrouter_ai::control::models::RoutingOptions {
+    fn from(value: RoutingConfig) -> Self {
+        Self {
+            sort: value.sort,
+            require_tags: value.require_tags,
+            only: value.only,
+            ignore: value.ignore,
+        }
+    }
+}
 
 /// One named router definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -115,7 +140,6 @@ pub enum RouterSelection {
         model: String,
         /// Provider preferences applied by the existing cascade resolver.
         #[serde(default)]
-        #[schemars(with = "StrictRoutingConfig")]
         routing: RoutingConfig,
     },
     /// Let one existing policy choose the effective model.
@@ -126,7 +150,6 @@ pub enum RouterSelection {
         base_model: String,
         /// Provider preferences applied after the policy selects a model.
         #[serde(default)]
-        #[schemars(with = "StrictRoutingConfig")]
         routing: RoutingConfig,
     },
 }
@@ -195,28 +218,6 @@ pub struct RouterInventoryEntry {
     pub binding_digest: String,
 }
 
-/// Provider routing preferences accepted by a named router.
-#[derive(Default, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-#[schemars(rename = "RouterRoutingConfig")]
-struct StrictRoutingConfig {
-    sort: Option<SortOrder>,
-    require_tags: Vec<String>,
-    only: Vec<String>,
-    ignore: Vec<String>,
-}
-
-impl From<StrictRoutingConfig> for RoutingConfig {
-    fn from(value: StrictRoutingConfig) -> Self {
-        Self {
-            sort: value.sort,
-            require_tags: value.require_tags,
-            only: value.only,
-            ignore: value.ignore,
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for RouterSelection {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -228,21 +229,18 @@ impl<'de> Deserialize<'de> for RouterSelection {
             Model {
                 model: String,
                 #[serde(default)]
-                routing: StrictRoutingConfig,
+                routing: RoutingConfig,
             },
             Policy {
                 policy: String,
                 base_model: String,
                 #[serde(default)]
-                routing: StrictRoutingConfig,
+                routing: RoutingConfig,
             },
         }
 
         Ok(match Input::deserialize(deserializer)? {
-            Input::Model { model, routing } => Self::Model {
-                model,
-                routing: routing.into(),
-            },
+            Input::Model { model, routing } => Self::Model { model, routing },
             Input::Policy {
                 policy,
                 base_model,
@@ -250,7 +248,7 @@ impl<'de> Deserialize<'de> for RouterSelection {
             } => Self::Policy {
                 policy,
                 base_model,
-                routing: routing.into(),
+                routing,
             },
         })
     }

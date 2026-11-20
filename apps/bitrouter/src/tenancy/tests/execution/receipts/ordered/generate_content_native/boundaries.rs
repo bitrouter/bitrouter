@@ -52,7 +52,7 @@ impl Harness {
         &self,
         indices: Vec<u16>,
         raw: &str,
-        defaults: Option<&GenerationDefaultsEnvelopeV2>,
+        defaults: Option<&GenerationDefaultsEnvelope>,
         opt_in: bool,
         media: &str,
     ) -> Result<reqwest::Response> {
@@ -61,7 +61,7 @@ impl Harness {
             .binding(indices, GenerationProtocol::GenerateContent)
             .await?;
         let binding = match defaults {
-            Some(defaults) => binding.with_generation_defaults_envelope_v2(defaults)?,
+            Some(defaults) => binding.with_generation_defaults_envelope(defaults)?,
             None => binding,
         };
         let mut headers = caller_timeout::ordered_headers(&self.ordered, &binding)?;
@@ -142,7 +142,7 @@ fn envelope(request: &str, stream: bool) -> String {
     )
 }
 
-fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelopeV2> {
+fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelope> {
     Ok(serde_json::from_value(
         json!({"schema_version":2,"canonical":{"schema_version":1,"max_tokens":17},
         "supplemental":supplemental,"configuration_defaults":"preserve_absence"}),

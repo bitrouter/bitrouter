@@ -151,7 +151,7 @@ pub(crate) fn reject_unrepresentable_native_reasoning(
     protocol: &ApiProtocol,
 ) -> Result<()> {
     reject_google_continuity(result, protocol)?;
-    use bitrouter_ai::conversion::{
+    use crate::gateway::conversion_report::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
     };
@@ -188,7 +188,7 @@ pub(crate) fn reject_unrepresentable_native_reasoning_part(
     protocol: &ApiProtocol,
 ) -> Result<()> {
     reject_google_continuity_part(part, protocol)?;
-    use bitrouter_ai::conversion::{
+    use crate::gateway::conversion_report::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
     };
@@ -224,7 +224,7 @@ pub(crate) fn reject_google_continuity(
     result: &GenerateResult,
     protocol: &ApiProtocol,
 ) -> Result<()> {
-    use bitrouter_ai::conversion::{
+    use crate::gateway::conversion_report::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
     };
@@ -268,7 +268,7 @@ pub(crate) fn reject_google_continuity_part(
     part: &StreamPart,
     protocol: &ApiProtocol,
 ) -> Result<()> {
-    use bitrouter_ai::conversion::{
+    use crate::gateway::conversion_report::{
         ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
         ConversionReason, ConversionReport, ConversionStage,
     };
@@ -483,7 +483,7 @@ pub trait OutboundAdapter: Send + Sync {
         target: &ModelTarget,
     ) -> Result<(
         serde_json::Value,
-        bitrouter_ai::conversion::ConversionReport,
+        crate::gateway::conversion_report::ConversionReport,
     )> {
         self.validate_managed_prompt(prompt)
             .map_err(crate::gateway::model::error::ModelError::invalid_request)?;
@@ -494,8 +494,8 @@ pub trait OutboundAdapter: Send + Sync {
 
     /// Content-free admission shared by direct calls and router preflight.
     /// Custom adapters can add rules for effects their request renderer detects.
-    fn admission(&self, prompt: &Prompt) -> bitrouter_ai::conversion::ConversionReport {
-        use bitrouter_ai::conversion::{
+    fn admission(&self, prompt: &Prompt) -> crate::gateway::conversion_report::ConversionReport {
+        use crate::gateway::conversion_report::{
             ConversionDisposition, ConversionEffect, ConversionIssue, ConversionLocation,
             ConversionReason, ConversionStage,
         };

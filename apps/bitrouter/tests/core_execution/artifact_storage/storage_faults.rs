@@ -5,8 +5,8 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitrouter::core::session::restoration_activity::RestorationActivity;
+use bitrouter::managed_contract::checkpoint::ToolStartFence;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
 
 #[derive(Clone, Copy, Debug)]
 enum Fault {

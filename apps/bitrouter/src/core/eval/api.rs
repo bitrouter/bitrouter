@@ -266,8 +266,7 @@ mod tests {
     use crate::eval::EvalService;
     use crate::eval::store::EvalStore;
     use {
-        crate::storage::evaluation::evidence_digest,
-        bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalScope,
+        crate::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalScope,
         bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
         bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
         bitrouter_ai::eval::EvaluatorKind,
@@ -337,7 +336,7 @@ mod tests {
             .post("/v1/evals/results")
             .authorization_bearer(&user_b_key)
             .json(&EvaluationResult {
-                schema_version: EVAL_RESULT_SCHEMA_VERSION,
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 eval_id: "eval-user-a".into(),
                 evidence_digest: subject_a.evidence_digest.clone(),
                 evaluator: EvaluatorIdentity {
@@ -403,7 +402,7 @@ mod tests {
     fn subject() -> anyhow::Result<EvalSubject> {
         let evidence = Vec::new();
         Ok(EvalSubject {
-            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: "eval-http".into(),
             scope: EvalScope::Task,

@@ -1,8 +1,8 @@
 use super::*;
 use bitrouter::core::protocol::ClientMessageExt;
+use bitrouter::managed_contract::protocol::{ClientMessage, Command, ToolObservation, ToolStatus};
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::validation::ToolResultLimitsExt;
-use bitrouter_ai::core::protocol::{ClientMessage, Command, ToolObservation, ToolStatus};
 
 fn bounded_task() -> TaskInput {
     TaskInput {
@@ -297,7 +297,7 @@ async fn tool_payload_verification_advertises_its_own_frozen_limits() -> TestRes
 
 pub(super) fn rewrite_last(
     store: &mut DurableHarness,
-    edit: impl FnOnce(&mut bitrouter_ai::core::checkpoint::CheckpointPayload),
+    edit: impl FnOnce(&mut bitrouter::managed_contract::checkpoint::CheckpointPayload),
 ) -> TestResult {
     let batch = store.batches.last_mut().ok_or("checkpoint")?;
     let mut payload = batch.decode(&store.limits)?;

@@ -32,8 +32,8 @@ use crate::gateway::pipeline::native::{
     NativeModelSelection, NativePlan, NativePlanAdmission,
 };
 use crate::gateway::pipeline::provider_admission::requires_input_count;
+use crate::managed_contract::evidence::NativeAttemptReport;
 use async_trait::async_trait;
-use bitrouter_ai::core::evidence::NativeAttemptReport;
 use bitrouter_ai::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
     ToolChoice,
@@ -48,6 +48,15 @@ use super::checkpoint::CommitGate;
 use super::collaboration;
 use super::collaboration::Applied;
 use super::signals;
+use crate::managed_contract::checkpoint::{
+    BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableEvent,
+    DurableHead, ToolStartFence,
+};
+use crate::managed_contract::protocol::{
+    Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, MaterialRef,
+    OperationDisposition, OperationReceipt, ServerMessage, SignalUpdate, TaskInput, ToolExecute,
+    ToolOutcome, ToolResult, VERSION, validate_id,
+};
 use crate::storage::checkpoint::sha256;
 use crate::storage::checkpoint::snapshot::allocation::ContextSource;
 use crate::storage::checkpoint::snapshot::collaboration::{Action, Call, Mail, RuntimeWait};
@@ -55,15 +64,6 @@ use crate::storage::checkpoint::snapshot::routing::{
     ApplicationDisposition, ContextManifest, DecisionApplied, ExecutionReceipt, RoutingDecision,
 };
 use crate::storage::checkpoint::snapshot::signals::{MaterialRequest, SignalState};
-use bitrouter_ai::core::checkpoint::{
-    BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, DurableEvent,
-    DurableHead, ToolStartFence,
-};
-use bitrouter_ai::core::protocol::{
-    Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, MaterialRef,
-    OperationDisposition, OperationReceipt, ServerMessage, SignalUpdate, TaskInput, ToolExecute,
-    ToolOutcome, ToolResult, VERSION, validate_id,
-};
 
 mod archive;
 mod artifact_storage;
@@ -202,7 +202,7 @@ pub trait HarnessPort: Send + Sync {
     /// durable. Checkpoint ACKs must retain that same dependency closure.
     async fn read_artifact(
         &self,
-        reference: &bitrouter_ai::core::protocol::ArtifactRef,
+        reference: &crate::managed_contract::protocol::ArtifactRef,
         offset: u64,
         max_bytes: u64,
     ) -> Result<Vec<u8>, CoreError>;
@@ -250,11 +250,12 @@ struct LiveSession {
     connection_generation: u64,
     activity: Activity,
     model_controls: Vec<std::sync::Weak<StepControl>>,
-    provider_evidence: bitrouter_ai::core::protocol::PendingProviderEvidence,
+    provider_evidence: crate::managed_contract::protocol::PendingProviderEvidence,
     reconnecting: bool,
     budget_watching: bool,
     restoration_started: Option<Instant>,
-    restoration_stops: BTreeMap<String, (String, bitrouter_ai::core::protocol::ToolObservation)>,
+    restoration_stops:
+        BTreeMap<String, (String, crate::managed_contract::protocol::ToolObservation)>,
 }
 
 #[derive(Clone)]
@@ -2576,8 +2577,8 @@ impl CoreSession {
             agent_turn_id: turn.agent_turn_id.clone(),
             provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
-                bitrouter_ai::core::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
-                bitrouter_ai::core::protocol::ModelMode::Policy => NativeModelSelection::Policy,
+                bitrouter_ai::harness::agent::ModelMode::Fixed => NativeModelSelection::Fixed,
+                bitrouter_ai::harness::agent::ModelMode::Policy => NativeModelSelection::Policy,
             },
         });
         {
@@ -2869,7 +2870,7 @@ impl CoreSession {
                                 _ => true,
                             }
                     });
-                    let core_owned = bitrouter_ai::core::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
+                    let core_owned = crate::managed_contract::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
                         || crate::storage::checkpoint::validation::CONTEXT_TOOLS.contains(&name.as_str());
                     if *provider_executed || !planned || (!core_owned && !manifest.tools.iter().any(|tool| tool.name == *name)) {
                         return Err(reject(
@@ -3959,7 +3960,7 @@ impl NativeExecutionControl for StepControl {
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,
-        route: &bitrouter_ai::core::evidence::NativeRoute,
+        route: &crate::managed_contract::evidence::NativeRoute,
     ) -> crate::gateway::error::Result<Option<u64>> {
         model_output::report_allowance(self.canonical_output_bytes, request_id, route)
             .map(Some)
@@ -4338,7 +4339,7 @@ impl NativeExecutionControl for StepControl {
                         "frozen_model_after_context_rebuild".into()
                     } else if joint_model.is_some() {
                         "decision_context_model_policy".into()
-                    } else if modes.model == bitrouter_ai::core::protocol::ModelMode::Fixed {
+                    } else if modes.model == bitrouter_ai::harness::agent::ModelMode::Fixed {
                         "fixed_override".into()
                     } else {
                         "named_model_policy".into()
@@ -5235,7 +5236,7 @@ fn record_tool_result(
         .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
     let limits = tool_payloads::limits(call, limits, run, turn.input.limits.as_ref())?;
     tool_payloads::validate_result(call, result, limits)?;
-    let may_change_workspace = (call.effect != bitrouter_ai::core::protocol::ToolEffect::Read
+    let may_change_workspace = (call.effect != crate::managed_contract::protocol::ToolEffect::Read
         && !matches!(
             result.status,
             ToolOutcome::Denied | ToolOutcome::NotExecuted

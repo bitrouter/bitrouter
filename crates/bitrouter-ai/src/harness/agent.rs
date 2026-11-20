@@ -16,14 +16,14 @@ pub struct EstimateRates {
 pub struct AgentConfig {
     pub model: String,
     #[serde(default, skip_serializing_if = "fixed_model_mode")]
-    pub model_mode: crate::core::protocol::ModelMode,
+    pub model_mode: ModelMode,
     pub effort: Option<ReasoningEffort>,
     /// Per-step output reservation, retained with the Thread configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     /// Explicit scoped constraints retained with this native Thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<crate::core::skills::SkillConstraints>,
+    pub skills: Option<crate::harness::skills::SkillConstraints>,
     pub instructions: String,
     pub max_steps: u32,
     pub max_tool_calls: u32,
@@ -51,8 +51,17 @@ pub enum RunStatus {
     BoundExceeded,
 }
 
-fn fixed_model_mode(mode: &crate::core::protocol::ModelMode) -> bool {
-    *mode == crate::core::protocol::ModelMode::Fixed
+fn fixed_model_mode(mode: &ModelMode) -> bool {
+    *mode == ModelMode::Fixed
 }
 
 redacted_contract_debug!(AgentConfig);
+
+/// Select a fixed model or the configured routing Policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelMode {
+    #[default]
+    Fixed,
+    Policy,
+}

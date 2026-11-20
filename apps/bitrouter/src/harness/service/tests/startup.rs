@@ -570,11 +570,11 @@ impl crate::gateway::pipeline::executor::Executor for RejectAfterFirstAttempt {
         _: &crate::gateway::pipeline::types::RoutingTarget,
         _: &bitrouter_ai::types::Prompt,
         _: &crate::gateway::pipeline::context::PipelineContext,
-    ) -> bitrouter_ai::core::evidence::NativeProtocolValidation {
+    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
         if self.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            bitrouter_ai::core::evidence::NativeProtocolValidation::Compatible
+            crate::managed_contract::evidence::NativeProtocolValidation::Compatible
         } else {
-            bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected {
+            crate::managed_contract::evidence::NativeProtocolValidation::Rejected {
                 reason: "fixture rejects the next prepared request".into(),
             }
         }

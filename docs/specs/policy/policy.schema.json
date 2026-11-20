@@ -57,6 +57,9 @@
         "routes": {
           "description": "Canonical `task-family|next-step|risk` classification to tier.",
           "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/RouteClass"
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -146,6 +149,10 @@
           "const": "max"
         }
       ]
+    },
+    "RouteClass": {
+      "type": "string",
+      "pattern": "^(code:generation|code:debugging|code:review|code:sql_database|code:frontend_ui|code:devops_config|code:repository_analysis|agent:multi_step_planning|agent:workflow_execution|agent:web_research|agent:memory_operations|agent:general|unknown)[|](orchestrate|implement|mechanical|verify|finalize|unknown)[|](normal|guarded)$"
     }
   }
 }

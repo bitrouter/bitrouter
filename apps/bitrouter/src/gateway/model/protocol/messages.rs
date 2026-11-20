@@ -866,8 +866,10 @@ fn render_stop_details(details: &StopDetails) -> serde_json::Value {
 /// Detect content that is omitted or flattened on request ingestion. Output
 /// parsing retains its separate contract; in particular these rules do not
 /// reinterpret provider SSE control events as request content.
-fn ingress_admission(body: &serde_json::Value) -> bitrouter_ai::conversion::ConversionReport {
-    use bitrouter_ai::conversion::{
+fn ingress_admission(
+    body: &serde_json::Value,
+) -> crate::gateway::conversion_report::ConversionReport {
+    use crate::gateway::conversion_report::{
         ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
     };
     let mut report = ConversionReport::default();

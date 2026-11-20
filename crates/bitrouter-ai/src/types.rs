@@ -1386,10 +1386,7 @@ pub struct GenerationParams {
     /// any other outbound adapter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_stream_options: Option<ChatStreamOptions>,
-    /// The inbound wire that owns [`Self::extra`]. `None` preserves the legacy
-    /// behavior for callers that construct a canonical prompt directly. This
-    /// provenance is serialized with the canonical prompt so an internal
-    /// queue/cache round trip cannot accidentally make raw fields unscoped.
+    /// Protocol owning request extensions. Unscoped request extensions are excluded from outbound provider requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_protocol: Option<ApiProtocol>,
     /// Extra defaults added after inbound parsing (for example by a preset).

@@ -351,9 +351,9 @@ async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay()
 #[tokio::test]
 async fn envelope_digest_survives_outstanding_intent_recovery_without_payload_or_replay()
 -> Result<()> {
-    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV1 =
+    let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            serde_json::json!({"schema_version":1,"supplemental":{"vendor_knob":"request-only-secret"}}),
+            serde_json::json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"request-only-secret"}}),
         )?;
     restart_case(Some(values.digest()?)).await
 }
@@ -362,7 +362,7 @@ async fn envelope_digest_survives_outstanding_intent_recovery_without_payload_or
 async fn envelope_v2_choice_digest_recovers_unknown_without_executable_payload_or_replay()
 -> Result<()> {
     for mode in ["apply", "preserve_absence"] {
-        let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelopeV2 =
+        let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
             serde_json::from_value(
                 serde_json::json!({"schema_version":2,"supplemental":{"vendor_knob":"request-only-secret"},"configuration_defaults":mode}),
             )?;

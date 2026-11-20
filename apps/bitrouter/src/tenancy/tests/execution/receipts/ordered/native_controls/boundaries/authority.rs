@@ -360,7 +360,7 @@ async fn native_current_caller_rotation_restart_and_new_defaults_preserve_only_c
         let envelope = defaults(tokens, json!({}))?;
         let bound = binding
             .clone()
-            .with_generation_defaults_envelope_v2(&envelope)?;
+            .with_generation_defaults_envelope(&envelope)?;
         let (id, reply) = invoke(
             &h,
             &bound,

@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::core::accounting::work::report_digest;
-use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     OwnershipGrant, PendingProviderEvidence, ProviderAttemptEvidence,
 };
+use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
 
 impl CoreSession {
     /// Fence a retained local owner before replacing it through authenticated
@@ -15,7 +15,8 @@ impl CoreSession {
     pub async fn fence_for_restoration(
         &self,
         durable: &DurableHead,
-    ) -> Result<Option<bitrouter_ai::core::protocol::RunActivityReconciliation>, CoreError> {
+    ) -> Result<Option<crate::managed_contract::protocol::RunActivityReconciliation>, CoreError>
+    {
         self.disconnect().await;
         let _input = self.shared.inputs.lock().await;
         let _driver =
@@ -55,7 +56,7 @@ impl CoreSession {
             .as_ref()
             .filter(|run| !run.status.terminal())
             .map(
-                |run| bitrouter_ai::core::protocol::RunActivityReconciliation {
+                |run| crate::managed_contract::protocol::RunActivityReconciliation {
                     run_id: run.run_id.clone(),
                     durable_head: durable.clone(),
                     active_ms: live.activity.elapsed_ms(),
