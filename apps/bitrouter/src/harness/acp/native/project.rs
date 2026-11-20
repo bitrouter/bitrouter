@@ -12,8 +12,8 @@ use crate::managed_contract::harness::thread::ThreadChange;
 use crate::managed_contract::harness::thread::ThreadEvent;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::thread::ThreadView;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 pub(super) struct Projector {
     wire: Wire,
@@ -146,12 +146,13 @@ impl Projector {
                     ..
                 } => {
                     let text = message_text(message);
-                    let status =
-                        if *effect == bitrouter_ai::harness::runtime::EffectStatus::Completed {
-                            "completed"
-                        } else {
-                            "failed"
-                        };
+                    let status = if *effect
+                        == crate::managed_contract::harness::runtime::EffectStatus::Completed
+                    {
+                        "completed"
+                    } else {
+                        "failed"
+                    };
                     self.send(cx, flow, json!({"sessionUpdate":"tool_call_update","toolCallId":item_id,"status":status,"content":[{"type":"content","content":{"type":"text","text":text}}]})).await?;
                 }
                 ThreadChange::VerificationResult {
@@ -161,7 +162,7 @@ impl Projector {
                     ..
                 } => {
                     let status = if *effect
-                        == bitrouter_ai::harness::runtime::EffectStatus::Completed
+                        == crate::managed_contract::harness::runtime::EffectStatus::Completed
                         && evidence.exit_status == Some(0)
                     {
                         "completed"

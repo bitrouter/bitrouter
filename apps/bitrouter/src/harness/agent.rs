@@ -5,7 +5,7 @@ use crate::managed_contract::harness::agent::AgentConfig;
 #[cfg(feature = "core")]
 use crate::managed_contract::harness::agent::EstimateRates;
 use crate::managed_contract::harness::agent::RunStatus;
-use bitrouter_ai::harness::agent::ToolMode;
+use crate::managed_contract::harness::agent::ToolMode;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -186,8 +186,8 @@ pub(crate) struct RunInput {
     pub checkpoint: Option<RunReport>,
     pub complete_checkpoint: bool,
     pub restored_verification: Option<(
-        bitrouter_ai::harness::turn::VerificationStatus,
-        bitrouter_ai::harness::turn::VerificationEvidence,
+        crate::managed_contract::harness::turn::VerificationStatus,
+        crate::managed_contract::harness::turn::VerificationEvidence,
     )>,
 }
 

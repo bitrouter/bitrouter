@@ -14,8 +14,8 @@ use crate::harness::turn::SteeringRequest;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::RuntimeLimits;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::SteeringStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {

@@ -18,14 +18,14 @@ use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::turn::ApprovalAnswer;
 use crate::harness::turn::CancelTurnRequest;
 use crate::harness::turn::SteeringRequest;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::PermissionProfile;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::SteeringStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 #[cfg(unix)]
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {

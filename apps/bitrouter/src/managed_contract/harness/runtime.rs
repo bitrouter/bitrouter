@@ -1,6 +1,15 @@
-//! Public harness runtime contracts. Execution and storage remain application-owned.
+//! Application-owned runtime capabilities, ownership and tool effects.
 
 use serde::{Deserialize, Serialize};
+
+/// Whether a tool completed its effects.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectStatus {
+    Completed,
+    NotExecuted,
+    Unknown,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RuntimeCapabilities {

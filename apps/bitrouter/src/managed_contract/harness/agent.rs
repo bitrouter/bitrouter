@@ -1,8 +1,17 @@
-//! Public harness agent contracts. Execution and storage remain application-owned.
+//! Application-owned agent configuration and tool permissions.
 
-use bitrouter_ai::{harness::agent::ToolMode, types::ReasoningEffort};
+use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+/// The tool permissions selected for a turn.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    #[default]
+    Coding,
+    ReadOnly,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct EstimateRates {

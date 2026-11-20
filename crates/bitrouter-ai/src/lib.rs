@@ -23,7 +23,6 @@ pub mod control;
 pub mod decisions;
 pub mod eval;
 pub mod gateway;
-pub mod harness;
 pub mod policy;
 pub mod protocol;
 pub mod routing;

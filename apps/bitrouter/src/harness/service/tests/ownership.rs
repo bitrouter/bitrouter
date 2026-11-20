@@ -15,7 +15,7 @@ use crate::harness::storage::MemoryExecutionStore;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::OwnerClaim;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn independent_services_share_one_owner_and_transfer_only_after_joined_shutdown()

@@ -12,11 +12,11 @@ use crate::managed_contract::harness::thread::ThreadHistoryPage;
 use crate::managed_contract::harness::thread::ThreadObservation;
 use crate::managed_contract::harness::thread::ThreadSnapshot;
 use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::SteeringReceipt;
 use crate::managed_contract::harness::turn::TurnReceipt;
 use crate::managed_contract::harness::turn::TurnSnapshot;
+use crate::managed_contract::harness::turn::TurnStatus;
 use anyhow::{Context, Result};
-use bitrouter_ai::harness::turn::SteeringReceipt;
-use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -306,7 +306,8 @@ impl ThreadClient {
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
             skills: config.skills.clone(),
-            read_only: config.tool_mode == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+            read_only: config.tool_mode
+                == crate::managed_contract::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
         };
@@ -550,7 +551,7 @@ mod tests {
             max_context_bytes: 512 * 1024,
             max_spend_microusd: None,
             estimate_rates: None,
-            tool_mode: bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+            tool_mode: crate::managed_contract::harness::agent::ToolMode::ReadOnly,
         }
     }
     use super::*;
@@ -733,7 +734,7 @@ mod tests {
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,
-                                    status: bitrouter_ai::harness::turn::TurnStatus::Accepted,
+                                    status: crate::managed_contract::harness::turn::TurnStatus::Accepted,
                                 },
                             },
                         )

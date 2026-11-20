@@ -84,7 +84,7 @@ impl Store {
         expected: u64,
         grant: &OwnershipGrant,
         workspace: &std::path::Path,
-        mode: bitrouter_ai::harness::agent::ToolMode,
+        mode: crate::managed_contract::harness::agent::ToolMode,
         previous: Option<&[u8]>,
         tool_free_config: bool,
     ) -> Result<u64, CoreError> {

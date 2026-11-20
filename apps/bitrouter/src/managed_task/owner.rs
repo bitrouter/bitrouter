@@ -12,12 +12,12 @@ use crate::gateway::caller::CallerContext;
 use crate::harness::resources::HarnessConfig;
 use crate::harness::resources::managed::session::{NativeApproval, NativeSession, StoredSession};
 use crate::harness::resources::managed::store::NativeStore;
+use crate::managed_contract::harness::agent::ToolMode;
 use crate::managed_contract::protocol::{
     CoreError, ErrorCode, OwnershipGrant, TaskInput, Verification,
 };
 use crate::managed_contract::skills::SkillConsentAnswer;
 use crate::storage::checkpoint::sha256;
-use bitrouter_ai::harness::agent::ToolMode;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;

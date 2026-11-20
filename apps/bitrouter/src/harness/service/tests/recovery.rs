@@ -24,10 +24,10 @@ use crate::managed_contract::harness::thread::PermissionProfile;
 use crate::managed_contract::harness::thread::RecoveryBlocker;
 use crate::managed_contract::harness::thread::ThreadObservation;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::SteeringStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 #[cfg(unix)]
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 fn recovery_request(
     view: &crate::managed_contract::harness::thread::ThreadView,

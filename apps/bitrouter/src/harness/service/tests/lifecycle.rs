@@ -10,11 +10,11 @@ use crate::harness::storage::ExecutionRecord;
 use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
 use crate::managed_contract::harness::item::CallOrigin;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 #[tokio::test]
 async fn approval_is_task_bound_and_one_use() -> Result<(), Box<dyn std::error::Error>> {

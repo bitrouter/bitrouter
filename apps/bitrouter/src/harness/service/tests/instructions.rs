@@ -14,7 +14,7 @@ use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::harness::thread::WorkspaceGrant;
 use crate::managed_contract::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 fn startup(prompt: &Prompt) -> Option<&str> {
     prompt
@@ -87,7 +87,7 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
                 .filter_map(|tool| match tool {
                     bitrouter_ai::types::Tool::Function { name, .. }
                         if crate::harness::tools::WorkspaceTools::allowed(
-                            bitrouter_ai::harness::agent::ToolMode::Coding,
+                            crate::managed_contract::harness::agent::ToolMode::Coding,
                             name,
                         ) =>
                     {

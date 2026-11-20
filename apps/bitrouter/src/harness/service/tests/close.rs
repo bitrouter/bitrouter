@@ -8,7 +8,7 @@ use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::harness::turn::CancelTurnRequest;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn close_cancels_active_approval_and_every_queued_input_atomically()

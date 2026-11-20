@@ -23,8 +23,8 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 pub mod instructions;
 pub mod managed;

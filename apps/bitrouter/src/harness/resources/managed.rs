@@ -16,13 +16,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::{DiscoveryOwner, HarnessConfig, HarnessResources, ResourceError, instructions};
 use crate::harness::tools::WorkspaceTools;
+use crate::managed_contract::harness::agent::ToolMode;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::protocol::{
     CoreError, ErrorCode, HarnessManifest, HarnessTool, Limits, MaterialRef, OwnershipGrant,
     SignalUpdate, ToolEffect, ToolExecute, ToolOutcome, ToolResult,
 };
 use crate::storage::checkpoint::sha256;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[cfg(feature = "core")]
 pub mod session;

@@ -1,11 +1,11 @@
 //! One accepted user input and its execution, approval and steering contracts.
 
+use crate::managed_contract::harness::turn::InputRequest;
 use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnEventPayload;
 use crate::managed_contract::harness::turn::TurnLifecycle;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::InputRequest;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 use serde::{Deserialize, Serialize};
 
@@ -160,12 +160,12 @@ pub struct SteeringRequest {
 
 /// Application-owned helpers for the public TurnLifecycle contract.
 pub(crate) trait TurnLifecycleExt: Sized {
-    fn payload(&self) -> bitrouter_ai::harness::turn::TurnEventPayload;
+    fn payload(&self) -> crate::managed_contract::harness::turn::TurnEventPayload;
 }
 
 impl TurnLifecycleExt for TurnLifecycle {
-    fn payload(&self) -> bitrouter_ai::harness::turn::TurnEventPayload {
-        use bitrouter_ai::harness::turn::TurnEventPayload as P;
+    fn payload(&self) -> crate::managed_contract::harness::turn::TurnEventPayload {
+        use crate::managed_contract::harness::turn::TurnEventPayload as P;
         match self {
             Self::Started => P::Started,
             Self::InputRequested {

@@ -32,6 +32,7 @@ use crate::harness::thread::ThreadTarget;
 use crate::managed_contract::harness::agent::RunStatus;
 use crate::managed_contract::harness::item::CallOrigin;
 use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::RuntimeLimits;
 use crate::managed_contract::harness::thread::RecoveredSteering;
@@ -42,12 +43,11 @@ use crate::managed_contract::harness::thread::RecoveryTurn;
 use crate::managed_contract::harness::thread::ThreadRecoveryRequest;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::SteeringStatus;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::SteeringStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationEvidence;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationEvidence;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 #[derive(Serialize)]
 struct RecoveredCall {

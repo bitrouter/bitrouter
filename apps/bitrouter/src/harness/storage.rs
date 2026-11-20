@@ -1,10 +1,10 @@
 //! Transactional facts used by execution and, later, checkpoint recovery.
 //! A successful commit must be durable for the backend's documented fault scope.
 
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ExecutionOwner;
 use crate::managed_contract::harness::runtime::OwnerClaim;
 use crate::managed_contract::harness::runtime::SettlementOutcome;
-use bitrouter_ai::harness::runtime::EffectStatus;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -16,8 +16,8 @@ use crate::managed_contract::harness::agent::AgentConfig;
 use crate::managed_contract::harness::item::CallRecord;
 use crate::managed_contract::harness::thread::ThreadEvent;
 use crate::managed_contract::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::turn::SteeringReceipt;
-use bitrouter_ai::harness::turn::VerificationEvidence;
+use crate::managed_contract::harness::turn::SteeringReceipt;
+use crate::managed_contract::harness::turn::VerificationEvidence;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcceptedKey {
@@ -178,7 +178,7 @@ pub enum ExecutionRecord {
     },
     VerificationResult {
         #[serde(default)]
-        status: Option<bitrouter_ai::harness::turn::VerificationStatus>,
+        status: Option<crate::managed_contract::harness::turn::VerificationStatus>,
         call: CallRecord,
         evidence: VerificationEvidence,
         effect: EffectStatus,

@@ -14,10 +14,10 @@ use crate::harness::thread::ThreadTarget;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnEventPayload;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 impl ThreadService {
     /// Cancel active work and every accepted unstarted input, retaining history.

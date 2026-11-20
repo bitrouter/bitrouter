@@ -2733,7 +2733,7 @@ async fn read_candidate_artifact(path: &Path) -> Result<bitrouter_ai::artifact::
 #[cfg(all(feature = "core", feature = "harness"))]
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::client::agent_local::{Operation, ReplyResult};
-    use bitrouter_ai::harness::turn::TurnStatus;
+    use bitrouter::managed_contract::harness::turn::TurnStatus;
 
     let skills = args.skills.constraints()?;
 

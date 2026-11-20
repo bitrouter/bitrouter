@@ -17,7 +17,7 @@ use bitrouter::harness::turn::TurnRequest;
 use bitrouter::managed_contract::harness::agent::AgentConfig;
 use bitrouter::managed_contract::harness::thread::PermissionProfile;
 use bitrouter::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::TurnStatus;
+use bitrouter::managed_contract::harness::turn::TurnStatus;
 use bitrouter_ai::types::{ApiProtocol, FinishReason, StreamPart, Usage};
 use rmcp::model::ProtocolVersion;
 use sea_orm::{ConnectionTrait, Statement};
