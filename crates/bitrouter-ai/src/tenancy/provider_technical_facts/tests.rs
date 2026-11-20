@@ -1,3 +1,5 @@
+#[path = "binding.rs"]
+mod binding;
 #[path = "operations.rs"]
 mod operations;
 #[path = "pipeline.rs"]
@@ -7,7 +9,7 @@ use super::*;
 use serde_json::{Value, json};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn sample() -> Value {
-    json!({"schema_version":3,"receipt_format":1,"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","execution_revision":"revision","operations":[],"pipeline_scope":null,"hop_observations":[{"profile":"core_json_hop_callbacks_v1","attempt_ids":["auth-a","auth-b"],"closing_attempt_id":"auth-b","duration_ms":77,"end":"failed","partial":false},{"profile":"core_stream_open_callbacks_v1","attempt_ids":["last"],"closing_attempt_id":"last","duration_ms":88,"end":"failed","partial":false}],"observer_hops":[{"profile":"core_json_hop_observer_floor_v1","attempt_ids":["auth-a","auth-b"],"closing_attempt_id":"auth-b","duration_ms":0,"end":"completed"},{"profile":"core_stream_open_hop_observer_floor_v1","attempt_ids":["last"],"closing_attempt_id":"last","duration_ms":1,"end":"failed"}]})
+    json!({"schema_version":3,"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","execution_revision":"revision","operations":[],"pipeline_scope":null,"hop_observations":[{"profile":"core_json_hop_callbacks_v1","attempt_ids":["auth-a","auth-b"],"closing_attempt_id":"auth-b","duration_ms":77,"end":"failed","partial":false},{"profile":"core_stream_open_callbacks_v1","attempt_ids":["last"],"closing_attempt_id":"last","duration_ms":88,"end":"failed","partial":false}],"observer_hops":[{"profile":"core_json_hop_observer_floor_v1","attempt_ids":["auth-a","auth-b"],"closing_attempt_id":"auth-b","duration_ms":0,"end":"completed"},{"profile":"core_stream_open_hop_observer_floor_v1","attempt_ids":["last"],"closing_attempt_id":"last","duration_ms":1,"end":"failed"}]})
 }
 #[test]
 fn guard_and_observer_group_overlap_preserves_independent_clocks() -> TestResult {

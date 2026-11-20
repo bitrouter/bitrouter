@@ -1371,6 +1371,14 @@ authentication recovery. Cross-check observed groups, ordinals and closing
 attempts against the retained receipt. Provider/model labels and correlation
 IDs do not establish timing identity.
 
+The document has no `receipt_format` discriminator. Bind it with
+`ProviderTechnicalFacts::validate_against(&ExecutionReceipt)`. The receipt's
+`dispatch` limits strict executions to eight actual attempts; ordered attempts
+must be a subsequence of the accepted selection, whose count cannot exceed
+`attempt_limit` (at most 64). The facts' standalone 64-arm transfer bound does
+not admit extra attempts: every referenced arm must occur in that validated
+receipt. Accepted candidates that were never armed supply no observations.
+
 #### Timing sources
 
 Provider operation time covers the original monotonic operation, including

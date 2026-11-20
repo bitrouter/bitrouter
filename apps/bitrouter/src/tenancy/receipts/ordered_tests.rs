@@ -709,7 +709,7 @@ async fn ordered_authority_bootstrap_converts_intents_before_service_publication
 }
 
 #[tokio::test]
-async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_receipt_changes()
+async fn provider_technical_facts_read_ordered_attempts_1_8_9_64_without_receipt_changes()
 -> Result<()> {
     use crate::tenancy::receipts::{
         provider_technical::{Capture, storage as technical},
@@ -721,7 +721,7 @@ async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_recei
         )
     };
     let dir = tempfile::tempdir()?;
-    let path = dir.path().join("technical-v2.sqlite");
+    let path = dir.path().join("technical-ordered.sqlite");
     let (lease, proof, startup) = acquisition(&path)?;
     let db = open(&path, &lease).await?;
     let checked: Result<()> = async {
@@ -754,7 +754,7 @@ async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_recei
             let capture = Arc::new(Capture::default());
             let operation = capture.begin(std::time::Instant::now(), false);
             let Terminal::V2(value) = &original else {
-                anyhow::bail!("V2 fixture")
+                anyhow::bail!("ordered storage fixture")
             };
             for attempt in &value.receipt.attempts {
                 operation.armed(&attempt.attempt_id);
@@ -762,9 +762,11 @@ async fn provider_facts_v1_object_reads_exact_v2_attempts_1_8_9_64_without_recei
             operation.finish(false);
             operation.selected();
             capture.freeze();
-            let facts = capture.take(&original).context("V2 technical snapshot")?;
-            ensure!(facts.receipt_format == 2 && facts.operations[0].attempt_ids.len() == count);
-            facts.validate_against_v2(&value.receipt)?;
+            let facts = capture
+                .take(&original)
+                .context("ordered technical snapshot")?;
+            ensure!(facts.operations[0].attempt_ids.len() == count);
+            facts.validate_against(&value.receipt)?;
             ensure!(technical::insert(&db, &original, &technical::Prepared::new(&facts)?).await?);
             let bytes = read::body(
                 &db,

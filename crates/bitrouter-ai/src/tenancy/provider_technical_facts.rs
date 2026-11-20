@@ -2,7 +2,6 @@
 //! Observations bind to an execution receipt and grant no execution authority.
 use super::{
     execution::ExecutionReceipt,
-    execution_v2::ExecutionReceiptV2,
     identity::{AttemptId, ExecutionId, InstallationId, PrincipalId, RevisionId, TenantId},
     validation::{Validate, ValidationError, bytes, nullable, require, unique},
 };
@@ -185,9 +184,6 @@ pub struct ProviderTechnicalFacts {
     /// Current technical observation format, exactly three.
     #[serde(deserialize_with = "super::number::integer")]
     pub schema_version: u8,
-    /// Owning receipt format, one or two.
-    #[serde(deserialize_with = "super::number::integer")]
-    pub receipt_format: u8,
     /// Original owning identity; a new timing object cannot create it.
     pub installation_id: InstallationId,
     /// Original owning tenant.
@@ -293,68 +289,31 @@ object_wire!(
     ProviderTechnicalFacts
 );
 impl ProviderTechnicalFacts {
-    /// Check original V1 identity and actual arm order; never recompute a receipt.
+    /// Bind to the original receipt identity, dispatch bounds and actual arm order.
+    /// The receipt validates strict or ordered admission before any observation
+    /// can refer to its actual attempts; accepted but unarmed candidates do not count.
     /// # Errors
-    /// Rejects foreign identity/revision/format/arms or invalid technical values.
+    /// Rejects invalid receipts, foreign identity/revision/arms or invalid technical values.
     pub fn validate_against(&self, r: &ExecutionReceipt) -> Result<(), ValidationError> {
         r.validate()?;
-        self.against(
-            1,
-            (
-                &r.installation_id,
-                &r.tenant_id,
-                &r.principal_id,
-                &r.execution_id,
-                &r.execution_revision,
-            ),
-            r.attempts.iter().map(|a| &a.attempt_id),
-        )?;
-        Ok(())
-    }
-    /// Check the unchanged V2 receipt and original ordered actual arms.
-    /// # Errors
-    /// Rejects foreign identity/revision/format/arms or invalid technical values.
-    pub fn validate_against_v2(&self, r: &ExecutionReceiptV2) -> Result<(), ValidationError> {
-        r.validate()?;
-        self.against(
-            2,
-            (
-                &r.installation_id,
-                &r.tenant_id,
-                &r.principal_id,
-                &r.execution_id,
-                &r.execution_revision,
-            ),
-            r.attempts.iter().map(|a| &a.attempt_id),
-        )?;
-        Ok(())
-    }
-    fn against<'a>(
-        &self,
-        format: u8,
-        identity: (
-            &InstallationId,
-            &TenantId,
-            &PrincipalId,
-            &ExecutionId,
-            &RevisionId,
-        ),
-        arms: impl Iterator<Item = &'a AttemptId>,
-    ) -> Result<(), ValidationError> {
         self.validate()?;
         require(
-            self.receipt_format == format
-                && identity
-                    == (
-                        &self.installation_id,
-                        &self.tenant_id,
-                        &self.principal_id,
-                        &self.execution_id,
-                        &self.execution_revision,
-                    ),
+            (
+                &r.installation_id,
+                &r.tenant_id,
+                &r.principal_id,
+                &r.execution_id,
+                &r.execution_revision,
+            ) == (
+                &self.installation_id,
+                &self.tenant_id,
+                &self.principal_id,
+                &self.execution_id,
+                &self.execution_revision,
+            ),
             "technical scope original identity",
         )?;
-        let arms: Vec<_> = arms.collect();
+        let arms: Vec<_> = r.attempts.iter().map(|a| &a.attempt_id).collect();
         let index = |id: &AttemptId| {
             arms.iter()
                 .position(|a| *a == id)
@@ -406,15 +365,10 @@ impl ProviderTechnicalFacts {
 
 impl Validate for ProviderTechnicalFacts {
     fn validate(&self) -> Result<(), ValidationError> {
-        require(
-            self.schema_version == 3 && matches!(self.receipt_format, 1 | 2),
-            "technical scope schema/receipt",
-        )?;
-        let bound = if self.receipt_format == 1 {
-            8
-        } else {
-            MAX_OPERATIONS
-        };
+        require(self.schema_version == 3, "technical scope schema")?;
+        // This is the transfer bound. validate_against additionally restricts
+        // every category to the validated receipt's actual strict/ordered arms.
+        let bound = MAX_OPERATIONS;
         require(
             self.operations.len() <= bound && self.hop_observations.len() <= bound,
             "technical scope count",
