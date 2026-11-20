@@ -59,7 +59,7 @@ fn text_tokens_json_and_sse_keep_original_quantities_without_double_counting() -
         }
         ensure!(
             ExecutionUsageEvidence::extractor_version_for(
-                bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
+                &bitrouter_ai::tenancy::execution::Dispatch::Strict,
                 &[frame],
             ) == 1
         );
