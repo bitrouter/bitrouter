@@ -278,16 +278,17 @@ pub struct ResourceCapabilities {
 
 impl Validate for Definition {
     fn validate(&self) -> Result<(), ValidationError> {
+        if let Self::Route { routing, .. } | Self::ProfiledRoute { routing, .. } = self {
+            super::validation::json_depth(routing, 3, "routing JSON depth")?;
+        }
         bytes(self, 1024 * 1024)?;
         if let Self::ProfiledRoute {
-            routing,
             selector,
             policy,
             attachments,
             ..
         } = self
         {
-            super::validation::json_depth(routing, 3, "routing JSON depth")?;
             require(selector.len() <= 512, "selector byte bound")?;
             require(policy.is_none(), "profiled static route policy")?;
             require(

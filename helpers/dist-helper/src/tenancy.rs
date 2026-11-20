@@ -95,13 +95,16 @@ fn validate_profile(profile: &Value, schema: &Value) -> Result<()> {
             "unreachable {instance} capacity"
         );
     }
+    let strict = array(&schema["$defs"]["ExecutionReceipt"]["allOf"])?
+        .iter()
+        .find(|rule| {
+            rule["if"]["properties"]["dispatch"]["properties"]["mode"]["const"] == "strict"
+        })
+        .context("strict dispatch schema")?;
     ensure!(
         number(profile, "max_attempts")?
-            == number(
-                &schema["$defs"]["ExecutionReceipt"]["properties"]["attempts"],
-                "maxItems"
-            )?,
-        "attempt bound differs from schema"
+            == number(&strict["then"]["properties"]["attempts"], "maxItems")?,
+        "strict attempt bound differs from schema"
     );
     ensure!(
         number(profile, "max_references")?
