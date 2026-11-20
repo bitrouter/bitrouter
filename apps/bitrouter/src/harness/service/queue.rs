@@ -20,10 +20,10 @@ use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::ThreadSnapshot;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnEventPayload;
 use crate::managed_contract::harness::turn::TurnReceipt;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 impl ThreadService {
     pub async fn cancel_queued_turn(

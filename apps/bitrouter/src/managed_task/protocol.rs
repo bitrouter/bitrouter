@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::managed_contract::checkpoint::DurableHead;
+use crate::managed_contract::harness::agent::ToolMode;
 use crate::managed_contract::protocol::{CoreError, OperationReceipt, OwnershipGrant};
 use crate::managed_contract::skills::{SkillConsentAnswer, SkillConsentRequest};
 use crate::storage::checkpoint::snapshot::RootRun;
-use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 

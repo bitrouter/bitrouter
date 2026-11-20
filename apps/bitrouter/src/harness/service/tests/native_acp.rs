@@ -14,7 +14,7 @@ use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionSt
 use crate::managed_contract::harness::agent::AgentConfig;
 use crate::managed_contract::harness::thread::PermissionProfile;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 struct Peer {
     write: WriteHalf<DuplexStream>,

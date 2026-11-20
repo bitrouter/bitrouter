@@ -777,9 +777,6 @@ jobs:
               'pub enum bitrouter_ai::stream::ProtocolEnd'
               'pub struct bitrouter_ai::stream::ServerEvent<T>'
               'pub const bitrouter_ai::control::SPEC_VERSION'
-              'pub enum bitrouter_ai::harness::agent::ToolMode'
-              'pub enum bitrouter_ai::harness::runtime::EffectStatus'
-              'pub enum bitrouter_ai::harness::turn::TurnEventPayload'
               'pub struct bitrouter_ai::tenancy::resources::ResourcePut'
               'pub struct bitrouter_ai::tenancy::admission::AdmissionProfile'
               'pub enum bitrouter_ai::tenancy::admission::AdmissionMode'
@@ -808,7 +805,7 @@ jobs:
               'pub struct bitrouter_ai::eval::EvalSubject'
               'pub struct bitrouter_ai::eval::AdmissionOutcome'
             )
-            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core)::|harness::(api|inspection|item|resources|skills|thread)::|harness::agent::(AgentConfig|EstimateRates|ModelMode|RunStatus)|harness::runtime::(RuntimeCapabilities|RuntimeLimits|StartupDiscovery|ErrorCode|ExecutionOwner|OwnerClaim|SettlementOutcome)|harness::turn::(TurnEvent[ :]|TurnSnapshot|TurnReceipt|TurnLifecycle)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core|harness)(::|[ {]|$)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
           else
             sentinels=(
               'pub struct bitrouter_sdk::gateway::GatewayClient'

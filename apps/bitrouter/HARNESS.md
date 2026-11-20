@@ -52,8 +52,7 @@ no observer holds them; this does not resolve their stored recovery blockers.
 
 | Module | Responsibility |
 | --- | --- |
-| AI `harness::{agent,runtime,turn}` | Tool permissions, effect status and turn events shared with BRO |
-| App `managed_contract::harness` | Agent configuration, thread/turn observations, call identity, ownership, materials, skills and context inspection |
+| App `managed_contract::harness` | Tool permissions, effect status, turn events, agent configuration, thread/turn observations, call identity, ownership, materials, skills and context inspection |
 | `thread.rs` | App-local targets, authenticated requests, close and explicit recovery commands |
 | `turn.rs` and `service/observation.rs` | App-owned event projection and lifecycle helpers on public data; local runtime requests |
 | `item.rs` | Internal bounds for volatile output and status detail |

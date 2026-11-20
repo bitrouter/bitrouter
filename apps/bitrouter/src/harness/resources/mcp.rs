@@ -18,7 +18,7 @@ use super::ResourceError;
 use super::sha256;
 use crate::managed_contract::harness::resources::MaterialRef;
 use crate::managed_contract::harness::resources::McpTool;
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 

@@ -20,11 +20,11 @@ use crate::harness::turn::TurnRequest;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::ThreadSnapshot;
 use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
 use crate::managed_contract::harness::turn::TurnReceipt;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
-use bitrouter_ai::harness::turn::VerificationStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::VerificationStatus;
 
 pub(super) fn fingerprint<T: Serialize>(value: &T) -> Result<String, ServiceError> {
     let encoded = serde_json::to_vec(value).map_err(|error| error.to_string())?;

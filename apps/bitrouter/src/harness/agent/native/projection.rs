@@ -6,8 +6,8 @@ use crate::harness::agent::RunEvent;
 use crate::harness::storage::ExecutionRecord;
 use crate::managed_contract::harness::item::CallOrigin;
 use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 #[derive(Default)]
 pub(super) struct Projection {

@@ -15,15 +15,15 @@ use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::turn::ApprovalAnswer;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::RuntimeLimits;
 use crate::managed_contract::harness::thread::ThreadChange;
 use crate::managed_contract::harness::thread::ThreadObservation;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::thread::ThreadView;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 fn snapshot(observation: ThreadObservation) -> Result<ThreadView, String> {
     match observation {

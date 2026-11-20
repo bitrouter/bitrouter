@@ -16,8 +16,8 @@ use crate::harness::resources::{
     HarnessConfig,
     managed::session::{NativeApproval, NativeSession},
 };
+use crate::managed_contract::harness::agent::ToolMode;
 use crate::managed_contract::protocol::{CoreError, TaskInput, ToolExecute};
-use bitrouter_ai::harness::agent::ToolMode;
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 

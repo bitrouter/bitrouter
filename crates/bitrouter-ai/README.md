@@ -7,7 +7,6 @@ types from their defining modules:
 use bitrouter_ai::types::{Prompt, ReasoningEffort, ToolResultOutput};
 use bitrouter_ai::protocol::chat_completions::ChatRequest;
 use bitrouter_ai::control::{CapabilitiesReport, StateReport};
-use bitrouter_ai::harness::{runtime::EffectStatus, turn::TurnStatus};
 use bitrouter_ai::gateway::operator::{Mutation, OperationLookup, Receipt};
 ```
 
@@ -20,9 +19,7 @@ work under a different account.
 The `control` reports carry routing and artifact identities consumed by typed
 clients. `policy` source is carried by control, shared publication and tenant
 resource APIs; the service owns compilation and authorization. `eval` defines
-independently retained subjects, results and frozen snapshots. `harness` carries
-tool permissions, effect outcomes and turn events shared by the application and BRO. It does not expose
-a managed-core or harness HTTP client.
+independently retained subjects, results and frozen snapshots.
 
 `gateway::operator` defines explicit shared-gateway administrative inputs,
 capabilities, metadata and operation receipts. The service validates authority,
@@ -35,7 +32,8 @@ JSON decoding preserves finite pricing values and object insertion order
 independently of application feature unification. Nested tool schemas can form
 part of a retained manifest digest; a decode/encode must preserve those members.
 
-Application-only harness snapshots and skill records live in `bitrouter::managed_contract::harness`;
+Harness contracts, including tool permissions, effect outcomes, turn events,
+snapshots and skill records, live in `bitrouter::managed_contract::harness`;
 MCP skill wire values live in `bitrouter::skills::wire`.
 Request-check callbacks and registration, lifecycle events, observation schema,
 bounded response encoding and Axum adapters belong to `bitrouter::gateway`.

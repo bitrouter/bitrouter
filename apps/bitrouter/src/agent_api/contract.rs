@@ -11,9 +11,9 @@ use crate::managed_contract::harness::runtime::RuntimeCapabilities;
 use crate::managed_contract::harness::thread::ThreadHistoryPage;
 use crate::managed_contract::harness::thread::ThreadSnapshot;
 use crate::managed_contract::harness::thread::ThreadView;
+use crate::managed_contract::harness::turn::SteeringReceipt;
 use crate::managed_contract::harness::turn::TurnReceipt;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::turn::SteeringReceipt;
 use bitrouter_ai::types::ReasoningEffort;
 
 pub const PROTOCOL_VERSION: u32 = 2;

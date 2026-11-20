@@ -17,7 +17,7 @@ use crate::harness::storage::ExecutionRecord;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::ExecutionOwner;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 const MARKER_BYTES: u64 = 64 * 1024;
 

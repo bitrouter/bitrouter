@@ -11,7 +11,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `crates/bitrouter-ai`            | crate   | Shared model/protocol, artifact, control, Policy, Eval, tenancy and harness data; optional schema derives; no service runtime or transport |
+| `crates/bitrouter-ai`            | crate   | Shared model/protocol, artifact, control, Policy, Eval and tenancy data; optional schema derives; no service runtime or transport |
 | `crates/bitrouter-sdk` | crate | Gateway HTTP/SSE, control, evaluation, operator and tenancy clients using AI wire contracts |
 | `extensions/regex-checker/matcher` | extension library | Compiled regex rules and configuration; request-check callback and hook adapters live in the application |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns core scheduling, harness execution/storage, CLI orchestration, optional OTLP and management commands |
@@ -161,10 +161,9 @@ Harness-only checks use `--no-default-features --features harness`; the live
 scheduler and terminal dependencies remain absent. The complete final feature
 matrix, packaged artifacts and profile transitions remain separate P0 gates.
 
-Shared `bitrouter_ai::harness` data is limited to tool permissions, effect
-outcomes and turn events consumed by both the application and BRO. Thread
-observations, agent configuration, resources, skill inventories and recovery
-records live in `bitrouter::managed_contract::harness`. The application owns
+Harness contracts, including tool permissions, effect outcomes, turn events,
+thread observations, agent configuration, resources, skill inventories and
+recovery records, live in `bitrouter::managed_contract::harness`. The application owns
 execution, storage and local IPC. The SDK exposes no harness or managed-core
 client; application transports retain their instance and recovery checks.
 

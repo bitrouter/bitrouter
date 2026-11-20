@@ -4,9 +4,9 @@ use super::{Active, RecoveredCall, Step};
 use crate::harness::storage::ExecutionRecord;
 use crate::managed_contract::harness::item::CallOrigin;
 use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::protocol::ToolOutcome;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 pub(super) fn is_projection(fact: &ExecutionRecord, calls: &[RecoveredCall]) -> bool {
     match fact {

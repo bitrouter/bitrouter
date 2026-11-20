@@ -5,7 +5,7 @@ use std::fs;
 use bitrouter_ai::types::ToolResultOutput;
 
 use super::{MAX_FILE_BYTES, WorkspaceTools, WriteArgs, persist_text};
-use bitrouter_ai::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::runtime::EffectStatus;
 
 impl WorkspaceTools {
     pub(super) fn write(

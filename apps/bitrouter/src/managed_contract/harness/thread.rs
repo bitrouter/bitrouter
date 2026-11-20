@@ -2,12 +2,12 @@
 
 use crate::managed_contract::harness::agent::AgentConfig;
 use crate::managed_contract::harness::item::CallRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
+use crate::managed_contract::harness::turn::SteeringReceipt;
 use crate::managed_contract::harness::turn::TurnEvent;
 use crate::managed_contract::harness::turn::TurnLifecycle;
 use crate::managed_contract::harness::turn::TurnReceipt;
 use crate::managed_contract::harness::turn::TurnSnapshot;
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::SteeringReceipt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -89,8 +89,8 @@ pub struct RecoveryTurn {
     pub outcome: Option<crate::managed_contract::harness::runtime::SettlementOutcome>,
     #[serde(default)]
     pub confirmed_verification: Option<(
-        bitrouter_ai::harness::turn::VerificationStatus,
-        bitrouter_ai::harness::turn::VerificationEvidence,
+        crate::managed_contract::harness::turn::VerificationStatus,
+        crate::managed_contract::harness::turn::VerificationEvidence,
     )>,
 }
 
@@ -195,7 +195,7 @@ pub enum ThreadChange {
     VerificationResult {
         turn_id: String,
         call: CallRecord,
-        evidence: bitrouter_ai::harness::turn::VerificationEvidence,
+        evidence: crate::managed_contract::harness::turn::VerificationEvidence,
         effect: EffectStatus,
         active_duration_ms: u64,
         tool_calls: u32,

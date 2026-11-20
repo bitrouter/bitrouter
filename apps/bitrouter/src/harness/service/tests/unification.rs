@@ -13,7 +13,7 @@ use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::RuntimeLimits;
 use crate::managed_contract::harness::thread::PermissionProfile;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 async fn joined(service: &ThreadService, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::timeout(Duration::from_secs(3), async {

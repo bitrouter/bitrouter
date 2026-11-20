@@ -18,8 +18,8 @@ use crate::harness::storage::ExecutionRecord;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::ThreadStatus;
 use crate::managed_contract::harness::turn::TurnEvent;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 pub(super) fn lifecycle_fact(event: &TurnEvent) -> Option<ExecutionRecord> {
     use crate::managed_contract::harness::turn::TurnLifecycle as L;
@@ -140,7 +140,8 @@ impl ThreadService {
             }
             if let Some(task) = state.turns.get(turn_id)
                 && task.steering.iter().all(|entry| {
-                    entry.receipt.status != bitrouter_ai::harness::turn::SteeringStatus::Received
+                    entry.receipt.status
+                        != crate::managed_contract::harness::turn::SteeringStatus::Received
                 })
             {
                 task.fence.set(false);
@@ -237,10 +238,12 @@ impl ThreadService {
             }
             if let TurnEventPayload::Finished { detail, .. } = &payload {
                 for entry in &record.steering {
-                    if entry.receipt.status == bitrouter_ai::harness::turn::SteeringStatus::Received
+                    if entry.receipt.status
+                        == crate::managed_contract::harness::turn::SteeringStatus::Received
                     {
                         let mut receipt = entry.receipt.clone();
-                        receipt.status = bitrouter_ai::harness::turn::SteeringStatus::NotApplied;
+                        receipt.status =
+                            crate::managed_contract::harness::turn::SteeringStatus::NotApplied;
                         receipt.reason = Some(detail.clone());
                         payloads.push(TurnEventPayload::SteeringUpdated {
                             receipt,

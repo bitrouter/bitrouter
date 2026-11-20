@@ -7,10 +7,10 @@ use super::ServiceError;
 use super::ThreadService;
 use super::unknown_turn;
 use crate::harness::storage::ExecutionRecord;
+use crate::managed_contract::harness::runtime::EffectStatus;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::runtime::ExecutionOwner;
 use crate::managed_contract::harness::runtime::OwnerClaim;
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation

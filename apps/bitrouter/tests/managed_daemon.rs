@@ -564,7 +564,7 @@ async fn original_embedded_journal_continues_in_daemon_without_identity_migratio
         bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+        bitrouter::managed_contract::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;
@@ -669,7 +669,7 @@ async fn durable_input_ack_uncertainty_remains_blocked_without_replay_or_forced_
         bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+        bitrouter::managed_contract::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;

@@ -19,12 +19,12 @@ use crate::core::session::HarnessPort;
 use crate::managed_contract::checkpoint::{
     CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence,
 };
+use crate::managed_contract::harness::agent::ToolMode;
 use crate::managed_contract::protocol::{
     ArtifactRef, CoreError, ErrorCode, HarnessManifest, Limits, OwnershipGrant, ServerMessage,
     ToolExecute, ToolResult,
 };
 use crate::storage::checkpoint::sha256;
-use bitrouter_ai::harness::agent::ToolMode;
 
 #[cfg(test)]
 mod timing;

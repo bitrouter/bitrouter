@@ -12,7 +12,7 @@ use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionSt
 use crate::managed_contract::harness::agent::AgentConfig;
 use crate::managed_contract::harness::runtime::ErrorCode;
 use crate::managed_contract::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 #[tokio::test]
 async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context()

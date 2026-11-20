@@ -9,8 +9,8 @@ use bitrouter::config::skills::McpSkillSourceGrant;
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::harness::resources::HarnessConfig;
 use bitrouter::harness::resources::managed::NativeResources;
+use bitrouter::managed_contract::harness::agent::ToolMode;
 use bitrouter::skills::mcp::SkillRead;
-use bitrouter_ai::harness::agent::ToolMode;
 use rmcp::model::ProtocolVersion;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -194,7 +194,7 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
     use bitrouter::harness::turn::{ApprovalAnswer, TurnRequest};
     use bitrouter::managed_contract::harness::agent::AgentConfig;
     use bitrouter::managed_contract::harness::thread::PermissionProfile;
-    use bitrouter_ai::harness::turn::TurnStatus;
+    use bitrouter::managed_contract::harness::turn::TurnStatus;
     use bitrouter_ai::types::{ApiProtocol, Role};
     use std::sync::Arc;
     use std::time::Duration;

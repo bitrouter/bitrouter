@@ -79,7 +79,7 @@ fn event(seq: u64, text: &str) -> ExecutionRecord {
                     thread_id: "thread".into(),
                     turn_id: format!("turn-{seq}"),
                     queue_order: seq,
-                    status: bitrouter_ai::harness::turn::TurnStatus::Queued,
+                    status: crate::managed_contract::harness::turn::TurnStatus::Queued,
                 },
                 user_item_id: format!("user-{seq}"),
                 prompt: text.into(),

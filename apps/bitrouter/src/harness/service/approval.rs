@@ -7,8 +7,8 @@ use super::unknown_turn;
 use crate::harness::agent::ApprovalRequest;
 use crate::harness::storage::ExecutionRecord;
 use crate::managed_contract::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnStatus;
+use crate::managed_contract::harness::turn::TurnEventPayload;
+use crate::managed_contract::harness::turn::TurnStatus;
 
 impl ThreadService {
     pub(super) async fn answer_input_serialized(
