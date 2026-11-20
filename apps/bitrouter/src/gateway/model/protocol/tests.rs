@@ -2079,6 +2079,7 @@ fn responses_outbound_merges_text_siblings() -> crate::gateway::model::error::Re
     // the synthesised `format`.
     let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut prompt = sample_prompt_with_schema();
+    prompt.params.extra_protocol = Some(ApiProtocol::Responses);
     prompt
         .params
         .extra
