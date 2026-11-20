@@ -1,8 +1,8 @@
 use super::*;
+use bitrouter::managed_contract::harness::inspection::AgentStatus;
 use bitrouter::managed_contract::protocol::ProviderAttemptEvidence;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::CostWorkState;
-use bitrouter_ai::harness::inspection::AgentStatus;
 
 pub(super) struct FaultPort {
     harness: Arc<Harness>,

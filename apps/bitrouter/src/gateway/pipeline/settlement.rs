@@ -14,10 +14,10 @@ use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::protocol::responses::CausalPrefixCommitment;
 use crate::gateway::observability::event::EventBus;
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::timing::FirstTokenKind;
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::gateway::providers::auth::ContinuationAuthority;
-use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{
     ApiProtocol, FinishReason, ModelOperation, ReasoningEffort, UsageOrigin,
 };

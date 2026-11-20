@@ -1,9 +1,8 @@
-//! Lightweight public contracts shared by BitRouter clients and extensions.
+//! Lightweight public contracts shared by BitRouter, BRO and the HTTP SDK.
 //!
-//! Model/protocol data, capability definitions and observation vocabulary live
-//! here. Optional Axum bindings adapt public payloads to HTTP without owning a
-//! listener. Service execution, conversion and authentication remain with the
-//! application. This crate initializes no runtime and makes no network calls.
+//! Public DTOs and intrinsic validation live here. Request execution, extension
+//! callbacks, HTTP adapters and telemetry belong to the application. This crate
+//! initializes no runtime and makes no network calls.
 
 #![forbid(unsafe_code)]
 
@@ -20,21 +19,14 @@ macro_rules! redacted_contract_debug {
 }
 
 pub mod artifact;
-#[cfg(feature = "axum")]
-pub mod axum;
 pub mod control;
 pub mod decisions;
-pub mod error;
 pub mod eval;
-pub mod event;
-pub mod extension;
 pub mod gateway;
 pub mod harness;
-pub mod observe;
 pub mod policy;
 pub mod protocol;
 pub mod routing;
 pub mod stream;
 pub mod tenancy;
 pub mod types;
-pub mod wire;

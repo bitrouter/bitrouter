@@ -15,6 +15,7 @@ use bitrouter::config::routing_table::ConfigRoutingTable;
 use bitrouter::gateway::assembly::App;
 use bitrouter::gateway::caller::CallerContext;
 use bitrouter::gateway::error::{BitrouterError, Result};
+use bitrouter::gateway::extensions::request_check::{ContentFragmentKind, Decision, Input};
 use bitrouter::gateway::http::{AppState, build_router};
 use bitrouter::gateway::model::protocol::decisions::DecisionsCodec;
 use bitrouter::gateway::pipeline::builder::PipelineBuilder;
@@ -28,7 +29,6 @@ use bitrouter::gateway::pipeline::request_checks::{
 use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
 use bitrouter::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
 use bitrouter_ai::decisions::DecisionRequest;
-use bitrouter_ai::extension::request_check::{ContentFragmentKind, Decision, Input};
 use bitrouter_ai::types::{ApiProtocol, ModelOperation, OperationScope, UsageOrigin};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, oneshot};

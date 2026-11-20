@@ -9,10 +9,10 @@ use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionStore, MemoryExecutionStore};
 use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::thread::WorkspaceGrant;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::runtime::RuntimeLimits;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 async fn joined(service: &ThreadService, id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -99,7 +99,7 @@ async fn sixty_four_settled_threads_reclaim_slots_preserve_keys_and_reload_witho
             .iter()
             .any(|event| event.changes.iter().any(|change| matches!(
                 change,
-                bitrouter_ai::harness::thread::ThreadChange::AssistantResponse { .. }
+                crate::managed_contract::harness::thread::ThreadChange::AssistantResponse { .. }
             )))
     );
     let loaded = service.load_thread(&target(&thread), &caller).await?;

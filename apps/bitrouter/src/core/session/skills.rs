@@ -2,10 +2,10 @@
 //! original checkpoint. Only explicitly included sources are selected.
 
 use super::*;
+use crate::managed_contract::harness::skills::SkillSelector;
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
 use crate::storage::skills::state::*;
 use crate::storage::skills::{SkillCandidate, SkillSelection, SkillSource};
-use bitrouter_ai::harness::skills::SkillSelector;
 
 impl CoreSession {
     pub(super) async fn prepare_skills(&self, agent_id: &str) -> Result<bool, CoreError> {
@@ -106,7 +106,7 @@ impl CoreSession {
                         Ok(held) => catalog.mcp.skills.push(held),
                         Err(error) if skill_resource_failure(&error) => {
                             catalog.mcp.excluded.push(
-                                bitrouter_ai::harness::skills::McpSkillProblem {
+                                crate::managed_contract::harness::skills::McpSkillProblem {
                                     server: server.clone(),
                                     uri: Some(uri.clone()),
                                     reason: crate::core::context_router::planner::truncate(

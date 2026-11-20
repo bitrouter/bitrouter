@@ -779,7 +779,7 @@ mod tests {
             bitrouter_ai::types::Capability::Tools,
         ];
         registry_provider.models[0].reasoning_effort =
-            Some(bitrouter_ai::types::ReasoningEffortConfig {
+            Some(crate::gateway::model::capabilities::ReasoningEffortConfig {
                 levels: vec![
                     bitrouter_ai::types::ReasoningEffort::Low,
                     bitrouter_ai::types::ReasoningEffort::High,

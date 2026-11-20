@@ -1,15 +1,15 @@
 //! Actual private ingress, explicit resource-v3 publication and paired mixed sends.
 //! Loopback peers implement the operator contract; this is not a provider-cloud test.
 use super::*;
+use crate::managed_contract::private_adapter::{
+    ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
+    Outcome as AdapterOutcome,
+};
 use axum::{body::Body as HttpBody, extract::Request, http::Version};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::tenancy::{
     generate_content::{MIME, OrderedGenerateContentRequestV1},
     generation_defaults::GenerationDefaultsEnvelope,
-    private_adapter::{
-        ATTEMPT_DOMAIN, ATTEMPT_HEADER, Attempt, Disposition, OUTCOME_DOMAIN, OUTCOME_HEADER,
-        Outcome as AdapterOutcome,
-    },
     resources::ResourcePut,
     usage_evidence::{Protocol, Source},
 };

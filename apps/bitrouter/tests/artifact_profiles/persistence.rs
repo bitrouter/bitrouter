@@ -14,7 +14,7 @@ use bitrouter::harness::{
     storage::{AcceptedKey, ExecutionRecord, ExecutionStore, RUNTIME_FORMAT_VERSION},
 };
 #[cfg(feature = "harness")]
-use bitrouter_ai::harness::{
+use bitrouter::managed_contract::harness::{
     agent::AgentConfig,
     runtime::{ErrorCode, OwnerClaim},
     thread::{PermissionProfile, ThreadChange, ThreadEvent, ThreadSnapshot, ThreadStatus},

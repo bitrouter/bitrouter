@@ -17,12 +17,12 @@ use crate::harness::agent::Agent;
 use crate::harness::storage::{AcceptedKey, ExecutionRecord};
 use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::TurnRequest;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnReceipt;
+use crate::managed_contract::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnEventPayload;
-use bitrouter_ai::harness::turn::TurnReceipt;
-use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::harness::turn::VerificationStatus;
 
@@ -227,8 +227,10 @@ impl ThreadService {
             }
             ExecutionRecord::TurnRecord { turn_id: id, fact } if &id == turn_id => {
                 if let ExecutionRecord::TurnLifecycle { lifecycle, .. } = *fact
-                    && let bitrouter_ai::harness::turn::TurnLifecycle::Finished { status, .. } =
-                        lifecycle
+                    && let crate::managed_contract::harness::turn::TurnLifecycle::Finished {
+                        status,
+                        ..
+                    } = lifecycle
                     && let Some(receipt) = &mut receipt
                 {
                     receipt.status = status;

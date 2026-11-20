@@ -84,8 +84,7 @@ pub enum RegistryKind {
 
 /// How a caller obtains access to a provider — the registration / credential
 /// *obtainment* model (orthogonal to [`RegistryAuthKind`], which is the wire
-/// placement). Mirrors the registry `access` field; replaces the old `byok`
-/// boolean (now derived: `byok` iff [`RegistryAccess::ApiKey`]).
+/// placement). Mirrors the registry `access` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryAccess {
@@ -302,7 +301,7 @@ pub struct RegistryModel {
     pub capabilities: Vec<Capability>,
     /// Positively verified qualitative effort levels for this exact route.
     #[serde(default)]
-    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
     /// Provider/model request-shape compatibility settings.
     #[serde(default)]
     pub compatibility: ModelCompatibility,

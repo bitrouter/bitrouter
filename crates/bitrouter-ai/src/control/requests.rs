@@ -71,7 +71,7 @@ pub struct RequestView {
     /// a request whose pricing evidence was incomplete also stores `0`.
     pub charge_micro_usd: i64,
     /// How `charge_micro_usd` was arrived at — `computed`, `not_charged`,
-    /// `unknown`, or `legacy_unknown`. Only the first two are evidence.
+    /// or `unknown`. Only the first two are evidence.
     pub charge_status: String,
     /// End-to-end latency in milliseconds.
     pub latency_ms: i64,

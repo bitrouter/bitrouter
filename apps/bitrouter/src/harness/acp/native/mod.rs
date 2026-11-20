@@ -26,9 +26,9 @@ use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::ApprovalAnswer;
 use crate::harness::turn::CancelTurnRequest;
 use crate::harness::turn::TurnRequest;
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::thread::PermissionProfile;
-use bitrouter_ai::harness::thread::ThreadObservation;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::ThreadObservation;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 mod flow;
@@ -797,7 +797,7 @@ impl NativeAcpServer {
         connection: &Connection,
         cx: &ConnectionTo<Client>,
         attachment: &Arc<Attachment>,
-        turn: &bitrouter_ai::harness::turn::TurnSnapshot,
+        turn: &crate::managed_contract::harness::turn::TurnSnapshot,
         delivery: CancellationToken,
     ) {
         let owned = self

@@ -674,7 +674,7 @@ impl InboundAdapter for GenerateContentAdapter {
     }
 
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
-        bitrouter_ai::wire::json(&body, 16 * 1024 * 1024).map_err(|_| {
+        crate::gateway::wire::json(&body, 16 * 1024 * 1024).map_err(|_| {
             ModelError::invalid_request("GenerateContent request exceeds codec bound")
         })?;
         let mut req: GenerateContentRequest = serde_json::from_value(body)
@@ -1153,7 +1153,7 @@ impl OutboundAdapter for GenerateContentAdapter {
     }
 
     fn parse_response(&self, body: Value) -> Result<GenerateResult> {
-        bitrouter_ai::wire::json(&body, 16 * 1024 * 1024)
+        crate::gateway::wire::json(&body, 16 * 1024 * 1024)
             .map_err(|_| invalid_response("GenerateContent response exceeds codec bound"))?;
         let failure = |message| invalid_with_usage(&body, message);
         if !body.is_object()

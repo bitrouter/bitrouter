@@ -1,6 +1,6 @@
 //! Public harness resources contracts. Execution and storage remain application-owned.
 
-use crate::harness::runtime::EffectStatus;
+use bitrouter_ai::harness::runtime::EffectStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

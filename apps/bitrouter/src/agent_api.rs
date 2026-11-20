@@ -14,6 +14,7 @@ use crate::harness::thread::ThreadHistoryRequest;
 use crate::harness::thread::ThreadRequest;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest};
+use crate::managed_contract::harness::agent::AgentConfig;
 use anyhow::{Result, ensure};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -21,11 +22,10 @@ use axum::response::sse::Event;
 use axum::response::{IntoResponse, Sse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bitrouter_ai::harness::agent::AgentConfig;
 mod contract;
 
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::PermissionProfile;
 use contract::{
     CancelMode, CancelRequest, CapabilitiesResponse, CreateThreadRequest, ErrorResponse,
     HistoryQuery, HistoryResponse, InputRequest, ObservationError, ObserveQuery, PROTOCOL_VERSION,

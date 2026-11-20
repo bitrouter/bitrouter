@@ -7,8 +7,9 @@ use clap::Subcommand;
 
 use super::directory;
 use crate::commands;
-use bitrouter_ai::harness::skills::LocalScope;
-use bitrouter_ai::harness::skills::{SkillConstraints, SkillSelector};
+use crate::managed_contract::harness::skills::LocalScope;
+use crate::managed_contract::harness::skills::SkillConstraints;
+use crate::managed_contract::harness::skills::SkillSelector;
 
 #[derive(Debug, Default, clap::Args)]
 pub struct ConstraintArgs {

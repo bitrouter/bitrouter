@@ -2854,7 +2854,7 @@ impl DeferredToolTail {
             .map_err(|_| invalid_tool_stream("cannot measure Messages tool stream"))?
             .len();
         self.bytes = self.bytes.saturating_add(bytes);
-        if self.bytes > bitrouter_ai::wire::DEFAULT_JSON_LIMIT
+        if self.bytes > crate::gateway::wire::DEFAULT_JSON_LIMIT
             || self.parts.len() >= MAX_DEFERRED_TOOL_PARTS
         {
             return Err(invalid_tool_stream(

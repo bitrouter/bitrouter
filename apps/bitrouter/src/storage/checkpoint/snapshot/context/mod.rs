@@ -49,7 +49,7 @@ pub struct WorkUnit {
     pub shared_evidence: Vec<String>,
     pub recalled: Vec<String>,
     pub last_view_id: Option<String>,
-    pub status: bitrouter_ai::harness::inspection::AgentStatus,
+    pub status: crate::managed_contract::harness::inspection::AgentStatus,
     pub result_evidence: Vec<String>,
     /// Frozen native skill decisions survive worker and root Turn reuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]

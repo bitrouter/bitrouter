@@ -32,8 +32,10 @@ use serde::Serialize;
 
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::extensions::request_check::{ContentRole, Decision, Input};
 use crate::gateway::model::error::ModelError;
 use crate::gateway::model::target::AuthScheme;
+use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::{PipelineContext, StreamContext};
 use crate::gateway::pipeline::execution::Pipeline;
@@ -48,8 +50,6 @@ use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder
 use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutcome};
 use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
 use crate::gateway::providers::auth::{AuthApplier, AuthAppliers};
-use bitrouter_ai::event::PipelineEvent;
-use bitrouter_ai::extension::request_check::{ContentRole, Decision, Input};
 use bitrouter_ai::types::*;
 use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource};
 use {

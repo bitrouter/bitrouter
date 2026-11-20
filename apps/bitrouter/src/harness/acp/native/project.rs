@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 
 use super::flow::Flow;
 use super::wire::{Wire, invalid};
-use bitrouter_ai::harness::thread::ThreadChange;
-use bitrouter_ai::harness::thread::ThreadEvent;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::thread::ThreadView;
+use crate::managed_contract::harness::thread::ThreadChange;
+use crate::managed_contract::harness::thread::ThreadEvent;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::thread::ThreadView;
 use bitrouter_ai::harness::turn::TurnEventPayload;
 use bitrouter_ai::harness::turn::TurnStatus;
 
@@ -180,7 +180,7 @@ impl Projector {
         &mut self,
         cx: &ConnectionTo<Client>,
         flow: &Flow,
-        event: &bitrouter_ai::harness::turn::TurnEvent,
+        event: &crate::managed_contract::harness::turn::TurnEvent,
     ) -> Result<(), Error> {
         if let TurnEventPayload::AssistantDelta { item_id, text, .. } = &event.payload {
             self.text(cx, flow, item_id, text, false, false).await?;

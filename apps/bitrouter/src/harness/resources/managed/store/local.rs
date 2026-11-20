@@ -475,7 +475,7 @@ impl HarnessPort for NativePort {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, CoreError> {
         self.poll_dispatch(self.resources.mcp_skill(server, uri, cancel))
             .await?
             .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))

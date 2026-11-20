@@ -8,9 +8,9 @@ use crate::harness::storage::ExecutionRecord;
 use crate::harness::thread::ThreadRequest;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::turn::TurnRequest;
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::thread::ThreadSnapshot;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::thread::ThreadSnapshot;
+use crate::managed_contract::harness::thread::ThreadStatus;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -87,7 +87,7 @@ async fn native_admission_rejects_before_workspace_lookup_or_store_ownership() -
             .recover_thread(
                 &target,
                 &CallerContext::local(),
-                bitrouter_ai::harness::thread::ThreadRecoveryRequest {
+                crate::managed_contract::harness::thread::ThreadRecoveryRequest {
                     source_server_instance_id: "prior".into(),
                     source_cursor: 1,
                     idempotency_key: "recover".into(),
@@ -200,7 +200,7 @@ async fn offline_load_retains_queued_records_without_claiming_workspace_or_resum
     let mut observer = service.observe_thread(&target, &CallerContext::local(), None)?;
     let observation = tokio::time::timeout(Duration::from_secs(2), observer.next()).await??;
     assert!(
-        matches!(observation, Some(bitrouter_ai::harness::thread::ThreadObservation::Snapshot { view, .. })
+        matches!(observation, Some(crate::managed_contract::harness::thread::ThreadObservation::Snapshot { view, .. })
         if view.thread.thread_id == target.thread_id && view.thread.queued.len() == 1)
     );
     assert!(

@@ -1,5 +1,6 @@
-use bitrouter_ai::harness::resources::MaterialRef;
-use bitrouter_ai::harness::skills::{LocalSkill, LocalSkillCatalog};
+use crate::managed_contract::harness::resources::MaterialRef;
+use crate::managed_contract::harness::skills::LocalSkill;
+use crate::managed_contract::harness::skills::LocalSkillCatalog;
 
 use std::path::Path;
 

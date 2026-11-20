@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{
+use bitrouter_ai::tenancy::{
     configuration::ResourceRef,
     identity::{
         AttemptId, CorrelationId, ExecutionId, InstallationId, InstanceId, PrincipalId, RevisionId,

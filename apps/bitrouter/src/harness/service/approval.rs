@@ -6,7 +6,7 @@ use super::state::PendingInput;
 use super::unknown_turn;
 use crate::harness::agent::ApprovalRequest;
 use crate::harness::storage::ExecutionRecord;
-use bitrouter_ai::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::ErrorCode;
 use bitrouter_ai::harness::turn::TurnEventPayload;
 use bitrouter_ai::harness::turn::TurnStatus;
 

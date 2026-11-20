@@ -15,14 +15,14 @@ use super::unknown_turn;
 use crate::harness::agent::RunEvent;
 use crate::harness::item::MAX_LIVE_BYTES;
 use crate::harness::storage::ExecutionRecord;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::ThreadStatus;
-use bitrouter_ai::harness::turn::TurnEvent;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::turn::TurnEvent;
 use bitrouter_ai::harness::turn::TurnEventPayload;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 pub(super) fn lifecycle_fact(event: &TurnEvent) -> Option<ExecutionRecord> {
-    use bitrouter_ai::harness::turn::TurnLifecycle as L;
+    use crate::managed_contract::harness::turn::TurnLifecycle as L;
     let lifecycle = match &event.payload {
         TurnEventPayload::Started => L::Started,
         TurnEventPayload::InputRequested {

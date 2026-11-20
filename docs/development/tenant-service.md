@@ -67,8 +67,8 @@ the old binary and its own consistent database/configuration/key copy.
 
 AI opens no client or listener and owns no storage or lifecycle hooks. SDK owns
 no routing executor, application accounting or production Axum dependency.
-Consumers compose their own handlers and middleware with the optional AI Axum
-binding; the [SDK example](../../crates/bitrouter-sdk/examples/axum_gateway.rs)
+Consumers compose their own handlers and middleware with application-owned
+`gateway::http_adapter` bindings; the [application example](../../apps/bitrouter/examples/axum_gateway.rs)
 shows that composition. A framework adapter's protocol end does not itself prove
 that the service committed an execution receipt.
 

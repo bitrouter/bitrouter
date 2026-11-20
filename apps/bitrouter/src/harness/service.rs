@@ -1,7 +1,9 @@
 //! Server-owned agent runtime with transactional execution facts. State, execution and observation share one
 //! authority; disconnecting an observer never cancels its task.
 
-use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities, RuntimeLimits};
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::runtime::RuntimeCapabilities;
+use crate::managed_contract::harness::runtime::RuntimeLimits;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -13,7 +15,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::harness::service::state::{Inner, State};
 use crate::harness::storage::{ExecutionStore, MemoryExecutionStore};
-use bitrouter_ai::harness::thread::PermissionProfile;
+use crate::managed_contract::harness::thread::PermissionProfile;
 
 pub mod activity;
 mod admission;

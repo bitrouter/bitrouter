@@ -3100,5 +3100,6 @@
     }
   },
   "title": "BitRouter config",
-  "type": "object"
+  "type": "object",
+  "x-bitrouter-spec-version": "configuration/1.0.0-beta.5"
 }

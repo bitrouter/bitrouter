@@ -1,10 +1,10 @@
 //! OS-local ThreadService listener and dispatch. The transport contracts and
 //! client live in the application client layer. Session authority stays here.
 
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::PermissionProfile;
 use anyhow::Result;
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::PermissionProfile;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader};
 use tokio_util::sync::CancellationToken;
 

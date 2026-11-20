@@ -2,11 +2,11 @@
 use super::*;
 use crate::core::context_router::owned::CompileOptions;
 use crate::gateway::model::decision::types::Answer;
+use crate::managed_contract::harness::agent::ModelMode;
 use crate::managed_contract::protocol::ContextMode;
 use crate::storage::checkpoint::snapshot::context::{
     action::ContextAction, evidence::SourceSpan, view::ContextRepresentation,
 };
-use bitrouter_ai::harness::agent::ModelMode;
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
     matchers::{method, path},

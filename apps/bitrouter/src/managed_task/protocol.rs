@@ -35,7 +35,7 @@ pub struct Submit {
     pub check: Option<String>,
     pub read_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
+    pub skills: Option<crate::managed_contract::harness::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

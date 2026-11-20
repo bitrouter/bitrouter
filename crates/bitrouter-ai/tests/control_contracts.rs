@@ -200,3 +200,31 @@ fn current_policy_report_carries_resubmittable_source_and_refuses_runtime_ir()
     assert!(serde_json::from_str::<PolicyReport>(old).is_err());
     Ok(())
 }
+
+#[test]
+fn contract_namespace_table_matches_public_constants() {
+    let index = include_str!("../../../docs/specs/README.md");
+    for (version, spec) in [
+        (
+            bitrouter_ai::control::SPEC_VERSION,
+            include_str!("../../../docs/specs/service-api/README.md"),
+        ),
+        (
+            bitrouter_ai::policy::SPEC_VERSION,
+            include_str!("../../../docs/specs/policy/README.md"),
+        ),
+        (
+            bitrouter_ai::eval::SPEC_VERSION,
+            include_str!("../../../docs/specs/eval/README.md"),
+        ),
+    ] {
+        assert!(
+            index.contains(&format!("`{version}`")),
+            "namespace table does not list {version}"
+        );
+        assert!(
+            spec.lines().take(5).any(|line| line.contains(version)),
+            "spec header does not identify {version}"
+        );
+    }
+}

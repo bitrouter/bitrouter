@@ -1,6 +1,9 @@
 //! Configuration schema artifact owned by the application.
 
 use anyhow::{Context, Result};
+/// Current configuration format, independent of the software release.
+pub const SPEC_VERSION: &str = "configuration/1.0.0-beta.5";
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Render the versioned configuration schema with deterministic object ordering.
@@ -8,6 +11,10 @@ pub fn render() -> Result<String> {
     let mut root = serde_json::to_value(schemars::schema_for!(crate::config::Config))
         .context("serializing generated schema")?;
     if let Some(obj) = root.as_object_mut() {
+        obj.insert(
+            "x-bitrouter-spec-version".to_string(),
+            serde_json::Value::String(SPEC_VERSION.to_string()),
+        );
         obj.insert(
             "$id".to_string(),
             serde_json::Value::String(format!(
@@ -57,7 +64,20 @@ fn sort_value(value: serde_json::Value) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{SPEC_VERSION, render};
+
+    #[test]
+    fn configuration_namespace_matches_schema_and_specification() -> anyhow::Result<()> {
+        let value: serde_json::Value = serde_json::from_str(&render()?)?;
+        assert_eq!(value["x-bitrouter-spec-version"], SPEC_VERSION);
+        for document in [
+            include_str!("../../../../docs/specs/README.md"),
+            include_str!("../../../../docs/specs/configuration/README.md"),
+        ] {
+            assert!(document.contains(&format!("`{SPEC_VERSION}`")));
+        }
+        Ok(())
+    }
 
     #[test]
     fn rendered_schema_is_key_sorted_everywhere() -> anyhow::Result<()> {

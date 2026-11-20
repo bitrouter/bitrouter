@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::ModelOperation;
+use bitrouter_ai::types::ModelOperation;
 
 /// Invalid bounded metadata supplied by a capability implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -26,8 +26,7 @@ pub const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024;
 pub const MAX_TIMEOUT_MS: u64 = 30_000;
 
 /// Role attached to a canonical checker fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentRole {
     /// Out-of-band system instructions.
@@ -41,8 +40,7 @@ pub enum ContentRole {
 }
 
 /// The canonical kind of one checker input fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentFragmentKind {
     /// Plain message or system text.
@@ -74,8 +72,7 @@ pub enum ContentFragmentKind {
 }
 
 /// Coverage scope for the first request-check contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckCoverageScope {
     /// Readable text on the entry request only. Media, opaque provider-private
@@ -84,8 +81,7 @@ pub enum RequestCheckCoverageScope {
 }
 
 /// Whether the checker input was complete within its declared scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckCoverageStatus {
     /// Every readable entry-request text fragment fit within byte/count bounds.
@@ -96,8 +92,7 @@ pub enum RequestCheckCoverageStatus {
 }
 
 /// Typed evidence for what an invocation covered.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RequestCheckCoverage {
     /// Fixed entry-request coverage scope.
     pub scope: RequestCheckCoverageScope,
@@ -115,8 +110,7 @@ pub struct RequestCheckCoverage {
 }
 
 /// One typed fragment passed to a request-check extension.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContentFragment {
     /// Conversation role of this fragment.
     pub role: ContentRole,

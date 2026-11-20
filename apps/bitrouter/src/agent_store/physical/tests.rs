@@ -84,7 +84,10 @@ impl Fixture {
     async fn claim(
         &self,
         name: &'static str,
-    ) -> Result<(bitrouter_ai::harness::runtime::ExecutionOwner, u64)> {
+    ) -> Result<(
+        crate::managed_contract::harness::runtime::ExecutionOwner,
+        u64,
+    )> {
         let gate = Gate::new(true);
         let store = self.store(Some(gate.clone()));
         let task =

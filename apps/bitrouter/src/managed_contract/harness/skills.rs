@@ -1,6 +1,6 @@
 //! Frozen skill source descriptions; discovery and verification stay in the host.
 
-use crate::protocol::mcp_skills::SkillEntry;
+use crate::skills::wire::SkillEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;

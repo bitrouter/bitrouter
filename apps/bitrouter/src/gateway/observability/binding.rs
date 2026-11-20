@@ -1,8 +1,8 @@
 //! Canonical execution identity and live gateway dispatch fences.
 
+use crate::gateway::observability::event::PipelineEvent;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use bitrouter_ai::event::PipelineEvent;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::sync::{Arc, OnceLock};

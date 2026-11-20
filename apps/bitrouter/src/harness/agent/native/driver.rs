@@ -6,6 +6,7 @@ use crate::harness::agent::Agent;
 use crate::harness::agent::RunChannels;
 use crate::harness::agent::RunReport;
 use crate::managed_contract::checkpoint::DurableHead;
+use crate::managed_contract::harness::agent::RunStatus;
 use crate::managed_contract::protocol::{
     Bind, Capabilities, ContextMode, HarnessManifest, HarnessTool, Limits, OwnershipGrant,
     RoutingSettings, ServerMessage, TaskInput, ToolEffect,
@@ -14,7 +15,6 @@ use crate::storage::checkpoint::CheckpointBatchExt;
 use crate::storage::checkpoint::snapshot::context::FEATURE;
 use crate::storage::checkpoint::snapshot::{RunStatus as CoreStatus, SessionSnapshot};
 use crate::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::harness::agent::RunStatus;
 use bitrouter_ai::types::{Message, Role, Tool};
 use futures::{StreamExt, stream::FuturesUnordered};
 use std::sync::Arc;

@@ -2,6 +2,9 @@
 //!
 //! These credentials and scopes are independent of inference authorization.
 
+/// Canonical service-message contract; independent of transport and software versions.
+pub const SPEC_VERSION: &str = "service-api/1.0.0-beta.6";
+
 pub mod action;
 pub mod administration;
 pub mod error;

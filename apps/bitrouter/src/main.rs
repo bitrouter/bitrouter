@@ -2358,7 +2358,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     .is_some_and(|constraints| constraints.include.iter().any(
                         |selector| matches!(
                             selector,
-                            bitrouter_ai::harness::skills::SkillSelector::Mcp { .. }
+                            crate::managed_contract::harness::skills::SkillSelector::Mcp { .. }
                         )
                     )),
                 "unsupported: ACP skill delivery cannot preserve MCP-origin manifest/consent/cache/execution boundaries"
@@ -2756,7 +2756,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         .or_else(|| bitrouter::policy_lock::native_default_model(&cfg).map(str::to_owned))
         .context("no native model configured; pass --model or enable defaults")?;
     let model_mode = bitrouter::policy_lock::native_model_mode(&cfg, &model)?;
-    let config = bitrouter_ai::harness::agent::AgentConfig::fixed(model, args.effort)
+    let config = crate::managed_contract::harness::agent::AgentConfig::fixed(model, args.effort)
         .with_model_mode(model_mode)
         .with_skill_constraints(skills)
         .with_output_reservation(args.max_output_tokens);
@@ -2796,7 +2796,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", accepted.turn_id))?,
         };
         match observation {
-            bitrouter_ai::harness::thread::ThreadObservation::Snapshot {
+            crate::managed_contract::harness::thread::ThreadObservation::Snapshot {
                 view: fresh,
                 resynchronized,
                 catchup,
@@ -2809,11 +2809,11 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                     serde_json::json!({"type":"snapshot", "view":view, "resynchronized":resynchronized}),
                 )?;
             }
-            bitrouter_ai::harness::thread::ThreadObservation::Event { event } => {
+            crate::managed_contract::harness::thread::ThreadObservation::Event { event } => {
                 view.apply(&event);
                 emit_task_event(&event)?;
             }
-            bitrouter_ai::harness::thread::ThreadObservation::Live {
+            crate::managed_contract::harness::thread::ThreadObservation::Live {
                 event,
                 after_cursor,
             } => {
@@ -2869,7 +2869,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
                 && !error
                     .downcast_ref::<bitrouter::client::agent_local::ReplyError>()
                     .is_some_and(|error| {
-                        error.code == bitrouter_ai::harness::runtime::ErrorCode::Conflict
+                        error.code == crate::managed_contract::harness::runtime::ErrorCode::Conflict
                     })
             {
                 return Err(error);
@@ -2905,7 +2905,7 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
 }
 
 #[cfg(all(feature = "core", feature = "harness"))]
-fn emit_task_event(event: &bitrouter_ai::harness::thread::ThreadEvent) -> Result<()> {
+fn emit_task_event(event: &crate::managed_contract::harness::thread::ThreadEvent) -> Result<()> {
     // Private execution fences still advance the durable cursor. The client
     // applies them locally, but NDJSON consumers only need public changes.
     if !event.changes.is_empty() {
@@ -7098,7 +7098,7 @@ mod tests {
         std::fs::write(
             &draft,
             r#"{
-  "schema_version": 2,
+  "spec_version": "eval/1.0.0-beta.1",
   "identity": {"profile": "gateway_generic"},
   "eval_id": "eval-generic-1",
   "scope": "task",

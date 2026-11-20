@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use bitrouter_ai::event::PipelineEvent;
+use crate::gateway::observability::event::PipelineEvent;
 
 /// Authentication succeeded — carries the caller's identity. Downstream
 /// hooks take identity from this event, not from the `api_keys` table.

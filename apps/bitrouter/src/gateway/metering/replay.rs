@@ -1,6 +1,6 @@
 //! Request identity rejection markers consumed by always-run accounting.
 
-use bitrouter_ai::event::PipelineEvent;
+use crate::gateway::observability::event::PipelineEvent;
 use serde::Serialize;
 
 /// A durable execution already owns this request identity. Always-run

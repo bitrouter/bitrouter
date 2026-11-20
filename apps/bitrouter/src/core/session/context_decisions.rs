@@ -304,7 +304,7 @@ impl CoreSession {
             let mut response = None;
             let mut reason = "conservative_context";
             let needs_assessment = turn.input.routing.model
-                == bitrouter_ai::harness::agent::ModelMode::Policy
+                == crate::managed_contract::harness::agent::ModelMode::Policy
                 || (turn.input.routing.context
                     == crate::managed_contract::protocol::ContextMode::Auto
                     && !candidates.candidates.is_empty());

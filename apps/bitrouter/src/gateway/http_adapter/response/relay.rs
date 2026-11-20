@@ -1,16 +1,16 @@
 //! Pull-driven framing; the caller retains all execution and completion authority.
 
 use ::axum::body::Body;
+use futures::StreamExt;
 use futures_core::Stream;
-use futures_util::StreamExt;
 use serde::Serialize;
 use std::pin::Pin;
 
 use super::Error;
-use crate::{
+use crate::gateway::wire;
+use bitrouter_ai::{
     protocol::{messages::MessagesEvent, responses::ResponsesEvent},
     stream::{ProtocolEnd, StreamItem},
-    wire,
 };
 
 #[derive(Clone, Copy)]
@@ -106,7 +106,7 @@ where
     };
     // Axum polls this stream through its body: no producer task or output queue.
     // https://docs.rs/axum/0.8.9/axum/body/struct.Body.html#method.from_stream
-    Body::from_stream(futures_util::stream::unfold(
+    Body::from_stream(futures::stream::unfold(
         state,
         move |mut state| async move {
             if state.done {

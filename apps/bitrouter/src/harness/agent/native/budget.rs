@@ -1,10 +1,10 @@
 //! Native run limits use the Core ledger, including retired child work.
 
 use crate::harness::agent::RunReport;
+use crate::managed_contract::harness::agent::AgentConfig;
 use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::harness::agent::AgentConfig;
 
 #[derive(Clone)]
 pub(super) struct Budget {
@@ -35,7 +35,7 @@ impl Budget {
     pub(super) fn observe(&mut self, state: &SessionSnapshot) {
         let Some(run) = &state.run else { return };
         if let Some(turn) = state.root_turn()
-            && turn.status == bitrouter_ai::harness::inspection::AgentStatus::Failed
+            && turn.status == crate::managed_contract::harness::inspection::AgentStatus::Failed
             && let Some(step) = turn.steps.last()
             && step.plan.is_none()
             && let Some(limit) = turn.input.context_limit_bytes

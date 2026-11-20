@@ -39,7 +39,8 @@ Keep these dimensions separate:
   identify mutable-management state; they are not SemVer versions.
 - Content digests identify bytes or a defined canonical representation. Each API
   states whether it hashes public source or compiled internal representation.
-- Software and SDK packages retain their independent package-manager SemVer.
+- Software and SDK packages share the workspace release version; it is independent
+  of each format contract.
 - URL namespaces and message discriminators retain their own scoped semantics;
   third-party protocols keep upstream versioning.
 - JSON Schema `$schema` identifies the validation dialect, while `$id` identifies

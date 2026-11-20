@@ -30,7 +30,6 @@ use crate::{
 /// HTTP protocol selection for ordinary requests and SSE streams.
 ///
 /// Protocol selection never retries a request using another HTTP version.
-/// Core WebSocket upgrades always use a separate HTTP/1.1 client.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HttpVersion {

@@ -42,8 +42,9 @@ Targets cannot refer recursively to another BitRouter router.
 
 `default_tier` is required and names an existing tier. Every explicit route,
 tool fallback and tool-safe entry names an existing tier. Duplicate model/effort
-targets under different tiers are rejected. There are at most 4,096 explicit
-classification routes and 256 tool-safe entries per policy.
+targets under different tiers are rejected. The closed classification domain
+permits at most 156 distinct routes (13 families × 6 steps × 2 risks). Each
+policy permits at most 256 tool-safe entries.
 
 For example:
 

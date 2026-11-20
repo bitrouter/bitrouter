@@ -9,9 +9,9 @@ use super::support::{
 };
 use crate::harness::service::ThreadService;
 use crate::harness::storage::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
-use bitrouter_ai::harness::agent::AgentConfig;
-use bitrouter_ai::harness::runtime::ErrorCode;
-use bitrouter_ai::harness::thread::ThreadStatus;
+use crate::managed_contract::harness::agent::AgentConfig;
+use crate::managed_contract::harness::runtime::ErrorCode;
+use crate::managed_contract::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::turn::TurnStatus;
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context
             &paused.thread_id,
             old.version,
             &[ExecutionRecord::ThreadEvent {
-                event: bitrouter_ai::harness::thread::ThreadEvent {
+                event: crate::managed_contract::harness::thread::ThreadEvent {
                     server_instance_id: reader.inner.instance_id.clone(),
                     thread_id: paused.thread_id.clone(),
                     seq: old.version + 1,
@@ -203,24 +203,24 @@ impl ExecutionStore for DiscoveryFault {
     async fn claim_owner(
         &self,
         id: &str,
-    ) -> Result<bitrouter_ai::harness::runtime::OwnerClaim, String> {
+    ) -> Result<crate::managed_contract::harness::runtime::OwnerClaim, String> {
         self.memory.claim_owner(id).await
     }
     async fn read_owner(
         &self,
         id: &str,
-    ) -> Result<Option<bitrouter_ai::harness::runtime::ExecutionOwner>, String> {
+    ) -> Result<Option<crate::managed_contract::harness::runtime::ExecutionOwner>, String> {
         self.memory.read_owner(id).await
     }
     async fn stop_owner(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
-    ) -> Result<bitrouter_ai::harness::runtime::ExecutionOwner, String> {
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
+    ) -> Result<crate::managed_contract::harness::runtime::ExecutionOwner, String> {
         self.memory.stop_owner(owner).await
     }
     async fn commit_owned(
         &self,
-        owner: &bitrouter_ai::harness::runtime::ExecutionOwner,
+        owner: &crate::managed_contract::harness::runtime::ExecutionOwner,
         id: &str,
         version: u64,
         records: &[ExecutionRecord],
@@ -622,7 +622,8 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
     )?;
     let mut request = thread_request(&workspace, "source");
     request.config = request.config.read_only();
-    request.permission_profile = bitrouter_ai::harness::thread::PermissionProfile::ReadOnly;
+    request.permission_profile =
+        crate::managed_contract::harness::thread::PermissionProfile::ReadOnly;
     let thread = source
         .create_thread(&source.inner.instance_id, request)
         .await?;
@@ -670,13 +671,13 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
     assert!(!budget.active_duration_unknown && !budget.tool_calls_unknown);
     assert!(report.blockers.iter().all(|blocker| matches!(
         blocker,
-        bitrouter_ai::harness::thread::RecoveryBlocker::OwnershipUnconfirmed
+        crate::managed_contract::harness::thread::RecoveryBlocker::OwnershipUnconfirmed
     )));
     reader
         .recover_thread(
             &old_target,
             &CallerContext::local(),
-            bitrouter_ai::harness::thread::ThreadRecoveryRequest {
+            crate::managed_contract::harness::thread::ThreadRecoveryRequest {
                 source_server_instance_id: report.source_server_instance_id.clone(),
                 source_cursor: report.source_cursor,
                 idempotency_key: "recover-terminal".into(),

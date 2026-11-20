@@ -461,8 +461,8 @@ async fn serve_with_options(
         let native_acp = crate::harness::acp::native::NativeAcpServer::new(
             task_service.clone(), crate::gateway::caller::CallerContext::local(),
             crate::harness::acp::native::NativeSessionConfig {
-                agent: bitrouter_ai::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
-                permission_profile: bitrouter_ai::harness::thread::PermissionProfile::Ask,
+                agent: crate::managed_contract::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
+                permission_profile: crate::managed_contract::harness::thread::PermissionProfile::Ask,
                 servers: native_harness_config(&cfg, home).servers,
                 register_local_workspaces: true,
             },

@@ -18,6 +18,7 @@ use super::native_preparation::{
     runtime as preparation_runtime,
 };
 use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::extensions::request_check::{Decision, Input};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::{Executor, StreamPartStream};
 use crate::gateway::pipeline::hooks::{
@@ -43,7 +44,6 @@ use crate::gateway::pipeline::settlement::{
     RequiredFinalizationReceipt, RequiredFinalizer, SettlementContext, SettlementRecorder,
 };
 use crate::managed_contract::evidence::{NativeAttemptReport, NativeRoute};
-use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::OperationScope;
 
 use crate::gateway::pipeline::stream::{StreamOutcome, StreamProcessor};
@@ -3945,10 +3945,10 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
 #[cfg(test)]
 mod policy_effort_target_tests {
     use super::filter_reasoning_effort_targets;
+    use crate::gateway::model::capabilities::ReasoningEffortConfig;
     use crate::gateway::pipeline::types::RoutingTarget;
     use bitrouter_ai::types::{
-        ApiProtocol, GenerationParams, Prompt, ReasoningEffort, ReasoningEffortConfig,
-        ReasoningEffortSource,
+        ApiProtocol, GenerationParams, Prompt, ReasoningEffort, ReasoningEffortSource,
     };
 
     fn prompt() -> Prompt {

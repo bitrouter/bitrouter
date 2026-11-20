@@ -1,7 +1,9 @@
 //! A custom asynchronous directory must not resume file I/O after revocation.
 use super::*;
+use crate::managed_contract::harness::skills::LocalScope;
+use crate::managed_contract::harness::skills::LocalSkill;
+use crate::managed_contract::harness::skills::LocalSkillCatalog;
 use crate::skills::library::SkillDirectory;
-use bitrouter_ai::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 use std::path::PathBuf;
 
 struct DelayedDirectory {

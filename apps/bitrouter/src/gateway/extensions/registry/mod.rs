@@ -11,7 +11,7 @@ use crate::gateway::error::Result;
 use registration::Registration;
 use request_check::Callback;
 
-use bitrouter_ai::extension::request_check;
+use crate::gateway::extensions::request_check;
 
 pub mod registration;
 

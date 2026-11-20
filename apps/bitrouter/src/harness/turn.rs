@@ -1,13 +1,16 @@
 //! One accepted user input and its execution, approval and steering contracts.
 
-use bitrouter_ai::harness::turn::{
-    InputRequest, TurnEvent, TurnEventPayload, TurnLifecycle, TurnSnapshot, TurnStatus,
-};
+use crate::managed_contract::harness::turn::TurnEvent;
+use crate::managed_contract::harness::turn::TurnLifecycle;
+use crate::managed_contract::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::InputRequest;
+use bitrouter_ai::harness::turn::TurnEventPayload;
+use bitrouter_ai::harness::turn::TurnStatus;
 
 use serde::{Deserialize, Serialize};
 
 use crate::harness::item::MAX_LIVE_BYTES;
-use bitrouter_ai::harness::item::LiveActivity;
+use crate::managed_contract::harness::item::LiveActivity;
 
 /// Application-owned helpers for the public TurnSnapshot contract.
 pub(crate) trait TurnSnapshotExt: Sized {

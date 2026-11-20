@@ -1,13 +1,14 @@
 //! Run a foreground BitRouter host with one explicitly linked regex checker.
-//! Usage: cargo run -p bitrouter --example native_regex_checker -- CONFIG RULES
+//! Usage: cargo run -p bitrouter --features guardrails --example native_regex_checker -- CONFIG RULES
 //! Management commands target CONFIG or its control socket. To restart, launch
 //! this custom binary again; official `bro restart` cannot retain its registrations.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use bitrouter::gateway::extensions::guardrails::checker;
 use bitrouter::gateway::extensions::registry::ExtensionApi;
-use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
+use bitrouter_guardrails::config::InputGuardrailConfig;
 
 fn register(api: &mut ExtensionApi, rules: InputGuardrailConfig) -> Result<()> {
     Ok(api.request_check(

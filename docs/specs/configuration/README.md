@@ -1,6 +1,9 @@
 # BitRouter configuration formats
 
 Status: **accepted, `configuration/1.0.0-beta.5`**.
+The [schema generator constant](../../../apps/bitrouter/src/config/schema.rs)
+and schema annotation `x-bitrouter-spec-version` identify this contract.
+The schema URL identifies its software distribution.
 This is the format contract for
 `bitrouter.yaml`, its shared-process profile and Policy source loading.
 The [Policy contract](../policy/README.md) governs portable routing policy files.

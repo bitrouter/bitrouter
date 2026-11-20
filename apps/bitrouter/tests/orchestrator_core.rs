@@ -398,6 +398,7 @@ models:
 #[tokio::test]
 async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions() -> Result<()> {
     use axum::{Json, Router, http::StatusCode, routing::post};
+    use bitrouter::managed_contract::harness::agent::ModelMode;
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
     use bitrouter::trajectory::{
         canonical::Canonicalizer,
@@ -406,7 +407,6 @@ async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions()
         types::{RequestStatus, TrajectoryEventKind},
     };
     use bitrouter_ai::eval::EvalScope;
-    use bitrouter_ai::harness::agent::ModelMode;
     use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
     use bitrouter_ai::types::ApiProtocol;
     use sea_orm::EntityTrait;

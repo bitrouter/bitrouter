@@ -1,10 +1,10 @@
 //! Match real socket work to each persisted family step and its owned receipt.
 use super::*;
+use crate::managed_contract::harness::inspection::AgentStatus;
 use crate::{
     storage::checkpoint::snapshot::{RunStatus, SessionSnapshot},
     tenancy::receipts::read,
 };
-use bitrouter_ai::harness::inspection::AgentStatus;
 use bitrouter_ai::tenancy::{
     execution::{ExecutionPage, ExecutionReceipt, Outcome, Provenance, ReceiptState},
     identity::RevisionId,

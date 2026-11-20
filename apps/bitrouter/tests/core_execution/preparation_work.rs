@@ -1,4 +1,5 @@
 use super::*;
+use bitrouter::gateway::extensions::request_check::{Decision, Input};
 use bitrouter::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
 use bitrouter::gateway::pipeline::native_accounting::{NativeCostObservation, NativeCostSource};
 use bitrouter::gateway::pipeline::native_preparation::NativePreparationWorkKind as Kind;
@@ -8,10 +9,9 @@ use bitrouter::gateway::pipeline::request_checks::{
 use bitrouter::gateway::pipeline::routing::{
     ModelResolution, ModelSelector, RoutingPrefs, RoutingTable,
 };
+use bitrouter::managed_contract::harness::agent::ModelMode;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::extension::request_check::{Decision, Input};
-use bitrouter_ai::harness::agent::ModelMode;
 use bitrouter_ai::routing::{ModelInfo, RouterRequestIdentity};
 
 struct Probe {

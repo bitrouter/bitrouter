@@ -1,5 +1,3 @@
-#![cfg(feature = "axum")]
-
 use std::{
     pin::Pin,
     sync::{
@@ -16,8 +14,8 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+use bitrouter::gateway::http_adapter::{error::Error, extract::Json, response::Reply};
 use bitrouter_ai::{
-    axum::{error::Error, extract::Json, response::Reply},
     protocol::{
         chat_completions::{ChatChunk, ChatRequest},
         messages::MessagesEvent,
@@ -25,8 +23,8 @@ use bitrouter_ai::{
     },
     stream::{ProtocolEnd, ServerEvent, StreamItem},
 };
+use futures::stream;
 use futures_core::Stream;
-use futures_util::stream;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -311,7 +309,7 @@ async fn native_error_payloads_latch_failure_and_end_stops_polling() -> TestResu
         .insert("error".into(), json!({"message":"PRIVATE"}));
     let polled = Arc::new(AtomicUsize::new(0));
     let watched = polled.clone();
-    let stream = futures_util::StreamExt::inspect(
+    let stream = futures::StreamExt::inspect(
         stream::iter(vec![
             Ok(event("message", payload)),
             Ok(StreamItem::End(ProtocolEnd::ChatDone)),
@@ -327,7 +325,7 @@ async fn native_error_payloads_latch_failure_and_end_stops_polling() -> TestResu
 
     let polled = Arc::new(AtomicUsize::new(0));
     let watched = polled.clone();
-    let stream = futures_util::StreamExt::inspect(
+    let stream = futures::StreamExt::inspect(
         stream::iter(vec![
             Ok(StreamItem::<ChatChunk>::End(ProtocolEnd::ChatDone)),
             Err(Error::bad_gateway()),

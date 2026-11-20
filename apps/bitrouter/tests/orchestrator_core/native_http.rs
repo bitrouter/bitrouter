@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use axum_test::TestServer;
 use bitrouter::core::session::CoreSession;
 use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::extensions::request_check::{Decision, Input};
 use bitrouter::gateway::http::{AppState, build_router};
 use bitrouter::gateway::pipeline::native::{
     NativeExecutionControl, NativePlan, NativePlanAdmission,
@@ -39,7 +40,6 @@ use bitrouter::managed_contract::protocol::{
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
 use bitrouter::storage::checkpoint::snapshot::RunStatus;
-use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::{
     GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,
     Role, Tool, ToolChoice,

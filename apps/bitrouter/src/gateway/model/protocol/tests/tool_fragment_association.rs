@@ -704,7 +704,7 @@ fn native_responses_rejects_tool_identity_and_completion_contradictions() -> Res
 
 #[test]
 fn responses_snapshot_only_tools_do_not_amplify_the_terminal_wire_batch() -> Result<()> {
-    use bitrouter_ai::wire::DEFAULT_JSON_LIMIT;
+    use crate::gateway::wire::DEFAULT_JSON_LIMIT;
     let mut decoder = ResponsesAdapter.stream_decoder();
     let mut encoder = ResponsesAdapter.stream_encoder("large-response", "fixture");
     let mut output = Vec::new();
@@ -772,7 +772,7 @@ fn responses_snapshot_only_tools_do_not_amplify_the_terminal_wire_batch() -> Res
 #[test]
 fn chat_turn_boundaries_keep_large_responses_batches_bounded_and_names_stable() -> Result<()> {
     use super::super::chat_completions::ChatCompletionsAdapter;
-    use bitrouter_ai::wire::DEFAULT_JSON_LIMIT;
+    use crate::gateway::wire::DEFAULT_JSON_LIMIT;
 
     let arguments = format!(r#"{{"blob":"{}"}}"#, "x".repeat(3 * 1024 * 1024));
     let mut decoder = ChatCompletionsAdapter.stream_decoder();
@@ -944,7 +944,8 @@ fn messages_statusless_terminal_snapshot_waits_for_response_outcome() -> Result<
 
 #[test]
 fn nine_mib_projected_close_uses_individually_bounded_sse_events() -> Result<()> {
-    use bitrouter_ai::{types::ToolCallBoundary, wire::DEFAULT_JSON_LIMIT};
+    use crate::gateway::wire::DEFAULT_JSON_LIMIT;
+    use bitrouter_ai::types::ToolCallBoundary;
     let args = format!(r#"{{"x":"{}"}}"#, "x".repeat(9 * 1024 * 1024));
     let mut encoder = ResponsesAdapter.stream_encoder("single-large", "fixture");
     encoder.encode(&StreamPart::ToolCallDelta {

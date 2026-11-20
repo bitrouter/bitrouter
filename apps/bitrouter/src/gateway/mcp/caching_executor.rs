@@ -30,7 +30,7 @@ use super::{
     McpTarget,
 };
 use crate::gateway::error::Result;
-use bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD;
+use crate::skills::wire::SKILLS_LIST_METHOD;
 
 // Defaults for `CacheTtls` and the YAML-facing `McpCacheConfig`
 // (`apps/bitrouter/src/config/mod.rs`) — single source of truth so a

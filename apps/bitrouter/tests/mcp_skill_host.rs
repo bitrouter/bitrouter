@@ -192,8 +192,8 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
     use bitrouter::harness::service::ThreadService;
     use bitrouter::harness::thread::{ThreadRequest, ThreadTarget};
     use bitrouter::harness::turn::{ApprovalAnswer, TurnRequest};
-    use bitrouter_ai::harness::agent::AgentConfig;
-    use bitrouter_ai::harness::thread::PermissionProfile;
+    use bitrouter::managed_contract::harness::agent::AgentConfig;
+    use bitrouter::managed_contract::harness::thread::PermissionProfile;
     use bitrouter_ai::harness::turn::TurnStatus;
     use bitrouter_ai::types::{ApiProtocol, Role};
     use std::sync::Arc;
@@ -256,11 +256,13 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
         .with_resources(fixture.configuration(workspace.path()))?;
         let caller = CallerContext::local();
         let config = AgentConfig::fixed("fixture-model", None).with_skill_constraints(Some(
-            bitrouter_ai::harness::skills::SkillConstraints {
-                include: vec![bitrouter_ai::harness::skills::SkillSelector::Mcp {
-                    server: fixture.server.name.clone(),
-                    uri: ROOT.into(),
-                }],
+            bitrouter::managed_contract::harness::skills::SkillConstraints {
+                include: vec![
+                    bitrouter::managed_contract::harness::skills::SkillSelector::Mcp {
+                        server: fixture.server.name.clone(),
+                        uri: ROOT.into(),
+                    },
+                ],
                 exclude: vec![],
             },
         ));

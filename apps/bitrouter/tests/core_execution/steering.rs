@@ -512,7 +512,7 @@ async fn steering_provisional_fence_does_not_reject_another_agents_admitted_atte
                 .as_ref()
                 .ok_or("child")?
                 .status,
-            bitrouter_ai::harness::inspection::AgentStatus::Completed
+            bitrouter::managed_contract::harness::inspection::AgentStatus::Completed
         );
         assert_eq!(
             done.steering.contains_key("steer"),

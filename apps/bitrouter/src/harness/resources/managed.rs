@@ -309,17 +309,19 @@ impl NativeResources {
         &self.signals.manifest
     }
 
-    pub fn mcp_skill_catalog(&self) -> &bitrouter_ai::harness::skills::McpSkillCatalog {
+    pub fn mcp_skill_catalog(&self) -> &crate::managed_contract::harness::skills::McpSkillCatalog {
         &self.resources.inventory.mcp_skills
     }
 
-    pub fn local_skill_catalog(&self) -> &bitrouter_ai::harness::skills::LocalSkillCatalog {
+    pub fn local_skill_catalog(
+        &self,
+    ) -> &crate::managed_contract::harness::skills::LocalSkillCatalog {
         &self.resources.inventory.local_skills
     }
 
     pub async fn managed_skill_file(
         &self,
-        binding: &bitrouter_ai::harness::skills::LocalSkill,
+        binding: &crate::managed_contract::harness::skills::LocalSkill,
         path: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, String> {
@@ -346,13 +348,13 @@ impl NativeResources {
         server: &str,
         uri: &str,
         cancel: &CancellationToken,
-    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, String> {
+    ) -> Result<crate::managed_contract::harness::skills::HeldMcpSkill, String> {
         self.resources.mcp_skill(server, uri, cancel).await
     }
 
     pub async fn mcp_skill_file(
         &self,
-        held: &bitrouter_ai::harness::skills::HeldMcpSkill,
+        held: &crate::managed_contract::harness::skills::HeldMcpSkill,
         read: crate::skills::mcp::SkillRead<'_>,
         cancel: &CancellationToken,
     ) -> Result<crate::skills::mcp::VerifiedSkillFile, String> {

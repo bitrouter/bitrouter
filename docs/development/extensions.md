@@ -10,7 +10,7 @@ breaking import migration are in the [guardrails guide](../GUARDRAILS_EXTENSION.
 An extension is trusted Rust code linked into a custom host. Register a request
 check through `bitrouter::gateway::extensions::registry::ExtensionApi` and
 `request_check(id, revision, callback)`. Callback value types live in
-`bitrouter_ai::extension::request_check`. Registration collects implementations;
+`bitrouter::gateway::extensions::request_check`. Registration collects implementations;
 a configured named router decides which bindings execute. Neither registration
 nor a Cargo feature alone activates a callback. The default `bro` binary does
 not contain custom registrations.
@@ -122,7 +122,7 @@ compiled code or registrations.
 
 Author types `ContentRole`, `ContentFragmentKind`, `ContentFragment`,
 `RequestCheckCoverageScope`, `RequestCheckCoverageStatus` and
-`RequestCheckCoverage` live in `bitrouter_ai::extension::request_check` alongside `Input`.
+`RequestCheckCoverage` live in `bitrouter::gateway::extensions::request_check` alongside `Input`.
 Projection, frozen bindings and runner results remain in the application gateway.
 
 ## Diagnostics and observability

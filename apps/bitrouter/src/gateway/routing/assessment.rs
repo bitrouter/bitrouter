@@ -12,7 +12,7 @@ use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionRequest;
 use crate::gateway::model::decision::types::DecisionResponse;
 use crate::gateway::model::decision::types::Question;
-use bitrouter_ai::harness::inspection::ProgressState;
+use crate::managed_contract::harness::inspection::ProgressState;
 use bitrouter_ai::policy::NextStep;
 use bitrouter_ai::policy::TaskFamily;
 

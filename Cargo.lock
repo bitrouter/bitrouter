@@ -740,6 +740,7 @@ dependencies = [
  "hmac 0.13.0",
  "http",
  "http-body",
+ "http-body-util",
  "httpdate",
  "hyper",
  "hyper-util",
@@ -801,10 +802,6 @@ dependencies = [
 name = "bitrouter-ai"
 version = "1.0.0-beta.1"
 dependencies = [
- "axum",
- "futures-core",
- "futures-util",
- "http-body-util",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -812,14 +809,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tower",
 ]
 
 [[package]]
 name = "bitrouter-guardrails"
 version = "1.0.0-beta.1"
 dependencies = [
- "bitrouter-ai",
  "futures",
  "regex",
  "schemars 1.2.1",

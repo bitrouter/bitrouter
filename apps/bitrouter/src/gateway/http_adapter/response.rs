@@ -11,10 +11,10 @@ use futures_core::Stream;
 use serde::Serialize;
 
 use super::error::Error;
-use crate::{
+use crate::gateway::wire;
+use bitrouter_ai::{
     protocol::{chat_completions::ChatChunk, messages::MessagesEvent, responses::ResponsesEvent},
     stream::StreamItem,
-    wire,
 };
 
 /// A prepared JSON response or a pull-driven protocol stream.

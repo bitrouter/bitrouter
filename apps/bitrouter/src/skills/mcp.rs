@@ -1,5 +1,7 @@
+use crate::managed_contract::harness::skills::HeldMcpSkill;
+use crate::managed_contract::harness::skills::SkillOrigin;
+use crate::managed_contract::harness::skills::SkillScope;
 use crate::skills::protocol::SkillEntryExt;
-use bitrouter_ai::harness::skills::{HeldMcpSkill, SkillOrigin, SkillScope};
 
 use std::path::Path;
 
@@ -8,7 +10,9 @@ use crate::gateway::caller::CallerContext;
 use crate::skills::protocol::{
     decode_skill_uri_segment, skill_resource_path, skill_uri_root, validate_skill_resource_uri,
 };
-use bitrouter_ai::protocol::mcp_skills::{SkillEntry, SkillResource, SkillResources};
+use crate::skills::wire::SkillEntry;
+use crate::skills::wire::SkillResource;
+use crate::skills::wire::SkillResources;
 
 use crate::storage::checkpoint::sha256;
 
