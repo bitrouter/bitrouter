@@ -175,8 +175,9 @@ async fn native_opt_in_and_bound_defaults_refuse_mismatches_before_send() -> Tes
             .await
             .is_err()
     );
-    let defaults: GenerationDefaultsEnvelope = serde_json::from_value(json!({"schema_version":1,
-        "max_tokens":8}))?;
+    let defaults: GenerationDefaultsEnvelope = serde_json::from_value(
+        json!({"schema_version":2,"canonical":{"schema_version":1,"max_tokens":8},"supplemental":{},"configuration_defaults":"apply"}),
+    )?;
     binding.selection.generation_defaults_digest = Some(defaults.digest()?);
     assert!(
         client
