@@ -1,8 +1,7 @@
 # Model-routing policy
 
 Status: **accepted, `policy/1.0.0-beta.1`**.
-The source fields and meaning are unchanged from the unpublished beta.1; its
-identifier is retained. This is the canonical contract for
+This is the canonical contract for
 portable model-only policy source, authored as JSON or YAML and submitted to
 the service through JSON. Consumers are policy authors, SDK clients, gateway
 publication, tenant resource management and the serving compiler. MUST, MUST NOT,
@@ -17,20 +16,13 @@ Regenerate the schema with `cargo run -p bitrouter-ai --features schema
 
 ## Identity and compatibility
 
-`spec_version` is required and exactly `policy/1.0.0-beta.1`. There is no
-unversioned, numeric-vx or namespace substitution fallback. Unknown fields at
+`spec_version` is required and exactly `policy/1.0.0-beta.1`. Readers reject
+missing versions, unsupported revisions and versions from other namespaces. Unknown fields at
 document, policy and target levels are errors. Optional fields use only the
 defaults declared by the public types. Null is not interchangeable with omission
 except for optional nullable fields represented by `Option`. Duplicate keys at
 every nesting level MUST be rejected from raw JSON/YAML before a map or generic
 JSON value can discard them.
-
-This contract replaces the service's former direct acceptance of
-`lockfileVersion` documents. Old context actions, compiler lineage, certificates,
-guards, adequacy settings and optimization state are not Policy source fields.
-They cannot be renamed into this contract. Unsupported beta revisions require
-an updated reader or explicitly authored supported source; no automatic downgrade
-or compatibility converter is provided.
 
 Changing a policy's model or rule produces a new resource revision, not a new
 contract revision. Tenant and installation identity, immutable revision,
@@ -46,7 +38,7 @@ policies. Policy names are at most 256 UTF-8 bytes, use ASCII letters, digits,
 dot, underscore and hyphen in one or two colon-separated segments, and neither
 segment starts with a dot. Each policy has 1–256 tiers; tier names are nonempty
 and at most 256 bytes. Each model selector is nonblank and at most 512 bytes.
-Targets cannot refer recursively to another BitRouter router or preset.
+Targets cannot refer recursively to another BitRouter router.
 
 `default_tier` is required and names an existing tier. Every explicit route,
 tool fallback and tool-safe entry names an existing tier. Duplicate model/effort
@@ -78,14 +70,19 @@ replace or route context, execute tools, own a harness session, or create an
 agent. Preservation also applies to no-match and bypass paths. Normal inference
 protocol conversion and provider fallback remain gateway responsibilities.
 
-Explicit classification routes are optional. Their keys have exactly the form
-`<task-family>|<next-step>|<risk>`. Families are `code:generation`,
+The optional `routes` map associates a typed `RouteClass` with a tier name.
+Each `RouteClass` combines a `TaskFamily`, a `NextStep` and a `Risk` and
+serializes as one case-sensitive key, `<task-family>|<next-step>|<risk>`.
+For example, `code:debugging|verify|guarded` is one key.
+
+Families are `code:generation`,
 `code:debugging`, `code:review`, `code:sql_database`, `code:frontend_ui`,
 `code:devops_config`, `code:repository_analysis`, `agent:multi_step_planning`,
 `agent:workflow_execution`, `agent:web_research`, `agent:memory_operations`,
 `agent:general`, and `unknown`. Steps are `orchestrate`, `implement`,
-`mechanical`, `verify`, `finalize`, and `unknown`. Risks are `normal`, `context`
-and `guarded`; these are classification labels and grant no context operations.
+`mechanical`, `verify`, `finalize`, and `unknown`. Risks are `normal` and `guarded`. Unknown labels, missing or extra segments
+and repeated keys are rejected. The generated schema constrains keys with
+`propertyNames`.
 
 A policy with routes requires `classifier_digest`, exactly matching the serving
 classifier's rubric/configuration contract digest. A different digest is rejected
@@ -109,9 +106,8 @@ the inference contract permits the override. Absence preserves caller effort.
 
 Policy submission creates an immutable revision through existing resource
 management. A route binds the full immutable `ResourceRef` and literal selected
-name. `auto` and `auto:cost` are independent names; a request variant MUST NOT
-select the latter or fall back to the former. Missing names fail. Updating
-the managed head does not retarget an old route/configuration. Configuration
+name. `auto` and `auto:cost` are independent names; selection requires
+an exact name match. Updating the managed head does not retarget an old route/configuration. Configuration
 activation is explicit and uses its existing authority revision/CAS. Drafting,
 evaluation or compilation does not activate a policy.
 
@@ -119,8 +115,7 @@ Files, defaults, HTTP, SDK, shared publication, reads and exports use the same
 typed `policy::Document`. `Definition::Policy.document` and source-bearing reads
 use that type; reported targets use `policy::Target`. Store normalized source
 and separate management metadata, then build a private model-selection view.
-No PolicyLock, compiler-marker qualification, certificate bridge or source
-reconstruction through recompilation is permitted. Provider secrets are excluded.
+Provider secrets are excluded.
 Qualification covers the complete reachable closure at import, configuration
 creation, activation, restart and execution reopening, including hidden and
 unselected dependencies. Experimental content fails with `capability_mismatch`.
@@ -134,9 +129,7 @@ unselected dependencies. Experimental content fails with `capability_mismatch`.
 | `classifier_digest` | Installed classification contract; never a resource revision or assessment cohort |
 
 The source digest excludes paths and management metadata. Equivalent YAML/JSON
-and object order have one digest. An old IR digest MUST NOT be relabelled as a
-source digest. Changed receipt/Eval identities require explicit discriminator
-selection rather than reinterpreting retained old fields.
+and object order have one digest.
 
 Publication takes explicit CAS parameters, never an artifact `parent_digest`.
 Rollback reactivates current-contract source/revision and preserves concurrency
@@ -146,35 +139,22 @@ default view; disk is explicitly selected and cannot replace a failed active or
 remote read. Authorized source reads return normalized source, literal selected
 name and exact resource status; the source can be resubmitted directly.
 
-Clients/external evaluators run evaluation using revision-bound inference; the
-service receives, validates, queries and freezes facts. M0 adds no server Eval
-runner or implicit learner. Model-policy subjects bind installation, tenant,
-configuration revision, full Policy ResourceRef and literal selected name.
-Source/classifier digests are supplemental evidence. Results and freeze inherit
-verified subject identity. Aggregation/export retain that tuple and MUST NOT
-merge solely by name/projection. Generic subjects cannot acquire model-policy
-update eligibility. See the closed
-[Eval profiles](../service-api/README.md#eval-subject-identity-profiles).
-
-The explicit loop is evaluate an exact revision, submit/freeze results, author
-new source, create a new revision, then separately authorize/CAS activation.
-Context treatments, candidate exchange, guards, optimization and paid assessment
-belong to an explicit BRO harness or are removed. Tenant/shared entry points
-reject experimental routes and dependencies even with all features and without
-a Policy binding. Normal provider continuation and explicit server tools retain
-their own authority; model selection cannot invoke them.
+A [model-policy Eval subject](../eval/README.md#subjects-and-ownership) binds
+evidence to an exact revision. After evaluating that revision, an authorized
+client may submit and freeze facts, author new source, create a new resource
+revision and explicitly activate a new configuration with CAS.
 
 ## Conformance
 
 Conforming implementations test source/schema admission, wrong namespaces and
-unsupported beta revisions, legacy and experimental field rejection, invalid
+unsupported beta revisions, unknown field rejection, invalid
 references/classes/classifier digests, normalized source round trips, exact
 revision activation, actual model dispatch and context preservation on default,
 class, tool and bypass paths. Management tests cover authorization, replay/CAS,
 restart, revocation and immutable old configurations. Shared publication uses
 the same admission rules as tenant submission.
 
-Required cutover cases include raw duplicate-key refusal, equivalent YAML/JSON
+Conformance cases include raw duplicate-key refusal, equivalent YAML/JSON
 source digests, source read/resubmission, literal selected-name failure, hidden
 experimental closures and Policy-free experimental routes in minimum and
 all-feature builds. Eval facts for same-name different-revision policies remain

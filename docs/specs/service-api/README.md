@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **accepted, `service-api/1.0.0-beta.5`**. This is the single
+Status: **accepted, `service-api/1.0.0-beta.6`**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -16,7 +16,7 @@ module ownership and deployment procedures live in the development and operator
 guides. The sections below are parts of this one API contract, not independently
 versioned feature specifications.
 
-Changes must review old-client/new-server and new-client/old-server behavior.
+Changes require review of compatibility in both client/server directions.
 Do not silently change a field's type, units, default, nullability, enum meaning,
 identifier scope, error semantics, terminal event or fingerprint encoding.
 Capability discovery is required where offered; an unknown optional response
@@ -26,24 +26,6 @@ Request strictness varies by schema; adding a request field is not automatically
 compatible with a reader that rejects unknown fields. Schema/DTO changes,
 examples and compatibility cases must be reviewed together. Feature availability
 and authorization remain distinct from format compatibility.
-
-Revision beta.2 consolidates resource provisioning and execution usage evidence
-for independently updated management clients, SDKs and receipt consumers. Their
-wire discriminators remain 1; the existing strict tenancy capability and receipt
-schemas are unchanged. Retained resource authority and evidence require the
-migration and rollback rules below, even when an older client uses only receipts.
-
-Revision beta.3 adds operator directory readback and explicitly negotiated
-ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
-formats retain their existing meanings and eight-attempt bound. The store boundary prevents an older binary from opening current authority data.
-
-### M0 cutover
-
-The following M0 decisions apply to DTOs, schemas, services, SDKs and conformance
-tests. Policy source remains unchanged, unpublished beta.1; Registry
-beta.7 is unchanged. Configuration and this API advance to beta.5. Historical
-PolicyLock, paid-recovery, offline conversion/backfill and dual-reader contracts
-are retired for this cutover. Current-format recovery remains mandatory.
 
 ## Control API
 
@@ -75,52 +57,46 @@ provided by discovery and the [public types](../../../crates/bitrouter-ai/src/co
 An endpoint's presence in this table does not guarantee it is enabled in a
 particular distribution or granted to a caller.
 
-### M0 control reader selection
+### Control descriptors
 
 Capabilities MUST identify `protocol: bitrouter-control` and
-`protocol_version: 2`. New SDKs reject protocol 1, missing/incorrect descriptors,
-versions, scopes or schemas before invoking an action; old SDKs reject protocol
-2. There is no legacy action-name discovery or fallback to local files. Every
-SDK method/transport path checks its action descriptor, including direct calls;
-CLI preflight alone is insufficient. The old `actions` discovery list is removed.
+`protocol_version: 2`. Before invoking any action the SDK checks its
+descriptor ID, version, required scope and schemas through discovery.
+This applies to direct SDK calls and CLI client calls.
 
-| Descriptor ID | Version | Required scope | M0 decision |
-| --- | --- | --- | --- |
-| `status` | 1 | `control:read` | Unchanged report |
-| `list_models` | 2 | `control:read` | Canonical router inventory, no legacy preset source/compatibility interpretation |
-| `route` | 2 | `control:read` | Literal Policy binding and model-only source identity; no variant/legacy semantics |
-| `requests` | 1 | `control:read` | Unchanged report |
-| `providers_list` | 1 | `control:read` | Unchanged report |
-| `observe_status` | 1 | `control:read` | Unchanged report |
-| `policy_status` | 2 | `control:read` | Typed source report below |
-| `policy_show` | 2 | `control:read` | Typed source report below |
-| `agents_list` | 1 | `control:read` | Unchanged report |
-| `reload` | 2 | `control:reload` | Source-based Policy reload and configuration beta.5 rejection semantics; guarded request/operation shapes unchanged |
+| Descriptor ID | Version | Required scope |
+| --- | --- | --- |
+| `status` | 1 | `control:read` |
+| `list_models` | 2 | `control:read` |
+| `route` | 2 | `control:read` |
+| `requests` | 1 | `control:read` |
+| `providers_list` | 1 | `control:read` |
+| `observe_status` | 1 | `control:read` |
+| `policy_status` | 2 | `control:read` |
+| `policy_show` | 2 | `control:read` |
+| `agents_list` | 1 | `control:read` |
+| `reload` | 2 | `control:reload` |
 
-PolicyReport contains `view`, `availability`, nullable `source_digest`,
-`policies`, router-to-literal-name `bindings`, and nullable typed
-`source: policy::Document`. Remove `digest`, `mode`, evidence roots,
-`definitions` and certificates. Show validates a supplied selected name and
-returns the complete resubmittable document; digest always covers that whole
-source. Active is the selected instance's default; disk is explicit. Unavailable
-source is not silently replaced by disk/default data. Tenant source reads retain
-`status`, typed `document` and literal `name`, with exact ResourceRef.
+`PolicyReport` includes `view`, `availability`, nullable `source_digest`,
+`policies`, router-to-literal-name `bindings` and nullable typed
+`source: policy::Document`. Show validates a supplied selected name and
+returns the complete resubmittable document. The digest covers that whole
+source. Active is the default view and disk must be requested explicitly.
+Unavailable source fails without substitution. The associated tenant API
+reads `status`, `document` and the literal `name` for an exact resource
+reference.
 
-Descriptor refusal is a client compatibility error, not an authorization grant
-or successful action. Direct malformed requests use 400 `invalid_request`;
-unsupported actions use 404 `unsupported_action`; live scopes still apply.
-Known old mutation fields/formats fail before admitting a mutation. The guarded
-reload body retains its current shape, so a raw client that omits discovery is
-not promised version self-detection; the server still strictly validates beta.5
-configuration/source before changing live state.
+An incompatible descriptor fails before invocation. Direct malformed requests
+return 400 `invalid_request`. Unsupported actions return 404
+`unsupported_action`. The server checks scopes and validates the selected
+configuration and Policy source before changing live state.
 
 ### Authentication and isolation
 
 Credentials are bearer tokens in `Authorization`. `control:read` grants
 inspection; `control:reload` authorizes reload and requires `control:read`;
 `control:tenancy` is separate and does not imply either. Host control tokens
-are independent of inference credentials. The default legacy token grants read
-only. The listener's deployment and TLS requirements are operator settings;
+are independent of inference credentials. The default control token grants read-only access. The listener's deployment and TLS requirements are operator settings;
 clients MUST authenticate the target and MUST NOT send tokens to an untrusted
 host. Token configuration requires at least 32 UTF-8 bytes. Handlers recheck
 scope even if discovery advertised an action.
@@ -184,10 +160,8 @@ read-plus-reload credentials.
    reload is admitted. Reuse the ID with changed input: 409 conflict.
 5. Stale generation, another boot and concurrent reload do not start a second
    operation. Unknown/expired results are not represented as a confirmed rollback.
-6. Old SDK capability fixtures reject protocol2 before invoking an action; new
-   SDK fixtures reject protocol1, legacy names, missing descriptors and wrong
-   versions/scopes/schemas on direct methods and CLI paths. Test all ten action
-   versions above, including unchanged version1 actions under protocol2.
+6. Every direct and CLI action checks its descriptor. Reject unsupported
+   protocol versions, missing descriptors and wrong versions, scopes or schemas.
 7. A partially applied operation is a terminal report with participant outcomes,
    not a successful atomic transaction. Unknown response fields/codes do not
    make a client report success.
@@ -304,13 +278,12 @@ For example, a one-tenant store can return:
 {"schema_version":1,"installation_id":"installation-a","authority_revision":1,"entries":[{"kind":"tenant","tenant_id":"tenant-a","revision_id":"revision-a","state":"active"}],"next_after":null}
 ```
 
-The additive SDK method is
+The SDK method is
 `TenancyClient::directory(installation, authority_revision, after, limit)`.
 It validates installation, requested revision, ordering, continuation and count,
 and caps received bytes at 1 MiB or the client's lower configured response bound.
 The DTO rejects unknown fields and variants; clients must fail visibly on
-unsupported schema versions. Existing clients and other tenancy DTOs are
-unchanged; older servers may return 404 for this additive endpoint.
+unsupported schema versions.
 
 Compatibility checks cover empty and exact full pages, ASCII pagination without
 duplicates or omissions, intervening mutations, wrong installation and malformed
@@ -343,7 +316,7 @@ its `kind` tag, is bounded at 262144 bytes (256 KiB). There is no separate
 bounded sink before allocating its uniqueness set; this does not claim that an
 HTTP decoder has not already allocated the input. Resource identities, duplicate
 rejection, nonempty resource scopes and operator-pool ownership rules are
-unchanged. JSON Schema describes the shape and uniqueness; the typed validator
+defined by each message. JSON Schema describes the shape and uniqueness; the typed validator
 enforces the serialized-byte bound. Runtime working and retained-view budgets
 remain separate, lazy, operator-configured capacity constraints. Sequential
 point reads charge actual retained record lengths before loading their links;
@@ -352,19 +325,14 @@ skipping any records. Operation and retained-record validation run once with
 their original budgets; their preflight refusals do not trigger directory
 retries.
 
-This broadens accepted inputs without changing their serialized shape. Every
-previously valid 256-key scope fits the new byte limit at maximum identity width.
-New readers accept old data, but old AI/SDK validators and old Core storage
-readers reject scopes above 256 keys. Upgrade the service and all management,
-directory and dispatch consumers together before writing such grants; an old
-binary is not a supported rollback reader for these new records. Never truncate
-an allowlist or replace it with tenant-wide authority for compatibility. Existing
-2 MiB management bodies and 1 MiB directory responses retain their bounds.
+Management request bodies are bounded to 2 MiB and directory responses to
+1 MiB. Clients MUST preserve scope exactly. A resource allowlist cannot be
+truncated or converted to tenant-wide authority.
 
 The configuration and its referenced route/policy revisions are pinned for
 execution. Current health, credential and authority changes can narrow eligible
 targets, not expand an admitted envelope. Suspended or deleting tenants cannot
-start or wake work; already admitted work can still finalize under its existing
+start work; already admitted work can still finalize under its existing
 ownership. A receipt-only audit reader may inspect retained receipts without
 gaining mutation or execution authority.
 
@@ -439,12 +407,9 @@ count quota or recycle IDs. Active work, queues, reads and storage admission
 remain bounded by the startup host budgets. A principal can recover its own
 unexpired operation only while current authority covers its saved scope.
 
-Revision beta.3 clarifies those capacity and retention semantics without
-changing strict-v1 message shapes or per-object limits. Host budgets are defined
-by the [configuration contract](../configuration/README.md#process-capacity).
-Current stores preserve indexed operation IDs, cumulative counters and stop
-state. No historical capacity upgrade or saturation-latch conversion is part of
-M0; current-only startup validation applies before authority is acquired.
+Host budgets are defined by the [configuration contract](../configuration/README.md#process-capacity).
+The store preserves indexed operation IDs, cumulative counters and stop state.
+Startup validates the store before acquiring authority.
 
 The tenancy error body is a JSON object with `code`, `message`, `dispatch_state`,
 `operation_id` and `execution_id` (the last two may be null). HTTP mappings are:
@@ -459,8 +424,10 @@ as failures and MUST NOT automatically repeat an uncertain execution.
 
 ### Receipts and pagination
 
-A receipt identifies an installation/execution and its actual attempts,
-configuration and available usage evidence. Unknown quantities remain null;
+The [execution receipt](../../../crates/bitrouter-ai/src/tenancy/execution.rs)
+identifies an installation/execution, its dispatch mode, actual attempts,
+configuration and available usage evidence. Ordered receipts include the
+accepted selection and original ordinals. Unknown quantities remain null;
 an estimate or missing attempt cannot be promoted to complete provider usage.
 The receipt endpoint is tenant-wide read or dedicated audit-reader authority.
 Correlation queries return an `ExecutionPage` ordered by execution ID, with an
@@ -488,24 +455,17 @@ extension points. Required nullable fields MUST be present: omission is not
 equivalent to null. Unsupported versions, inexact integers and out-of-bound
 values fail validation. No stable compatibility guarantee is claimed in beta.
 
-An old client can continue using the unchanged tenancy discovery and receipt
-messages against a new server. A new client MUST discover resource and evidence
-support separately; the original tenancy capability document does not advertise
-them. An older server may lack those endpoints. An absent endpoint or an explicit
-disabled capability means the facility is unavailable, not permission to send
-new fields to an old endpoint. Authentication, authorization, transport and
-malformed-response failures MUST NOT be treated as successful discovery or as
-historical absence of evidence. Clients may continue an explicitly optional
-receipt-only workflow; required provisioning or evidence must fail visibly.
+Clients MUST discover required resource and evidence capabilities through
+their respective endpoints. An absent endpoint or disabled capability makes
+the facility unavailable. Authentication, transport or response-validation
+failure does not establish capability or evidence absence.
 
 ### Resource provisioning
 
-Routing Policy `Definition::Policy.document` is a typed
-[Policy Document](../policy/README.md), exactly `policy/1.0.0-beta.1`.
-Public provisioning format 1, immutable resource revisions and /control/v1 retain
-separate meanings. Old lock discriminators, duplicate/unknown fields and
-experimental source are rejected from raw input before mutation, never converted.
-Shared publication format 2 uses typed `model_policy` and the same reader.
+`Definition::Policy.document` and shared publication's `model_policy` use
+the typed [Policy Document](../policy/README.md). The resource revision,
+HTTP namespace and source contract are independent. Unknown or duplicate
+fields and unsupported source fail before mutation.
 
 `GET /control/v1/tenants/{tenant_id}/resources/policy` takes the same exact
 `ResourceRef` query and installation binding as resource-status reads. It
@@ -515,7 +475,7 @@ then revalidates authority before disclosure. Its response is
 `status`, `document` and selected `name`. It returns only representable model
 Policy source. Other resource kinds are invalid requests; experimental artifacts
 return `capability_mismatch`. Generic resource-status reads remain nonsecret
-status only. Missing endpoints on older services are not a downgrade signal.
+status only.
 
 `GET /control/v1/tenancy/policy-capabilities` uses the same installation binding
 and live capability authority as resource discovery. `PolicyCapabilities`
@@ -527,7 +487,6 @@ Policy compatibility is checked over the complete reachable dependency closure
 when a managed route is submitted, a configuration is created, an active
 configuration is restored, and an execution view is opened. Referencing an
 operator-imported experimental policy does not bypass Policy admission.
-No historical Policy decoder or paid-recovery bypass survives this cutover.
 Tenant/shared import, configuration and execution reject experimental routes
 (core_choice, assessment, block and hidden dependencies), even in all-feature
 builds and without Policy. Exact literal selected names have no variant fallback.
@@ -545,146 +504,64 @@ installation binding, current authority, errors and no-store response policy.
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| GET | `/tenancy/resource-capabilities` | [Resource capabilities schema](../resource-provisioning-v1/capabilities.schema.json) |
-| POST | `/tenants/{tenant_id}/resources` | [Put command schema](../resource-provisioning-v1/put.schema.json); existing tenancy `OperationResult` |
-| POST | `/tenants/{tenant_id}/resources/revoke` | [Revoke command schema](../resource-provisioning-v1/revoke.schema.json); existing tenancy `OperationResult` |
-| GET | `/tenants/{tenant_id}/resources` | Exact `ResourceRef` query; [status schema](../resource-provisioning-v1/status.schema.json) |
+| GET | `/tenancy/resource-capabilities` | `ResourceCapabilities` |
+| POST | `/tenants/{tenant_id}/resources` | `ResourcePut` / `OperationResult` |
+| POST | `/tenants/{tenant_id}/resources/revoke` | `ResourceRevoke` / `OperationResult` |
+| GET | `/tenants/{tenant_id}/resources` | Exact `ResourceRef` query / `ResourceStatus` |
 
-These schemas remain at their build/test-consumed paths and are the field
-catalog. The [DTOs and validator](../../../crates/bitrouter-ai/src/tenancy/resources.rs)
-also enforce semantic constraints. Discovery requires `Bitrouter-Installation-Id`
-and reports provisioning availability and command bounds; it grants no authority.
-Without a configured wrapping key, `provisioning_enabled` is false. Upstream
-secrets are distinct from the bearer credentials used to call this API.
+The [resource DTOs and validators](../../../crates/bitrouter-ai/src/tenancy/resources.rs)
+define the fields and semantic constraints. The put command accepts the closed
+set of resource definitions, including credential slots, model-only Policies,
+admission profiles and static routes with explicit profile attachments.
+Discovery requires `Bitrouter-Installation-Id`. It reports which definitions
+can be provisioned and their bounds. Provisioning is disabled without a
+configured wrapping key. Upstream secrets are distinct from API bearer
+credentials.
 
 #### Creation, rotation and authority
-
-For example, this synthetic request creates a managed credential head:
-
-```json
-{
-  "format": 1,
-  "operation_id": "provision-slot-01",
-  "installation_id": "example-installation",
-  "key": {
-    "owner_kind": "tenant",
-    "owner_id": "example-tenant",
-    "resource_kind": "credential",
-    "resource_id": "upstream-slot"
-  },
-  "expected_revision": null,
-  "definition": { "kind": "credential", "secret": "synthetic-example-only" }
-}
-```
 
 The required `expected_revision` is null only for creation of a remotely managed
 head; otherwise it MUST equal that head. The service assigns a new immutable
 revision. Rotation MUST NOT rewrite old definitions or retarget configurations
-that selected them. A manifest-only resource has no managed head; a managed
-create of the same key leaves its existing manifest revisions unchanged.
-Resource kinds are `route`, `policy`, `credential`, `configuration` and
-`execution`. The retired learned-policy `checkpoint` resource/evidence envelope
-is unsupported. ACP and managed execution checkpoint messages retain their
-independent contracts. Model Policy resource dependencies accept credentials;
-they cannot import experimental learning evidence.
+that selected them. Creating a managed head for a manifest-only key preserves
+its existing revisions. Resource kinds are `route`, `policy`, `credential`,
+`configuration` and `execution`.
 
 Resource identity includes owner kind, owner ID, resource kind and resource ID;
 an exact reference additionally includes revision ID. Authority revision and
 content revision are distinct and MUST NOT be substituted for each other.
 
-The same format-one command has two additional closed definition variants:
-`admission_profile` contains an `AdmissionProfileV1`, and `profiled_route`
-contains the existing concrete routing fields plus a total attachment map.
-An admission profile is an operator-pool Policy resource, distinct from a
-model-routing Policy definition. Both variants require installation authority, including
-a profiled route with a tenant owner. A profile key cannot change between the
-two Policy definition types. Only its member RPM ceiling may rotate; rate-group
-membership, health rules and fallback remain immutable for that key. Zero RPM
-is valid and means local refusal, while explicit null disables a gate.
+An admission profile is an operator-pool Policy resource with explicit
+nullable rate and health rules, a required nullable `health_group_id` and a
+fallback rule. Health and group MUST both be null or both be non-null.
+Zero RPM denies admission locally. Null rate disables that gate. The profile
+is bounded to 4 KiB. Multiple members may share one health circuit.
 
-Attachments identify exact ingress protocol, original candidate ordinal,
-credential revision and profile revision. Compilation verifies total, unique
-coverage of the three retained generation roots. Policy, continuation, counting,
-dynamic credential and other unsupported roots cannot acquire a profiled
-definition. All existing command, import, artifact and configuration byte bounds
-apply to the final serialized objects; cardinality ceilings do not promise that
-every combination of maximum-width values fits.
-
-Accepting a profiled route permanently protects its resource key across retained
-revisions. Legacy activation or execution cannot bypass that protection by using
-an old configuration, default route, native entrypoint or auxiliary operation.
-Revocation and rotation retain the old immutable definitions and protection.
-Read authority and existing terminal obligations remain independent of current
-operational eligibility. The private format-one import accepts the same new
-variants. It initializes one unambiguous head for a new profile key atomically;
-identical reimport never rewinds the head. Later rotations use authenticated CAS.
-Missing retained profile heads are errors, not disabled admission rules.
+An attached route binds every compiled protocol root and original candidate
+ordinal to its exact credential and profile revision. Compilation verifies
+total, unique attachment coverage. A profile or attached route requires
+installation authority, even when the route has a tenant owner. A profiled
+key remains protected across all retained revisions. Missing or revoked
+dependencies fail authority checks. Rotation preserves definitions and
+readability of previously admitted evidence.
 
 #### Shared health profiles
 
-`AdmissionProfileV2` makes circuit membership explicit while keeping each member
-independently addressable. The additive format-two
-[`ResourcePutV2`](../resource-provisioning-v2/put.schema.json) accepts only
-`admission_profile_v2` definitions, on operator-pool Policy keys and with
-installation authority. Other definitions continue through format-one puts.
-The existing POST resource endpoint selects the closed decoder by the raw
-`format` token; missing, duplicate and unsupported versions fail before writing.
-V1 profile codecs, schemas, fingerprints and profile-local health remain exact.
+Group identity is scoped to the installation and operator-pool owner.
+All retained members, including revoked and unreferenced members, must have
+identical health rules. Member revisions, RPM, credential and route
+identities do not partition group health. Members may have distinct rate
+groups, ceilings, read-only rate associations and fallback rules. Only a
+member's RPM can rotate. Changing health rules requires a new group and
+member keys, followed by explicit route and configuration publication.
+Concurrent group creation uses the serialized authority writer.
 
-V2 adds required nullable `health_group_id` to the existing profile fields and
-requires `schema_version: 2`. Health and group MUST both be non-null or both be
-null. Missing group data never falls back to local health. Exact integral
-decimals and exponents retain the bounded integer semantics; fractional or
-out-of-range values, unknown fields and duplicates fail closed. Existing 4 KiB
-profile and 1 MiB command bounds remain unchanged.
-
-Before publishing V2 members, discover
-`GET /control/v1/tenancy/resource-capabilities/v2` using
-`TenancyClient::resource_capabilities_v2`. Its closed
-[`ResourceCapabilitiesV2`](../resource-provisioning-v2/capabilities.schema.json)
-has `format: 2` and `admission_profile_versions: [1, 2]`. Require the expected
-installation and enabled provisioning. A 404, V1 response or malformed
-capability is unsupported; do not retry a grouped write as V1 or remove its
-group. `put_resource_v2` retains ordinary CAS, operation recovery and result
-identity checks, with a distinct `resource.put.v2` fingerprint domain. V1
-discovery, status, revocation, grants and configuration contracts are unchanged.
-
-Health identity is the installation plus a tagged choice of either the full V1
-profile key or the V2 operator-pool owner and health-group ID. Equal spellings
-across these families, pools or installations cannot collide. Member revision,
-RPM, rate group, credential, tenant, route and candidate ordinal do not partition
-group health. All retained members of one group MUST have identical complete
-health rules, including classification, failure threshold, both cooldowns and
-probe lease. Distinct members may have different rate ceilings, rate groups,
-read-only rate associations and fallback rules. A shared circuit does not grant
-resource or dispatch authority.
-
-Only member RPM may rotate on one key. Family, group, health rules, rate presence
-and group, read-only rate association and fallback are immutable across every
-revision. A model-routing Policy key, V1 member and V2 member cannot change families.
-Revoked, superseded, unreferenced and all-revoked members still constrain group
-rules after restart. Changing a group's rules requires a new group and member
-keys followed by explicit route/configuration publication. Concurrent first puts
-and imports validate against the same serialized authority writer; failed
-validation publishes no new resource, managed head or group.
-
-Admission, observation, capacity and captured completion tickets use the same
-tagged identity. One half-open probe owns the group across all members; stale
-results cannot complete a newer lease. Rate-denied probes release neutrally;
-charged timestamps are not refunded. A null-health profile creates no health
-state and cannot open or close a shared circuit. Its explicit read-only rate
-association can still expose shared count without charging. Observations never
-allocate state or claim a probe and are not dispatch permission.
-
-Private format-two imports permit V2 profiles alongside existing definitions;
-format-one imports reject V2. Exact attachment references, total root coverage
-and current/pinned revocation checks apply to both profile families. Admission
-mode remains `profiled_v1`; ordered selection, receipts and evidence do not add
-a caller-supplied group or change their codecs. The encrypted profile definition
-and exact reference bind membership. V2 resource artifacts use authenticated
-compiler `tenancy-admission-v2`. Any configuration closure containing V2 uses
-that compiler and retained envelope 5, with format 4's compact route validation.
-V1-only profiled closures remain envelope 4 with their original compiler.
+A shared circuit grants no resource or dispatch authority. One half-open
+probe owns the group. A stale probe result cannot complete a newer lease.
+Rate-denied probes release neutrally and charged timestamps stay charged.
+A profile with null health allocates no circuit state. Its optional
+read-only rate association exposes the shared count without charging.
+Observation cannot allocate state or claim a probe.
 
 Credential writes require `credential.manage`; route and policy writes require
 `resource.draft` on the addressed key. Every dependency in the compiled closure
@@ -718,7 +595,7 @@ Withdrawing approval requires explicit revocation of affected revisions.
 Revocation addresses an exact reference and compares
 `expected_authority_revision` with current authority. It requires
 `credential.manage` for credentials or `policy.activate` for other resources.
-Both old and current revisions can be revoked. Revocation MUST fence subsequent
+Revocation applies to any retained revision. Revocation MUST fence subsequent
 use, including cached dispatch and new compilation/activation, without erasing
 immutable evidence. Re-enabling requires a new revision and explicit
 configuration selection. A revoke cannot undo an upstream request already sent.
@@ -746,7 +623,7 @@ requests to the installation and check returned operation/resource identities
 before accepting success. Capability and status installation IDs MUST match the
 requested installation; an `OperationResult` does not add an installation field.
 
-### Ordered static dispatch v2
+### Ordered static dispatch
 
 Ordered dispatch is an explicit mode on the existing `/v1/chat/completions`,
 `/v1/messages` and `/v1/responses` endpoints. It uses the same protocol bodies,
@@ -755,22 +632,22 @@ idempotency, a retry API, a scheduler callback or a separate dispatcher.
 
 | Method | Path under `/control/v1` | Purpose |
 | --- | --- | --- |
-| GET | `/tenancy/ordered/capabilities` | Authenticated v2 discovery before installation binding |
+| GET | `/tenancy/ordered/capabilities` | Authenticated dispatch discovery before installation binding |
 | GET | `/tenancy/tenants/{tenant}/configurations/{revision}/candidates` | Operator-only descriptors for an exact retained protocol root |
-| GET | `/tenancy/tenants/{tenant}/executions/{execution}/v2` | Explicit v2 receipt read with current receipt authority |
-| GET | `/tenancy/tenants/{tenant}/executions/{execution}/usage-evidence/v2` | V2 original usage observations with the same authority |
+| GET | `/tenants/{tenant_id}/executions/{execution_id}` | [Execution receipt](#receipts-and-pagination) |
+| GET | `/tenants/{tenant_id}/executions/{execution_id}/usage-evidence` | [Original usage observations](#execution-usage-evidence) |
 
 The [ordered dispatch schema](ordered-dispatch.schema.json) and the public
 [selection](../../../crates/bitrouter-ai/src/tenancy/ordered.rs),
-[receipt](../../../crates/bitrouter-ai/src/tenancy/execution_v2.rs) and
-[evidence](../../../crates/bitrouter-ai/src/tenancy/usage_evidence_v2.rs) validators
+[receipt](../../../crates/bitrouter-ai/src/tenancy/execution.rs) and
+[evidence](../../../crates/bitrouter-ai/src/tenancy/usage_evidence.rs) validators
 define required fields, nullability, versions and semantic constraints. All
 reads other than discovery require `Bitrouter-Installation-Id`; protected
 responses use `Cache-Control: no-store`.
 
 #### Discovery, selection and authority
 
-`OrderedCapabilitiesV2` reports contract version 2, installation/instance IDs,
+Ordered capabilities report the dispatch binding version, installation and instance IDs,
 capability and authority revisions, the host attempt limit, and the three
 dispatch/receipt eligibility flags. A client MUST explicitly require all three
 flags and respect the reported limit. Discovery does not grant resource access.
@@ -782,9 +659,8 @@ Manifest queries require exactly `route_owner_kind`, `route_owner_id`, `route_id
 persisted protocol root, not positions in a private deduplicated target array.
 The manifest contains at most 256 entries and 1 MiB of JSON, with each ordinal,
 nonsecret configured target IDs and exact credential resource reference.
-Its required `admission_mode` is `legacy` or `profiled_v1`; each descriptor has
-an explicit nullable `admission_profile`. Profiled descriptors must carry the
-exact pinned profile reference, including for explicitly disabled gates. The
+Each descriptor carries its exact pinned profile reference, including for
+explicitly disabled gates. The
 required-nullable `runtime_observation` is advisory process-local information,
 with one entry per descriptor in the same ordinal order. Missing profile
 authority is unavailable/denied, never an invented zero count. Producers use
@@ -809,15 +685,7 @@ It contains no credential bytes, URL, arbitrary metadata or provider body.
 An authority change during read fails rather than mixing revisions. Tenant
 inference credentials cannot enumerate this operator view.
 
-The admission mode is mandatory in selections and accepted selections; it has
-no deserialization default. Previously retained ordered bindings or receipts
-without the field require an explicit historical decoder in archive consumers.
-Preserve their original bytes and digests instead of reserializing them through
-the current DTO or injecting a field. A historical read projection grants no
-new dispatch authority. Previously retained manifests also lack the new
-required-nullable fields. Legacy v1 receipt and evidence formats are unchanged.
-
-A v2 request sends the existing seven strict binding headers with
+An ordered request sends the existing seven strict binding headers with
 `Bitrouter-Tenancy-Version: 2`, plus exactly one `Bitrouter-Candidate-Selection`.
 The latter is strict JSON encoded as canonical, unpadded RFC 4648 base64url,
 at most 4096 encoded bytes. Its decoded shape is:
@@ -825,7 +693,7 @@ at most 4096 encoded bytes. Its decoded shape is:
 ```json
 {
   "schema_version": 1,
-  "admission_mode": "legacy",
+  "admission_mode": "profiled_v1",
   "route": {
     "owner_kind": "tenant",
     "owner_id": "example-tenant",
@@ -837,29 +705,20 @@ at most 4096 encoded bytes. Its decoded shape is:
 }
 ```
 
-The route MUST match the exact retained revision and body model. The ordered
-mode is required and must match the authenticated retained root; omission is
-not a legacy default. Predecessor closed readers reject the added field, while
-current readers reject the old missing-field shape. This completes the
-unreleased ordered contract without changing strict v1 bytes or endpoints. The
-accepted mode remains part of selection identity in the existing v2 receipt,
-usage evidence and bounded dispatch intent. The ordered
-list has 1–64 unique integer ordinals below 256, each present in that root.
-In legacy mode, different ordinals that resolve to the same private candidate
-cannot both be selected. Profiled mode permits equal private candidates at
-distinct original ordinals, preserving each ordinal's own profile attachment
-and reached-hop admission. Duplicate ordinals are rejected in both modes.
-Empty, unknown, oversized or unauthorized selections also fail before sending.
-V1 requests carrying the selection header are rejected; a
-client MUST NOT retry an unsupported v2 request as v1 or truncate its list.
-The header is removed before provider dispatch.
+The route MUST match the exact retained revision and body model. The
+selection must match the authenticated profiled root. The accepted selection
+becomes part of the receipt and usage evidence. The list has 1–64 unique
+integer ordinals below 256, each present in that root. Distinct ordinals
+preserve their own profile attachments even when they share a provider target.
+Invalid or unauthorized selections fail before a provider send. Ordinary
+dispatch rejects the selection header. The gateway removes it before dispatch.
 
 Selection constructs an immutable request-local view. It narrows candidate
 membership and required credential dependencies without changing the cached
 revision, active configuration or another request. It never grants permission
 to a selected resource. Only policy-free static generation roots without
 learning, experiments, auxiliary counting, native harness, OAuth refresh or
-continuation requirements qualify. Ordinary v2 continuation-bearing input fails
+continuation requirements qualify. Ordered continuation-bearing input fails
 explicitly; the separately discovered provider-native opt-in below accepts
 opaque controls without introducing owned-handle authority.
 Unselected private credentials do not become usable through later hooks.
@@ -874,20 +733,20 @@ fallback does not reset it or the separate stream-idle rules.
 
 #### Receipts, bounds and recovery
 
-V2 receipts explicitly bind the accepted route, server-observed ingress protocol,
+Ordered receipts bind the accepted route, server-observed ingress protocol,
 ordered selection and host attempt limit. Every actual attempt records its
 selected ordinal and a required nullable observed HTTP status (200–599).
 Completed attempts cannot claim non-2xx status. An observed 2xx status does not
 prove completion. An actual unknown attempt requires an unknown receipt;
 successful execution with missing usage can still be `incomplete`.
 
-V2 receipt JSON is bounded to 1 MiB. Let A be accepted selection length and
+Ordered receipt JSON is bounded to 1 MiB. Let A be accepted selection length and
 K = ceil(A / 8). Original usage evidence allows 512K frames, at most 128 per
 actual attempt and 32 quantities per frame. Frame bytes are bounded to 192 KiB K,
 with 64 KiB K reserved for identities and terminal metadata, for at most
 256 KiB K total (2 MiB at A=64). This allocation depends on accepted candidates,
 not eventual sends. Overflow retains a prefix and sticky truncation; it never
-manufactures zero quantities or complete evidence. V2 has no auxiliary children.
+manufactures zero quantities or complete evidence. Ordered dispatch has no auxiliary children.
 
 Before any effectful provider work, the owning writer commits a bounded dispatch
 intent containing the immutable identity, selection and budgets. An uncertain
@@ -897,126 +756,43 @@ intents as unknown with unavailable observations before enabling dispatch; it
 never replays inference. A missing receipt is not proof that no work happened.
 The maximum receipt/evidence/disposition/intent obligation, including three row
 charges, is 3,212,288 bytes and fits the existing 4 MiB execution reservation.
-Ordinary v1 requests retain their original eight-slot allocation and budgets.
-
-V1 and v2 reads are explicit: requesting the wrong format returns
-`capability_mismatch`, with no conversion, flattening or truncation. Existing
-correlation pagination can list both formats and retains multiplicity. Neither
-an execution ID nor a correlation ID expands receipt-read authority.
-
-Current stores use the baseline and content rules in
-[store selection](#resource-and-evidence-migration-and-rollback). Ordered
-receipt formats retain their independent meaning; profiled/shared-health
-closures retain their current compiler bindings. Historical authority upgrades,
-capacity conversion and old-store reopening are not supported. Rollback uses
-the old binary and its own consistent data copy.
+The receipt and evidence APIs serve both dispatch modes on the same paths.
+An ordered receipt carries the accepted selection and original ordinals.
+Ordinary dispatch retains its eight-attempt bound. Correlation pagination
+preserves multiplicity across modes. Execution and correlation IDs confer
+no receipt-read authority.
 
 #### Request-local generation defaults
 
-Ordered generation can opt into one closed per-call default object described by
-[`generation-defaults.schema.json`](generation-defaults.schema.json). Its only
-fields besides `schema_version: 1` are `temperature`, `top_p`, `max_tokens`,
+An ordered request can carry one bounded
+[defaults envelope](generation-defaults-envelope.schema.json) in the
+reserved body member `bitrouter_generation_defaults_envelope`. The object
+requires `schema_version: 2`, `supplemental` and `configuration_defaults`.
+The configuration choice is exactly `apply` or `preserve_absence`. Optional non-null `canonical` uses the
+[canonical defaults schema](generation-defaults.schema.json). Supplemental
+values can contain any JSON value allowed by the byte, nesting and
+reserved-name limits. Duplicate fields at any depth fail before parsing
+can erase them. The canonical fields are `temperature`, `top_p`, `max_tokens`,
 `reasoning_effort`, `top_k`, `seed`, `stop`, `presence_penalty`, and
-`frequency_penalty`. Absent fields supply no default. The object rejects null,
-unknown or duplicate fields, non-finite numbers and invalid typed values. A
-single stop string normalizes to an array. No provider-specific extras, model,
-credential, header or routing control can be carried by this object.
+`frequency_penalty`. A single stop string normalizes to an array.
+Caller values, including zero, take precedence. Typed null and an empty
+stop list permit filling. An opaque source extra using a canonical name
+can block filling without being forwarded across protocols.
 
-Call `OrderedDispatchBindingV2::with_generation_defaults` before retaining the
-submission binding, then supply the same object through the consuming
-`OrderedTenantGateway::with_generation_defaults` method. The optional
-`generation_defaults_digest` is SHA-256 of the ASCII domain
-`bitrouter.canonical-generation-defaults.v1` followed by a zero byte and the
-compact typed JSON in declared field order. Absent fields are omitted. It binds
-the normalized requested defaults, not the raw request, effective provider
-settings or usage. Selection, accepted selection, intent, receipt and evidence
-retain that digest. The SDK rejects a missing, changed or competing object
-before I/O; the service repeats validation before execution admission.
+Bind the envelope with the ordered dispatch binding and attach the same
+envelope to the SDK request. Missing, mismatched, null or invalid
+attachments fail before execution admission. Ingress removes the member
+before passing the request to the inference protocol parser. Ordinary
+dispatch rejects it.
 
-The SDK carries the object in `bitrouter_generation_defaults` in the existing
-request body. Core rejects duplicate reserved members, removes the object before
-protocol parsing, and never forwards it. The whole request remains limited to
-16 MiB; the fixed digest retains the existing 4,096-byte encoded selection
-limit. Unused extensions omit both members and preserve previous bytes. An old
-closed selection reader rejects the used extension. This optional field does
-not relax the separately mandatory `admission_mode` contract.
-
-Defaults fill the canonical prompt before retained configuration defaults and
-normal policy checks. Typed caller values, including zero, win. Typed null
-becomes `None` and permits filling; an empty stop list also permits filling.
-An opaque source extra with the competing canonical name blocks filling without
-being promoted across protocols. Existing outbound adapters control supported
-spellings and omissions on each fallback hop. Strict v1, native Decisions and
-host execution do not gain this per-call API.
-
-For protocol-independent supplemental defaults, use the additive
-[`generation-defaults-envelope.schema.json`](generation-defaults-envelope.schema.json)
-contract `GenerationDefaultsEnvelopeV1`. Its closed outer object requires
-`schema_version: 1` and a `supplemental` object; optional `canonical` is the
-unchanged nine-field contract above and cannot be null. Supplemental values can
-be any JSON value, including null. Duplicate keys at every depth of the envelope
-are rejected before JSON object construction can erase them.
-
-```json
-{
-  "schema_version": 1,
-  "canonical": {"schema_version": 1, "max_tokens": 25},
-  "supplemental": {
-    "vendor_knob": {"mode": "fast"},
-    "store": false,
-    "parallel_tool_calls": false
-  }
-}
-```
-
-Bind the complete object with
-`OrderedDispatchBindingV2::with_generation_defaults_envelope`, then attach that
-same object with `OrderedTenantGateway::with_generation_defaults_envelope`.
-The SDK sends `bitrouter_generation_defaults_envelope` in the request body.
-Exactly one of the canonical-only member and envelope member may be present;
-missing, mismatched, duplicate, null or competing attachments fail before
-execution admission (bounded ingress reservation and parsing occur first). The envelope is removed before caller protocol parsing. Ordinary
-v1/anonymous ingress rejects this reserved member. A preceding canonical-only
-ordered server rejects a correctly bound envelope because its computed defaults
-digest does not match; clients must not retry or downgrade. Unused extensions
-and existing canonical-only calls retain their original encoding and API.
-
-The existing `generation_defaults_digest` slot carries SHA-256 of
-`bitrouter.generation-defaults-envelope.v1` followed by a zero byte, then compact
-UTF-8 JSON with outer order `schema_version`, `canonical` (if present),
-`supplemental`. Canonical fields retain their existing declared-field encoding.
-Supplemental object keys are recursively sorted by decoded Rust string order;
-arrays retain order. Numbers use Serde JSON representation, not RFC 8785 or
-arbitrary-precision numeric normalization. All requested values bind the digest,
-including defaults suppressed by caller precedence. Receipts and evidence carry
-the same single digest, never the defaults payload. Its separate hash domain
-preserves canonical V1 digests without a durable schema revision. A verifier
-retains the requested defaults object and contract family.
-
-The additive [`generation-defaults-envelope-v2.schema.json`](generation-defaults-envelope-v2.schema.json)
-contract `GenerationDefaultsEnvelopeV2` uses the same reserved body member. Its
-closed object requires `schema_version: 2`, `supplemental`, and
-`configuration_defaults`, exactly `apply` or `preserve_absence`. Optional
-`canonical` keeps the unchanged V1 contract. Bind and attach it with the additive
-`with_generation_defaults_envelope_v2` methods on `OrderedDispatchBindingV2`
-and `OrderedTenantGateway` respectively.
-
-```json
-{
-  "schema_version": 2,
-  "supplemental": {"vendor_knob": {"mode": "fast"}},
-  "configuration_defaults": "preserve_absence"
-}
-```
-
-Its digest domain is `bitrouter.generation-defaults-envelope.v2` followed by a
-zero byte, then compact JSON in exactly `schema_version`, optional `canonical`,
-`supplemental`, `configuration_defaults` order. The choice always binds identity,
-even when effective provider bodies match. Nested normalization, exact integer
-decoding, duplicate rejection, bounds and reserved names are unchanged. Missing,
-null, unknown or duplicate layer choices fail; unsupported versions do not
-fall back to another contract. Both canonical-only and envelope-V1 predecessors
-reject correctly bound V2 requests; clients must not downgrade or replay them.
+The digest domain is `bitrouter.generation-defaults-envelope.v2` followed by
+a zero byte, then compact UTF-8 JSON in exactly `schema_version`, optional
+`canonical`, `supplemental`, `configuration_defaults` order. Supplemental
+object keys sort recursively by decoded string order. Arrays preserve order
+and numbers use Serde JSON representation. All defaults and the
+configuration choice bind the digest, including values displaced by caller
+input. Retain the digest in receipts and evidence without storing the
+defaults payload there.
 
 `apply` fills absent typed temperature and output tokens from retained
 configuration. `preserve_absence` skips only that configuration-specific fill:
@@ -1029,17 +805,14 @@ absent temperature. Explicit later protocol requirements still apply. A null
 input is not an assertion of key absence and keeps existing parser semantics.
 
 This is a request-only selection, not a nullable configuration format or an
-execution-token budget. All old, V1 and native entry points retain `apply`.
-Bounded ingress reservation precedes validation and retains its release paths;
-execution admission, intent, RPM/probe and provider work remain behind their
-existing checks. Ordered model-policy routes remain `CapabilityMismatch`; V2
-neither enables them nor bypasses constraints or continuation guards. Storage
-formats, retained compiled bytes and writer fences are unchanged. Intent,
+execution-token budget. Bounded ingress reservation precedes validation.
+Execution admission, intent, RPM/probe and provider work have their own
+checks. Ordered model-policy routes return `capability_mismatch`. Intent,
 receipt and archive retain only the opaque digest; outstanding-intent recovery
 terminalizes Unknown without storing or replaying the envelope or layer choice.
 
 Only these exact top-level supplemental keys are reserved: `model`, `messages`,
-`stream`, the nine canonical names above, `bitrouter_generation_defaults` and
+`stream`, the nine canonical names above and
 `bitrouter_generation_defaults_envelope`. There is no prefix blacklist and no
 recursive name ban. Names such as `provider`, `headers`, `tenant_id`, `api_key`
 and `extra_protocol` remain opaque provider JSON; they do not modify routing,
@@ -1094,7 +867,7 @@ entries and order; comma lists are not split, trimmed, sorted or deduplicated.
 An empty slice removes the header, while an explicitly empty field value stays
 present. Invalid HTTP field-value bytes are rejected by `HeaderValue`
 construction before any request. Shared client defaults and dispatch bindings
-remain unchanged. Preservation applies to parsed field values, not header-name
+apply. Preservation applies to parsed field values, not header-name
 casing, HTTP whitespace framing or HTTP/2 frame layout.
 
 The SDK sends these values to the gateway independently of the ingress
@@ -1115,8 +888,7 @@ execution ID or status. These observations do not cause automatic retries.
 
 #### Ordered compatibility cases
 
-1. Old v1 clients retain their wire contracts; new clients reject unsupported
-   v2 servers before any downgrade or alternative model submission.
+1. Missing or disabled ordered discovery prevents ordered submission.
 2. Different concurrent subsets/orders of the same retained root preserve
    their own membership, resource authorization and immutable ordinal mapping.
 3. Counts 1, 8, 9 and 64 retain all actual attempts; 65 and a host limit below
@@ -1124,11 +896,10 @@ execution ID or status. These observations do not cause automatic retries.
 4. Current revocation after queueing or between hops blocks the next send;
    selection and capability caches never stand in for current grants.
 5. JSON and SSE for all three protocols preserve their terminals and original
-   usage through HTTP/1.1 and HTTP/2; wrong-format reads fail explicitly.
+   usage through HTTP/1.1 and HTTP/2 and the unified receipt and evidence reads.
 6. Unknown outcomes, truncated observations, lost intent acknowledgement and
    crash recovery cannot authorize replay, a second attempt or fabricated usage.
-7. Fresh/migrated format-2 stores, including subsequent management writes,
-   refuse incompatible stores; current v1/v2 receipt bytes remain unchanged.
+7. Restart preserves the exact receipt and evidence bytes for both modes.
 8. Repeated opaque Beta values remain isolated per call over HTTP/1.1 and HTTP/2
    for JSON and SSE; replacing or clearing them cannot change the binding,
    request body or another call's headers.
@@ -1147,32 +918,32 @@ Authenticated `GET /control/v1/tenancy/ordered/native-controls/capabilities`
 returns the closed [version-one descriptor](ordered-native-controls-capabilities-v1.schema.json).
 It binds installation, instance and capability revision, reports current authority
 revision, and enables the mode only when operator policy and ordered dispatch
-readiness both hold. It leaves `OrderedCapabilitiesV2` unchanged. The explicit SDK
+readiness both hold. The SDK
 `ordered_native_controls_capabilities` read and `with_native_controls` helper
 require matching discovery, with no automatic refresh, speculative dispatch or
 downgrade. The observation is not an authority lease.
 
 An ordered Responses or Messages ingress request opts in with exactly one
 `Bitrouter-Native-Controls: provider_native_v1` header. Missing header preserves
-ordinary v2 refusal. Unknown or duplicate values and v1 use fail before dispatch.
+ordinary ordered refusal. Unknown or duplicate values and ordinary dispatch
+with this header fail before a provider send.
 Core consumes the header; it never reaches the provider. Normal current caller
 authentication, route/member/profile/credential authorization, defaults digest,
 admission, deadline and receipt rules remain mandatory. Caller credential rotation
 under the same principal and new per-call/configuration defaults are allowed when
-current authority permits them. Neither old caller credentials nor old defaults
-are recovered or pinned from a raw value.
+current authority permits them. A raw control value does not select a
+credential or a configuration revision.
 
 Responses `previous_response_id` and `conversation`, and Messages
-`context_management`, retain opaque JSON values and provider validation. A literal
-`brc_` prefix is forwarded unchanged in this explicit mode; it never invokes a
+`context_management`, retain opaque JSON values and provider validation. The gateway forwards the literal
+`brc_` prefix in this mode without invoking a
 managed resolver or a fallback between modes. Values cannot choose endpoints,
 headers, credentials or candidate order. No owned continuation handle is published,
 imported or reconstructed, and no history is replayed. Ordinary gateway response
 IDs retain their existing encoding; this mode does not make them resumable or
 export a separate native-ID mapping. Provider success establishes no
-historical ownership or usage facts. The ordinary version-one field set does
-not add Generate Content `cachedContent`; that control belongs to the separate
-private operation below. Retired public Google routes remain unavailable.
+prior ownership or usage facts. Generate Content `cachedContent` belongs to
+the private operation below.
 
 Source-native fields remain protocol-bound. The existing post-parse merge suppresses
 a supplemental key when source extras already contain that key, including null;
@@ -1188,24 +959,17 @@ boundary rather than cross-protocol omission compatibility. Retained route
 defaults containing native controls remain outside the ordered static-root
 contract; request-local bound envelopes provide the explicit path.
 
-Raw values supply no original-member affinity. The existing classified rejection
+Raw values supply no original-member affinity. The classified rejection
 rules may permit the next selected compatible target; unknown transport/body/stream
 outcomes, cancellation or completed work stop further sends. Rendering and the
-authenticated outbound body are checked against effective controls. Receipt and
-usage-evidence v2 still describe current execution only, with no format changes.
-A predecessor without discovery cannot be assumed to support this mode. Its
-ordinary non-null-control refusal remains meaningful; an empty opted-in request
-has no new custody or publication promise and may still execute ordinarily.
+authenticated outbound body are checked against effective controls. Receipts and usage evidence describe the admitted execution only. An opted-in
+request without native controls may execute ordinarily.
 
 ### Private ordered Generate Content
 
-This new version-one operation is scoped to the next alpha release after
-alpha.35. The Rust additions `GenerationProtocol::GenerateContent` and
-`ProtocolEnd::GenerateContentFinished` intentionally require exhaustive-match
-consumers to recompile and handle the new variants. Existing protocol wire
-values, ordinary ordered-v2 discovery, and native-controls-v1's three-field set
-remain unchanged. Old readers reject the unknown protocol rather than treating
-it as Chat. No retired public Google endpoint or provider registration is restored.
+The private ordered operation uses `GenerationProtocol::GenerateContent`
+and the terminal marker `ProtocolEnd::GenerateContentFinished`. It requires
+an operator-paired native adapter.
 
 Authenticated `GET /control/v1/tenancy/ordered/generate-content/capabilities`
 returns `OrderedGenerateContentCapabilitiesV1`. Its installation, instance and
@@ -1278,34 +1042,18 @@ native feature. Actual accepted headers, outcomes, usage observations, deadlines
 receipt custody and original selected ranks retain the existing ordered rules.
 Unsigned/unknown bridge outcomes and interrupted streams never authorize fallback.
 
-Native routes require explicit resource format three, independently observed at
-`GET /control/v1/tenancy/resource-capabilities/v3`. The existing resource POST
-accepts `ResourcePutV3` with a closed `native_profiled_route_v1` definition;
-[`native-resource-put-v3.schema.json`](native-resource-put-v3.schema.json) and
-[`native-resource-capabilities-v3.schema.json`](native-resource-capabilities-v3.schema.json)
-define its wire fields. Every compiled protocol root has an exact ordinal,
-credential and admission-profile association. Only the native root can target
-the operator-paired `ordered_generate_content` bridge. A Chat grant cannot
-create native membership. Arbitrary custom protocols remain unsupported.
-
-Format-one resource definitions and their three-protocol attachment codec remain
-unchanged; format two still provisions shared-health profiles only. Native
-artifacts and configurations use `tenancy-native-generate-content-v1`, retained
-envelope format six when no model-policy closure is present. Model-policy
-closures use the current model-policy envelope/compiler, without changing native
-route semantics. Writer/authority schema numbers do not replace the whole-store
-baseline. Refuse old, malformed or future datasets before authority or marker
-writes. Discovery/provisioning does not grant dispatch authority or qualify an
-adapter response. Generic MySQL runtime initialization retains exclusive custody,
-requires transactional ledger/header tables and publishes readiness only after
-complete validated baseline creation; tenant/shared backend profiles stay fixed.
-No historical writer-fence migration or backfill is a serving upgrade path.
+Provision native routes through [resource provisioning](#resource-provisioning).
+The route must carry exact credential and admission-profile attachments for
+every compiled root and contain an explicit Generate Content root. Only that
+root can target the operator-paired `ordered_generate_content` bridge.
+A Chat grant cannot create native membership. Discovery and provisioning
+grant no dispatch authority and do not qualify an adapter response.
 
 Native requests without an explicit per-call defaults layer preserve absence.
 An explicit defaults envelope retains its committed configuration-defaults
 choice. The original native request and that defaults layer travel separately
 to the reached paired adapter; current authority and the body commitment are
-rechecked at the actual send. Ordinary wires keep their existing defaults.
+rechecked at the actual send.
 
 ### Exact retained admission-profile observations
 
@@ -1340,9 +1088,8 @@ rounding; fractions and values outside the declared bounds fail.
 A request contains schema version 1, the exact expected authority revision and
 1–256 distinct full operator-pool Policy ResourceRefs. Different pinned revisions
 of one key are valid; duplicate full refs are not. Both original request bytes
-and response bytes are limited to 1 MiB. Discovery reports version 1, actual
-installation/instance/authority, enabled state, count/byte limits and exactly
-profile versions `[1,2]`. Successful discovery reports enabled=true; no separate
+and response bytes are limited to 1 MiB. Discovery reports actual
+installation/instance/authority, enabled state, count/byte limits and the supported admission profile. Successful discovery reports enabled=true; no separate
 server setting is introduced by this contract.
 
 The snapshot preserves the exact request order, cardinality and full refs. It
@@ -1354,13 +1101,12 @@ count fields exist, their values must agree: retained profile validation require
 the associations to name the same rate group. Rate-only, observation-only and
 both-null configurations remain valid. Zero RPM is a valid rate refusal.
 
-Both the pinned revision and its same-family current head must exist in the
+Both the pinned revision and its current head must exist in the
 authenticated retained profile index and be nonrevoked. Unknown/nonprofile/revoked
 pins or missing/invalid/revoked heads produce complete entries with null current
 revision/rate/count, unavailable health and authority_denied availability. No
 other profile is substituted. Current-head RPM rotation does not replace the
-requested pin. V1 health remains local to its profile key; V2 uses the existing
-tagged installation/pool/group identity. Disabled fields remain null/disabled;
+requested pin. Health uses the installation, pool and group identity. Disabled fields remain null/disabled;
 an authorized unused runtime truthfully reports zero/healthy. The normal refusal
 priority is circuit_blocked, rate_limited, capacity_denied, then eligible.
 Capacity denial preserves actual fields and consumes no admission capacity.
@@ -1385,30 +1131,29 @@ no response extends a lease. Route/credential lifecycle, grants and reached-hop
 checks remain required for execution. A successful profile read never establishes
 an executable association or permission to send.
 
-Compatibility cases include standalone V1/V2 provisioning and restart; exact
+Conformance covers provisioning and restart; exact
 256-entry completeness; current RPM rotation and pin/head revocation; strict
 nullable/numeric/count consistency; operator-only direct/HTTP authorization;
 H1/H2 SDK transport; transient lock/body-deadline refusal followed by recovery;
-real authority publication between sampling and return; and unchanged durable
-and operational state before/after observations.
+an authority publication between sampling and return; and read-only durable
+and operational state.
 
 ### Execution usage evidence
 
-Usage evidence contains bounded technical observations, not prices, charges or
-payable quantities. It is a separate message from the unchanged strict v1
-execution receipt, within this canonical service specification.
+Usage evidence preserves bounded technical observations from an exact
+execution, independently of prices, charges or payable quantities.
 
 | Method | Path under `/control/v1` | Contract |
 | --- | --- | --- |
-| GET | `/tenancy/usage-evidence/capabilities` | [Capabilities schema](../../../crates/bitrouter-ai/src/tenancy/usage_evidence/capabilities.schema.json) |
-| GET | `/tenants/{tenant_id}/executions/{execution_id}/usage-evidence` | [Execution evidence schema](../../../crates/bitrouter-ai/src/tenancy/usage_evidence/execution.schema.json) |
+| GET | `/tenancy/usage-evidence/capabilities` | `UsageEvidenceCapabilities` |
+| GET | `/tenants/{tenant_id}/executions/{execution_id}/usage-evidence` | `ExecutionUsageEvidence` |
 
-The packaged schemas and [DTO validator](../../../crates/bitrouter-ai/src/tenancy/usage_evidence.rs)
-define the field catalog and cross-field constraints. Discovery requires
-authentication and `Bitrouter-Installation-Id`. Clients MUST check the advertised
-bounds, estimator and child-linkage facilities; a DTO or version number alone
-does not imply availability. Generic server-tool capture is not supported in
-version 1 and MUST NOT be advertised. Child linkage depends on the enabled build.
+The [evidence DTOs and validators](../../../crates/bitrouter-ai/src/tenancy/usage_evidence.rs)
+describe the field catalog and cross-field constraints. The response binds
+to the exact receipt and distinguishes ordinary and ordered dispatch.
+Discovery requires authentication and `Bitrouter-Installation-Id`. Check
+the advertised bounds, estimator and child-linkage support before consuming
+the observations.
 
 Reads require current receipt-read authority for the tenant and execution and
 return `Cache-Control: no-store`. Installation, tenant and execution identities
@@ -1426,7 +1171,7 @@ historical receipt without capture.
 | Capture state | Required interpretation |
 | --- | --- |
 | `captured` | Capture was installed; observations may still be empty, incomplete or truncated. It does not assert successful execution. |
-| `not_captured` | Historical receipt predating this capture contract; no original observations are asserted. This unchanged wire meaning does not authorize opening an old dataset. |
+| `not_captured` | Historical receipt predating this capture contract; no original observations are asserted. This status grants no store authority. |
 | `unavailable` | A version-1 admission seed proves capture was installed, but recovery lost the observations; retain an unknown outcome and durable unavailable evidence. |
 
 Both absence states require empty attempts, frames and child IDs, null parent
@@ -1434,8 +1179,7 @@ and estimate, `estimation: not_captured`, `truncated: false` and
 `dropped_frames: 0`. Current seeds retain their declared serialization and
 absence semantics; unsupported capture versions and missing required seeds fail
 validation. A current execution MUST NOT become `not_captured` after observation
-loss. The historical missing-seed recovery fallback is retired.
-HTTP errors or an unsupported evidence endpoint do not assert either capture
+loss. HTTP errors or an unsupported evidence endpoint do not assert either capture
 state for a particular execution.
 
 #### Native observations and ordering
@@ -1494,8 +1238,7 @@ usage chunks alike:
   quantities, tariff selection or charge calculation.
 - `prompt_tokens_details.created_cache_tokens` is qualified only when it is the
   exact integer zero. This is a zero-only constraint, not a new cache-write
-  quantity: existing quantities and projection remain unchanged, including
-  absent cache-write observations. Positive, null and malformed values remain
+  quantity. Cache-write observations therefore remain absent. Positive, null and malformed values remain
   `unsupported`; this compatibility case assigns no positive cache pricing.
 - `prompt_tokens_details.multimodal_tokens` is qualified only when null, meaning
   no multimodal input breakdown. Every non-null value, including an empty object
@@ -1508,15 +1251,9 @@ not a provider currency or billing contract. These exceptions apply only to
 Chat Completions at the stated paths; other protocols, paths and unknown fields
 retain their existing refusal behavior. No metadata names or values are retained.
 
-These validated redundant counters add no quantity, default zero or retained
-field, and neither do the metadata exceptions above. Extractor 1's quantity
-mapping, units and snapshot arithmetic stay fixed,
-as do both evidence schemas and predecessor-reader validation. Thus the capture
-fix retains extractor 1 (and the existing native GenerateContent discriminator),
-rather than introducing another wire version. Older writers may retain
-`unsupported: true` for the same source shape. Existing evidence, its flags and
-digests MUST remain unchanged; a newer binary or an extractor version alone MUST
-NOT reinterpret old evidence or certify a provider's commercial qualification.
+These validated redundant counters and metadata add no quantity, default
+zero or retained field. Preserve retained evidence, flags and digests exactly.
+An extractor revision does not qualify commercial usage.
 
 Upstream usage field meanings remain defined by the
 [Chat API reference](https://developers.openai.com/api/reference/resources/chat),
@@ -1530,12 +1267,10 @@ those upstream contracts.
 
 Only the explicit private ordered `generate_content` ingress and paired native
 outbound wire qualify this protocol. Chat permissions and ordinary endpoint
-names do not authorize it. Ordered evidence keeps `schema_version: 2` and uses
+names do not authorize it. Ordered evidence uses
 `extractor_version: 2` exactly when the accepted ingress is `generate_content`
 or any retained frame has that protocol; otherwise it stays extractor 1.
-Frameless or unavailable native ingress also requires extractor 2. Predecessor
-readers reject the new extractor or closed protocol value. Evidence V1 rejects
-this protocol and `generate_content_chunk`; its schemas and old bytes stay fixed.
+Frameless or unavailable native ingress also requires extractor 2.
 
 Native JSON and HTTP rejection frames use `json` and `http_error`; native SSE
 uses `generate_content_chunk`. Each original `usageMetadata` object is a snapshot,
@@ -1557,9 +1292,9 @@ usage from an estimator, invalid stream, unknown outcome or missing dimensions.
 
 #### Bounds, estimates and children
 
-The original encoded response, including whitespace, is limited to 256 KiB.
-The contract permits at most eight attempts, 512 frames per execution, 128 per
-attempt, 32 quantities per frame and 64 child IDs. Capture retains an ordered
+Ordinary dispatch allows 256 KiB of encoded evidence, eight attempts, 512
+frames per execution, 128 per attempt, 32 quantities per frame and 64 child
+IDs. Ordered bounds depend on selection size. Both count encoded whitespace. Capture retains an ordered
 prefix. Once a frame cannot fit, truncation is sticky; `dropped_frames` counts
 discarded observations with saturation at the exact integer maximum, and
 `truncated` MUST equal `dropped_frames > 0`. Neither truncation, unsupported or
@@ -1573,12 +1308,6 @@ finalizer or the successful non-streaming native generate-content executor,
 which does not install that estimator. Absence of an observation MUST remain
 `not_captured`; it MUST NOT be inferred to mean `not_used`. Only `captured`
 permits a nonnull `estimate`.
-
-This expands the producers of an existing fact without changing the enum or
-wire schema. Historical `not_captured` documents remain unchanged. A reader
-that does not support the native protocol or extractor MUST continue to reject
-that evidence; `not_used` alone does not qualify native usage or authorize a
-financial interpretation.
 
 Algorithm `stream_character_ceiling`, version 1, rounds each prompt/output
 Unicode scalar count divided by four upward. It retains the numerical inputs,
@@ -1595,88 +1324,90 @@ Consumers requiring linkage MUST check discovery before relying on it.
 
 ### Optional provider technical facts
 
-`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v1`
-uses the existing installation binding, current tenant-wide `ReceiptRead` or
-separately issued audit authority, read semaphore, management deadline and
-`Cache-Control: no-store`. The body is the independent
-[version-one object](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
-or JSON `null`. An unknown original execution is still NotFound. A retained
-receipt without retained measurements (including historical receipts and lost
-noncritical writes) returns null. The same result applies when neither optional
-object has been installed, including a refused installation that left no objects.
-A partial, shadowed, conflicting or corrupt optional layout instead makes this
-getter unavailable without fencing the original receipt API. Neither result implies zero, no provider work,
-a billing disposition or permission to repeat inference. Unsupported old Core
-routes remain existing HTTP/service errors; clients do not silently downgrade.
-The original V1/V2 receipt, usage, capability JSON and commitment formats do not
-change. SDK callers can validate the object against the original V1/V2 receipt;
-public DTOs do not expose/recompute the Core-private terminal digest.
+`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts`
+uses the installation binding, current tenant-wide receipt-read or audit
+authority, bounded read deadline and `Cache-Control: no-store`. The SDK entry
+is `TenancyClient::provider_technical_facts`. The closed response is
+`ProviderTechnicalFacts` or JSON null. An unknown execution returns
+`not_found`. Null means the execution exists without retained measurements.
+An invalid optional object fails only this read. A technical measurement
+does not assign billing or authorize inference replay.
 
-Schema one binds the original installation, tenant, principal, execution,
-execution revision and receipt format. Every operation refers to a unique ordered
-subsequence of actual receipt attempts, including the actual sends used by
-authentication recovery. Never group by provider/model/account name or sum
-fallback/child clocks. `selected_attempt_id` records the existing execution
-selection, not successful delivery or financial qualification. The whole object
-is at most64KiB; actual attempts bound operations (V1<=8, V2<=64), and the validator
-checks total cardinality/order/selection across operations in addition to schema.
+The [provider facts schema](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
+describes the response. The document binds to the exact execution and original
+receipt. Its scope contains provider operations, nullable request pipeline
+timing and scoped hop observations. `observer_hops` records the independent local callback clock
+when captured. One 64 KiB bound applies to the entire original response.
+Operations identify unique ordered subsequences of actual attempts, including
+authentication recovery. Cross-check observed groups, ordinals and closing
+attempts against the retained receipt. Provider/model labels and correlation
+IDs do not establish timing identity.
 
-The clock is the original Core-owned provider operation's raw monotonic interval,
-including authentication recovery and consumption, not an RPC or pure network
-span. JSON upstream uses millisecond truncation (a real positive submillisecond
-sample can be0). Stream upstream/TTFT/generation keep the original helper:
-zero stays0 and a positive submillisecond interval becomes1. `streamed` identifies
-that original timing path: internal SSE collection for a nonstreaming result
-retains JSON timing semantics and does not fabricate TTFT. First semantic
-means accepted nonempty reasoning/text/tool name or arguments before output
-hooks/rendering; tool ID-only, usage, metadata and terminal markers do not count.
-No semantic sample means null first/generation; one means generation0. Separate
-rounding does not imply an additive TTFT+generation inequality. Partial prefix
-observations remain partial independently of receipt/usage completeness.
-Core's paired private bridge does not measure the Cloud-owned Google sender:
-that route requires its own genuine provider facts and is not filled with bridge
-latency. No financial callback/envelope is extended to carry these measurements.
+#### Timing sources
 
-Measurements are a noncritical optional child object. After original durable
-notification, the existing control loop may own one disposable technical task;
-there is no queue or resident worker. Original work/stop preempts its dedicated,
-same-acquisition SQLite connection. Main jobs do not join the optional task.
-Transactions that may mutate acquire SQLite write intent before application
-reads, on their original owned transaction; pure reads remain deferred. Ordinary
-storage contention can consume the original deadline. No provider retry, seed
-marker, outbox or required receipt participant repairs missing data. Existing deadlines and high-water/physical budgets apply.
-An interrupted writer must positively close before exact-key readback; absence
-can refund bytes, committed bytes remain charged, and unknown results conserve
-the one optional charge and disable further technical writes. They do not create
-a financial pending state, storage-health fence or original send permit. Unknown
-actual driver closure cannot be reported as successful resource shutdown.
+Provider operation time covers the original monotonic operation, including
+authentication recovery and response consumption. JSON truncates to whole
+milliseconds. Stream times round a positive submillisecond sample to one.
+First semantic output means nonempty reasoning, text, a tool name or arguments
+before rendering hooks. Usage, metadata, terminal markers and tool IDs alone
+do not count. No semantic sample yields null first and generation times. A
+single semantic sample yields zero for generation time. Internal stream
+collection for a JSON reply follows JSON timing and has no stream TTFT.
+Independently rounded TTFT and generation durations need not add up to the
+operation duration.
 
-Required business migrations are unchanged. Optional objects and their own
-schema stamp install atomically outside the required migration ledger. Unknown
-or conflicting objects are refused, never adopted, overwritten or marked as a
-successful required migration. Optional installation refusal does not deny
-normal business/receipt startup. Once retained, facts read after restart/archive
-by the original key/digest; conflicting bytes cannot overwrite them. Canonical
-receipt/archive encoding remains unchanged. Independently counted child bytes
-stay inline after parent archival; deleting their exact original parent cascades
-to the child. Optional payload failure refuses only this getter.
+The nullable pipeline scope describes the actual owning pipeline context and
+its settlement path. Positive submillisecond pipeline duration rounds up
+to one. An observed stream uses the first opened upstream clock
+through the owning processor's finalization and its accepted pre-hook deltas.
+Across internal turns, the source auth arm and the selected terminal arm may
+differ. Both must belong to the original receipt in order. Partial observations
+cannot certify termination.
+
+Hop observations describe each armed group and its actual callback boundary.
+Failed-open and JSON callback guards, the successful opened-stream notify
+scalar and observer-local callback clocks have separate meanings. A completed
+wrapper without a successful provider terminal can still be partial. An
+unobserved end has null duration and is partial. The
+`core_json_hop_observer_floor_v1` and `core_stream_open_hop_observer_floor_v1` samples use the paired observer's
+own start and end callbacks and floor the elapsed duration to milliseconds.
+The observer runs first, so its sample includes subsequent start callbacks
+and excludes subsequent end callbacks. Pairing is specific to a context and
+fork. The second profile applies only to a failed stream open. Missing
+callbacks or uncertain pairing omit the sample. A positive submillisecond sample may be zero.
+A successful stream open uses the original `core_stream_hop_notify_v1` scalar
+for its opened-stream hop.
+
+A Core-owned clock cannot report upstream work performed in a paired external
+bridge or merge observations across independent execution owners. Validate any
+parent/child linkage against the actual usage evidence and each receipt. A
+measured callback completion establishes neither complete delivery nor cost.
+
+#### Retention
+
+Capture is optional and runs outside required receipt or financial publication.
+The original execution and shutdown take priority over the bounded capture
+task. Missing measurements require no repair, replay or second write. Where
+an optional write outcome is uncertain, keep its bounded capacity charge until
+it is safe to resolve. Exact-key readback validates immutable bytes and their
+original scope. An optional capture failure cannot change receipt authority,
+terminal evidence or startup eligibility. Optional objects install atomically
+outside required schema initialization. Once written, facts read by their
+original key and digest. Parent archival preserves the child bytes and
+deleting the original parent cascades to the child.
 
 ### Resource and evidence migration and rollback
 
-M0 is a current-only dataset break for affected service runtime, tenant
-resource/execution and shared authority stores. There is no automatic migration,
-dual read, downgrade write or compatibility switch. Unrelated keychains,
-external credential stores and independent BRO session files keep their own
-contracts. Package/Policy versions and migration counts do not select a reader.
+The service opens supported current runtime, tenant and shared authority
+datasets. Each store is selected independently of software release and
+Policy source versions. Archive incompatible datasets with their matching
+binary and configuration before provisioning a new installation.
 
-The ordinary service store's sole format discriminator is the existing
-`seaql_migrations` ledger's current baseline identity
-`m20261118_000001_model_policy_store`. Do not add a second editable version
-switch. SQLite tenant authority retains its independently meaningful authority
-header; that header alone never proves whole-store eligibility. Shared namespace
-selection requires its current `gateway_shared_migrations` baseline, authenticated
-`Head.format: 2` and encrypted `Publication.format: 2` together. Neither a
-ledger row nor head marker proves retained-content integrity.
+Store validation checks the expected runtime schema and its ownership
+metadata. The SQLite tenant authority header binds an installation independently
+of the database schema. Shared state requires the shared schema and
+authenticated head and publication. A marker never replaces retained-content
+validation.
 
 Initialize current schema/baseline atomically in supported transactional SQLite
 and PostgreSQL stores, only in genuinely empty locations. For generic runtime
@@ -1696,24 +1427,10 @@ Physical locks/custody may be acquired for validation; this is not execution
 authority. Shared refusal precedes Engine::join side effects. Failed opens never
 clear/rewrite old databases or user files, or create a successful empty substitute.
 
-Policy-bearing private imports use manifest format 4 and typed source. Compiled
-configuration closures containing model Policy use envelope format 7 and compiler
-identity `tenancy-model-policy-v1`, retaining the exact source and name. Format 7
-preserves its contained ordinary/profiled/native route discriminators; it does
-not reinterpret them. Policy-free current imports 1–3 and compiled ordinary/
-profiled/native formats 1/4/5/6 retain their distinct current consumers. Old
-Policy-bearing uses and historical experimental formats 2/3 are rejected,
-not treated as fallbacks. A retained current BRO local producer must explicitly
-select the BRO-only obligation profile: envelope 8, compiler identity
-`tenancy-bro-obligation-v1`, with its current typed source and recovery proofs.
-It has no tenant/shared import, activation or execution authority. An explicit
-BRO local harness entry owns creation/recovery; mature entry points reject it
-even when Policy-free/all-features. Move each still-current native capture/paid
-obligation writer and reader together to that profile before retiring its old
-envelope. Do not delete a current obligation or silently adopt an old envelope.
-Admission profiles v1/v2, native route v3 and receipt/usage payload
-versions remain independently selected; version numbers are not a chronology
-that authorizes deleting current capabilities.
+An imported route or configuration must retain its exact current source,
+bindings and credentials. Policy-bearing closures retain the model Policy
+document and selected name. The selected route's ordinary, profiled or native
+dispatch semantics survive publication and reopening.
 
 Stop old ingress and finish resolvable work with the old deployment. Archive its
 binary/data outside the new dataset. New instances use explicit new locations,
@@ -1726,16 +1443,13 @@ Current-format recovery is mandatory. Preserve no-send/observed/unknown dispatch
 meaning, original receipts/output/usage and immutable bindings. Missing provider
 evidence never implies success or zero usage. Missing terminal becomes Unknown
 only with required exclusion, cleanup and stop-set proofs; otherwise refuse
-ready/dispatch. Recovery cannot select an assessment head. Missing evidence
-from current capture remains Unavailable; no historical missing-seed fallback.
+ready/dispatch. Missing evidence from an installed capture remains unavailable.
 Retain capacity/custody until settlement and cleanup acknowledgement. Begin,
 rollback, commit errors, cancellation and lost acknowledgements retain unknown
-obligations. Every configuration revision's cumulative accepted-job count is
-unchanged by completion, failure, cancellation, Unknown and repeated recovery;
-it never refunds/resets. Reduced builds refuse ready when they cannot service
+obligations. The cumulative accepted-job count does not decrease after completion, failure,
+cancellation or repeated recovery. Reduced builds refuse ready when they cannot service
 current obligations. Recovery never replays providers or silently drops current
-writers/obligations. Preserve actual current DDL/validators while retiring
-historical conversion/backfill and old executable-producer test dependencies.
+writers or obligations.
 
 ### Resource provisioning compatibility cases
 
@@ -1768,10 +1482,8 @@ not schema validation alone.
    installation/operation/resource responses. Real service processes accept
    SDK-created resources and execute authorized JSON/SSE without manifest edits
    or recompilation.
-9. An old strict discovery/receipt client still decodes the new server's original
-   messages. A new client handles an absent provisioning endpoint or
-   `provisioning_enabled: false` without attempting unsupported mutations.
-   Invalid discovery never becomes a capability grant.
+9. Absent provisioning discovery or `provisioning_enabled: false` prevents
+   unsupported mutations. Invalid discovery grants no capability.
 10. Current restart preserves revisions and evidence. Old/unmarked/partial/
     foreign/future stores and forged stamps fail before authority/provider work,
     including inactive Policy and Policy-free active heads. Refusal preserves
@@ -1810,10 +1522,8 @@ not schema validation alone.
 10. Advertised child linkage derives from independent admissions; parent and
     child ledgers remain separate without double counting. Generic server-tool
     capture stays unavailable.
-11. Old strict receipt/discovery clients keep working. A new client treats an
-    old server's absent evidence endpoint as unavailable functionality, never
-    as `not_captured` for a named execution. Required evidence cannot silently
-    fall back to normalized receipt usage.
+11. An absent evidence endpoint is unavailable functionality. Required
+    evidence cannot silently fall back to normalized receipt usage.
 12. Current restart preserves receipt/evidence bytes and binding; old dataset
     upgrades and destructive downgrade are refused. Rollback uses the old binary
     with its own verified compatible data copy, without deleting bindings.
@@ -1856,7 +1566,7 @@ not schema validation alone.
 ## Shared operator API
 
 The operator listener is explicitly configured and authenticates a separate
-bearer credential before parsing queries or bodies. Inference and legacy
+bearer credential before parsing queries or bodies. Inference and host
 control credentials do not authorize it. Its grants are `read`, `policy_write`,
 `credential_write`, `publish`, `rotate_correlation`, `resolve_execution` and
 `global_principal_write`. A write grant does not imply unrelated authority.
@@ -1916,17 +1626,15 @@ See the [operator guide](../../../skills/bitrouter/references/shared-gateway.md#
 ### Shared model-policy publication
 
 `Publication.format` is exactly 2. Optional `model_policy` is a typed public
-Policy Document; when absent no model Policy is installed. The old `policy_lock`
-field, mixed fields, format 1 and unsupported versions are 400 `invalid_input`
-before mutation or head publication. ACL `policies` and principal `policy_id`
+Policy Document; when absent no model Policy is installed. Unknown fields and unsupported formats return
+400 `invalid_input` before mutation or head publication. ACL `policies` and principal `policy_id`
 retain their independent access-control meaning and grants. Expected-generation
 CAS, actor-bound replay, encrypted retained source, immutable generation and
-current recovery guarantees remain required. Old SDK/readers reject format 2;
-new SDK/service reject format 1 rather than converting it.
+current recovery guarantees remain required.
 
 ### Shared Operator API compatibility cases
 
-1. An inference or legacy-control token cannot authenticate the operator
+1. An inference or host-control token cannot authenticate the operator
    listener. Insufficient grants fail before a mutation is applied.
 2. Unknown query/body fields, non-JSON or encoded mutation bodies and oversized
    input are rejected. Responses include `Cache-Control: no-store`.
@@ -1935,277 +1643,85 @@ new SDK/service reject format 1 rather than converting it.
 4. A timed-out mutation remains unknown until a same-actor receipt resolves it;
    an unresolved receipt is not reported as rollback or successful execution.
 5. Credential read projections do not disclose imported credential plaintext.
-6. Raw format1, old policy_lock and mixed-field publications fail before
-   mutation. Format2 source round-trips through SDK/operator/storage/restart;
-   ACL policies stay independent. Old/new SDK fixtures reject unsupported
-   publication versions in both directions.
+6. Reject unsupported publication formats and unknown fields before mutation.
+   Typed source round-trips through the SDK, operator API, storage and restart.
+   ACL policies stay independent.
 
 ## Eval exchange API
 
-The evaluator-neutral evidence exchange appends, queries and freezes facts.
-Tenant exchange and model Policy are available in the minimum gateway build,
-independent of experimental core/harness. Evaluation runs in clients/external
-evaluators using revision-bound inference; M0 adds no server Eval runner,
-implicit learner or automatic Policy publication. Authentication follows the configured gateway
-credential policy, including explicit development `skip_auth` configuration;
-production clients MUST use the host's configured authentication boundary.
+The [Eval specification](../eval/README.md) defines subjects, results and
+snapshots. Gateway Eval uses the configured inference credential boundary,
+including explicit development configurations that allow unauthenticated
+requests. Tenant Eval uses the protected control listener.
 
-| Method | Path | Body / response |
-| --- | --- | --- |
-| POST, GET | `/v1/evals/subjects` | `EvalSubject` / insertion report or subject list |
-| GET | `/v1/evals/subjects/{eval_id}` | Subject |
-| POST | `/v1/evals/results` | `EvaluationResult` / admission outcome |
-| POST | `/v1/evals/snapshots` | Optional `FreezeRequest` / frozen snapshot |
-| GET | `/v1/evals/snapshots/{evidence_root}` | Frozen snapshot |
-| GET | `/v1/evals/status` | Ledger status |
+| Method | Path under `/v1/evals` | Request | Response |
+| --- | --- | --- | --- |
+| POST | `/subjects` | `EvalSubject` | `PutSubjectReport` |
+| GET | `/subjects` | — | Subject list |
+| GET | `/subjects/{eval_id}` | — | `EvalSubject` |
+| POST | `/results` | `EvaluationResult` | `AdmissionOutcome` |
+| POST | `/snapshots` | Empty or `FreezeRequest` | `EvalSnapshot` |
+| GET | `/snapshots/{evidence_root}` | — | `EvalSnapshot` |
+| GET | `/status` | — | Ledger status |
 
-Fields, identity, numeric units, result and error envelopes are defined by the
-[public Eval types](../../../crates/bitrouter-ai/src/eval.rs). Results refer to
-subjects; evidence snapshots represent frozen membership, not live policy.
-Subject and result identity are immutable: matching replay is distinguished from
-conflicting data. Observation of transport success or cost does not by itself
-establish task quality. Clients MUST handle authentication, invalid input,
-missing subjects and server failures as failures, and MUST NOT use a network
-failure as proof that a prior write did not commit. Unknown optional response
-fields may be ignored; unknown required semantics MUST NOT be guessed. See the [operator workflow](../../../skills/evaluating-bitrouter-routes/references/eval-exchange.md).
-
-### Eval subject identity profiles
-
-`EvalSubject.schema_version` is exactly 2 for every current producer. Required
-`identity` is a closed tagged object with `profile` as discriminator. Common
-subject/evidence/scope IDs, observation, holdout/cohort and dimensions retain their
-bounds and meanings. Old `policy_digest` and `preset` identity substitutes are
-removed; names/digests cannot stand in for immutable ownership. Profile fields
-below are required unless explicitly optional, with unknown/mixed fields rejected.
-
-| identity.profile | Fields and verification | Accepted entry |
-| --- | --- | --- |
-| `tenant_model_policy` | `installation_id`, `tenant_id`, `configuration_revision`, `policy: ResourceRef`, `name`; optional `source_digest`, `classifier_digest`. Validate the full tuple against actual retained configuration/execution records and literal selected name, including exact resource owner/revision. | Tenant Eval only |
-| `tenant_generic` | `installation_id`, `tenant_id`; common `subject_id` and evidence remain required. A linked execution must belong to the real tenant/configuration. No Policy identity or fake model-policy evidence. | Tenant Eval only |
-| `gateway_generic` | Existing gateway subject/evidence/scope and evaluator authority; no tenant or Policy ResourceRef fields. | Gateway Eval only |
-
-Results/freeze inherit the verified subject profile and exact identity; results
-must reference the same tenant's admitted subject. Generic profiles never qualify
-for model-policy revision evidence/aggregation. Aggregation/export retain the
-complete tuple and cannot merge name/projection across revisions. Wrong endpoint,
-missing tuple, mixed profile, unknown fields, wrong resource/configuration/name
-are rejected before ledger mutation. Tenant profiles may include a typed
-`execution` link with exact `execution_id` and `configuration_revision`; verify
-the original execution receipt and do not infer it from correlation or subject ID. Tenant invalid content is 400; current
-credential/profile/grant denial is 403; installation mismatch is 409. Existing
-gateway authentication and evaluator authority stay independent.
-
-Subject and result version constants are separate. Unchanged EvaluationResult
-schema 1 and route-measurement schema 2 remain current; old subject 1 is refused.
-BRO experiment discriminators remain independent and confer no tenant dispatch
-or Eval authority. Old/new raw HTTP/SDK fixtures must prove subject 1/2 refusal
-in both directions while preserving legal result1/measurement2 combinations.
+Gateway errors use the Eval `{"error":"message"}` envelope. A result's evaluator
+must match the host's configured authority, principal binding, kinds and metric
+permissions. For either listener, resolve ambiguous write responses with a
+read when possible. A network error cannot establish rollback.
 
 ### Tenant Eval profile
 
-This control-listener profile exposes the ledger in an authenticated tenant
-namespace independently of core/harness. Management operations and gateway Eval
-retain their separate authorization; no experimental runtime is enabled.
-
-#### Authentication and installation binding
-
 Every operation requires a tenant bearer credential and exactly one
-`Bitrouter-Installation-Id` header, including POST. The installation header and schema-2 subject identity must agree; neither
-can replace the other.
-A body field, query parameter, public caller context, host inspection credential,
-installation operator, audit credential, or legacy virtual key cannot replace it.
-
-The credential and its current recipient binding must both cover the whole
-path tenant. Current credential state, expiry, binding, tenant state and permission
-intersection are checked again after storage waits and before commit. Resource-only
-grants cannot use this tenant-wide ledger. Operator pool grants are not required.
+`Bitrouter-Installation-Id` header. The specified installation, tenant path
+and any submitted subject identity MUST agree. The credential and its current
+binding must cover the whole tenant. State, expiry and grants are rechecked
+after waits and before commit. A resource-scoped grant or installation-operator
+credential cannot authorize this ledger.
 
 | Method | Path under `/control/v1/tenants/{tenant_id}/evals` | Request | HTTP 200 body | Permission |
 | --- | --- | --- | --- | --- |
 | POST | `/subjects` | `EvalSubject` | `PutSubjectReport` | `evaluation.submit` |
-| GET | `/subjects` | None | `Vec<EvalSubject>` | `resource.read` |
-| GET | `/subjects/{eval_id}` | None | `EvalSubject` | `resource.read` |
+| GET | `/subjects` | — | Subject list | `resource.read` |
+| GET | `/subjects/{eval_id}` | — | `EvalSubject` | `resource.read` |
 | POST | `/results` | `EvaluationResult` | `AdmissionOutcome` | `evaluation.submit` |
-| POST | `/snapshots` | Empty body or `FreezeRequest` | `EvalSnapshot` | Both permissions |
-| GET | `/snapshots/{evidence_root}` | None | `EvalSnapshot` | `resource.read` |
-| GET | `/status` | None | `StatusReport` | `resource.read` |
+| POST | `/snapshots` | Empty or `FreezeRequest` | `EvalSnapshot` | Both |
+| GET | `/snapshots/{evidence_root}` | — | `EvalSnapshot` | `resource.read` |
+| GET | `/status` | — | Ledger status | `resource.read` |
 
-No query parameters are accepted. POST subjects/results and nonempty snapshot
-bodies require JSON. Duplicate JSON keys are rejected at every nesting level.
-Malformed nonempty snapshot bodies and unknown FreezeRequest fields are errors;
-only an empty body or an omitted/null `frozen_at` chooses the service clock.
-All responses, including errors, carry `Cache-Control: no-store`. HEAD inherits
-GET authorization. Status retains the existing `heldout` count key.
+These endpoints reject query parameters and duplicate JSON keys at every
+nesting level. Subject/result POSTs and nonempty snapshot POSTs require JSON.
+An empty snapshot request or omitted or null `frozen_at` selects the service
+clock. Status reports the `heldout` count. Every response uses
+`Cache-Control: no-store`. HEAD inherits GET authorization.
 
-#### Initial evaluator profile
+Manual result submission requires `kind: generic`, the authenticated
+principal as `evaluator.authority_id` and no hard violations. Requests that
+fail these requirements are rejected. Host evaluator configuration does not
+grant trusted authority on the tenant API.
 
-Manual results must identify the authenticated stable principal exactly as
-`evaluator.authority_id`, use `EvaluatorKind::Generic`, and contain no
-`hard_violations`. Other evaluator fields remain submitted provenance. Requests
-are rejected rather than rewritten. Host EvalConfig cannot confer a trusted rank,
-metric wildcard, or permission. Full result-for-subject validation still applies.
-Manual imports work with learning off and do not initiate providers or learning
-jobs, consume evaluation-job allowances, or activate policies.
+Result admission and any resulting disputes commit together. An exact
+authorized result replay returns the existing outcome with `duplicate: true`.
+Conflicting immutable content fails. A rotated credential for the same
+principal may replay without changing creator provenance. Freeze atomically
+selects and stores an immutable snapshot. Its timestamp is a label and
+does not act as an as-of query or an idempotency key.
 
-#### Atomicity and retry semantics
+Tenancy errors have null operation and execution IDs and
+`dispatch_state: not_started`. This dispatch state describes provider work.
+The ledger may already have committed when the response cannot be delivered.
+Invalid content is 400, invalid credentials 401, denied grants or inactive
+tenancy 403, missing authorized facts 404 and installation mismatch 409.
+Limits can return 413 or 429. Storage or integrity failure and uncertain
+outcomes return 503. Clients MUST NOT retry an uncertain mutation implicitly.
 
-A result, every resulting prior-result dispute, and its terminal admission event
-are written in one transaction. Exact authorized replay returns the existing
-latest outcome with `duplicate=true` and appends no events. Changed immutable
-content is rejected. Missing admission closure is an integrity failure, not an
-automatic repair. Rotated credentials for the same principal can replay without
-changing creator provenance.
-
-Owned snapshot freeze selects membership, computes the existing tenant root,
-persists that exact manifest and validates its stored winner in one stable
-transaction. `frozen_at` labels the manifest; it is not an as-of query or a client
-idempotency key. A supplied `frozen_at` is validated as RFC3339 and its exact
-decoded string is preserved in the manifest, reply and root calculation; there
-is no timestamp normalization. An absent or null value chooses the actor clock
-once for that operation. Current snapshots retain their immutable closure after later admission changes.
-Snapshot roots bind the schema-2 subject bytes/profile; old subject roots are not
-converted, relabelled or imported into the new dataset.
-
-The existing authority actor serializes ledger writes with management operations.
-A revoke acknowledged before a job executes wins. A revoke queued during a ledger
-transaction runs after that transaction. Expiry before commit dispatch causes
-explicit rollback; expiry during COMMIT can have an unknown durable outcome.
-Postcommit revocation can suppress a success response without removing evidence
-that already committed. Bytes already handed to transport cannot be recalled.
-
-#### Bounds and failures
-
-The endpoint bounds headers to 128 values / 64 KiB, subject/result wire and
-canonical JSON to 1 MiB, freeze bodies to 4 KiB, each collection/conflict set to 1,024 rows,
-cumulative serialized SQL/manifest/write work to 32 MiB, and an encoded success
-response to 8 MiB. Collection overflow fails instead of truncating. These are
-payload/work bounds, not a claim about allocator overhead or process RSS.
-Eight ingress leases cover body collection, queued work and response-body custody.
-Work has a five-second absolute deadline including queue time. Precommit cleanup
-gets one additional second from its first stop/error; missed cleanup fences new
-authority while the actor retains the transaction. In-flight commit at the work
-deadline fences immediately. No transaction is aborted or retried automatically.
-
-Failures use the existing tenancy Error envelope with null operation/execution
-IDs and `dispatch_state=not_started`. That dispatch state describes provider
-work, not whether a ledger transaction committed. Invalid input/content is 400;
-invalid credentials are 401; denied profile/grants or inactive tenants are 403;
-wrong installation binding is 409; authorized absence is 404; oversized bodies
-are 413. Confirmed ordinary capacity rejection is 429. Storage/integrity failure,
-uncertain cleanup, or a response waiter timing out after enqueue is 503. A waiter
-timeout is never evidence of rollback. No automatic retry is performed.
-
-Already admitted execution observations use the same actor lane under existing
-execution custody and their own bounded deadline. Their failure is retained and
-makes shutdown unsuccessful even if database rollback succeeded. Cleanup does
-not require a newly granted manual evaluation permission. This transport does
-not enable production dispatch, strict receipts, or distributed writers.
-
-### Eval Exchange API compatibility cases
-
-1. An authenticated producer stores a subject and a result and reads only
-   evidence available to its configured owner. A missing subject is not success.
-2. An identical result replay is distinguished from changed immutable content.
-3. A frozen snapshot remains bound to its original evidence membership after
-   new results are submitted.
-4. Posting evidence does not publish or mutate the active routing policy.
-5. A lost response does not prove that a subject or result was not committed.
-6. All three schema-2 profiles have positive cases; reject subject1, mixed/missing
-   identity and cross-endpoint profiles. Same-name different-revision facts stay
-   distinct; result1/measurement2 remain accepted for valid current subjects.
-7. Submit/freeze never changes active source/configuration. Minimum/all-feature
-   gateway builds admit tenant exchange without experimental execution.
-
-## Thread API
-
-The optional host listener binds to loopback and uses a dedicated execution
-bearer, not an inference or control token. `GET /agent/v2/capabilities`
-authenticates and returns the server instance, runtime capabilities, operations
-and version. Other operations carry `X-Bro-Server-Instance` identifying the
-discovered instance. A client MUST reconnect and rediscover after an instance
-change and MUST NOT silently replay a mutation against the new instance. A
-workspace must be explicitly authorized by the host. Authentication or
-possession of a Thread ID does not grant a different workspace.
-
-| Method/path relative to `/agent/v2` | Operation |
-| --- | --- |
-| GET `/capabilities` | Discover available operations |
-| POST `/threads` | Create thread |
-| GET `/threads/{id}` | Read thread |
-| POST `/threads/{id}/turns` | Start or enqueue a turn |
-| GET `/threads/{id}/turns/{turn_id}` | Read turn |
-| POST `/threads/{id}/turns/{turn_id}/cancel` | Cancel selected work |
-| POST `/threads/{id}/steer`, `/threads/{id}/inputs`, `/threads/{id}/resume` | Steer, answer input, or resume queue |
-| GET `/threads/{id}/history`, `/threads/{id}/observe` | Paginated committed history or SSE observations |
-
-Mutation requests carry a caller-owned ASCII `Idempotency-Key` of 1–128 bytes.
-A matching authorized replay and conflicting reuse are distinguished by the
-server; a client MUST NOT generate a new key solely because a response was
-lost. Mutation JSON is limited to 64 KiB. `mode` on a turn distinguishes
-`start` and `enqueue`; a receipt is admission, not successful completion.
-Disconnecting an observer does not cancel accepted work. History query defaults
-`after` to 0 and `limit` to 128; the server remains authoritative on limits.
-
-JSON responses are versioned where described by the [public API types](../../../crates/bitrouter-ai/src/harness/api.rs).
-Errors use `{ "error": "...", "code": "..." }`; SSE can carry an `error`
-event with `{ "code": "...", "message": "..." }`. A client MUST handle
-unknown error codes as failures and resynchronize when required. The API's
-request types are not uniformly closed to unknown fields; no blanket unknown
-field rejection or forward-preservation guarantee is implied. Feature-disabled
-operations MUST NOT be inferred from their path alone.
-
-### Thread API compatibility cases
-
-1. The dedicated bearer is required; capabilities identify the serving instance
-   and do not advertise disabled native execution operations.
-2. A request targeting an unauthorized workspace or a stale server instance is
-   rejected. A client rediscovers after restart before a new mutation.
-3. Matching mutation/key replay does not execute twice; changed content using
-   the same key conflicts. Missing, non-ASCII or oversized keys fail.
-4. Enqueued turn admission is not completion. Disconnecting observation does
-   not cancel accepted execution; history remains accessible with authority.
-5. An SSE error and a truncated stream do not become a successful terminal.
-
-## Managed Core API
-
-An active virtual service key authenticates `GET /v1/orchestrator/capabilities`
-even if ordinary inference is configured to skip authentication. Availability
-depends on the host's `core` feature and enabled service. The response identifies
-the core instance, supported operations/transports and limits. A client MUST
-honor the advertised capabilities rather than assume the endpoint's presence
-implies every operation is enabled.
-
-`GET /v1/orchestrator/channel` upgrades to WebSocket only with
-`Bitrouter-Beta: orchestrator_core=v1`. Managed `POST /v1/responses` uses the
-same beta header; the ordinary Responses profile remains separate. The caller
-must first bind or restore a session over the core channel within the host's
-initial-message deadline. The harness owns durable checkpoint persistence and
-must explicitly acknowledge the checkpoint only after persistence; HTTP/SSE
-observation does not acknowledge it. DTOs and message variants are defined by
-[core protocol](../../../crates/bitrouter-ai/src/core/protocol.rs),
-[checkpoint](../../../crates/bitrouter-ai/src/core/checkpoint.rs) and
-[managed Responses](../../../crates/bitrouter-ai/src/core/responses.rs).
-
-A channel disconnect or dropped HTTP stream does not itself complete or cancel
-a run. No automatic replay or exactly-once result after uncertain delivery is
-promised. A client MUST use the existing operation inspection/recovery semantics
-before deciding on a new operation. `CoreError` carries `code`, `message` and
-`commit_status` (`not_committed`, `committed`, `unknown`); `unknown` MUST NOT be
-interpreted as rollback. Strict input structures reject unknown fields where
-specified by the DTO. Unknown required capabilities or future message variants
-MUST NOT be guessed.
-
-### Managed Core API compatibility cases
-
-1. Require a valid service key for capabilities even when ordinary inference
-   skips auth. Reject an unsupported beta value before channel upgrade.
-2. Require bind/restore within the initial deadline; unsupported operations
-   fail rather than being inferred from a successful handshake.
-3. Persist a checkpoint before sending its explicit ACK; observing HTTP/SSE
-   output alone does not acknowledge a checkpoint.
-4. Dropping the channel or observation does not establish cancellation or
-   rollback. Treat `commit_status: unknown` as an unresolved outcome.
-5. Reject malformed strict message input and unsupported required semantics.
+Header bounds are 128 values and 64 KiB. Subject/result wire and canonical
+payloads are bounded to 1 MiB and freeze requests to 4 KiB. Each collection or
+conflict set is limited to 1,024 rows. The service bounds serialized work to
+32 MiB and an encoded success response to 8 MiB. Overflow fails without
+truncating the collection. Eight leases bound concurrent operations, including
+body custody. Work has a five-second absolute deadline including queue time.
+Precommit cleanup gets one additional second. Uncertain cleanup or commit
+fences new authority while the actor owns the transaction.
 
 ## Native ACP extensions
 
@@ -2378,7 +1894,7 @@ Original model methods remain local-compatible and reject 202 with its HTTP
 metadata retained. No new SDK feature or service dependency is required.
 
 Options accept only the fixed semantic header set above, preserving duplicate
-values; authentication and managed-profile overrides are rejected locally.
+values; authentication and framing overrides are rejected locally.
 Generation methods reject an extension-map `stream` field before sending, so it
 cannot override the typed stream mode during serialization. Original correlation
 in a 202 execution DTO is independently validated as normalized 1–256 ASCII bytes;
@@ -2397,139 +1913,3 @@ container with the actual wire status and a `body_error`. Calling a shared-only
 submission method against a local server may execute inference before missing
 metadata is detected; the SDK never probes, retries or falls back automatically.
 See the [SDK usage and recovery contract](../../../crates/bitrouter-sdk/README.md).
-
-
-### Core-owned technical scopes (payload 2)
-
-`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v2`
-uses the same `ReceiptRead` authorization, installation/tenant namespace,
-original receipt lookup, deadline and no-store response as the version-one
-technical getter. The SDK entry is
-`TenancyClient::provider_technical_facts_v2`. Its independent closed object is
-`ProviderTechnicalFactsV2`, with schema
-[`provider_technical_facts_v2/schema.json`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v2/schema.json).
-One encoded 64KiB bound covers the operations, pipeline and hop observations
-together; receipt V1/V2 and their usage, estimator provenance, digest and native
-financial formats are unchanged.
-
-The original `operations` clocks retain their version-one meanings. The new
-nullable `pipeline_scope` records the actual owning `PipelineContext` ID,
-finalized request duration and actual settlement mode. Request duration uses
-the existing request helper (positive sub-millisecond rounds to one); provider
-JSON operation timing retains its original millisecond floor. Context IDs are
-not inferred from correlation IDs, external replay metadata or parent IDs.
-A JSON context has no stream object. A streamed context may have no stream
-measurement; null does not mean false or zero. Its stream, when observed,
-uses the first opened upstream clock through the original owning processor
-finalization, and that processor's accepted pre-hook semantic deltas. A normal
-single SSE is the singleton case. Core's configured internal server-tool loop
-can use the same owning processor across turns; the source arm is the first
-opened turn's closing auth arm, and the terminal arm is the final successful
-selected turn's closing arm. They can differ. Both must belong to the original
-receipt in source-to-terminal order. Neither ID means the last failed arm in
-the receipt. Missing binding or incomplete termination remains partial.
-
-Hop observations separately identify the actual send-order arm group, callback
-boundary profile and completion/error/drop. JSON outer callbacks, failed stream
-open callbacks and the original opened-stream notify scalar are distinct
-profiles. The last reuses the scalar passed to existing stream observers; it
-is not the merged processor clock or a physical-operation substitute. Wrapper
-EOF can report `completed` while `partial` remains true if no successful
-provider terminal was observed. `unobserved` means the optional snapshot
-preceded the hop end and therefore has null duration and partial=true. None
-of these profiles implies financial success or eligibility for a legacy health
-percentile. An unarmed hop supplies no timing row.
-
-Pipeline scope is finalized before settlement recorders. Receipt ACK never
-waits for it: the single pre-existing disposable optional task can await a
-racing local finalization only within its original five-second/owner cleanup
-deadline, with ordinary main-work preemption. There is no second worker, queue,
-retry or parent sum. If it loses that race, the scope remains unavailable;
-a late finalizer cannot rewrite the retained snapshot. The exact retained
-version and bytes govern optional write readback/accounting. Payloads one and
-two share the existing optional child-table key/FK, physical schema/stamp and
-original GC/capacity owner, with separate payload digest domains. No table
-migration, backfill or second row is introduced. Optional schema installation
-or read failure cannot promote this object into mandatory startup authority.
-
-An old payload-one row is still read exactly through the V1 getter and returns
-null through V2. A new payload-two row provides only its unchanged operation
-view through V1 (null if none); the retained bytes are never rewritten. An old
-Core may refuse the unknown optional row or V2 route; the new SDK does not
-retry, replay, fall back to another source or invent absent facts. Corrupt
-optional data refuses the technical read without corrupting original receipt
-reads. Root/child association must still be checked against the original
-retained usage-evidence parent/child edge and each execution's own receipt;
-timing never creates or repairs that edge.
-
-Stock tenancy profiles do not install Core's internal server-tool loop. This
-contract describes actual Core-owned contexts only. A logical loop assembled
-across executions in Cloud or another process has no Core-owned merged timing
-from this endpoint. There is no cross-process measurement session, observer RPC,
-root clock, or child-duration aggregation.
-
-### Observer-local hop clock (technical payload 3)
-
-`GET /control/v1/tenants/{tenant_id}/executions/{execution_id}/provider-technical-facts/v3`
-and `TenancyClient::provider_technical_facts_v3` read
-[`ProviderTechnicalFactsV3`](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts_v3/schema.json).
-The closed response contains `schema_version:3`, the unchanged typed V2 `scope`,
-and `observer_hops`. The old V1/V2 DTOs and enum values remain unchanged. This
-format adds no source, receipt, usage, financial, native or send authority.
-Validate its scope against the original receipt, and each observer group against
-the corresponding actual original scope hop. Categories may reference the same
-group; duplicate observer samples or order/closing mismatches are invalid.
-
-JSON and unsuccessful stream-open `on_hop_end` callbacks have no duration
-parameter. The former Cloud fallback observer computed its own elapsed scalar
-inside its paired callbacks, using `as_millis()` floor. The outer callback guard
-uses a different window and rounding; no subtraction or enum rename recovers
-that observer fact. The Core producer now installs one private observer in the
-fixed first slot of the existing observer dispatch. It remembers a start inside
-its own start callback and computes ONE floor scalar inside its own end callback
-using the existing JSON timing primitive. Its duration therefore includes later
-start observers and excludes later end observers. It is not a sample taken after
-all end callbacks, nor physical operation or merged stream timing. Registration
-order is part of the observation source: this does not reproduce arbitrary old
-Cloud hook orders, an old execution's timestamps or any Cloud-owned clock.
-
-`core_json_hop_observer_floor_v1` covers actual Generated/Failed JSON callbacks.
-`core_stream_open_hop_observer_floor_v1` covers a Failed open only. `completed`
-means Generated was observed at this boundary; it does not imply the enclosing
-execution or billing succeeded. The actual Hop/capture and original arm group
-bind both ends, independently of provider names or request correlation. Each
-context/fork has a separate pairing slot; overlapping callbacks on one context
-lose that observer sample rather than borrowing another turn's clock. A real
-positive sub-millisecond scalar may be zero. Missing start/end, cancellation,
-panic, duplicate pairing or diagnostic lock loss produces no observer row, not
-zero or an elapsed reconstructed from receipt timestamps. A successful open
-clears this pairing without a second sample; its full hop still uses the exact
-original `core_stream_hop_notify_v1` callback scalar. The existing JSON/open
-callback-guard profiles keep their own meanings. No profile automatically gains
-legacy percentile eligibility; consumers must independently establish source,
-owner, actual-arm and outcome eligibility before selecting a metric.
-
-All observations still share one optional row, key/FK, writer, original cleanup
-and capacity budgets, and one 64KiB encoded bound. Observer-only capture uses a
-separate bounded per-Hop cell; its contention cannot invalidate the old scope.
-The private retained payload3 envelope is closed/map-only with fields
-`schema_version`, `scope`, and `observer_hops_json` (the bounded serialized
-observer array string). Its digest domain is
-`bitrouter.provider-technical-facts.v3`, followed by the original big-endian u64
-UTF-8 JSON length and exact JSON bytes. This is private storage framing; public
-HTTP returns the typed array, not that string. No physical schema/stamp/table
-migration is needed. Idempotence and unknown-write readback compare this exact
-retained version/byte sequence, never a projected V2 view.
-
-Writing selects its one immutable payload before reservation/SQL: invalid or
-oversized observer contents retain the already-valid scope-only payload2. There
-is no second write, retry, backfill or larger allowance. For payload3, old getters
-strictly parse the known retained envelope and validate its scope against the
-original receipt, then return their original typed views. They do not interpret
-observer-only contents. V3 separately parses and validates that array; an invalid
-observer array refuses V3 while the original scope/receipt remain readable.
-Invalid outer framing, scope, digest or whole-row transfer bound still refuses
-the technical read under the original guards. Old retained payload1/2 returns
-null through V3, without relabelling history or inventing observer samples. A
-scope-only fallback remains readable through V2. The new SDK getter performs no
-automatic downgrade, repeated inference, additional admission or source repair.

@@ -2,13 +2,14 @@
 
 Evaluate outcomes in a client or external evaluator. The service validates,
 stores, queries and freezes facts; it does not run an evaluation job or publish
-Policy automatically. The canonical wire rules are in the
-[Service API specification](../../../docs/specs/service-api/README.md#eval-exchange-api)
-and [public Eval types](../../../crates/bitrouter-ai/src/eval.rs).
+Policy automatically. See the [Eval contract](../../../docs/specs/eval/README.md)
+for payloads and the [Service API](../../../docs/specs/service-api/README.md#eval-exchange-api)
+for endpoints, authorization and retry semantics.
 
 ## Subject identity and sealing
 
-Every current subject uses `schema_version: 2` and a required, closed `identity`:
+Set `spec_version: "eval/1.0.0-beta.1"` on each subject and result. A frozen
+snapshot carries the same required version. Subjects use one closed `identity`:
 
 | `identity.profile` | Required identity | Endpoint |
 | --- | --- | --- |
@@ -27,8 +28,7 @@ configuration and its real route binding. Preserve the literal selected name:
 `auto` and `auto:cost` are separate names. A Policy-free tenant evaluation uses
 `tenant_generic`. Generic evidence cannot justify a different Policy revision.
 Tenant profiles are rejected by Gateway Eval, and gateway profiles are rejected
-by Tenant Eval. Mixed or unknown profile fields and subject schema 1 are rejected.
-The retired top-level `policy_digest` and `preset` fields are not accepted.
+by Tenant Eval. Mixed or unknown identity fields are rejected.
 
 Common subject fields retain these meanings:
 
@@ -37,7 +37,7 @@ Common subject fields retain these meanings:
 | `eval_id` | Immutable evaluation-attempt identity. |
 | `subject_id` | Logical request, episode or task identity in its explicit namespace. |
 | `scope` | `request`, `episode`, or `task`; select the outcome boundary actually observed. |
-| `cohort` | Optional evaluator metadata; it grants no experiment or Policy identity. |
+| `cohort` | Optional evaluator metadata. |
 | `holdout` | Held-out facts remain outside admitted update evidence. |
 | `decisions` | Router-authored references; empty when no exact decision attribution is available. |
 | `requested_dimensions` | Namespaced metric IDs the evaluator may submit. |
@@ -53,11 +53,11 @@ the logical task identity stable within its run and source namespace.
 
 Copy decision fields from router evidence, including exact selected/baseline
 tiers and efforts, `route_projection`, `request_key`, diagnostic `policy_digest`,
-and any route measurement. Route-measurement schema stays **2**. Its probabilities
-and context candidate identities are observations, not task quality or permission
-to rewrite context. Optional BRO experiment references have their own discriminator;
-copy them unchanged and do not manufacture assignment IDs, arms or propensities.
-They grant no tenant execution authority.
+and any route measurement. Both route classifications are exact
+[Policy class keys](../../../docs/specs/policy/README.md#model-selection), such
+as `code:debugging|verify|guarded`. A measured candidate identifies its tier,
+model, optional effort and logging probability. These probabilities describe
+the router's distribution. Record task quality from the observed outcome.
 
 Keep raw prompts, code, tool arguments and evaluator output in the evaluator's
 private source. Evidence items contain `evidence_id`, namespaced `kind`, a
@@ -75,10 +75,10 @@ and writes deterministic JSON. It does not open the ledger or grant tenant autho
 
 ## Result contract and units
 
-Result schema stays **1** and inherits identity from the validated subject:
+The result inherits identity from the validated subject:
 
 ```text
-schema_version: 1
+spec_version: "eval/1.0.0-beta.1"
 eval_id: exact sealed subject ID
 evidence_digest: exact sealed evidence digest
 evaluator: { authority_id, evaluator_id, kind, version, config_digest }
@@ -181,8 +181,7 @@ rewrite it or retry with different identities.
 | `disputed` | Preserve conflicting facts; do not average verdicts. |
 
 An evaluator's authorized handoff ends after submission unless the task also
-explicitly requests freezing or updating Policy. There is no mature `optimize run`,
-`policy compile`, or `policy evolve` step.
+explicitly requests freezing or updating Policy.
 
 The explicit client-driven update flow is: infer against an exact retained
 configuration, evaluate its actual output, submit/freeze the bound facts, then
@@ -198,7 +197,7 @@ redacted verifier digest with a digest of actual private evidence, then seal it:
 
 ```json
 {
-  "schema_version": 2,
+  "spec_version": "eval/1.0.0-beta.1",
   "identity": {"profile": "gateway_generic"},
   "eval_id": "task-run-42",
   "scope": "task",
@@ -213,7 +212,7 @@ redacted verifier digest with a digest of actual private evidence, then seal it:
 }
 ```
 
-A corresponding result retains schema 1, repeats the sealed `eval_id` and
+A corresponding result uses the same `spec_version`, repeats the sealed `eval_id` and
 `evidence_digest`, uses its actual authorized evaluator identity, and cites
 `verifier`. For model-policy evidence, instead supply the complete authenticated
 `tenant_model_policy` tuple and submit through Tenant Eval.

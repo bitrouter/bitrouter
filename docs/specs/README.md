@@ -9,11 +9,8 @@ compatibility consequences. Admission and review follow the
 | Published model/provider registry | [Registry v1](registry-v1/README.md), `registry/1.0.0-beta.7` | Independent publishers/readers, persisted caches, identities, schema and revision compatibility |
 | Application configuration | [Configuration formats](configuration/README.md), `configuration/1.0.0-beta.5` | Existing YAML files, defaults, startup tenancy, routing weights and strict readers |
 | Portable model-routing policy | [Policy](policy/README.md), `policy/1.0.0-beta.1` | Independently authored policy files, SDK submissions, retained source and model-only execution semantics |
-| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.5` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
-
-M0 configuration/service-api beta.5 and Policy cutover clauses are accepted
-requirements for implementation and conformance qualification. Policy beta.1
-retains its unchanged unpublished source; Registry beta.7 is unchanged.
+| BitRouter-owned service messages and APIs | [Service API](service-api/README.md), `service-api/1.0.0-beta.6` | Independently updated clients/services, authentication and instance binding, resource revisions, usage evidence, errors, replay, cursors and persistent identities |
+| Routing evaluation artifacts | [Eval](eval/README.md), `eval/1.0.0-beta.1` | Subjects, results and frozen snapshots retained independently by external evaluators and offline learners |
 
 ## Contract identifiers and revision dimensions
 
@@ -57,11 +54,9 @@ of that object's contract when it needs the same compatibility review; it does
 not get another independently maintained spec. Supporting schemas, examples and
 conformance cases are indexed by the canonical entry. Existing build-consumed
 schemas may retain their shared contract paths; do not create a duplicate schema.
-The service specification indexes the resource-provisioning schemas and packaged
-usage-evidence schemas at their existing paths, with compatibility cases under
-[resource provisioning](service-api/README.md#resource-provisioning) and
-[execution usage evidence](service-api/README.md#execution-usage-evidence).
-Those supporting files are not separate specifications. Keep revision/stability
+See the [resource provisioning](service-api/README.md#resource-provisioning)
+and [execution usage evidence](service-api/README.md#execution-usage-evidence)
+sections for resource and evidence payloads. Keep revision/stability
 status distinct from URL, message, file-format and software-release versions.
 
 A change requires deliberate review of both compatibility directions, rejected
