@@ -3,10 +3,7 @@
 Status: **accepted, `configuration/1.0.0-beta.5`**.
 This is the format contract for
 `bitrouter.yaml`, its shared-process profile and Policy source loading.
-The beta.5 cutover requires matching parser, schema, DTO and conformance behavior.
-Portable service routing policies have their own
-[Policy contract](../policy/README.md). This document's revision does not add
-a version field to existing application YAML.
+The [Policy contract](../policy/README.md) governs portable routing policy files.
 MUST, MUST NOT, SHOULD and MAY express requirements on readers and writers.
 
 ## Compatibility and validation
@@ -23,53 +20,32 @@ changes; it does not permit an undocumented change in interpretation.
 The [generated application schema](../../../dist/schema/bitrouter.config.schema.json)
 is the field/type reference for ordinary application YAML. The configuration
 parser performs additional reference, derivation and semantic validation.
-`bro config validate` uses that parser; JSON Schema validation alone is not
-runtime acceptance. The schema, parser, rejection behavior, examples and this
+The CLI config validator uses that parser. Runtime acceptance also requires
+semantic validation. The schema, parser, rejection behavior, examples and this
 contract must be reviewed together. Do not hand-maintain another copy of the
 complete field catalog in prose.
 
 ## Application YAML
 
-`bitrouter.yaml` is a YAML mapping. There is currently no top-level format-version
-field. The top-level object rejects unknown fields; nested objects follow their
-own schema and parser rules. Absence selects declared defaults, rather than a
-universal null value. Opaque `plugins` entries are not evidence that the host
-implements or activates the named plugin. In-memory derived registry records
-are not local YAML fields.
-
-The root groups are `server`, `control`, `tenancy`, `agent_api`, `decision_model`,
-`chat`, `upstream`, `database`, `gateway_state`, `eval`, `trajectory`,
-`acp_recording`, `continuation`, `providers`, `models`, `routers`, `checkers`,
-`plugins`, `mcp`, `mcp_servers`, `skills`, `server_tools`,
-`agents`, `inherit_defaults`, `registry` and `policy`. Their exact shapes and
-field units are defined by the generated schema. Environment substitution in
-the local profile precedes parsing and semantic validation. Operator instructions
-for source selection, substitutions and validation are in the
-[CLI reference](../../CLI.md#config-resolution).
+`bitrouter.yaml` is a YAML mapping with no top-level format-version field.
+The root rejects unknown fields. Each nested object follows its schema and
+parser rules, including defaults and nullability. The generated schema is the
+catalog of root groups and field units. Environment substitution in the local
+profile precedes parsing and semantic validation. See the [CLI reference](../../CLI.md#config-resolution)
+for source selection, substitutions and validation.
 
 Named routers use `bitrouter/<id>`. Selection, defaults and ordered request
-checks are separate. `presets`, `variants`, old router addresses and aliases
-are rejected without conversion. Ordinary provider/model selectors and upstream
-protocol versions keep their meanings. Policy bindings select literal names;
-there is no variant-derived selection or base-name fallback.
+checks are separate. Policy bindings select literal names by exact match.
 
-`policy` is closed and accepts only optional `path`. Unknown/deleted keys,
-including `mode`, `writeback`, `locked` and `evolve`, fail even with values
-that previously disabled them. Paths resolve relative to the configuration;
-the conventional omitted path is `policy.yaml` beside `bitrouter.yaml`.
-There is no implicit discovery of `policy-lock.yaml`. Every path accepts only
-public Policy source. An explicit missing, invalid or unsupported file fails
-without default fallback. Local zero-configuration may use the maintained bundled
-source when no user source is selected; no user file is overwritten. Tenant
-initialization explicitly submits source and never inherits host files/defaults.
+The closed `policy` mapping accepts an optional `path` relative to the
+configuration file. When omitted, the conventional filename is `policy.yaml`
+beside `bitrouter.yaml`. An explicit missing, invalid or unsupported source
+fails. Tenant initialization explicitly submits its own source.
 
-Policy init/check/show/status/diff and explicit publish/rollback use that source.
-Active is the default for the selected running instance; disk is explicitly
-selected for offline checks and never replaces failed active/remote reads.
-Publication takes explicit expected-head/CAS. Filesystem/process permissions
-control local writes; service authentication/scope/CAS control service writes.
-There is no automatic learning publication, v4 migration or legacy compile/evolve/
-evidence-verification entry point in mature Policy commands.
+Policy publication requires an explicit expected head. The selected running
+instance's active view is the default for inspection. The disk view must be
+selected explicitly. Filesystem permissions govern local writes. Service
+authentication, scope and compare-and-swap govern service writes.
 
 A structural minimal local example is:
 
@@ -83,15 +59,12 @@ registry:
 This example only illustrates fields; it does not supply provider credentials
 or guarantee a runnable inference route.
 
-## Tenancy and routing compatibility
+## Tenancy and routing
 
-Revision beta.3 adds startup runtime budgets independent of directory size.
-Revision beta.2 records the startup tenancy and per-model routing-weight
-semantics below. The `TenancyConfig` and `ProviderModel` definitions in the
-[generated schema](../../../dist/schema/bitrouter.config.schema.json) remain
-their field catalogs; this revision adds no YAML version field. The
-[tenancy validator](../../../apps/bitrouter/src/config/tenancy.rs) also checks
-deployment, bounds and references that the generated schema alone cannot prove.
+The `TenancyConfig` and `ProviderModel` definitions in the
+[generated schema](../../../dist/schema/bitrouter.config.schema.json)
+define accepted fields. The [tenancy validator](../../../apps/bitrouter/src/config/tenancy.rs)
+also checks deployment, bounds and references.
 
 ### Opt-in and startup ownership
 
@@ -99,8 +72,7 @@ Omitting `tenancy` or supplying an empty mapping preserves the disabled default.
 Tenancy requires explicit enablement, authenticated inference, an enabled control
 listener and an explicit `control:tenancy` operator credential. The supported
 profile is one Unix process exclusively owning a file-backed SQLite database
-with `gateway_state.mode: local`. In-memory SQLite, non-SQLite stores, shared
-gateway mode and the host coding-task API are not accepted for this profile.
+with `gateway_state.mode: local`.
 These settings do not enable distributed tenant authority or distributed quotas.
 
 The entire `tenancy` object is startup-only. A reload with changed effective
@@ -159,7 +131,7 @@ allocation; active leases keep their ownership. Routing send ownership derives f
 With tenancy enabled, the local inference listener uses
 `transport.connections` and `transport.header_timeout_ms`, with an aggregate
 request/HTTP/2-stream budget of `ingress.requests` across connections. HTTP/1
-keep-alive remains available. The per-request wire limits remain unchanged.
+connections can use keep-alive. Each request remains subject to its wire limit.
 
 Receipt unknown budgets govern new admission. Retained obligations above a
 lowered budget remain valid evidence and MUST NOT be deleted or treated as
@@ -176,13 +148,11 @@ shared filesystem. The [storage guide](../../development/tenant-service.md#recei
 describes ownership, maintenance and failure boundaries.
 
 Changing effective capacity requires a restart under the same rules as the
-rest of `tenancy`. Older strict readers reject the new keys. Operators MUST use
-a compatible binary; removing a configuration key is not a database downgrade.
+rest of `tenancy`.
 
 ### Absence, nullability and admission limits
 
-The schema's optional import path, learning-registration path, wrapping-key
-environment name and execution timeout accept omission or explicit null as
+The optional import path, wrapping-key environment name and execution timeout accept omission or explicit null as
 absence. Boolean, list and required numeric settings do not accept null in
 place of their defaults. In particular, an omitted origin list is empty, and an
 omitted weight is unknown, not zero. Unknown fields within `tenancy` are rejected.
@@ -197,16 +167,11 @@ bounds a provider read or blocked output handoff and renews with progress.
 Expiration does not authorize inference replay or imply that cleanup, rollback
 or durable completion succeeded.
 
-Revision beta.3 adds startup-only `tenancy.ordered_attempt_limit`, an integer
-from 1 through 64, default 8. It bounds one explicitly negotiated ordered v2
-execution, not the tenant directory or ordinary v1 requests. A submitted
-selection above the limit is rejected before provider work; it is never
-truncated. Raising the limit does not widen any grant, change routing defaults,
-or reserve 64 attempts for ordinary executions. Old configurations retain the
-default. An old reader can reject this new key; omission is the compatible
-configuration for a v1-only binary, whose store compatibility must also be
-checked before rollback. See the
-[ordered dispatch contract](../service-api/README.md#ordered-static-dispatch-v2).
+Startup-only `tenancy.ordered_attempt_limit` is an integer from 1 through 64
+with default 8. It bounds a single ordered execution. A selection above the
+limit is rejected before provider work. The limit does not change ordinary
+dispatch limits, grants or routing defaults. See the
+[ordered dispatch contract](../service-api/README.md#ordered-static-dispatch).
 
 ### Private generation adapter
 
@@ -232,8 +197,8 @@ protocol decoder still requires a valid terminal.
 
 ### Provisioning authority and retained settings
 
-Import, learning-registration and wrapping-key options require tenancy to be
-enabled; nonempty origin lists do as well. Import additionally requires an
+Import, wrapping-key configuration and nonempty origin lists require enabled
+tenancy. Import additionally requires an
 explicit wrapping-key environment name. The name identifies an operator-owned
 environment variable containing a stable base64-encoded 32-byte key, not the
 key itself; no replacement key is generated implicitly. A missing or wrong key
@@ -243,9 +208,7 @@ not an in-place re-encryption or migration procedure.
 Resource import is privileged startup input, read before listeners open. A
 relative import path is resolved against the process working directory, not the
 configuration directory or a tenant-selected directory. Omitting it does not
-delete previously imported revisions. Omitting learning registrations likewise
-preserves durable schedules; that facility requires the `core` and `harness`
-features. Resource mutations and evidence use the
+delete imported revisions. Resource mutations and evidence use the
 [canonical tenancy API](../service-api/README.md#resource-provisioning).
 
 Origin approval is a bounded list of at most 256 unique exact HTTP(S) origins,
@@ -269,29 +232,10 @@ The weight has no currency, tariff, discount or payable-usage unit; published
 prices do not provide its default. It orders only the already authorized
 candidate set and cannot add an endpoint or grant credential use.
 
-The compiler's retained target identity and encrypted envelope format are
-unchanged. Existing retained routes without weights keep their missing-weight
-semantics. Changing a configuration file does not rewrite an immutable tenant
-route; publish and explicitly select a new resource/configuration revision for
-new weights. Runtime ordering, rate limits, health and fallback are described in
-the [tenant routing guide](../../development/tenant-routing.md).
-
-### Reader compatibility and rollback
-
-A new reader of old YAML uses the declared defaults and does not rewrite the
-file or opt into tenancy. An older strict reader can reject new tenancy keys;
-an older permissive model reader may accept `routing_weight` while ignoring its
-meaning. Syntactic acceptance is therefore not proof of the requested routing
-behavior. Writers MUST target a reader known to implement required settings;
-they MUST NOT strip origin, lifetime or ownership constraints just to make an
-older binary accept the file.
-
-Binary rollback requires an explicitly reviewed compatible configuration and
-the [service data rollback rules](../service-api/README.md#resource-and-evidence-migration-and-rollback).
-Preserve a verified database/configuration/wrapping-key set before upgrading.
-Removing new YAML keys does not downgrade retained heads, revocations or evidence,
-and an older binary is not qualified to reopen that store merely because its
-configuration parser succeeds.
+Changing configuration does not rewrite an immutable tenant route. Publish
+and explicitly select a new resource/configuration revision for new weights.
+The [tenant routing guide](../../development/tenant-routing.md) describes
+dispatch ordering, rate limits, health and fallback.
 
 ## Shared-process profile
 
@@ -315,13 +259,9 @@ contains a complete deployment example and current feature restrictions.
 
 ## Service policy source
 
-File, API, default, SDK and export inputs use the
-[Policy contract](../policy/README.md), exactly `policy/1.0.0-beta.1`.
-Shared publication format 2 carries typed `model_policy`; format 1,
-`policy_lock` and mixed fields are rejected before mutation. ACL `policies`
-and principal `policy_id` remain independent access-control objects. BRO
-experiments need an explicit harness owner and cannot reuse the retired lock
-reader or submit context/learning state as model-only source.
+Local files and managed requests use the [Policy contract](../policy/README.md).
+Shared publication carries typed `model_policy`. Its ACL `policies` and
+principal `policy_id` fields govern access control independently.
 
 ## Persistent dataset selection
 
@@ -338,20 +278,19 @@ data/configuration/key copy, never a downgraded new store.
 - Parse the ordinary local example and reject an unknown root key. Check nested
   openness against the corresponding schema rather than applying one rule to
   all objects. Missing values retain declared defaults and units.
-- Reject old presets/variants, addresses and Policy aliases from raw YAML,
-  including duplicates and removed nested keys; leave files unchanged.
+- Reject unknown keys and duplicate mapping fields where the schema requires
+  unique keys. Preserve source files on validation failure.
 - Select shared mode literally; reject an environment-selected mode, unknown
   shared process key or routing authority embedded in that process document.
-- Load public source from policy.yaml, explicit paths and bundled defaults.
-  Reject old lock discriminators, invalid references and unsupported versions.
-  Explicit missing/invalid paths never discover defaults or an old lock file.
+- Load Policy from the conventional file or an explicit path. Reject invalid
+  references, unsupported versions and missing explicitly selected files.
 - Verify exact route, unknown-family fallback and default. Compilation preserves
   active source; explicit stale CAS blocks publication.
-- An old document without tenancy settings stays disabled. Omitted and null
+- A document without tenancy settings leaves tenancy disabled. Omitted and null
   optional values retain their absence semantics; reject null required values,
   unknown tenancy keys and invalid timeout bounds, including schema-valid zero.
 - Enabled tenancy rejects anonymous ingress, absent operator authority, shared
-  mode, in-memory/non-SQLite databases, non-Unix ownership and the host task API.
+  mode, in-memory/non-SQLite databases and non-Unix ownership.
   Changed effective tenancy settings reject reload before publishing a candidate.
 - Omitted capacity groups and partial nested mappings preserve the defaults of
   omitted fields. Reject null, negative and fractional numeric budgets, overflow,
@@ -363,13 +302,12 @@ data/configuration/key copy, never a downgraded new store.
   and userinfo fail validation; origin comparison never expands wildcards or
   matches URL prefixes. Removing an approved origin leaves retained revisions
   intact until explicit revocation.
-- A valid restart preserves imported/managed resources and durable schedules
-  when import/registration paths are omitted. Retained encrypted resources fail
+- A valid restart preserves imported and managed resources when the import
+  path is omitted. Retained encrypted resources fail
   closed with a missing or wrong wrapping key; restart does not generate one.
 - Weights 0 and larger exact unsigned integers sort ascending, unknown weights
   sort last and ties retain order. Omitted/null weights never inherit prices.
-  Test old-reader rejection or ignored-field behavior without treating it as
-  support; new-reader defaults preserve old unweighted routes.
+  Verify exact ordering after restart.
 - Reject old/unmarked/partially initialized/foreign/future stores and forged
   markers before authority or recovery writes. Preserve records, source bytes
   and provider counts. Current restart preserves receipts and cumulative budgets.

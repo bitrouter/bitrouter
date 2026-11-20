@@ -7,11 +7,12 @@ description: Use when evaluating BitRouter route decisions or Eval Exchange subj
 
 Evaluate actual outcomes outside the serving path. Read the
 [Eval Exchange reference](references/eval-exchange.md) before forming a packet;
-the canonical contract remains in the Service API specification and public DTOs.
+the [Eval specification](../../docs/specs/eval/README.md) defines the payloads.
 
 ## Bind the subject
 
-Every subject uses schema 2 with one closed identity profile:
+Set `spec_version: "eval/1.0.0-beta.1"` on subjects and results. A frozen
+snapshot carries that version too. Choose one closed subject identity profile:
 
 - `tenant_model_policy`: exact installation, tenant, configuration revision,
   full Policy ResourceRef and literal selected name. Use revision-bound inference
@@ -21,7 +22,6 @@ Every subject uses schema 2 with one closed identity profile:
   without tenant or Policy fields.
 
 Use the matching endpoint. Generic facts cannot justify another Policy revision.
-Do not submit old top-level `policy_digest` or `preset` identity substitutes.
 
 Choose scope from the outcome actually observed: one request is `request`, a
 bounded workflow/conversation is `episode`, and an externally defined task with
@@ -32,7 +32,8 @@ inside its run/source namespace; give separate attempts distinct evaluation IDs.
 
 1. Copy router-authored decision IDs, selected/baseline tiers and efforts,
    request/projection keys, diagnostic digests and route measurements exactly.
-   Preserve any BRO experiment reference unchanged; it grants no service authority.
+   Use the exact Policy `RouteClass` strings for `request_key` and
+   `route_projection`.
 2. Keep raw prompts, code, tool arguments and evaluator output private. Submit
    only redacted, content-addressed evidence and safe attributes.
 3. Request only supported dimensions. Keep cost/latency/reliability separate from
@@ -43,8 +44,7 @@ inside its run/source namespace; give separate attempts distinct evaluation IDs.
    bro eval subject seal subject-draft.json --output subject.json
    ```
 
-5. Produce result schema **1**, repeating the subject's exact ID and sealed
-   evidence digest. Route-measurement schema remains **2**.
+5. Repeat the subject's exact ID and sealed evidence digest on its result.
 6. Follow the endpoint's authority rules. Gateway evaluator kind must match its
    configured source/authority. Tenant manual results require `generic`, the
    authenticated principal's authority ID, and no hard violations.
@@ -76,4 +76,3 @@ those actions to be part of the task. If requested, the client may freeze facts,
 independently author a public model-only Policy source, create new immutable
 resource/configuration revisions, and explicitly activate with current authority
 and CAS. Submission, freeze and drafts never change active Policy automatically.
-There is no mature optimizer/compiler publication step.

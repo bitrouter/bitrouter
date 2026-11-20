@@ -20,7 +20,7 @@ currency, provider tariff, discount, or billing calculation is involved. Publish
 catalog prices never supply this field. An absent weight sorts after known
 weights; ties preserve the retained order.
 
-Explicit [ordered dispatch v2](../specs/service-api/README.md#ordered-static-dispatch-v2)
+Explicit [ordered dispatch](../specs/service-api/README.md#ordered-static-dispatch)
 uses a request-local view of one retained protocol root. Public ordinals map to
 that root's persisted positions, independently of internal candidate deduplication.
 The view keeps the charged revision pin and only the selected credential
