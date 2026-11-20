@@ -195,32 +195,23 @@ impl Capture {
         if operations.is_empty() {
             return None;
         }
-        let facts = terminal.facts();
-        let revision = match terminal {
-            super::store::format::Terminal::V1(value) => value.receipt.execution_revision.clone(),
-            super::store::format::Terminal::V2(value) => value.receipt.execution_revision.clone(),
+        let receipt = match terminal {
+            super::store::format::Terminal::V1(value) => &value.receipt,
+            super::store::format::Terminal::V2(value) => &value.receipt,
         };
         let result = ProviderTechnicalFacts {
             schema_version: 3,
             pipeline_scope: None,
             hop_observations: Vec::new(),
             observer_hops: Vec::new(),
-            receipt_format: match terminal.format() {
-                super::store::format::Format::V1 => 1,
-                super::store::format::Format::V2 => 2,
-            },
-            installation_id: facts.installation.clone(),
-            tenant_id: facts.tenant.clone(),
-            principal_id: facts.principal.clone(),
-            execution_id: facts.execution.clone(),
-            execution_revision: revision,
+            installation_id: receipt.installation_id.clone(),
+            tenant_id: receipt.tenant_id.clone(),
+            principal_id: receipt.principal_id.clone(),
+            execution_id: receipt.execution_id.clone(),
+            execution_revision: receipt.execution_revision.clone(),
             operations,
         };
-        let valid = match terminal {
-            super::store::format::Terminal::V1(value) => result.validate_against(&value.receipt),
-            super::store::format::Terminal::V2(value) => result.validate_against_v2(&value.receipt),
-        };
-        valid.ok().map(|()| result)
+        result.validate_against(receipt).ok().map(|()| result)
     }
 }
 
@@ -289,32 +280,23 @@ impl Pending {
         if !self.capture.healthy() {
             return None;
         }
-        let facts = terminal.facts();
-        let revision = match terminal {
-            super::store::format::Terminal::V1(value) => value.receipt.execution_revision.clone(),
-            super::store::format::Terminal::V2(value) => value.receipt.execution_revision.clone(),
+        let receipt = match terminal {
+            super::store::format::Terminal::V1(value) => &value.receipt,
+            super::store::format::Terminal::V2(value) => &value.receipt,
         };
         let result = bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts {
             schema_version: 3,
             observer_hops: Vec::new(),
-            receipt_format: match terminal.format() {
-                super::store::format::Format::V1 => 1,
-                super::store::format::Format::V2 => 2,
-            },
-            installation_id: facts.installation.clone(),
-            tenant_id: facts.tenant.clone(),
-            principal_id: facts.principal.clone(),
-            execution_id: facts.execution.clone(),
-            execution_revision: revision,
+            installation_id: receipt.installation_id.clone(),
+            tenant_id: receipt.tenant_id.clone(),
+            principal_id: receipt.principal_id.clone(),
+            execution_id: receipt.execution_id.clone(),
+            execution_revision: receipt.execution_revision.clone(),
             operations: self.operations.clone(),
             pipeline_scope: scope,
             hop_observations: hops,
         };
-        let valid = match terminal {
-            super::store::format::Terminal::V1(value) => result.validate_against(&value.receipt),
-            super::store::format::Terminal::V2(value) => result.validate_against_v2(&value.receipt),
-        };
-        valid.ok().map(|()| result)
+        result.validate_against(receipt).ok().map(|()| result)
     }
 }
 

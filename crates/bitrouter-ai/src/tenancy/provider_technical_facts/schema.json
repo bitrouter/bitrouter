@@ -5,7 +5,6 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
-    "receipt_format",
     "installation_id",
     "tenant_id",
     "principal_id",
@@ -19,12 +18,6 @@
   "properties": {
     "schema_version": {
       "const": 3
-    },
-    "receipt_format": {
-      "enum": [
-        1,
-        2
-      ]
     },
     "installation_id": {
       "type": "string",
@@ -508,30 +501,5 @@
       }
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "receipt_format": {
-            "const": 1
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "operations": {
-            "maxItems": 8,
-            "items": {
-              "properties": {
-                "attempt_ids": {
-                  "maxItems": 8
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

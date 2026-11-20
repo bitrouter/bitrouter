@@ -9,8 +9,9 @@ use bitrouter_ai::tenancy::{
 
 impl TenancyClient {
     /// Read optional provider operation, pipeline, hop and observer measurements.
-    /// Validate against the original receipt
-    /// before interpreting any actual-arm or parent/child association.
+    /// Call `ProviderTechnicalFacts::validate_against` with the original
+    /// `ExecutionReceipt` before interpreting actual-arm or parent/child
+    /// associations. Its dispatch supplies the strict or ordered attempt limits.
     ///
     /// # Errors
     /// Original authorization, unsupported Core route, bounded transfer,

@@ -2,19 +2,19 @@ use super::*;
 use serde_json::json;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-fn value() -> serde_json::Value {
-    json!({"schema_version":3,"observer_hops":[],"pipeline_scope":null,"hop_observations":[],"receipt_format":1,"installation_id":"store","tenant_id":"tenant",
+pub(super) fn value() -> serde_json::Value {
+    json!({"schema_version":3,"observer_hops":[],"pipeline_scope":null,"hop_observations":[],"installation_id":"store","tenant_id":"tenant",
         "principal_id":"principal","execution_id":"execution","execution_revision":"revision",
         "operations":[{"attempt_ids":["attempt-a","attempt-b"],"selected_attempt_id":"attempt-b",
             "streamed":false,"upstream_duration_ms":0,"first_semantic":null,"generation_duration_ms":null,"partial":false}]})
 }
-fn receipt() -> Result<ExecutionReceipt, Box<dyn std::error::Error>> {
+pub(super) fn receipt() -> Result<ExecutionReceipt, Box<dyn std::error::Error>> {
     let usage = json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false});
     Ok(serde_json::from_value(
-        json!({"installation_id":"store","tenant_id":"tenant","principal_id":"principal",
+        json!({"dispatch":{"mode":"strict"},"installation_id":"store","tenant_id":"tenant","principal_id":"principal",
         "execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed",
-        "attempts":[{"attempt_id":"attempt-a","target":null,"outcome":"failed","usage":usage,"native_usage":[]},
-            {"attempt_id":"attempt-b","target":null,"outcome":"failed","usage":usage,"native_usage":[]}],
+        "attempts":[{"attempt_id":"attempt-a","candidate_index":null,"observed_http_status":null,"target":null,"outcome":"failed","usage":usage,"native_usage":[]},
+            {"attempt_id":"attempt-b","candidate_index":null,"observed_http_status":null,"target":null,"outcome":"failed","usage":usage,"native_usage":[]}],
         "usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
     )?)
 }
@@ -105,7 +105,8 @@ fn required_null_unknown_duplicates_integer_overflow_and_kind_fail_closed() -> T
 }
 
 #[test]
-fn receipt_binding_rejects_foreign_identity_missing_arm_reorder_and_wrong_format() -> TestResult {
+fn receipt_binding_rejects_foreign_identity_missing_arm_reorder_and_invalid_dispatch() -> TestResult
+{
     let facts: ProviderTechnicalFacts = serde_json::from_value(value())?;
     let original = receipt()?;
     let before = serde_json::to_vec(&original)?;
@@ -129,9 +130,9 @@ fn receipt_binding_rejects_foreign_identity_missing_arm_reorder_and_wrong_format
     let mut changed = facts.clone();
     changed.operations[0].attempt_ids[0] = "never-armed".try_into()?;
     assert!(changed.validate_against(&original).is_err());
-    let mut changed = facts;
-    changed.receipt_format = 2;
-    assert!(changed.validate_against(&original).is_err());
+    let mut changed = original.clone();
+    changed.attempts[0].candidate_index = Some(0);
+    assert!(facts.validate_against(&changed).is_err());
     assert_eq!(serde_json::to_vec(&original)?, before);
     Ok(())
 }
@@ -145,7 +146,6 @@ fn operation_and_actual_attempt_budgets_and_selected_binding_are_finite() -> Tes
         "missing_pair",
         "json_semantic",
         "schema",
-        "format",
         "count",
     ] {
         let mut changed = facts.clone();
@@ -161,9 +161,9 @@ fn operation_and_actual_attempt_budgets_and_selected_binding_are_finite() -> Tes
                 changed.operations[0].generation_duration_ms = Some(0);
             }
             "schema" => changed.schema_version = 2,
-            "format" => changed.receipt_format = 3,
             "count" => {
-                for index in 0..8 {
+                changed.operations[0].selected_attempt_id = None;
+                for index in 0..MAX_OPERATIONS {
                     changed.operations[0]
                         .attempt_ids
                         .push(format!("extra-{index}").try_into()?);
@@ -180,25 +180,25 @@ fn operation_and_actual_attempt_budgets_and_selected_binding_are_finite() -> Tes
 }
 
 #[test]
-fn v2_original_ordinal_receipt_and_auth_retry_group_are_not_relabelled_v1() -> TestResult {
+fn ordered_original_ordinals_and_auth_retry_group_remain_receipt_bound() -> TestResult {
     let mut raw = serde_json::to_value(receipt()?)?;
-    raw["schema_version"] = json!(2);
-    raw["attempt_limit"] = json!(2);
-    raw["accepted_selection"] = json!({"admission_mode":"unprofiled","route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route","revision_id":"route-revision"},"inbound_protocol":"messages","candidate_indices":[17,2]});
+    raw["dispatch"] = json!({"mode":"ordered","attempt_limit":2});
+    raw["dispatch"]["accepted_selection"] = json!({"admission_mode":"unprofiled","route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route","revision_id":"route-revision"},"inbound_protocol":"messages","candidate_indices":[17,2]});
     for (position, ordinal) in [17, 2].into_iter().enumerate() {
         raw["attempts"][position]["candidate_index"] = json!(ordinal);
         raw["attempts"][position]["observed_http_status"] = json!(503);
     }
-    let original: ExecutionReceiptV2 = serde_json::from_value(raw)?;
+    let original: ExecutionReceipt = serde_json::from_value(raw)?;
     original.validate()?;
-    let mut facts: ProviderTechnicalFacts = serde_json::from_value(value())?;
-    facts.receipt_format = 2;
-    facts.validate_against_v2(&original)?;
+    let facts: ProviderTechnicalFacts = serde_json::from_value(value())?;
+    facts.validate_against(&original)?;
     let before = serde_json::to_vec(&original)?;
     let mut changed = original.clone();
     changed.attempts.swap(0, 1);
-    assert!(facts.validate_against_v2(&changed).is_err());
-    assert!(facts.validate_against(&receipt()?).is_err());
+    assert!(facts.validate_against(&changed).is_err());
+    let mut changed = original.clone();
+    changed.dispatch = crate::tenancy::execution::Dispatch::Strict;
+    assert!(facts.validate_against(&changed).is_err());
     assert_eq!(serde_json::to_vec(&original)?, before);
     Ok(())
 }

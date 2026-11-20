@@ -7,7 +7,7 @@ use serde_json::json;
 fn original() -> Result<Terminal> {
     let usage = json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false});
     let receipt = serde_json::from_value(
-        json!({"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed","attempts":[{"attempt_id":"attempt","target":null,"outcome":"failed","usage":usage,"native_usage":[]}],"usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
+        json!({"dispatch":{"mode":"strict"},"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","correlation_id":"correlation","execution_revision":"revision","state":"incomplete","outcome":"failed","attempts":[{"attempt_id":"attempt","candidate_index":null,"observed_http_status":503,"target":null,"outcome":"failed","usage":usage,"native_usage":[]}],"usage":usage,"recorded_at":"2026-01-01T00:00:00Z"}),
     )?;
     Ok(Terminal::V1(std::sync::Arc::new(Candidate::new(
         receipt,
@@ -21,7 +21,7 @@ fn original() -> Result<Terminal> {
 
 fn facts() -> Result<ProviderTechnicalFacts> {
     Ok(serde_json::from_value(json!({
-        "schema_version":3,"receipt_format":1,"installation_id":"store","tenant_id":"tenant",
+        "schema_version":3,"installation_id":"store","tenant_id":"tenant",
         "principal_id":"principal","execution_id":"execution","execution_revision":"revision",
         "operations":[{"attempt_ids":["attempt"],"selected_attempt_id":null,"streamed":false,
             "upstream_duration_ms":0,"first_semantic":null,"generation_duration_ms":null,"partial":false}],
@@ -78,14 +78,20 @@ async fn ut_current_payload_reopens_and_corrupt_observers_do_not_poison_receipts
         ensure!(exact.version == 3 && exact.json == prepared.json && exact.digest == prepared.digest);
         ensure!(retained_bytes(&db).await? == u64::try_from(prepared.json.len())?
             + crate::tenancy::receipts::capacity::ROW_OVERHEAD);
-        for case in ["observer_shape", "observer_group", "old_version", "envelope"] {
+        for case in ["observer_shape", "observer_group", "unarmed_operation", "old_version", "receipt_format", "envelope"] {
             let mut value = serde_json::to_value(&data)?;
             match case {
                 "observer_shape" => value["observer_hops"] = json!({"not":"an array"}),
                 "observer_group" => value["observer_hops"][0]["closing_attempt_id"] = json!("foreign"),
+                "unarmed_operation" => value["operations"][0]["attempt_ids"] = json!(["never-armed"]),
                 "old_version" => value["schema_version"] = json!(2),
+                "receipt_format" => value["receipt_format"] = json!(1),
                 "envelope" => value = json!({"schema_version":3,"scope":value,"observer_hops_json":"[]"}),
                 _ => anyhow::bail!("unknown storage case"),
+            }
+            if case == "unarmed_operation" {
+                // A valid standalone object still cannot invent a receipt arm.
+                serde_json::from_value::<ProviderTechnicalFacts>(value.clone())?.validate()?;
             }
             let json = serde_json::to_string(&value)?;
             let tx = db.begin().await?;

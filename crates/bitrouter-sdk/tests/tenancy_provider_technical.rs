@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const TOKEN: &str = "scope-reader-fixture-token-0123456789";
 fn facts() -> Value {
-    json!({"schema_version":3,"receipt_format":1,"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","execution_revision":"revision","operations":[{"attempt_ids":["attempt"],"selected_attempt_id":"attempt","streamed":false,"upstream_duration_ms":0,"first_semantic":null,"generation_duration_ms":null,"partial":false}],"pipeline_scope":{"profile":"core_pipeline_finalized_v1","context_request_id":"actual-context-not-correlation","request_duration_ms":1,"streamed":false,"stream":null},"hop_observations":[{"profile":"core_json_hop_callbacks_v1","attempt_ids":["attempt"],"closing_attempt_id":"attempt","duration_ms":8,"end":"completed","partial":false}],"observer_hops":[{"profile":"core_json_hop_observer_floor_v1","attempt_ids":["attempt"],"closing_attempt_id":"attempt","duration_ms":0,"end":"completed"}]})
+    json!({"schema_version":3,"installation_id":"store","tenant_id":"tenant","principal_id":"principal","execution_id":"execution","execution_revision":"revision","operations":[{"attempt_ids":["attempt"],"selected_attempt_id":"attempt","streamed":false,"upstream_duration_ms":0,"first_semantic":null,"generation_duration_ms":null,"partial":false}],"pipeline_scope":{"profile":"core_pipeline_finalized_v1","context_request_id":"actual-context-not-correlation","request_duration_ms":1,"streamed":false,"stream":null},"hop_observations":[{"profile":"core_json_hop_callbacks_v1","attempt_ids":["attempt"],"closing_attempt_id":"attempt","duration_ms":8,"end":"completed","partial":false}],"observer_hops":[{"profile":"core_json_hop_observer_floor_v1","attempt_ids":["attempt"],"closing_attempt_id":"attempt","duration_ms":0,"end":"completed"}]})
 }
 fn receipt() -> Value {
     let usage = json!({"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"provenance":"unknown","complete":false});
@@ -84,6 +84,8 @@ async fn foreign_unsupported_old_or_malformed_observer_never_falls_back_or_retri
         "unsupported",
         "old",
         "old_scope",
+        "receipt_format_1",
+        "receipt_format_2",
         "foreign_installation",
         "foreign_tenant",
         "foreign_execution",
@@ -102,6 +104,8 @@ async fn foreign_unsupported_old_or_malformed_observer_never_falls_back_or_retri
         match case {
             "old" => value["schema_version"] = json!(1),
             "old_scope" => value["schema_version"] = json!(2),
+            "receipt_format_1" => value["receipt_format"] = json!(1),
+            "receipt_format_2" => value["receipt_format"] = json!(2),
             "foreign_installation" => value["installation_id"] = json!("other"),
             "foreign_tenant" => value["tenant_id"] = json!("other"),
             "foreign_execution" => value["execution_id"] = json!("other"),
@@ -168,5 +172,70 @@ async fn foreign_unsupported_old_or_malformed_observer_never_falls_back_or_retri
         assert_eq!(records[0].version, Version::HTTP_11);
         assert_eq!(records[0].connection, 1);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_receipt_and_technical_facts_use_the_same_current_gets() -> TestResult {
+    let mut original = receipt();
+    let indices: Vec<_> = (247..=255).rev().collect();
+    original["dispatch"] = json!({"mode":"ordered","attempt_limit":9,"accepted_selection":{
+        "admission_mode":"unprofiled","inbound_protocol":"messages","candidate_indices":indices,
+        "route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route",
+            "resource_id":"route","revision_id":"route-revision"}}});
+    let mut attempts = Vec::new();
+    let mut ids = Vec::new();
+    for ordinal in indices {
+        let mut attempt = original["attempts"][0].clone();
+        let id = format!("actual-{ordinal}");
+        attempt["attempt_id"] = json!(id);
+        attempt["candidate_index"] = json!(ordinal);
+        attempt["observed_http_status"] = json!(503);
+        attempts.push(attempt);
+        ids.push(id);
+    }
+    original["attempts"] = json!(attempts);
+    let mut data = facts();
+    data["operations"][0]["attempt_ids"] = json!(ids);
+    data["operations"][0]["selected_attempt_id"] = json!(ids.last());
+    for category in ["hop_observations", "observer_hops"] {
+        data[category][0]["attempt_ids"] = json!(ids);
+        data[category][0]["closing_attempt_id"] = json!(ids.last());
+    }
+    let server = server::serve(
+        Version::HTTP_11,
+        vec![
+            Some(server::json(data.clone())?),
+            Some(server::json(original.clone())?),
+        ],
+    )
+    .await?;
+    let client = TenancyClient::new(&server.endpoint, TOKEN)?;
+    let installation = "store".try_into()?;
+    let tenant = "tenant".try_into()?;
+    let execution = "execution".try_into()?;
+    let observed = client
+        .provider_technical_facts(&installation, &tenant, &execution)
+        .await?
+        .ok_or("technical facts")?;
+    let retained = client.execution(&installation, &tenant, &execution).await?;
+    observed.validate_against(&retained)?;
+    assert_eq!(serde_json::to_value(&observed)?, data);
+    assert_eq!(serde_json::to_value(&retained)?, original);
+    assert_eq!(retained.attempts.len(), 9);
+    let records = server.records.lock().await;
+    assert_eq!(records.len(), 2);
+    assert!(
+        records[0]
+            .path
+            .ends_with("/executions/execution/provider-technical-facts")
+    );
+    assert!(records[1].path.ends_with("/executions/execution"));
+    assert_eq!(records[0].connection, records[1].connection);
+    assert!(
+        records
+            .iter()
+            .all(|record| record.method == "GET" && record.body.is_empty())
+    );
     Ok(())
 }
