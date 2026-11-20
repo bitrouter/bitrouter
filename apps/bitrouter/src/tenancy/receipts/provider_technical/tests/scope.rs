@@ -1,6 +1,6 @@
 //! Value-only collector controls plus real SQLite read/reopen. No authority fixture.
 use super::*;
-use bitrouter_ai::tenancy::provider_technical_facts_v2::{
+use bitrouter_ai::tenancy::provider_technical_facts::{
     HopEnd, HopProfile, PipelineProfile, PipelineScope,
 };
 use tokio_util::sync::CancellationToken;
@@ -123,7 +123,7 @@ async fn optional_scope_cancel_deadline_and_unfinished_hop_keep_nulls_and_no_sec
     Ok(())
 }
 #[tokio::test]
-async fn payload_versions_keep_original_bytes_and_exact_storage_accounting_across_reopen()
+async fn technical_payload_keeps_original_bytes_and_exact_storage_accounting_across_reopen()
 -> Result<()> {
     use sea_orm::{ConnectionTrait, TransactionTrait};
     let home = tempfile::tempdir()?;
@@ -139,19 +139,18 @@ async fn payload_versions_keep_original_bytes_and_exact_storage_accounting_acros
         let tx = db.begin().await?;
         ensure!(super::super::super::store::insert_terminal(&tx, &original).await?);
         tx.commit().await?;
-        let legacy = storage::Prepared::new(&facts()?)?;
-        ensure!(storage::insert(&db, &original, &legacy).await?);
+        let captured = facts()?;
+        let first = storage::Prepared::new(&captured)?;
+        ensure!(storage::insert(&db, &original, &first).await?);
         ensure!(
-            storage::read_v2(&db, &original).await?.is_none(),
-            "legacy bytes were relabeled"
+            storage::read(&db, &original).await? == Some(captured),
+            "retained technical facts changed"
         );
         let retained = storage::read_prepared(&db, &original)
             .await?
-            .context("legacy retained")?;
+            .context("first retained payload")?;
         ensure!(
-            retained.version == 1
-                && retained.json == legacy.json
-                && retained.digest == legacy.digest
+            retained.version == 3 && retained.json == first.json && retained.digest == first.digest
         );
         let capture = observed()?;
         capture.finalize_scope(own_scope());
@@ -165,10 +164,10 @@ async fn payload_versions_keep_original_bytes_and_exact_storage_accounting_acros
             )
             .await
             .context("new observed scope")?;
-        let prepared = storage::Prepared::new_v2(&value)?;
+        let prepared = storage::Prepared::new(&value)?;
         ensure!(
             storage::insert(&db, &original, &prepared).await.is_err(),
-            "new writer overwrote payload1"
+            "new writer overwrote the first immutable payload"
         );
         // Separate transaction models a distinct empty optional slot, never a production backfill.
         let tx = db.begin().await?;
@@ -196,9 +195,9 @@ async fn payload_versions_keep_original_bytes_and_exact_storage_accounting_acros
     let checked:Result<()>=async {
  let original=super::super::super::store::lookup_terminal(&db,&"installation".try_into()?,&"tenant".try_into()?,&"execution".try_into()?).await?.context("real reopened original")?;
  ensure!(original.json()==original_bytes.0 && original.private_json()==original_bytes.1 && original.digest()==original_bytes.2);
- ensure!(storage::read_v2(&db,&original).await?==Some(value.clone()));ensure!(storage::read(&db,&original).await?==value.operation_view());
+ ensure!(storage::read(&db,&original).await?==Some(value.clone()));
  let exact=storage::read_prepared(&db,&original).await?.context("reopened raw scope")?;
- ensure!(exact.version==2 && exact.json==prepared.json && exact.digest==prepared.digest);
+ ensure!(exact.version==3 && exact.json==prepared.json && exact.digest==prepared.digest);
  db.execute_unprepared("DELETE FROM tenancy_execution_receipts WHERE installation_id='installation' AND tenant_id='tenant' AND execution_id='execution'").await?;
  ensure!(storage::retained_bytes(&db).await?==0,"original parent FK did not remove scope");Ok(())
  }.await;

@@ -86,7 +86,7 @@ impl super::hooks::ObserveHook for HopObserver {
         _: &RoutingTarget,
         outcome: super::hooks::HopOutcome<'_>,
     ) {
-        use bitrouter_ai::tenancy::provider_technical_facts_v2::HopEnd;
+        use bitrouter_ai::tenancy::provider_technical_facts::HopEnd;
         if let Some(hop) = observer_hop(ctx) {
             hop.observer_end(match outcome {
                 super::hooks::HopOutcome::Generated(_) => Some(HopEnd::Completed),
@@ -111,12 +111,12 @@ pub(super) fn register_context(ctx: &PipelineContext) {
 pub(super) struct HopGuard {
     hop: Option<Arc<crate::tenancy::receipts::provider_technical::scope::Hop>>,
     started: Instant,
-    profile: bitrouter_ai::tenancy::provider_technical_facts_v2::HopProfile,
+    profile: bitrouter_ai::tenancy::provider_technical_facts::HopProfile,
     finished: bool,
 }
 impl HopGuard {
     pub(super) fn finish(&mut self, success: bool) {
-        use bitrouter_ai::tenancy::provider_technical_facts_v2::HopEnd;
+        use bitrouter_ai::tenancy::provider_technical_facts::HopEnd;
         if let Some(hop) = &self.hop {
             hop.finish(
                 self.profile,
@@ -148,7 +148,7 @@ impl Drop for HopGuard {
         {
             hop.finish(
                 self.profile,
-                bitrouter_ai::tenancy::provider_technical_facts_v2::HopEnd::Dropped,
+                bitrouter_ai::tenancy::provider_technical_facts::HopEnd::Dropped,
                 super::timing::elapsed_millis(self.started),
                 true,
             );
@@ -156,7 +156,7 @@ impl Drop for HopGuard {
     }
 }
 pub(super) fn begin_hop(ctx: &PipelineContext, streamed: bool) -> HopGuard {
-    use bitrouter_ai::tenancy::provider_technical_facts_v2::HopProfile;
+    use bitrouter_ai::tenancy::provider_technical_facts::HopProfile;
     let profile = if streamed {
         HopProfile::CoreStreamOpenCallbacksV1
     } else {
@@ -195,9 +195,7 @@ pub(super) fn finalize_scope(
 ) {
     use bitrouter_ai::tenancy::{
         provider_technical_facts::{FirstSemantic, FirstSemanticKind},
-        provider_technical_facts_v2::{
-            PipelineProfile, PipelineScope, PipelineStream, StreamProfile,
-        },
+        provider_technical_facts::{PipelineProfile, PipelineScope, PipelineStream, StreamProfile},
     };
     if let Some(capture) = capture(ctx) {
         if !capture.healthy() {

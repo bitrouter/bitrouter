@@ -3,7 +3,7 @@
 use super::{Capture, MAX_OPERATIONS};
 use bitrouter_ai::tenancy::{
     identity::AttemptId,
-    provider_technical_facts_v2::{HopEnd, HopObservation, HopProfile, PipelineScope},
+    provider_technical_facts::{HopEnd, HopObservation, HopProfile, PipelineScope},
 };
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
@@ -49,7 +49,7 @@ struct ObserverCapture {
 pub(super) struct Snapshot {
     pub scope: Option<PipelineScope>,
     pub hops: Vec<HopObservation>,
-    pub observers: Vec<bitrouter_ai::tenancy::provider_technical_facts_v3::ObserverHop>,
+    pub observers: Vec<bitrouter_ai::tenancy::provider_technical_facts::ObserverHop>,
 }
 impl Scope {
     pub(super) fn notify_lost(&self) {
@@ -251,8 +251,8 @@ impl Hop {
     fn observer_snapshot(
         &self,
         hop: &Observation,
-    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts_v3::ObserverHop> {
-        use bitrouter_ai::tenancy::provider_technical_facts_v3::{ObserverHop, ObserverHopProfile};
+    ) -> Option<bitrouter_ai::tenancy::provider_technical_facts::ObserverHop> {
+        use bitrouter_ai::tenancy::provider_technical_facts::{ObserverHop, ObserverHopProfile};
         if self
             .observer
             .lost

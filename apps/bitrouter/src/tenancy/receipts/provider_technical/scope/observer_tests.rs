@@ -38,7 +38,7 @@ fn observer_floor_and_busy_duplicate_missing_end_do_not_invalidate_original_scop
         ensure!(capture.healthy());
         let snapshot = capture
             .scope_snapshot()
-            .context("old scope remains usable")?;
+            .context("scope remains usable without observer samples")?;
         ensure!(snapshot.hops[0].duration_ms == Some(77) && snapshot.observers.is_empty());
     }
     Ok(())

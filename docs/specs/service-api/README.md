@@ -1334,10 +1334,13 @@ An invalid optional object fails only this read. A technical measurement
 does not assign billing or authorize inference replay.
 
 The [provider facts schema](../../../crates/bitrouter-ai/src/tenancy/provider_technical_facts/schema.json)
-describes the response. The document binds to the exact execution and original
-receipt. Its scope contains provider operations, nullable request pipeline
-timing and scoped hop observations. `observer_hops` records the independent local callback clock
-when captured. One 64 KiB bound applies to the entire original response.
+describes the single flattened response. The document binds to the exact
+execution and receipt. `operations`, nullable `pipeline_scope`,
+`hop_observations` and `observer_hops` are required fields in the same object.
+The observer category records the independent local callback clock when
+captured. Empty arrays and a null pipeline scope mean unobserved categories;
+at least one category must contain observations. One 64 KiB bound applies to
+the entire response.
 Operations identify unique ordered subsequences of actual attempts, including
 authentication recovery. Cross-check observed groups, ordinals and closing
 attempts against the retained receipt. Provider/model labels and correlation
@@ -1388,6 +1391,10 @@ measured callback completion establishes neither complete delivery nor cost.
 Capture is optional and runs outside required receipt or financial publication.
 The original execution and shutdown take priority over the bounded capture
 task. Missing measurements require no repair, replay or second write. Where
+observer validation or the shared size bound prevents capture, omit that
+category only if the remaining operation, pipeline and hop facts validate
+within the bound. Corrupt retained facts fail the optional read; reads never
+rewrite or repair the stored object. Where
 an optional write outcome is uncertain, keep its bounded capacity charge until
 it is safe to resolve. Exact-key readback validates immutable bytes and their
 original scope. An optional capture failure cannot change receipt authority,

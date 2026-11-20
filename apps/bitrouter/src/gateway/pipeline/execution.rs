@@ -525,7 +525,7 @@ impl ObservedUpstreamStream {
         let duration_ms =
             crate::gateway::pipeline::timing::elapsed_millis(self.provider_started_at);
         if let Some(hop) = &self.technical_hop {
-            use bitrouter_ai::tenancy::provider_technical_facts_v2::{HopEnd, HopProfile};
+            use bitrouter_ai::tenancy::provider_technical_facts::{HopEnd, HopProfile};
             let end = match outcome {
                 StreamHopOutcome::Completed => HopEnd::Completed,
                 StreamHopOutcome::Failed(_) => HopEnd::Failed,

@@ -2,36 +2,14 @@
 //! barriers grant a quiet window, not production retention or authority.
 use super::*;
 use bitrouter_ai::tenancy::{
-    identity::ExecutionId, provider_technical_facts::ProviderTechnicalFactsV1,
-    provider_technical_facts_v2::ProviderTechnicalFactsV2, validation::Validate,
+    identity::ExecutionId, provider_technical_facts::ProviderTechnicalFacts, validation::Validate,
 };
 
 async fn scoped(
     bound: &Bound,
     caller: &crate::tenancy::model::Caller,
     id: &ExecutionId,
-) -> Result<(Vec<u8>, ProviderTechnicalFactsV2)> {
-    let bytes = bound
-        .fixture
-        .service
-        .read_receipt(
-            caller.clone(),
-            bound.fixture.tenant.clone(),
-            read::Request::ProviderTechnicalV2(id.clone()),
-        )
-        .await
-        .map_err(failure)?;
-    let value: Option<ProviderTechnicalFactsV2> = serde_json::from_slice(&bytes)?;
-    Ok((
-        bytes,
-        value.context("protected v2 getter has no durable object")?,
-    ))
-}
-async fn operation_view(
-    bound: &Bound,
-    caller: &crate::tenancy::model::Caller,
-    id: &ExecutionId,
-) -> Result<Option<ProviderTechnicalFactsV1>> {
+) -> Result<(Vec<u8>, ProviderTechnicalFacts)> {
     let bytes = bound
         .fixture
         .service
@@ -42,7 +20,11 @@ async fn operation_view(
         )
         .await
         .map_err(failure)?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let value: Option<ProviderTechnicalFacts> = serde_json::from_slice(&bytes)?;
+    Ok((
+        bytes,
+        value.context("protected technical getter has no durable object")?,
+    ))
 }
 
 #[tokio::test]
@@ -134,7 +116,7 @@ async fn real_choice_parent_and_child_durable_getters_keep_own_context_mode_and_
                 && child_scope.hop_observations[0].attempt_ids
                     == child_scope.operations[0].attempt_ids
         );
-        ensure!(operation_view(&bound, &caller, &child).await? == child_scope.operation_view());
+        ensure!(scoped(&bound, &caller, &child).await?.1 == child_scope);
         // Read actual DB-backed getter bytes, not captured(). The Core outcome
         // has not yet returned through this held caller; the child ACK is real.
         ensure!(
@@ -203,7 +185,7 @@ async fn real_choice_parent_and_child_durable_getters_keep_own_context_mode_and_
             parent_scope.validate_against(&child_receipt).is_err()
                 && child_scope.validate_against(&parent_receipt).is_err()
         );
-        ensure!(operation_view(&bound, &caller, &parent).await? == parent_scope.operation_view());
+        ensure!(scoped(&bound, &caller, &parent).await?.1 == parent_scope);
         let parent_evidence = usage_evidence(&bound, parent.as_str()).await?;
         let child_evidence = usage_evidence(&bound, child.as_str()).await?;
         parent_evidence.validate()?;
