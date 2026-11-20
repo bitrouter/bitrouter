@@ -17,6 +17,8 @@ fn full() -> Value {
 
 fn attempt(id: &str, usage: Usage) -> Result<Attempt> {
     Ok(Attempt {
+        candidate_index: None,
+        observed_http_status: None,
         attempt_id: id.try_into()?,
         target: None,
         outcome: Outcome::Failed,

@@ -111,7 +111,7 @@ async fn native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_js
             ensure!(
                 receipt.outcome == Outcome::Completed
                     && receipt.attempts.len() == 1
-                    && receipt.attempts[0].candidate_index == 0
+                    && receipt.attempts[0].candidate_index == Some(0)
             );
             {
                 let records = harness

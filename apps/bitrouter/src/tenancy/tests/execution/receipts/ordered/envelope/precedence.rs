@@ -148,11 +148,11 @@ async fn envelope_fallback_keeps_complete_digest_and_terminal_response_never_res
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
-    ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+    ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
     let observed = bodies(&harness)?;
     ensure!(observed.len() == 2);
     for body in &observed {
@@ -199,10 +199,10 @@ async fn envelope_fallback_keeps_complete_digest_and_terminal_response_never_res
     let receipt = harness.receipt(&page.execution_ids[0]).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
     ensure!(
-        receipt.accepted_selection.generation_defaults_digest
+        receipt_selection(&receipt)?.generation_defaults_digest
             == binding.selection.generation_defaults_digest
     );
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 1);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(1));
     harness.fixture.service.shutdown().await?;
     Ok(())
 }

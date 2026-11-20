@@ -110,6 +110,8 @@ async fn fresh_terminal_matches_eager_reconciliation_for_every_source_kind() -> 
             } else {
                 for (id, outcome) in [("first", Outcome::Failed), ("last", Outcome::Unknown)] {
                     receipt.attempts.push(Attempt {
+                        candidate_index: None,
+                        observed_http_status: None,
                         attempt_id: id.try_into()?,
                         target: None,
                         outcome,

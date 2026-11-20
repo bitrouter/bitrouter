@@ -15,7 +15,7 @@ impl Drop for ReleaseGate {
 
 pub(super) fn ordered_headers(
     h: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in [

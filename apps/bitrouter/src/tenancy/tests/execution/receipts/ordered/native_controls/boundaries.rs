@@ -199,7 +199,7 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
     let binding = control.ordered_capabilities().await?.bind(
         h.revision.revision_id.clone(),
         "native-ordinals".try_into()?,
-        OrderedCandidateSelectionV1 {
+        OrderedCandidateSelection {
             schema_version: 1,
             admission_mode: manifest.admission_mode,
             route: h.route.clone(),
@@ -216,12 +216,12 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
     )
     .await?;
     let receipt = h.receipt(&id).await?;
-    ensure!(receipt.accepted_selection.candidate_indices == [1, 3, 2, 0]);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == [1, 3, 2, 0]);
     ensure!(
         receipt
             .attempts
             .iter()
-            .map(|a| a.candidate_index)
+            .filter_map(|a| a.candidate_index)
             .collect::<Vec<_>>()
             == [3, 0]
     );
@@ -230,7 +230,9 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
         ensure!(
             serde_json::to_value(attempt.target.as_ref().context("actual target")?)?
                 == serde_json::to_value(
-                    &manifest.candidates[usize::from(attempt.candidate_index)].target
+                    &manifest.candidates
+                        [usize::from(attempt.candidate_index.context("ordered ordinal")?)]
+                    .target
                 )?
         );
     }

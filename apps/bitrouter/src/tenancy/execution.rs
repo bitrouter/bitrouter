@@ -19,7 +19,7 @@ use bitrouter_ai::{
             PrincipalId, RevisionId, TenantId,
         },
         operation::{DispatchBinding, DispatchState, ErrorCode},
-        ordered::{OrderedCandidateSelectionV1, OrderedDispatchBindingV2},
+        ordered::{OrderedCandidateSelection, OrderedDispatchBinding},
         validation::Validate,
     },
     types::ApiProtocol,
@@ -92,7 +92,7 @@ struct DispatchIdentity {
     capability_revision: RevisionId,
     execution_revision: RevisionId,
     correlation_id: CorrelationId,
-    selection: Option<OrderedCandidateSelectionV1>,
+    selection: Option<OrderedCandidateSelection>,
     native_controls: bool,
 }
 
@@ -1164,7 +1164,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
             if URL_SAFE_NO_PAD.encode(&bytes) != encoded {
                 return Err(ErrorCode::InvalidRequest.into());
             }
-            let selection: OrderedCandidateSelectionV1 = serde_json::from_slice(&bytes)
+            let selection: OrderedCandidateSelection = serde_json::from_slice(&bytes)
                 .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
             selection
                 .validate()
@@ -1174,7 +1174,7 @@ fn dispatch_binding(headers: &HeaderMap) -> Result<DispatchIdentity, Failure> {
                 serde_json::to_value(selection)
                     .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?,
             );
-            let binding: OrderedDispatchBindingV2 = serde_json::from_value(document.into())
+            let binding: OrderedDispatchBinding = serde_json::from_value(document.into())
                 .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
             binding
                 .validate()

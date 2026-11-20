@@ -30,7 +30,7 @@ fn defaults(supplemental: Value) -> Result<GenerationDefaultsEnvelope> {
 
 pub(in crate::tenancy::tests::execution::receipts::ordered) async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     defaults: GenerationDefaultsEnvelope,
     protocol: GenerationProtocol,
     stream: bool,

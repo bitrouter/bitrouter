@@ -37,7 +37,7 @@ async fn receipt(bound: &Bound, id: &str) -> Result<ExecutionReceipt> {
 async fn usage_evidence(
     bound: &Bound,
     id: &str,
-) -> Result<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1> {
+) -> Result<bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence> {
     let bytes = bound
         .fixture
         .service

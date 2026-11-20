@@ -12,9 +12,9 @@ use bitrouter_ai::{
     tenancy::{
         authority::{OwnerKind, ResourceKind},
         configuration::ResourceRef,
+        execution::ExecutionReceipt,
         execution::{Outcome, ReceiptState},
-        execution_v2::ExecutionReceiptV2,
-        ordered::{GenerationProtocol, OrderedCandidateSelectionV1, OrderedDispatchBindingV2},
+        ordered::{GenerationProtocol, OrderedCandidateSelection, OrderedDispatchBinding},
         validation::Validate,
     },
 };
@@ -541,7 +541,7 @@ impl OrderedHarness {
         &self,
         indices: Vec<u16>,
         protocol: GenerationProtocol,
-    ) -> Result<OrderedDispatchBindingV2> {
+    ) -> Result<OrderedDispatchBinding> {
         let control = self.control(true, HttpVersion::Http1Only)?;
         let capabilities = control.ordered_capabilities().await?;
         ensure!(
@@ -570,7 +570,7 @@ impl OrderedHarness {
         Ok(capabilities.bind(
             self.revision.revision_id.clone(),
             "ordered-correlation".try_into()?,
-            OrderedCandidateSelectionV1 {
+            OrderedCandidateSelection {
                 generation_defaults_digest: None,
                 admission_mode: manifest.admission_mode,
                 schema_version: 1,
@@ -581,7 +581,7 @@ impl OrderedHarness {
     }
     async fn invoke(
         &self,
-        binding: &OrderedDispatchBindingV2,
+        binding: &OrderedDispatchBinding,
         protocol: GenerationProtocol,
         stream: bool,
         version: HttpVersion,
@@ -646,13 +646,13 @@ impl OrderedHarness {
             ),
         })
     }
-    async fn receipt(&self, id: &ExecutionId) -> Result<ExecutionReceiptV2> {
+    async fn receipt(&self, id: &ExecutionId) -> Result<ExecutionReceipt> {
         let client = self.control(false, HttpVersion::Http1Only)?;
         let receipt = client
-            .execution_v2(&self.fixture.installation, &self.fixture.tenant, id)
+            .execution(&self.fixture.installation, &self.fixture.tenant, id)
             .await?;
         receipt.validate()?;
-        let evidence = client.usage_evidence_v2(&receipt).await?;
+        let evidence = client.usage_evidence(&receipt).await?;
         evidence.validate_against(&receipt)?;
         ensure!(!evidence.truncated && evidence.attempts.len() == receipt.attempts.len());
         Ok(receipt)
@@ -715,12 +715,12 @@ async fn ordered_sdk_executes_one_eight_nine_and_sixty_four_actual_hops_in_suppl
         ensure!(
             receipt.outcome == Outcome::Completed && receipt.attempts.len() == usize::from(count)
         );
-        ensure!(receipt.accepted_selection.candidate_indices == indices);
+        ensure!(receipt_selection(&receipt)?.candidate_indices == indices);
         ensure!(
             receipt
                 .attempts
                 .iter()
-                .map(|attempt| attempt.candidate_index)
+                .filter_map(|attempt| attempt.candidate_index)
                 .collect::<Vec<_>>()
                 == indices
         );
@@ -742,12 +742,10 @@ async fn ordered_sdk_executes_one_eight_nine_and_sixty_four_actual_hops_in_suppl
             );
         }
         let client = harness.control(false, HttpVersion::Http1Only)?;
-        ensure!(
-            client
-                .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
-                .await
-                .is_err()
-        );
+        let reread = client
+            .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
+            .await?;
+        ensure!(serde_json::to_value(&reread)? == serde_json::to_value(&receipt)?);
         harness.fixture.service.shutdown().await?;
     }
     Ok(())
@@ -772,7 +770,7 @@ async fn ordered_sdk_three_protocols_json_and_streams_use_the_same_protected_rec
                 let id = harness.invoke(&binding, protocol, stream, version).await?;
                 let receipt = harness.receipt(&id).await?;
                 ensure!(receipt.outcome == Outcome::Completed && receipt.attempts.len() == 1);
-                ensure!(receipt.accepted_selection.inbound_protocol == protocol);
+                ensure!(receipt_selection(&receipt)?.inbound_protocol == protocol);
             }
         }
     }
@@ -810,8 +808,21 @@ async fn ordered_unknown_body_stops_the_chain_and_retains_unknown() -> Result<()
     ensure!(page.execution_ids.len() == 1);
     let receipt = harness.receipt(&page.execution_ids[0]).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 2);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(2));
     ensure!(harness.observed()? == vec!["model-2"]);
     harness.fixture.service.shutdown().await?;
     Ok(())
+}
+
+fn receipt_selection(
+    receipt: &ExecutionReceipt,
+) -> Result<&bitrouter_ai::tenancy::ordered::AcceptedSelection> {
+    match &receipt.dispatch {
+        bitrouter_ai::tenancy::execution::Dispatch::Ordered {
+            accepted_selection, ..
+        } => Ok(accepted_selection),
+        bitrouter_ai::tenancy::execution::Dispatch::Strict => {
+            anyhow::bail!("expected ordered receipt")
+        }
+    }
 }

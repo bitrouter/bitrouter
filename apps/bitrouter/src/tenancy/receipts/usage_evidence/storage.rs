@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::{ExecutionReceipt, Outcome, ReceiptState},
     identity::{ExecutionId, InstallationId, TenantId},
-    usage_evidence::{Capture, ExecutionUsageEvidenceV1, MAX_BYTES},
+    usage_evidence::{Capture, ExecutionUsageEvidence},
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend,
@@ -12,15 +12,18 @@ use sea_orm::{
 };
 use sha2::{Digest, Sha256};
 
+const MAX_BYTES: usize = bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::STRICT.max_bytes;
+
 const TABLE: &str = "tenancy_usage_evidence";
 pub(in crate::tenancy::receipts) struct Evidence {
     pub json: String,
     pub digest: String,
     #[cfg(test)]
-    pub document: ExecutionUsageEvidenceV1,
+    pub document: ExecutionUsageEvidence,
 }
 impl Evidence {
-    pub fn new(document: ExecutionUsageEvidenceV1, receipt: &ExecutionReceipt) -> Result<Self> {
+    pub fn new(document: ExecutionUsageEvidence, receipt: &ExecutionReceipt) -> Result<Self> {
+        document.validate_against(receipt)?;
         let json = document.to_validated_json()?;
         ensure!(
             (document.capture == Capture::Captured
@@ -33,17 +36,15 @@ impl Evidence {
                 && document.attempts.len() == receipt.attempts.len(),
             "usage evidence receipt binding"
         );
-        for (observed, actual) in document.attempts.iter().zip(&receipt.attempts) {
-            ensure!(
-                observed.attempt_id == actual.attempt_id
-                    && observed.outcome == actual.outcome
-                    && serde_json::to_value(&observed.target)?
-                        == serde_json::to_value(&actual.target)?,
-                "usage evidence attempt binding"
-            );
-        }
         let mut hash = Sha256::new();
-        hash.update(b"bitrouter.execution.usage-evidence.v1");
+        hash.update(match document.dispatch {
+            bitrouter_ai::tenancy::execution::Dispatch::Strict => {
+                b"bitrouter.execution.usage-evidence.v1"
+            }
+            bitrouter_ai::tenancy::execution::Dispatch::Ordered { .. } => {
+                b"bitrouter.execution.usage-evidence.v2"
+            }
+        });
         hash.update((json.len() as u64).to_be_bytes());
         hash.update(json.as_bytes());
         Ok(Self {
@@ -424,14 +425,14 @@ struct Namespace<'a> {
     max_bytes: usize,
 }
 impl<'a> Namespace<'a> {
-    fn v2(r: &'a bitrouter_ai::tenancy::execution_v2::ExecutionReceiptV2) -> Result<Self> {
+    fn v2(r: &'a bitrouter_ai::tenancy::execution::ExecutionReceipt) -> Result<Self> {
         Ok(Self {
             installation: &r.installation_id,
             tenant: &r.tenant_id,
             execution: &r.execution_id,
             version: 2,
-            max_bytes: bitrouter_ai::tenancy::usage_evidence_v2::EvidenceBudgetV2::for_attempts(
-                r.accepted_selection.candidate_indices.len(),
+            max_bytes: bitrouter_ai::tenancy::usage_evidence::EvidenceBudget::for_attempts(
+                r.dispatch.accepted_count(),
             )?
             .max_bytes,
         })
@@ -563,47 +564,17 @@ async fn load_raw(
         _ => anyhow::bail!("usage evidence presence mismatch"),
     }
 }
-pub(in crate::tenancy::receipts) struct EvidenceV2 {
-    pub json: String,
-    pub digest: String,
-    pub document: bitrouter_ai::tenancy::usage_evidence_v2::ExecutionUsageEvidenceV2,
-}
-impl EvidenceV2 {
-    pub fn new(
-        document: bitrouter_ai::tenancy::usage_evidence_v2::ExecutionUsageEvidenceV2,
-        receipt: &bitrouter_ai::tenancy::execution_v2::ExecutionReceiptV2,
-    ) -> Result<Self> {
-        document.validate_against(receipt)?;
-        ensure!(
-            document.capture == Capture::Captured
-                || (document.capture == Capture::Unavailable
-                    && receipt.state == ReceiptState::Unknown
-                    && receipt.outcome == Outcome::Unknown),
-            "ordered evidence capture binding"
-        );
-        let json = serde_json::to_string(&document)?;
-        let mut hash = Sha256::new();
-        hash.update(b"bitrouter.execution.usage-evidence.v2");
-        hash.update((json.len() as u64).to_be_bytes());
-        hash.update(json.as_bytes());
-        Ok(Self {
-            json,
-            digest: hex::encode(hash.finalize()),
-            document,
-        })
-    }
-}
 pub(in crate::tenancy::receipts) async fn load_v2(
     db: &impl ConnectionTrait,
-    receipt: &bitrouter_ai::tenancy::execution_v2::ExecutionReceiptV2,
+    receipt: &bitrouter_ai::tenancy::execution::ExecutionReceipt,
     digest: &str,
     expected: Option<&str>,
     charge: Option<&Charge<'_>>,
-) -> Result<EvidenceV2> {
+) -> Result<Evidence> {
     let json = load_raw(db, Namespace::v2(receipt)?, digest, expected, charge)
         .await?
         .context("ordered evidence missing")?;
-    let evidence = EvidenceV2::new(serde_json::from_str(&json)?, receipt)?;
+    let evidence = Evidence::new(serde_json::from_str(&json)?, receipt)?;
     ensure!(
         evidence.json == json && Some(evidence.digest.as_str()) == expected,
         "ordered evidence integrity"

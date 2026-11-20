@@ -84,6 +84,8 @@ fn cost_for_receipt(rates: [f64; 2]) -> TestResult<Option<u64>> {
         .select("chosen", &ApiProtocol::ChatCompletions)
         .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
     let attempt = Attempt {
+        candidate_index: None,
+        observed_http_status: None,
         attempt_id: "attempt".try_into()?,
         target: Some(target),
         outcome: Outcome::Completed,

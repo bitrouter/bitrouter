@@ -3,15 +3,13 @@
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
-    http::header,
-    response::{IntoResponse, Response},
 };
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
-    identity::{ExecutionId, OwnerId, ResourceId, RevisionId, TenantId},
+    identity::{OwnerId, ResourceId, RevisionId, TenantId},
     operation::ErrorCode,
-    ordered::{CandidateManifestV1, GenerationProtocol, OrderedCapabilitiesV2},
+    ordered::{CandidateManifest, GenerationProtocol, OrderedCapabilities},
 };
 use serde::Deserialize;
 
@@ -20,11 +18,11 @@ use super::{Service, configuration_store, error::Failure, model::Caller};
 pub(super) async fn capabilities(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
-) -> Result<Json<OrderedCapabilitiesV2>, Failure> {
+) -> Result<Json<OrderedCapabilities>, Failure> {
     service
         .with_capability_authority(&caller, |state| {
             let enabled = service.ordered_dispatch_ready(state);
-            Ok(Json(OrderedCapabilitiesV2 {
+            Ok(Json(OrderedCapabilities {
                 contract_version: 2,
                 installation_id: state.installation.clone(),
                 instance_id: service.instance.clone(),
@@ -92,34 +90,6 @@ pub(super) async fn native_controls_capabilities(
         .await
 }
 
-pub(super) async fn receipt(
-    State(service): State<Service>,
-    Extension(caller): Extension<Caller>,
-    input: Result<Path<(TenantId, ExecutionId)>, axum::extract::rejection::PathRejection>,
-) -> Result<Response, Failure> {
-    let Path((tenant, id)) = input.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    let body = service
-        .read_receipt(caller, tenant, super::receipts::read::Request::OneV2(id))
-        .await?;
-    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
-}
-
-pub(super) async fn evidence(
-    State(service): State<Service>,
-    Extension(caller): Extension<Caller>,
-    input: Result<Path<(TenantId, ExecutionId)>, axum::extract::rejection::PathRejection>,
-) -> Result<Response, Failure> {
-    let Path((tenant, id)) = input.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    let body = service
-        .read_receipt(
-            caller,
-            tenant,
-            super::receipts::read::Request::UsageEvidenceV2(id),
-        )
-        .await?;
-    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ManifestQuery {
@@ -135,7 +105,7 @@ pub(super) async fn manifest(
     Extension(caller): Extension<Caller>,
     input: Result<Path<(TenantId, RevisionId)>, axum::extract::rejection::PathRejection>,
     query: Result<Query<ManifestQuery>, axum::extract::rejection::QueryRejection>,
-) -> Result<Json<CandidateManifestV1>, Failure> {
+) -> Result<Json<CandidateManifest>, Failure> {
     if !matches!(caller, Caller::Installation(_)) {
         return Err(ErrorCode::Forbidden.into());
     }
@@ -168,7 +138,7 @@ impl Service {
         revision: &RevisionId,
         reference: &ResourceRef,
         inbound: GenerationProtocol,
-    ) -> Result<CandidateManifestV1, Failure> {
+    ) -> Result<CandidateManifest, Failure> {
         if !matches!(caller, Caller::Installation(_)) {
             return Err(ErrorCode::Forbidden.into());
         }

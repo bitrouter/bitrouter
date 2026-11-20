@@ -87,6 +87,13 @@ impl Candidate {
     fn from_parts(receipt: ExecutionReceipt, disposition: StoredDisposition) -> Result<Self> {
         receipt.validate()?;
         ensure!(
+            matches!(
+                receipt.dispatch,
+                bitrouter_ai::tenancy::execution::Dispatch::Strict
+            ),
+            "strict storage dispatch"
+        );
+        ensure!(
             disposition.statuses.len() == receipt.attempts.len(),
             "receipt attempt disposition count"
         );
@@ -171,7 +178,7 @@ impl Candidate {
     }
     fn with_usage_document(
         mut self,
-        document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1,
+        document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidence,
     ) -> Result<Self> {
         let evidence = super::usage_evidence::storage::Evidence::new(document, &self.receipt)?;
         let mut disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;

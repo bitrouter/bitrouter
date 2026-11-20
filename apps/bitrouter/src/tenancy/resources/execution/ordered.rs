@@ -9,9 +9,7 @@ use bitrouter_ai::tenancy::{
     admission::AdmissionMode,
     authority::ResourceKind,
     configuration::LearningMode,
-    ordered::{
-        AcceptedSelectionV2, CandidateDescriptorV1, CandidateManifestV1, GenerationProtocol,
-    },
+    ordered::{AcceptedSelection, CandidateDescriptor, CandidateManifest, GenerationProtocol},
     validation::Validate,
 };
 use std::collections::HashSet;
@@ -59,7 +57,7 @@ impl RetainedExecutionRevision {
         reference: &ResourceRef,
         inbound_protocol: GenerationProtocol,
         authority_revision: AuthorityRevision,
-    ) -> std::result::Result<CandidateManifestV1, ErrorCode> {
+    ) -> std::result::Result<CandidateManifest, ErrorCode> {
         let inbound = match inbound_protocol {
             GenerationProtocol::ChatCompletions => ApiProtocol::ChatCompletions,
             GenerationProtocol::Messages => ApiProtocol::Messages,
@@ -89,7 +87,7 @@ impl RetainedExecutionRevision {
                     candidate.target.account_label.as_deref(),
                 )
                 .map_err(|_| ErrorCode::CapabilityMismatch)?;
-                Ok(CandidateDescriptorV1 {
+                Ok(CandidateDescriptor {
                     admission_profile: route
                         .profile_for_ordinal(
                             u16::try_from(ordinal).map_err(|_| ErrorCode::CapacityExceeded)?,
@@ -102,7 +100,7 @@ impl RetainedExecutionRevision {
                 })
             })
             .collect::<std::result::Result<Vec<_>, ErrorCode>>()?;
-        let manifest = CandidateManifestV1 {
+        let manifest = CandidateManifest {
             schema_version: 1,
             admission_mode: route.admission_mode(),
             runtime_observation: None,
@@ -324,7 +322,7 @@ impl RetainedRoute {
     pub(crate) fn accepted_selection(
         &self,
         generation_defaults_digest: Option<&bitrouter_ai::tenancy::identity::Digest>,
-    ) -> std::result::Result<Option<AcceptedSelectionV2>, ErrorCode> {
+    ) -> std::result::Result<Option<AcceptedSelection>, ErrorCode> {
         let Some(selection) = &self.ordered else {
             return Ok(None);
         };
@@ -341,7 +339,7 @@ impl RetainedRoute {
             }
             _ => return Err(ErrorCode::CapabilityMismatch),
         };
-        Ok(Some(AcceptedSelectionV2 {
+        Ok(Some(AcceptedSelection {
             generation_defaults_digest: generation_defaults_digest.cloned(),
             admission_mode: self.admission_mode(),
             route: self.reference().clone(),

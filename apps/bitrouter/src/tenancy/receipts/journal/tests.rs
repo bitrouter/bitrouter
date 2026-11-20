@@ -57,6 +57,7 @@ fn known_usage() -> serde_json::Value {
 
 fn receipt(frozen: Frozen, outcome: Outcome) -> Result<ExecutionReceipt> {
     Ok(ExecutionReceipt {
+        dispatch: bitrouter_ai::tenancy::execution::Dispatch::Strict,
         installation_id: frozen.owner.installation,
         tenant_id: "tenant".try_into()?,
         principal_id: "principal".try_into()?,

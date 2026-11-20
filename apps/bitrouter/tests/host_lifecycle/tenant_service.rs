@@ -17,7 +17,7 @@ use bitrouter_ai::{
         },
         resources::ResourceRevoke,
         usage_evidence::{
-            Capture, Dimension, ExecutionUsageEvidenceV1, Protocol as EvidenceProtocol, Semantics,
+            Capture, Dimension, ExecutionUsageEvidence, Protocol as EvidenceProtocol, Semantics,
             Source,
         },
         validation::Validate,
@@ -136,11 +136,8 @@ async fn evidence(
     protocol: Protocol,
     streaming: bool,
     terminal: bool,
-) -> Result<ExecutionUsageEvidenceV1> {
-    let evidence = owned
-        .reader
-        .usage_evidence(&owned.installation, &owned.tenant, &receipt.execution_id)
-        .await?;
+) -> Result<ExecutionUsageEvidence> {
+    let evidence = owned.reader.usage_evidence(receipt).await?;
     evidence.validate()?;
     ensure!(
         evidence.installation_id == receipt.installation_id

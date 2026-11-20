@@ -64,7 +64,7 @@ async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profi
         .bind(
             harness.revision.revision_id.clone(),
             "equal-projections".try_into()?,
-            OrderedCandidateSelectionV1 {
+            OrderedCandidateSelection {
                 schema_version: 1,
                 admission_mode: manifest.admission_mode,
                 route: harness.route.clone(),
@@ -86,7 +86,7 @@ async fn profiled_equal_private_targets_use_original_ordinals_and_distinct_profi
             .await?
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [2, 0]
     );
@@ -148,7 +148,7 @@ async fn rotate(
 }
 
 fn count(
-    observation: &bitrouter_ai::tenancy::ordered::CandidateManifestV1,
+    observation: &bitrouter_ai::tenancy::ordered::CandidateManifest,
     index: usize,
 ) -> Result<u64> {
     Ok(observation
@@ -320,7 +320,7 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
     let receipt = harness.receipt(&id).await?;
     ensure!(receipt.outcome == Outcome::Completed);
     if envelope {
-        ensure!(receipt.accepted_selection.generation_defaults_digest == Some(values.digest()?));
+        ensure!(receipt_selection(&receipt)?.generation_defaults_digest == Some(values.digest()?));
         let bodies = harness
             .controls
             .bodies
@@ -328,12 +328,12 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
             .map_err(|_| anyhow::anyhow!("provider bodies"))?;
         ensure!(bodies.len() == 64 && bodies.iter().all(|body| body["vendor_knob"] == "bounded"));
     }
-    ensure!(receipt.accepted_selection.candidate_indices == order);
+    ensure!(receipt_selection(&receipt)?.candidate_indices == order);
     ensure!(
         receipt
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == order
     );
@@ -374,7 +374,7 @@ async fn profiled_success_prefix_never_charges_an_unreached_distinct_group() -> 
             .await?
             .attempts
             .iter()
-            .map(|attempt| attempt.candidate_index)
+            .filter_map(|attempt| attempt.candidate_index)
             .collect::<Vec<_>>()
             == [1, 0]
     );
@@ -490,17 +490,17 @@ async fn revocation_after_charge(shared_health: bool) -> Result<()> {
         // operator read grants no submission authority or fallback send.
         let audit = harness.control(true, HttpVersion::Http1Only)?;
         let receipt = audit
-            .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+            .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
             .await?;
         receipt.validate()?;
         audit
-            .usage_evidence_v2(&receipt)
+            .usage_evidence(&receipt)
             .await?
             .validate_against(&receipt)?;
         if change == "grant" {
             let error = harness
                 .control(false, HttpVersion::Http1Only)?
-                .execution_v2(&harness.fixture.installation, &harness.fixture.tenant, &id)
+                .execution(&harness.fixture.installation, &harness.fixture.tenant, &id)
                 .await
                 .err()
                 .context("narrowed tenant read unexpectedly succeeded")?;

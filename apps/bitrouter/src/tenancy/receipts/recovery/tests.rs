@@ -4,7 +4,7 @@ use crate::tenancy::receipts::{read, store, usage_evidence::storage};
 use anyhow::Context;
 use bitrouter_ai::tenancy::{
     operation::ErrorCode,
-    usage_evidence::{Capture, ExecutionUsageEvidenceV1},
+    usage_evidence::{Capture, ExecutionUsageEvidence},
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 use serde_json::json;
@@ -101,7 +101,7 @@ async fn recovered_loss_sidecar_is_atomic_survives_restart_and_cannot_disappear(
     })
     .await
     .map_err(|_| anyhow::anyhow!("recovered evidence read failed"))?;
-    let evidence: ExecutionUsageEvidenceV1 = serde_json::from_slice(&body)?;
+    let evidence: ExecutionUsageEvidence = serde_json::from_slice(&body)?;
     ensure!(evidence.capture == Capture::Unavailable && evidence.frames.is_empty());
     db.execute(Statement::from_string(
         DatabaseBackend::Sqlite,

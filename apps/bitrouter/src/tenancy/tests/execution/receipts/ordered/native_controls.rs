@@ -111,7 +111,7 @@ fn bodies(harness: &OrderedHarness) -> Result<Vec<Value>> {
 
 async fn invoke(
     harness: &OrderedHarness,
-    binding: &OrderedDispatchBindingV2,
+    binding: &OrderedDispatchBinding,
     protocol: GenerationProtocol,
     mut input: Value,
     defaults: Option<GenerationDefaultsEnvelope>,
@@ -316,19 +316,19 @@ async fn native_effective_null_precedence_skips_foreign_candidates_without_renum
         )
         .await?;
         let receipt = harness.receipt(&id).await?;
-        ensure!(receipt.accepted_selection.candidate_indices == [1, 2, 0]);
+        ensure!(receipt_selection(&receipt)?.candidate_indices == [1, 2, 0]);
         ensure!(
             receipt
                 .attempts
                 .iter()
-                .map(|a| a.candidate_index)
+                .filter_map(|a| a.candidate_index)
                 .collect::<Vec<_>>()
                 == expected,
             "source={source:?} supplemental={supplemental:?}; actual={:?}; sends={:?}",
             receipt
                 .attempts
                 .iter()
-                .map(|a| a.candidate_index)
+                .filter_map(|a| a.candidate_index)
                 .collect::<Vec<_>>(),
             harness.observed()?
         );

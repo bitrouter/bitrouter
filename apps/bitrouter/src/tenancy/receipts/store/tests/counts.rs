@@ -334,6 +334,8 @@ fn unknown_auxiliary_never_rewrites_already_known_model_usage() -> Result<()> {
         complete: false,
     };
     receipt.attempts.push(Attempt {
+        candidate_index: None,
+        observed_http_status: None,
         attempt_id: "model-attempt".try_into()?,
         target: Some(Target {
             provider_id: "provider".try_into()?,

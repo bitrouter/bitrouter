@@ -428,7 +428,7 @@ async fn native_partial_stream_cancellation_never_replays_or_reaches_the_next_ca
     tokio::time::timeout(TIMEOUT, h.fixture.service.admission.wait_drained()).await?;
     let receipt = h.receipt(&id).await?;
     ensure!(receipt.state == ReceiptState::Unknown && receipt.outcome == Outcome::Unknown);
-    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == 0);
+    ensure!(receipt.attempts.len() == 1 && receipt.attempts[0].candidate_index == Some(0));
     ensure!(h.observed()? == ["model-0"] && gate.release.available_permits() == 0);
     gate.release.close();
     h.fixture.service.shutdown().await?;
