@@ -187,7 +187,7 @@ impl Service {
         .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
         let mut manifest =
             self.manifest_from_stored(&stored, before.revision, reference, inbound)?;
-        if manifest.admission_mode != bitrouter_ai::tenancy::admission::AdmissionMode::ProfiledV1 {
+        if manifest.admission_mode != bitrouter_ai::tenancy::admission::AdmissionMode::Profiled {
             if self.current()?.revision != before.revision
                 || stored.authority_revision > before.revision
             {

@@ -152,9 +152,9 @@ impl CachePin<RetainedExecutionRevision> {
 impl RetainedRoute {
     pub(crate) fn admission_mode(&self) -> AdmissionMode {
         if self.data.admission.is_some() {
-            AdmissionMode::ProfiledV1
+            AdmissionMode::Profiled
         } else {
-            AdmissionMode::Legacy
+            AdmissionMode::Unprofiled
         }
     }
 
@@ -246,7 +246,7 @@ impl RetainedRoute {
                 .candidates
                 .get(usize::from(*ordinal))
                 .ok_or(ErrorCode::InvalidRequest)?;
-            if self.admission_mode() == AdmissionMode::Legacy && candidates.contains(&index) {
+            if self.admission_mode() == AdmissionMode::Unprofiled && candidates.contains(&index) {
                 return Err(ErrorCode::InvalidRequest);
             }
             let candidate = self

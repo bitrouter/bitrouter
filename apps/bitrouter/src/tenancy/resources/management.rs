@@ -11,7 +11,6 @@ use bitrouter_ai::tenancy::{
     identity::{RevisionId, TenantId},
     operation::ErrorCode,
     resources::{ResourceCapabilities, ResourceStatus},
-    resources_v2::ResourceCapabilitiesV2,
 };
 use chrono::{DateTime, Utc};
 use sea_orm::ConnectionTrait;
@@ -97,10 +96,7 @@ impl Resources {
         command: &Command,
         digest: &str,
     ) -> Result<String> {
-        if !matches!(
-            command,
-            Command::Resource(..) | Command::ResourceV2(..) | Command::ResourceV3(..)
-        ) {
+        if !matches!(command, Command::Resource(..)) {
             return Ok(digest.to_owned());
         }
         self.key
@@ -443,49 +439,6 @@ impl Service {
         })
     }
 
-    pub(in crate::tenancy) async fn resource_capabilities_v3(
-        &self,
-        caller: &Caller,
-    ) -> std::result::Result<bitrouter_ai::tenancy::resources_v3::ResourceCapabilitiesV3, Failure>
-    {
-        use bitrouter_ai::tenancy::{
-            ordered::GenerationProtocol, resources_v3::ResourceCapabilitiesV3,
-        };
-        self.with_capability_authority(caller, |state| {
-            Ok(ResourceCapabilitiesV3 {
-                format: 3,
-                installation_id: state.installation.clone(),
-                provisioning_enabled: self.resources.key.is_some()
-                    && self.private_adapter.is_some()
-                    && self.ordered_dispatch_ready(state),
-                max_command_bytes: 1048576,
-                tenant_routes_require_approved_origins: true,
-                generation_protocols: [
-                    GenerationProtocol::ChatCompletions,
-                    GenerationProtocol::Messages,
-                    GenerationProtocol::Responses,
-                    GenerationProtocol::GenerateContent,
-                ],
-            })
-        })
-        .await
-    }
-
-    pub(in crate::tenancy) async fn resource_capabilities_v2(
-        &self,
-        caller: &Caller,
-    ) -> std::result::Result<ResourceCapabilitiesV2, Failure> {
-        let previous = self.resource_capabilities(caller).await?;
-        Ok(ResourceCapabilitiesV2 {
-            format: 2,
-            installation_id: previous.installation_id,
-            provisioning_enabled: previous.provisioning_enabled,
-            max_command_bytes: previous.max_command_bytes,
-            tenant_routes_require_approved_origins: previous.tenant_routes_require_approved_origins,
-            admission_profile_versions: [1, 2],
-        })
-    }
-
     pub(in crate::tenancy) async fn resource_capabilities(
         &self,
         caller: &Caller,
@@ -497,6 +450,12 @@ impl Service {
             provisioning_enabled: self.resources.key.is_some(),
             max_command_bytes: 1024 * 1024,
             tenant_routes_require_approved_origins: true,
+            generation_protocols: [
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::ChatCompletions,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::Messages,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::Responses,
+                bitrouter_ai::tenancy::ordered::GenerationProtocol::GenerateContent,
+            ],
         })
     }
 

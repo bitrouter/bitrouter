@@ -31,7 +31,7 @@ impl Service {
         state: &Snapshot,
         manifest: &mut CandidateManifestV1,
     ) -> Result<(), ErrorCode> {
-        if manifest.admission_mode != AdmissionMode::ProfiledV1 {
+        if manifest.admission_mode != AdmissionMode::Profiled {
             return Ok(());
         }
         let operational = self.operational.snapshot();

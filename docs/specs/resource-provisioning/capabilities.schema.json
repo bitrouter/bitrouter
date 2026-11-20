@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ResourceCapabilities",
-  "description": "Independently versioned descriptor; does not alter strict v1 discovery.",
+  "description": "Current provisioning capabilities; discovery does not grant resource authority.",
   "type": "object",
   "properties": {
     "format": {
@@ -28,7 +28,23 @@
     },
     "tenant_routes_require_approved_origins": {
       "description": "Endpoint selection by tenant credentials requires host-approved origins.",
-      "type": "boolean"
+      "type": "boolean",
+      "const": true
+    },
+    "generation_protocols": {
+      "description": "Supported ingress protocols in canonical order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/GenerationProtocol"
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "const": [
+        "chat_completions",
+        "messages",
+        "responses",
+        "generate_content"
+      ]
     }
   },
   "additionalProperties": false,
@@ -37,7 +53,8 @@
     "installation_id",
     "provisioning_enabled",
     "max_command_bytes",
-    "tenant_routes_require_approved_origins"
+    "tenant_routes_require_approved_origins",
+    "generation_protocols"
   ],
   "$defs": {
     "InstallationId": {
@@ -45,6 +62,15 @@
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "GenerationProtocol": {
+      "type": "string",
+      "enum": [
+        "chat_completions",
+        "messages",
+        "responses",
+        "generate_content"
+      ]
     }
   }
 }

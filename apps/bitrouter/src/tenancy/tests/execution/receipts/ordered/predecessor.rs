@@ -431,7 +431,7 @@ async fn qualify(
         receipt_mode: "strict".into(),
         selection: OrderedCandidateSelectionV1 {
             generation_defaults_digest: None,
-            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+            admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
             schema_version: 1,
             route: provisioned.route.clone(),
             candidate_indices: vec![1],

@@ -88,7 +88,7 @@ impl Read<'_> {
             max_profiles: 256,
             max_request_bytes: 1048576,
             max_response_bytes: 1048576,
-            profile_versions: [1, 2],
+            profile_versions: [1],
         })
     }
 

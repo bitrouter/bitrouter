@@ -1,4 +1,4 @@
-//! Versioned resource provisioning contracts. Validation does not grant authority.
+//! Current resource provisioning contracts. Validation does not grant authority.
 //!
 //! Provider secrets are write-only. Route and policy documents are compiled by
 //! the service; this crate neither resolves their configuration nor executes it.
@@ -12,10 +12,11 @@ mod decoding;
 pub(super) mod schema;
 
 use super::{
-    admission::{AdmissionAttachmentV1, AdmissionProfileV1},
+    admission::{AdmissionAttachment, AdmissionProfile},
     authority::{OwnerKind, ResourceKey, ResourceKind},
     configuration::ResourceRef,
     identity::{AuthorityRevision, InstallationId, OperationId, RevisionId},
+    ordered::GenerationProtocol,
     validation::{Validate, ValidationError, bytes, nullable, require, text, unique},
 };
 
@@ -42,7 +43,7 @@ pub enum Definition {
     /// Installation-managed operational profile, independent of routing Policy.
     AdmissionProfile {
         /// Closed, bounded operational rules.
-        profile: AdmissionProfileV1,
+        profile: AdmissionProfile,
     },
     /// Static ordered route with an explicit profile for every protocol-root entry.
     ProfiledRoute {
@@ -55,19 +56,16 @@ pub enum Definition {
         /// Selector resolved exclusively inside this document.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]
         selector: String,
-        /// Required-nullable policy reference; only qualified static roots execute.
+        /// Required null; profiled routes use a static ordered root.
         #[serde(deserialize_with = "nullable")]
-        #[cfg_attr(
-            feature = "schema",
-            schemars(with = "schema::RequiredNullable<ResourceRef>")
-        )]
+        #[cfg_attr(feature = "schema", schemars(required, with = "()"))]
         policy: Option<ResourceRef>,
         /// Separately owned immutable credential slots.
         #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 256)))]
         credentials: Vec<CredentialBinding>,
-        /// Total unique map over the three actual compiled protocol roots.
-        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 768)))]
-        attachments: Vec<AdmissionAttachmentV1>,
+        /// Total unique map over the actual compiled protocol roots.
+        #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 1024)))]
+        attachments: Vec<AdmissionAttachment>,
     },
     /// Static upstream credential; ingress credentials use the separate issuance API.
     Credential {
@@ -253,7 +251,7 @@ pub struct ResourceStatus {
     pub revoked: bool,
 }
 
-/// Independently versioned descriptor; does not alter strict v1 discovery.
+/// Current provisioning capabilities; discovery does not grant resource authority.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -271,15 +269,29 @@ pub struct ResourceCapabilities {
     #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 1048576)))]
     pub max_command_bytes: u32,
     /// Endpoint selection by tenant credentials requires host-approved origins.
+    #[cfg_attr(feature = "schema", schemars(extend("const" = true)))]
     pub tenant_routes_require_approved_origins: bool,
+    /// Supported ingress protocols in canonical order.
+    #[cfg_attr(feature = "schema", schemars(extend("const" = serde_json::json!(["chat_completions","messages","responses","generate_content"]))))]
+    pub generation_protocols: [GenerationProtocol; 4],
 }
 
 impl Validate for Definition {
     fn validate(&self) -> Result<(), ValidationError> {
         bytes(self, 1024 * 1024)?;
-        if let Self::ProfiledRoute { attachments, .. } = self {
+        if let Self::ProfiledRoute {
+            routing,
+            selector,
+            policy,
+            attachments,
+            ..
+        } = self
+        {
+            super::validation::json_depth(routing, 3, "routing JSON depth")?;
+            require(selector.len() <= 512, "selector byte bound")?;
+            require(policy.is_none(), "profiled static route policy")?;
             require(
-                !attachments.is_empty() && attachments.len() <= 768,
+                !attachments.is_empty() && attachments.len() <= 1024,
                 "admission attachment count",
             )?;
             let mut ordinals = std::collections::HashSet::new();
@@ -387,7 +399,14 @@ impl Validate for ResourceCapabilities {
             self.format == 1
                 && self.max_command_bytes > 0
                 && self.max_command_bytes <= 1024 * 1024
-                && self.tenant_routes_require_approved_origins,
+                && self.tenant_routes_require_approved_origins
+                && self.generation_protocols
+                    == [
+                        GenerationProtocol::ChatCompletions,
+                        GenerationProtocol::Messages,
+                        GenerationProtocol::Responses,
+                        GenerationProtocol::GenerateContent,
+                    ],
             "resource capabilities",
         )
     }

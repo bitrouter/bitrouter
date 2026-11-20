@@ -210,7 +210,7 @@ async fn current_bro_format_keeps_hidden_choice_projection_and_profiled_root() -
     let mut imports = rows()?;
     let mut profile_ref = reference("pool", ResourceKind::Policy, "operational")?;
     profile_ref.owner_kind = OwnerKind::OperatorPool;
-    imports.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"fallback":"stop"}}}));
+    imports.push(json!({"reference":profile_ref,"definition":{"kind":"admission_profile","profile":{"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"stop"}}}));
     let mut profiled = route("tenant", "profiled", "generation")?;
     profiled["definition"]["kind"] = json!("profiled_route");
     profiled["definition"]["attachments"] = json!(["chat_completions","messages","responses"].map(|protocol| json!({"inbound_protocol":protocol,"candidate_index":0,"credential":imports[1]["reference"],"profile":profile_ref})));

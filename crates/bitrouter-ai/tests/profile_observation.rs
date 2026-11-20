@@ -23,7 +23,7 @@ fn snapshot() -> Value {
     json!({"schema_version":1,"installation_id":"installation","instance_id":"instance","authority_revision":7,"observed_at":"2026-11-03T00:00:00Z","profiles":[entry()]})
 }
 fn capabilities() -> Value {
-    json!({"contract_version":1,"installation_id":"installation","instance_id":"instance","authority_revision":7,"observation_enabled":true,"max_profiles":256,"max_request_bytes":1048576,"max_response_bytes":1048576,"profile_versions":[1,2]})
+    json!({"contract_version":1,"installation_id":"installation","instance_id":"instance","authority_revision":7,"observation_enabled":true,"max_profiles":256,"max_request_bytes":1048576,"max_response_bytes":1048576,"profile_versions":[1]})
 }
 fn valid<T: DeserializeOwned + Validate>(value: Value) -> bool {
     serde_json::from_value::<T>(value).is_ok_and(|v| v.validate().is_ok())
@@ -80,7 +80,7 @@ fn exact_integral_numeric_spellings_normalize_without_float_rounding() -> TestRe
             capabilities(),
             vec![
                 ("\"contract_version\":1", "\"contract_version\":1e0"),
-                ("[1,2]", "[1.0,2e0]"),
+                ("[1]", "[1.0]"),
                 ("256", "2.56e2"),
                 ("1048576", "1048576.0"),
             ],
@@ -153,8 +153,8 @@ fn exact_integral_numeric_spellings_normalize_without_float_rounding() -> TestRe
         }
     }
     let raw = serde_json::to_string(&capabilities())?;
-    for bad in ["[1.1,2]", "[1,256]", "[1]", "[1,2,3]"] {
-        assert!(serde_json::from_str::<Capabilities>(&raw.replace("[1,2]", bad)).is_err());
+    for bad in ["[1.1]", "[256,1]", "[]", "[1,2]"] {
+        assert!(serde_json::from_str::<Capabilities>(&raw.replace("[1]", bad)).is_err());
     }
     Ok(())
 }
@@ -278,19 +278,19 @@ fn separate_profile_read_schemas_preserve_required_null_and_ref_bounds() -> Test
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specs/service-api");
     for (name, schema) in [
         (
-            "profile-observation-capabilities-v1.schema.json",
+            "profile-observation-capabilities.schema.json",
             schemars::schema_for!(Capabilities),
         ),
         (
-            "profile-observation-request-v1.schema.json",
+            "profile-observation-request.schema.json",
             schemars::schema_for!(Request),
         ),
         (
-            "profile-observation-snapshot-v1.schema.json",
+            "profile-observation-snapshot.schema.json",
             schemars::schema_for!(Snapshot),
         ),
         (
-            "profile-observation-entry-v1.schema.json",
+            "profile-observation-entry.schema.json",
             schemars::schema_for!(ProfileObservationV1),
         ),
     ] {

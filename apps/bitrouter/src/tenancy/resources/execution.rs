@@ -433,7 +433,7 @@ pub(crate) struct RetainedRoute {
 
 struct RouteData {
     reference: ResourceRef,
-    admission: Option<Vec<bitrouter_ai::tenancy::resources_v3::NativeAdmissionAttachmentV1>>,
+    admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachment>>,
     assessment: Option<ResourceRef>,
     block: Option<Box<super::block::Profile>>,
     block_pricing: Vec<Option<crate::gateway::pipeline::stream::UsagePricing>>,

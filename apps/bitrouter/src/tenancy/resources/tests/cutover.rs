@@ -47,15 +47,11 @@ async fn current_source(
     unused["reference"]["resource_id"] = json!("zz-unreferenced");
     let unused_reference = serde_json::from_value(unused["reference"].clone())?;
     rows.push(unused);
-    for version in [1, 2] {
-        let mut profile =
-            json!({"schema_version":version,"rate":null,"health":null,"fallback":"stop"});
-        if version == 2 {
-            profile["health_group_id"] = Value::Null;
-        }
+    for member in [1, 2] {
+        let profile = json!({"schema_version":1,"rate":null,"health":null,"health_group_id":null,"fallback":"stop"});
         rows.push(json!({"reference":{"owner_kind":"operator_pool","owner_id":"pool","resource_kind":"policy",
-            "resource_id":format!("admission-{version}"),"revision_id":"v1"},
-            "definition":{"kind":if version == 1 {"admission_profile"} else {"admission_profile_v2"},"profile":profile}}));
+            "resource_id":format!("admission-{member}"),"revision_id":"v1"},
+            "definition":{"kind":"admission_profile","profile":profile}}));
     }
     let import = home.join("current-resources.json");
     producer::private_json(&import, &manifest)?;
@@ -127,7 +123,7 @@ async fn independent_admission_profiles_survive_file_restarts_and_v2_restore() -
     let (installation, _, _) = current_source(&home, &source).await?;
     let profiles = profile_rows(&source).await?;
     ensure!(profiles.len() == 2);
-    ensure!(profiles[0].0 == PROFILED_COMPILER_VERSION);
+    ensure!(profiles[0].0 == SHARED_HEALTH_COMPILER_VERSION);
     ensure!(profiles[1].0 == SHARED_HEALTH_COMPILER_VERSION);
     for _ in 0..2 {
         let live = producer::Live::open(&source, None, Some(producer::KEY_ENV)).await?;

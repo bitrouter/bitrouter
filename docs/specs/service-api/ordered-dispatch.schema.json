@@ -1553,8 +1553,8 @@
     "AdmissionMode": {
       "type": "string",
       "enum": [
-        "legacy",
-        "profiled_v1"
+        "unprofiled",
+        "profiled"
       ]
     },
     "AdmissionProfileRef": {

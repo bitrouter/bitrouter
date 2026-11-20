@@ -37,7 +37,7 @@ fn identity(installation: &InstallationId, id: &str, count: usize) -> Result<Ide
         ordered: Some((
             AcceptedSelectionV2 {
                 generation_defaults_digest: None,
-                admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+                admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                 route: ResourceRef {
                     owner_kind: OwnerKind::Tenant,
                     owner_id: "tenant".try_into()?,
@@ -121,7 +121,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
     for (count, expected) in [(1, 1826), (8, 1854), (9, 1860), (64, 2082)] {
         let selected = AcceptedSelectionV2 {
             generation_defaults_digest: None,
-            admission_mode: AdmissionMode::ProfiledV1,
+            admission_mode: AdmissionMode::Profiled,
             route: ResourceRef {
                 owner_kind: OwnerKind::OperatorPool,
                 owner_id: "o".repeat(128).try_into()?,
@@ -162,7 +162,7 @@ fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<
         };
         ensure!(intent.matches(&terminal.receipt));
         let mut changed = terminal.receipt.clone();
-        changed.accepted_selection.admission_mode = AdmissionMode::Legacy;
+        changed.accepted_selection.admission_mode = AdmissionMode::Unprofiled;
         ensure!(!intent.matches(&changed));
         let mut oversized = serde_json::to_value(intent)?;
         oversized["admitted_at"] = json!(format!("2026-11-02T00:00:00.{}Z", "0".repeat(MAX_BYTES)));

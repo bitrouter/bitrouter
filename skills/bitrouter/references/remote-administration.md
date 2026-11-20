@@ -130,16 +130,17 @@ endpoint requires a profiled ordered generation request and a peer that
 authenticates and consumes each attempt before sending it upstream. See the
 [configuration contract](../../../docs/specs/configuration/README.md#private-generation-adapter).
 
-Ordered selections require an explicit `admission_mode` (`legacy` or
-`profiled_v1`), matching the retained root; missing mode is not a default.
+Ordered selections require an explicit `admission_mode` (`unprofiled` or
+`profiled`), matching the retained root; missing mode is not a default.
 Installation authority alone can provision admission profiles or profiled
 routes through the existing resource API. Profiles use explicit rate/health
 rules; zero RPM is valid local refusal. A profiled route permanently protects
-its key, including old revisions and configurations. Do not downgrade a denied
-profiled request to legacy or v1. V1 profiles keep local health. For explicit
-shared health across distinct members, verify enabled V2 resource discovery and
-use format-two profile puts with `health_group_id`; never downgrade unsupported
-V2 writes. Group rules and membership remain immutable, including revoked history.
+its key, including old revisions and configurations. Use the current resource
+capabilities endpoint and format-one puts. Every profile has a required nullable
+`health_group_id`; health rules and the group are enabled or disabled together.
+Use distinct group IDs for isolated circuits or the same ID for shared health
+within one operator pool. Group rules and membership remain immutable, including
+revoked history. Only a member's RPM ceiling can rotate.
 New authority stores use format four and refuse unreleased format-two stores;
 the supported upgrade preserves the historical 1-to-3 step before 3-to-4.
 Retain a compatible stopped-writer backup

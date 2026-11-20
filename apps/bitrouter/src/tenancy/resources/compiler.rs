@@ -95,13 +95,6 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
             credentials,
             ..
         } => (routing, selector, policy, credentials, &[][..], None),
-        Definition::NativeProfiledRouteV1 {
-            routing,
-            selector,
-            policy,
-            credentials,
-            ..
-        } => (routing, selector, policy, credentials, &[][..], None),
         _ => anyhow::bail!("route definition required"),
     };
     let (mut config, provider_sizes) =
@@ -117,7 +110,7 @@ fn prepare_current_route(import: &Import, policy: Option<&Artifact>) -> Result<R
                     .api_protocol
                     .as_ref()
                     .is_some_and(|protocols| protocols.as_slice().iter().any(native)))),
-            "native protocols require explicit resource format three"
+            "native protocols require an explicit generate_content attachment"
         );
     }
     let resolution = config

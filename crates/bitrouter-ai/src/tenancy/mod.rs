@@ -4,7 +4,6 @@
 //! Validation checks wire bounds and internal consistency; it never grants access.
 
 pub mod admission;
-pub mod admission_v2;
 pub mod authority;
 pub mod configuration;
 pub mod directory;
@@ -20,8 +19,6 @@ pub mod private_adapter;
 pub mod profile_observation;
 pub mod provider_technical_facts;
 pub mod resources;
-pub mod resources_v2;
-pub mod resources_v3;
 pub mod usage_evidence;
 pub mod usage_evidence_v2;
 pub mod validation;

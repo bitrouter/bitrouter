@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, operation::DispatchState};
+use bitrouter_ai::tenancy::{admission::AdmissionProfile, operation::DispatchState};
 
 mod authority;
 
@@ -135,9 +135,9 @@ async fn native_profiled_duplicate_projections_keep_original_ordinals_and_skip_w
 -> Result<()> {
     let profiles = (0..4)
         .map(|index| {
-            serde_json::from_value::<AdmissionProfileV1>(json!({
+            serde_json::from_value::<AdmissionProfile>(json!({
         "schema_version":1,"rate":{"rate_group_id":format!("native-group-{index}"),
-        "member_rpm":if index == 2 {0} else {100}},"health":null,
+        "member_rpm":if index == 2 {0} else {100}},"health":null,"health_group_id":null,
         "fallback":"ordered_terminal_rejections_v1"}))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;

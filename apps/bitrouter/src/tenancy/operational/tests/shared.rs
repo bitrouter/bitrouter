@@ -1,11 +1,11 @@
 //! Deterministic state tests; socket dispatch is covered separately.
 use super::*;
-use bitrouter_ai::tenancy::admission_v2::AdmissionProfileV2;
+use bitrouter_ai::tenancy::admission::AdmissionProfile;
 
-fn grouped(rpm: u32) -> Result<AdmissionProfileV2> {
+fn grouped(rpm: u32) -> Result<AdmissionProfile> {
     let local = rules(rpm)?;
-    Ok(AdmissionProfileV2 {
-        schema_version: 2,
+    Ok(AdmissionProfile {
+        schema_version: 1,
         rate: local.rate,
         observe_rate_group_id: None,
         health: local.health,
@@ -57,7 +57,7 @@ fn take(
     runtime: &Arc<Runtime>,
     installation: &InstallationId,
     member: &ResourceRef,
-    profile: &AdmissionProfileV2,
+    profile: &AdmissionProfile,
     now: Instant,
 ) -> Result<super::super::state::Ticket> {
     runtime
@@ -69,7 +69,7 @@ fn view(
     runtime: &Runtime,
     installation: &InstallationId,
     member: &ResourceRef,
-    profile: &AdmissionProfileV2,
+    profile: &AdmissionProfile,
     now: Instant,
 ) -> Result<super::super::state::View> {
     runtime
@@ -120,7 +120,7 @@ fn distinct_member_ceilings_share_rate_and_distributed_health_failures() -> Resu
 }
 
 #[test]
-fn tagged_groups_isolate_local_profile_pool_installation_and_other_group() -> Result<()> {
+fn explicit_groups_isolate_member_pool_installation_and_other_group() -> Result<()> {
     let runtime = Arc::new(Runtime::default());
     let installation = "installation".try_into()?;
     let a = reference("circuit")?;
@@ -165,7 +165,16 @@ fn tagged_groups_isolate_local_profile_pool_installation_and_other_group() -> Re
     admitted(&runtime, &installation, &a, &local, now)?.finish(HealthOutcome::Persistent, now);
     assert_eq!(
         runtime
-            .observe(&installation, &b, &local, now)
+            .observe(
+                &installation,
+                &b,
+                &{
+                    let mut isolated = local.clone();
+                    isolated.health_group_id = Some("other-local".try_into()?);
+                    isolated
+                },
+                now
+            )
             .map_err(|e| anyhow::anyhow!("{e:?}"))?
             .health,
         HealthObservation::Healthy

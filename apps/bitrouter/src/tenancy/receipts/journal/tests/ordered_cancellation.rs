@@ -78,7 +78,7 @@ async fn owner_with_deadline(
             ordered: Some((
                 AcceptedSelectionV2 {
                     generation_defaults_digest: None,
-                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: reference(ResourceKind::Route)?,
                     inbound_protocol: GenerationProtocol::Messages,
                     candidate_indices: vec![0],

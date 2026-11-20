@@ -1024,11 +1024,11 @@ fn authorize_effect(
 ) -> Result<(), ErrorCode> {
     use bitrouter_ai::tenancy::admission::AdmissionMode;
     let mode = route.admission_mode();
-    if state.resource_admission.protected(route.reference()) && mode != AdmissionMode::ProfiledV1 {
+    if state.resource_admission.protected(route.reference()) && mode != AdmissionMode::Profiled {
         return Err(ErrorCode::CapabilityMismatch);
     }
     authorize_route(state, submission, route.dependencies())?;
-    if mode == AdmissionMode::ProfiledV1 {
+    if mode == AdmissionMode::Profiled {
         if !route.is_ordered()
             || !submission
                 .binding

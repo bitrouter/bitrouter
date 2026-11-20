@@ -154,7 +154,7 @@ fn defaults_are_nine_closed_typed_fields_without_new_provider_ranges() -> TestRe
 
 #[test]
 fn optional_digest_preserves_unused_bytes_and_binds_accepted_identity() -> TestResult {
-    let raw = r#"{"schema_version":1,"admission_mode":"legacy","route":{"owner_kind":"tenant","owner_id":"t","resource_kind":"route","resource_id":"r","revision_id":"r1"},"candidate_indices":[255,0]}"#;
+    let raw = r#"{"schema_version":1,"admission_mode":"unprofiled","route":{"owner_kind":"tenant","owner_id":"t","resource_kind":"route","resource_id":"r","revision_id":"r1"},"candidate_indices":[255,0]}"#;
     let mut selection: OrderedCandidateSelectionV1 = serde_json::from_str(raw)?;
     assert_eq!(serde_json::to_string(&selection)?, raw);
     let old = selection.accept(GenerationProtocol::Messages)?;

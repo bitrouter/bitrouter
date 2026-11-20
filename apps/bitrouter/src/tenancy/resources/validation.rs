@@ -165,9 +165,6 @@ pub(super) fn compiled_with_operation(
                         }
                         | Definition::ProfiledRoute {
                             selector, policy, ..
-                        }
-                        | Definition::NativeProfiledRouteV1 {
-                            selector, policy, ..
                         },
                         Some(route),
                     ) => {
@@ -179,12 +176,7 @@ pub(super) fn compiled_with_operation(
                         );
                         route_shape(route, &dependencies, artifact.definition.is_native_route())?;
                     }
-                    (
-                        Definition::Policy { .. }
-                        | Definition::AdmissionProfile { .. }
-                        | Definition::AdmissionProfileV2 { .. },
-                        None,
-                    ) => {}
+                    (Definition::Policy { .. } | Definition::AdmissionProfile { .. }, None) => {}
                     _ => anyhow::bail!("invalid compiled artifact kind or shape"),
                 }
             }
@@ -270,11 +262,7 @@ pub(super) fn compiled_with_operation(
                 // ordering and reject missing or extra profiled projections.
                 let ordinary = expected.iter().filter(|route| {
                     !artifacts.get(&route.reference).is_some_and(|artifact| {
-                        matches!(
-                            artifact.definition,
-                            Definition::ProfiledRoute { .. }
-                                | Definition::NativeProfiledRouteV1 { .. }
-                        )
+                        matches!(artifact.definition, Definition::ProfiledRoute { .. })
                     })
                 });
                 ensure!(

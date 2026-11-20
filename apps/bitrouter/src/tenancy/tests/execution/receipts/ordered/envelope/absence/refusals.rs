@@ -1,5 +1,5 @@
 use super::*;
-use bitrouter_ai::tenancy::{admission::AdmissionProfileV1, operation::ErrorCode};
+use bitrouter_ai::tenancy::{admission::AdmissionProfile, operation::ErrorCode};
 
 fn request(protocol: GenerationProtocol) -> Result<(&'static str, Value)> {
     Ok(match protocol {
@@ -66,8 +66,8 @@ async fn no_work(harness: &OrderedHarness) -> Result<()> {
 }
 
 async fn profiled() -> Result<OrderedHarness> {
-    let profile: AdmissionProfileV1 = serde_json::from_value(
-        json!({"schema_version":1,"rate":{"rate_group_id":"envelope-rpm","member_rpm":100},"health":{"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,"persistent_cooldown_seconds":120,"probe_lease_seconds":5},"fallback":"ordered_terminal_rejections_v1"}),
+    let profile: AdmissionProfile = serde_json::from_value(
+        json!({"schema_version":1,"rate":{"rate_group_id":"envelope-rpm","member_rpm":100},"health":{"rules":"availability_v1","failure_threshold":1,"transient_cooldown_seconds":60,"persistent_cooldown_seconds":120,"probe_lease_seconds":5},"health_group_id":"profile","fallback":"ordered_terminal_rejections_v1"}),
     )?;
     OrderedHarness::with_profiles(1, 8, None, Value::Null, Some(&[profile])).await
 }
@@ -277,7 +277,7 @@ async fn envelope_v2_policy_lock_stays_unsupported_with_valid_binding_and_no_sen
                 "ordered-correlation".try_into()?,
                 OrderedCandidateSelectionV1 {
                     schema_version: 1,
-                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: harness.route.clone(),
                     candidate_indices: vec![0],
                     generation_defaults_digest: None,
@@ -461,7 +461,7 @@ async fn envelope_v2_retains_supported_model_facts_and_refuses_required_counting
                 "ordered-correlation".try_into()?,
                 OrderedCandidateSelectionV1 {
                     schema_version: 1,
-                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Legacy,
+                    admission_mode: bitrouter_ai::tenancy::admission::AdmissionMode::Unprofiled,
                     route: harness.route.clone(),
                     candidate_indices: vec![0],
                     generation_defaults_digest: None,

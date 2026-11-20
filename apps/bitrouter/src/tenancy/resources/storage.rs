@@ -197,7 +197,7 @@ pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredR
         super::BRO_OBLIGATION_COMPILER_VERSION
     } else if artifact.definition.is_native_route() {
         super::NATIVE_COMPILER_VERSION
-    } else if artifact.definition.is_shared_profile() {
+    } else if artifact.definition.is_admission_profile() {
         super::SHARED_HEALTH_COMPILER_VERSION
     } else if artifact.definition.is_profiled() {
         super::PROFILED_COMPILER_VERSION
@@ -274,7 +274,7 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
         super::BRO_OBLIGATION_COMPILER_VERSION
     } else if artifact.definition.is_native_route() {
         super::NATIVE_COMPILER_VERSION
-    } else if artifact.definition.is_shared_profile() {
+    } else if artifact.definition.is_admission_profile() {
         super::SHARED_HEALTH_COMPILER_VERSION
     } else if artifact.definition.is_profiled() {
         super::PROFILED_COMPILER_VERSION

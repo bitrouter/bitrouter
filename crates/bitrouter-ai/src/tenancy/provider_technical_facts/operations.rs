@@ -184,7 +184,7 @@ fn v2_original_ordinal_receipt_and_auth_retry_group_are_not_relabelled_v1() -> T
     let mut raw = serde_json::to_value(receipt()?)?;
     raw["schema_version"] = json!(2);
     raw["attempt_limit"] = json!(2);
-    raw["accepted_selection"] = json!({"admission_mode":"legacy","route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route","revision_id":"route-revision"},"inbound_protocol":"messages","candidate_indices":[17,2]});
+    raw["accepted_selection"] = json!({"admission_mode":"unprofiled","route":{"owner_kind":"tenant","owner_id":"tenant","resource_kind":"route","resource_id":"route","revision_id":"route-revision"},"inbound_protocol":"messages","candidate_indices":[17,2]});
     for (position, ordinal) in [17, 2].into_iter().enumerate() {
         raw["attempts"][position]["candidate_index"] = json!(ordinal);
         raw["attempts"][position]["observed_http_status"] = json!(503);

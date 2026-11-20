@@ -238,12 +238,12 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
                     .iter_mut()
                     .filter(|row| row["reference"]["resource_kind"] == "policy")
                 {
-                    let local: AdmissionProfileV1 =
+                    let local: AdmissionProfile =
                         serde_json::from_value(row["definition"]["profile"].clone())?;
                     let mut profile =
                         super::shared::grouped(local.rate.context("rate")?.member_rpm)?;
                     profile.health.as_mut().context("health")?.failure_threshold = 1000;
-                    row["definition"] = json!({"kind":"admission_profile_v2","profile":profile});
+                    row["definition"] = json!({"kind":"admission_profile","profile":profile});
                 }
             }
             Ok(())
@@ -293,7 +293,7 @@ async fn capacity_profile_case(envelope: bool, shared_health: bool) -> Result<()
     revoke(&harness, reference(1)?).await?;
     let values: bitrouter_ai::tenancy::generation_defaults::GenerationDefaultsEnvelope =
         serde_json::from_value(
-            json!({"schema_version":2,"configuration_defaults":"apply","supplemental":{"vendor_knob":"bounded"}}),
+            json!({"schema_version":1,"configuration_defaults":"apply","supplemental":{"vendor_knob":"bounded"}}),
         )?;
     let id = if envelope {
         let binding = binding.with_generation_defaults_envelope(&values)?;
@@ -430,16 +430,16 @@ async fn revocation_after_charge(shared_health: bool) -> Result<()> {
         if matches!(change, "pinned" | "current") {
             let result = harness
                 .control(true, HttpVersion::Http1Only)?
-                .put_resource_v2(
+                .put_resource(
                     &harness.fixture.tenant,
-                    &bitrouter_ai::tenancy::resources_v2::ResourcePutV2 {
-                        format: 2,
+                    &bitrouter_ai::tenancy::resources::ResourcePut {
+                        format: 1,
                         operation_id: "rotate-before-revocation".try_into()?,
                         installation_id: harness.fixture.installation.clone(),
                         key: current.key(),
                         expected_revision: Some(current.revision_id.clone()),
                         definition:
-                            bitrouter_ai::tenancy::resources_v2::DefinitionV2::AdmissionProfileV2 {
+                            bitrouter_ai::tenancy::resources::Definition::AdmissionProfile {
                                 profile: super::shared::grouped(501)?,
                             },
                     },
