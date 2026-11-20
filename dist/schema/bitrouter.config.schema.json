@@ -2108,6 +2108,7 @@
       "properties": {
         "ignore": {
           "default": [],
+          "description": "Providers excluded by the router.",
           "items": {
             "type": "string"
           },
@@ -2115,6 +2116,7 @@
         },
         "only": {
           "default": [],
+          "description": "Providers allowed by the router.",
           "items": {
             "type": "string"
           },
@@ -2122,6 +2124,7 @@
         },
         "require_tags": {
           "default": [],
+          "description": "Provider tags required by the router.",
           "items": {
             "type": "string"
           },
@@ -2136,7 +2139,8 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Cascade-chain ordering."
         }
       },
       "type": "object"
