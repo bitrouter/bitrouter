@@ -16,12 +16,12 @@ use bitrouter::harness::resources::{
         store::NativeStore,
     },
 };
+use bitrouter::managed_contract::protocol::{
+    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
+};
 use bitrouter::managed_task::{
     local::Client,
     protocol::{Operation, Report, socket_path},
-};
-use bitrouter_ai::core::protocol::{
-    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
 };
 use serde_json::{Value, json};
 use tokio::process::{Child, Command};
@@ -620,7 +620,7 @@ impl NativeStore for LostInputAck {
         let journal: Value = serde_json::from_slice(&bytes)
             .map_err(|e| CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string()))?;
         let accepted = if journal["checkpoint"].is_object() {
-            let batch: bitrouter_ai::core::checkpoint::CheckpointBatch =
+            let batch: bitrouter::managed_contract::checkpoint::CheckpointBatch =
                 serde_json::from_value(journal["checkpoint"].clone()).map_err(|e| {
                     CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string())
                 })?;

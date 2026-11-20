@@ -1,6 +1,6 @@
 //! Typed model and router inspection contracts.
 
-use crate::routing::{ModelInfo, RoutingConfig};
+use crate::routing::{ModelInfo, SortOrder};
 
 /// Which view of the catalog answered.
 ///
@@ -47,6 +47,21 @@ pub enum RouterReadiness {
     Unknown,
 }
 
+/// Provider preferences reported by the router inventory.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct RoutingOptions {
+    /// Cascade-chain ordering.
+    pub sort: Option<SortOrder>,
+    /// Provider tags required by the router.
+    pub require_tags: Vec<String>,
+    /// Providers allowed by the router.
+    pub only: Vec<String>,
+    /// Providers excluded by the router.
+    pub ignore: Vec<String>,
+}
+
 /// Public, non-secret selection portion of a normalized router definition.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -54,12 +69,12 @@ pub enum RouterReadiness {
 pub enum RouterSelectionStatus {
     Model {
         model: Option<String>,
-        routing: RoutingConfig,
+        routing: RoutingOptions,
     },
     Policy {
         policy: String,
         base_model: Option<String>,
-        routing: RoutingConfig,
+        routing: RoutingOptions,
     },
 }
 

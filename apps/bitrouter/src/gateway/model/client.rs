@@ -199,7 +199,7 @@ impl ModelClient {
         stream: bool,
     ) -> Result<(
         serde_json::Value,
-        bitrouter_ai::conversion::ConversionReport,
+        crate::gateway::conversion_report::ConversionReport,
     )> {
         if let Some(message) =
             crate::gateway::providers::retired::protocol_message(target.api_protocol.as_str())

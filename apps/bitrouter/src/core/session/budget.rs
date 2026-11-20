@@ -1,7 +1,7 @@
 //! Shared resource admission and durable cleanup after time or capacity expires.
 
 use super::*;
-use bitrouter_ai::core::checkpoint::ToolStartFence;
+use crate::managed_contract::checkpoint::ToolStartFence;
 
 pub(super) fn remaining_tools(state: &SessionSnapshot) -> u64 {
     let Some(run) = &state.run else { return 0 };

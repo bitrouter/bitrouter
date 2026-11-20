@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::protocol::{
+use crate::managed_contract::protocol::{
     ArtifactRef, DiscardableHistory, Limits, RoutingSettings, ToolOutcome, Verification,
 };
 

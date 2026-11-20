@@ -28,11 +28,11 @@ async fn envelope_v2_real_overlap_isolates_layer_choice_and_unextended_control()
                     let first_binding = harness
                         .binding(vec![0], protocol)
                         .await?
-                        .with_generation_defaults_envelope_v2(&first)?;
+                        .with_generation_defaults_envelope(&first)?;
                     let second_binding = harness
                         .binding(vec![0], protocol)
                         .await?
-                        .with_generation_defaults_envelope_v2(&second)?;
+                        .with_generation_defaults_envelope(&second)?;
                     ensure!(
                         first_binding.selection.generation_defaults_digest
                             != second_binding.selection.generation_defaults_digest
@@ -166,7 +166,7 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
     let binding = harness
         .binding(vec![1, 0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     let id = invoke(
         &harness,
         &binding,
@@ -207,7 +207,7 @@ async fn envelope_v2_fallback_preserves_per_hop_absence_and_unknown_never_resend
     let binding = harness
         .binding(vec![1, 0], GenerationProtocol::ChatCompletions)
         .await?
-        .with_generation_defaults_envelope_v2(&values)?;
+        .with_generation_defaults_envelope(&values)?;
     ensure!(
         invoke(
             &harness,

@@ -2,8 +2,8 @@
 //! Scheduling and execution transitions are implemented by core.
 
 use super::RunStatus;
-use bitrouter_ai::core::checkpoint::DurableEvent;
-use bitrouter_ai::core::protocol::{TaskInput, ToolExecute, ToolResult};
+use crate::managed_contract::checkpoint::DurableEvent;
+use crate::managed_contract::protocol::{TaskInput, ToolExecute, ToolResult};
 use bitrouter_ai::types::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

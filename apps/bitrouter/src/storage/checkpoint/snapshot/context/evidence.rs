@@ -2,7 +2,7 @@
 //! Scheduling and execution transitions are implemented by core.
 
 use super::{ContextStore, digest, invalid};
-use bitrouter_ai::core::protocol::{CoreError, HarnessManifest};
+use crate::managed_contract::protocol::{CoreError, HarnessManifest};
 use bitrouter_ai::types::{Content, Message, Role, ToolResultOutput};
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ pub struct EvidenceExtract {
 /// A complete tool body, retained independently of its bounded prompt preview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceArtifact {
-    pub reference: bitrouter_ai::core::protocol::ArtifactRef,
+    pub reference: crate::managed_contract::protocol::ArtifactRef,
     pub source: EvidenceSource,
 }
 

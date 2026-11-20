@@ -51,7 +51,7 @@ pub(super) struct NativeStreamCapture(Mutex<Option<Arc<BridgeCapture>>>);
 
 use super::native_continuation::NativeContinuationPlan;
 use super::native_work::{self, NativeProviderWorkKind};
-use bitrouter_ai::core::evidence::{ContinuationFailure, NativeContinuationInput};
+use crate::managed_contract::evidence::{ContinuationFailure, NativeContinuationInput};
 
 fn native_continuation_plan(
     target: &RoutingTarget,
@@ -109,7 +109,7 @@ pub trait Executor: Send + Sync {
         input: &super::types::generate_content::Input,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let prompt = input.projection().ok_or_else(|| {
             super::types::generate_content::Input::unavailable(&target.api_protocol)
         })?;
@@ -171,7 +171,7 @@ pub trait Executor: Send + Sync {
         _target: &RoutingTarget,
         _prompt: &Prompt,
         _ctx: &PipelineContext,
-    ) -> bitrouter_ai::core::evidence::NativeProtocolValidation {
+    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
         Default::default()
     }
 
@@ -182,7 +182,7 @@ pub trait Executor: Send + Sync {
         _target: &RoutingTarget,
         _prompt: &Prompt,
         _ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
+    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
         Err(BitrouterError::bad_request(
             "input token counting is unsupported",
         ))
@@ -205,7 +205,7 @@ pub trait Executor: Send + Sync {
         target: &RoutingTarget,
         prompt: &Prompt,
         _stream: bool,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let report =
             crate::gateway::model::conversion::request_admission(prompt, &target.api_protocol);
         report.require_admitted()?;
@@ -220,7 +220,7 @@ pub trait Executor: Send + Sync {
         prompt: &Prompt,
         stream: bool,
         _ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         self.preflight(target, prompt, stream)
     }
 
@@ -1170,7 +1170,7 @@ impl HttpExecutor {
         stream: bool,
     ) -> Result<(
         serde_json::Value,
-        bitrouter_ai::conversion::ConversionReport,
+        crate::gateway::conversion_report::ConversionReport,
     )> {
         crate::gateway::catalog::execution::validate_generation(target, prompt)?;
         if let super::types::PipelineInput::GenerateContent(input) = ctx.input()
@@ -1848,7 +1848,7 @@ impl Executor for HttpExecutor {
         input: &super::types::generate_content::Input,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         self.preflight_native_generate_content(target, input, stream, ctx)
     }
 
@@ -1923,14 +1923,14 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> bitrouter_ai::core::evidence::NativeProtocolValidation {
+    ) -> crate::managed_contract::evidence::NativeProtocolValidation {
         let validate = || -> std::result::Result<(), &'static str> {
             if let Some(runtime) =
                 ctx.extension::<super::native_context::NativePrivateContextRuntime>()
             {
                 runtime
                     .validate_target(prompt, ctx, target)
-                    .map_err(bitrouter_ai::core::evidence::PrivateContextFailure::reason)?;
+                    .map_err(crate::managed_contract::evidence::PrivateContextFailure::reason)?;
             }
             let (adapter, _) = self
                 .dispatch
@@ -1963,8 +1963,8 @@ impl Executor for HttpExecutor {
             Ok(())
         };
         match validate() {
-            Ok(()) => bitrouter_ai::core::evidence::NativeProtocolValidation::Compatible,
-            Err(reason) => bitrouter_ai::core::evidence::NativeProtocolValidation::Rejected {
+            Ok(()) => crate::managed_contract::evidence::NativeProtocolValidation::Compatible,
+            Err(reason) => crate::managed_contract::evidence::NativeProtocolValidation::Rejected {
                 reason: reason.into(),
             },
         }
@@ -1975,7 +1975,7 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
+    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
         self.count_managed_input(target, prompt, ctx).await
     }
 
@@ -1999,7 +1999,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let (adapter, _) = self
             .dispatch
             .lookup(&target.api_protocol)
@@ -2013,7 +2013,7 @@ impl Executor for HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         stream: bool,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let (client, _) = self.client_for(target, false);
         client
             .render_request_with_report(&target.model_target(), prompt, stream)
@@ -2502,7 +2502,7 @@ impl Executor for DispatchExecutor {
         input: &super::types::generate_content::Input,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         self.by_protocol
             .get(&target.api_protocol)
             .unwrap_or(&self.default)
@@ -2552,7 +2552,7 @@ impl Executor for DispatchExecutor {
         prompt: &Prompt,
         stream: bool,
         ctx: &PipelineContext,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         self.by_protocol
             .get(&target.api_protocol)
             .unwrap_or(&self.default)
@@ -2564,7 +2564,7 @@ impl Executor for DispatchExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         stream: bool,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+    ) -> Result<crate::gateway::conversion_report::ConversionReport> {
         let executor = self
             .by_protocol
             .get(&target.api_protocol)
@@ -3079,7 +3079,7 @@ mod beta_forward_tests {
     async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
     -> crate::gateway::error::Result<()> {
         use crate::gateway::pipeline::native::NativeCountedRequests;
-        use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
+        use crate::managed_contract::evidence::{InputTokenCounting, NativeInputCount};
         let mut ctx = ctx_with_headers(http::HeaderMap::new());
         let mut target = target(ApiProtocol::Responses);
         target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);

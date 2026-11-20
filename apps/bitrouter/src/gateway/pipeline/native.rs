@@ -1,10 +1,10 @@
 //! Durable admission for embedding runtimes that own their model/tool loop.
 //! The callbacks never execute tools and never receive provider credentials.
 
-use async_trait::async_trait;
-use bitrouter_ai::core::evidence::{
+use crate::managed_contract::evidence::{
     NativeAttemptReport, NativeEvidenceCommitment, NativeInputCount, NativeRoute,
 };
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::gateway::error::Result;

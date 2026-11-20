@@ -10,8 +10,8 @@ use bitrouter::gateway::pipeline::routing::{
 };
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::core::protocol::ModelMode;
 use bitrouter_ai::extension::request_check::{Decision, Input};
+use bitrouter_ai::harness::agent::ModelMode;
 use bitrouter_ai::routing::{ModelInfo, RouterRequestIdentity};
 
 struct Probe {

@@ -5,7 +5,7 @@ use bitrouter::gateway::model::decision::types::{
 };
 use bitrouter::gateway::routing::assessment;
 use bitrouter::gateway::routing::input::Input;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use bitrouter_ai::types::{Message, Prompt, Role};
 
 fn prompt(messages: Vec<Message>) -> Prompt {
@@ -102,14 +102,14 @@ fn low_confidence_abstains_without_losing_distribution_or_classifier_identity()
         );
     }
     let strict = assessment::decode(&request, &response, 0.85)?;
-    assert_eq!(strict.next_step_role, NextStepRole::Unknown);
+    assert_eq!(strict.next_step_role, NextStep::Unknown);
     assert_eq!(
         strict.judgments[assessment::ROLE].probabilities["verify"],
         1.0
     );
     assert!(!strict.judgments[assessment::ROLE].accepted);
     let relaxed = assessment::decode(&request, &response, 0.75)?;
-    assert_eq!(relaxed.next_step_role, NextStepRole::Verify);
+    assert_eq!(relaxed.next_step_role, NextStep::Verify);
     assert_eq!(strict.contract_digest, relaxed.contract_digest);
     assert_ne!(strict.classifier_digest, relaxed.classifier_digest);
     response.model = "decision-revision-2".into();

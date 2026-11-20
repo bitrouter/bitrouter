@@ -3,7 +3,7 @@ use bitrouter_ai::{
     stream::{ProtocolEnd, StreamItem},
     tenancy::{
         generate_content::{OrderedGenerateContentCapabilitiesV1, OrderedGenerateContentRequestV1},
-        generation_defaults::GenerationDefaultsEnvelopeV2,
+        generation_defaults::GenerationDefaultsEnvelope,
         ordered::OrderedDispatchBindingV2,
     },
 };
@@ -20,7 +20,7 @@ struct Input {
     binding: OrderedDispatchBindingV2,
     capabilities: OrderedGenerateContentCapabilitiesV1,
     request: OrderedGenerateContentRequestV1,
-    defaults: Option<GenerationDefaultsEnvelopeV2>,
+    defaults: Option<GenerationDefaultsEnvelope>,
     h2: bool,
 }
 
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ordered_tenant(&input.token, &input.binding)?
         .with_generate_content(&input.capabilities)?;
     if let Some(defaults) = input.defaults {
-        call = call.with_generation_defaults_envelope_v2(defaults)?;
+        call = call.with_generation_defaults_envelope(defaults)?;
     }
     let reply = call.generate_content_reply(&input.request).await?;
     let execution = reply

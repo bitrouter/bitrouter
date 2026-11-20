@@ -6,7 +6,7 @@ use serde_json::json;
 
 fn subject(identity: serde_json::Value) -> serde_json::Value {
     json!({
-        "schema_version":2,"identity":identity,"eval_id":"eval","scope":"task",
+        "spec_version":bitrouter_ai::eval::SPEC_VERSION,"identity":identity,"eval_id":"eval","scope":"task",
         "subject_id":"task","cohort":null,"holdout":false,"decisions":[],
         "requested_dimensions":[],"evidence":[],"evidence_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "observed_at":"2026-11-18T00:00:00Z"
@@ -21,8 +21,8 @@ fn model_identity() -> serde_json::Value {
 }
 
 #[test]
-fn subject_schema_two_profiles_are_closed_and_identity_is_required()
--> Result<(), Box<dyn std::error::Error>> {
+fn subject_profiles_are_closed_and_identity_is_required() -> Result<(), Box<dyn std::error::Error>>
+{
     use bitrouter_ai::eval::EvalSubject;
     for identity in [
         model_identity(),
@@ -70,70 +70,62 @@ fn subject_schema_two_profiles_are_closed_and_identity_is_required()
 }
 
 #[test]
-fn subject_version_cutover_does_not_change_result_or_measurement_versions()
--> Result<(), Box<dyn std::error::Error>> {
-    use bitrouter_ai::eval::{
-        EVAL_RESULT_SCHEMA_VERSION, EVAL_SUBJECT_SCHEMA_VERSION, EvalSubject,
-        ROUTE_MEASUREMENT_SCHEMA_VERSION,
-    };
-    assert_eq!(
-        (
-            EVAL_SUBJECT_SCHEMA_VERSION,
-            EVAL_RESULT_SCHEMA_VERSION,
-            ROUTE_MEASUREMENT_SCHEMA_VERSION
-        ),
-        (2, 1, 2)
-    );
-    for version in [0, 1, 3] {
-        let mut input = subject(json!({"profile":"gateway_generic"}));
-        input["schema_version"] = version.into();
-        assert!(serde_json::from_value::<EvalSubject>(input).is_err());
+fn all_eval_documents_require_the_exact_contract_version() -> Result<(), Box<dyn std::error::Error>>
+{
+    use bitrouter_ai::eval::{EvalSnapshot, EvalSubject, EvaluationResult, SPEC_VERSION};
+
+    fn observe<T: serde::de::DeserializeOwned>(
+        mut document: serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        document["spec_version"] = json!(SPEC_VERSION);
+        let _: T = serde_json::from_value(document.clone())?;
+        for wrong in [
+            json!("policy/1.0.0-beta.1"),
+            json!("eval/1.0.0-beta.2"),
+            json!(1),
+            json!(null),
+        ] {
+            document["spec_version"] = wrong;
+            assert!(serde_json::from_value::<T>(document.clone()).is_err());
+        }
+        document
+            .as_object_mut()
+            .ok_or("document")?
+            .remove("spec_version");
+        assert!(serde_json::from_value::<T>(document).is_err());
+        Ok(())
     }
-    for field in ["policy_digest", "preset"] {
-        let mut input = subject(json!({"profile":"gateway_generic"}));
-        input[field] = "old identity substitute".into();
-        assert!(serde_json::from_value::<EvalSubject>(input).is_err());
-    }
+
+    observe::<EvalSubject>(subject(json!({"profile":"gateway_generic"})))?;
+    observe::<EvaluationResult>(json!({
+        "eval_id": "eval", "evidence_digest": "digest",
+        "evaluator": {
+            "authority_id": "owner", "evaluator_id": "reviewer", "kind": "human",
+            "version": "1", "config_digest": "config"
+        },
+        "verdict": "pass", "idempotency_key": "submission", "submitted_at": "time"
+    }))?;
+    observe::<EvalSnapshot>(json!({"evidence_root": "root", "frozen_at": "time", "entries": []}))?;
     Ok(())
 }
 
 #[test]
-fn previous_subject_reader_and_current_writer_refuse_each_others_wire_shape()
--> Result<(), Box<dyn std::error::Error>> {
-    // Frozen schema-1 reader fields, without a historical executable dependency.
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct PreviousSubject {
-        schema_version: u32,
-        eval_id: String,
-        scope: bitrouter_ai::eval::EvalScope,
-        subject_id: String,
-        policy_digest: String,
-        preset: Option<String>,
-        cohort: Option<String>,
-        holdout: bool,
-        #[serde(default)]
-        decisions: Vec<bitrouter_ai::eval::EvalDecisionRef>,
-        #[serde(default)]
-        requested_dimensions: std::collections::BTreeSet<String>,
-        #[serde(default)]
-        evidence: Vec<bitrouter_ai::eval::EvidenceItem>,
-        evidence_digest: String,
-        observed_at: String,
-    }
-    let current = subject(json!({"profile":"gateway_generic"}));
-    assert!(serde_json::from_value::<PreviousSubject>(current.clone()).is_err());
-    let mut old = current;
-    old.as_object_mut()
-        .ok_or("subject object")?
-        .remove("identity");
-    old["schema_version"] = 1.into();
-    old["policy_digest"] =
-        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
-    old["preset"] = "auto".into();
-    let accepted_old: PreviousSubject = serde_json::from_value(old.clone())?;
-    assert_eq!(accepted_old.schema_version, 1);
-    assert!(serde_json::from_value::<bitrouter_ai::eval::EvalSubject>(old).is_err());
+fn eval_decisions_use_the_policy_route_key() -> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::eval::EvalDecisionRef;
+
+    let mut decision = json!({
+        "decision_id": "decision", "policy": "auto", "route_projection": "code:review|verify|normal",
+        "request_key": "unknown|verify|normal", "selected_tier": "default",
+        "baseline_tier": null, "policy_digest": "digest"
+    });
+    let decoded: EvalDecisionRef = serde_json::from_value(decision.clone())?;
+    assert_eq!(
+        decoded.route_projection.task_family,
+        bitrouter_ai::policy::TaskFamily::CodeReview
+    );
+    assert_eq!(serde_json::to_value(decoded)?, decision);
+    decision["request_key"] = json!("unknown|verify|context");
+    assert!(serde_json::from_value::<EvalDecisionRef>(decision).is_err());
     Ok(())
 }
 
@@ -188,5 +180,26 @@ fn metric_validation_is_intrinsic_and_error_diagnostics_do_not_echo_payloads()
     let error: ErrorEnvelope = serde_json::from_value(payload.clone())?;
     assert!(!format!("{error:?}").contains("private peer diagnostic"));
     assert_eq!(serde_json::to_value(error)?, payload);
+    Ok(())
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn published_eval_schemas_match_the_contract() -> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::eval::{EvalSnapshot, EvalSubject, EvaluationResult};
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specs/eval");
+    for (file, schema) in [
+        ("subject.schema.json", schemars::schema_for!(EvalSubject)),
+        (
+            "result.schema.json",
+            schemars::schema_for!(EvaluationResult),
+        ),
+        ("snapshot.schema.json", schemars::schema_for!(EvalSnapshot)),
+    ] {
+        let published: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join(file))?)?;
+        assert_eq!(published, serde_json::to_value(schema)?, "{file}");
+    }
     Ok(())
 }

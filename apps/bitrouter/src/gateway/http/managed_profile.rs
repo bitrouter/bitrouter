@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use axum::body::{Body, Bytes, to_bytes};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use tokio::sync::Semaphore;
 
 /// Keep inspection separately bounded from scheduler output and execution slots.
@@ -90,7 +90,7 @@ fn failure(error: CoreError) -> axum::response::Response {
     };
     (
         status,
-        axum::Json(bitrouter_ai::core::protocol::ErrorEnvelope { error }),
+        axum::Json(crate::managed_contract::protocol::ErrorEnvelope { error }),
     )
         .into_response()
 }
@@ -135,7 +135,7 @@ mod tests {
                 .await?;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             let bytes = to_bytes(response.into_body(), 4096).await?;
-            let error: bitrouter_ai::core::protocol::ErrorEnvelope =
+            let error: crate::managed_contract::protocol::ErrorEnvelope =
                 serde_json::from_slice(&bytes)?;
             assert_eq!(error.error.code, ErrorCode::UnsupportedCapability);
         }
@@ -244,7 +244,7 @@ mod tests {
             )
             .await?;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let error: bitrouter_ai::core::protocol::ErrorEnvelope =
+        let error: crate::managed_contract::protocol::ErrorEnvelope =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
         assert_eq!(error.error.code, ErrorCode::UnsupportedCapability);
         for path in ["/v1/orchestrator/capabilities", "/v1/orchestrator/channel"] {

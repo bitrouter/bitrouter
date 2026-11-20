@@ -26,8 +26,8 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
+use crate::managed_contract::evidence::{ModelTokenLimits, NativeRouteConstraints};
 use bitrouter_ai::{
-    core::evidence::{ModelTokenLimits, NativeRouteConstraints},
     policy::{Document, Policy, Target},
     tenancy::{
         configuration::{Configuration, GenerationDefaults, Learning, Limits, ResourceRef},
@@ -626,8 +626,7 @@ impl Weight {
         self.string(default_tier)?;
         self.optional_string(classifier_digest)?;
         self.tree(routes)?;
-        for (key, tier) in routes {
-            self.string(key)?;
+        for tier in routes.values() {
             self.string(tier)?;
         }
         self.optional_string(tool_use_tier)?;

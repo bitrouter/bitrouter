@@ -16,11 +16,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::{DiscoveryOwner, HarnessConfig, HarnessResources, ResourceError, instructions};
 use crate::harness::tools::WorkspaceTools;
-use crate::storage::checkpoint::sha256;
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     CoreError, ErrorCode, HarnessManifest, HarnessTool, Limits, MaterialRef, OwnershipGrant,
     SignalUpdate, ToolEffect, ToolExecute, ToolOutcome, ToolResult,
 };
+use crate::storage::checkpoint::sha256;
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::harness::runtime::EffectStatus;
 

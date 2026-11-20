@@ -12,14 +12,12 @@ use bitrouter_ai::types::Prompt;
 use http::HeaderMap;
 use http::{HeaderName, HeaderValue};
 
-use crate::gateway::routing::workflow::ir::{
-    HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind,
-};
+use crate::gateway::routing::workflow::ir::{HarnessId, ProtocolKind, WorkflowStateKind};
 use crate::gateway::routing::workflow::predictive::NextActionClass;
 use crate::policy_table_router::PolicyTable;
-use bitrouter_ai::harness::inspection::NextStepRole;
 use bitrouter_ai::harness::inspection::ProgressState;
-use bitrouter_ai::harness::inspection::TaskFamily;
+use bitrouter_ai::policy::NextStep;
+use bitrouter_ai::policy::TaskFamily;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {
@@ -45,9 +43,9 @@ pub struct ExpectedWorkflowState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpectedPredictiveRoute {
-    pub next_step_role: NextStepRole,
+    pub next_step_role: NextStep,
     pub next_action_class: NextActionClass,
-    pub route_risk: RouteRisk,
+    pub route_risk: bitrouter_ai::policy::Risk,
     #[serde(default)]
     pub task_family: Option<TaskFamily>,
     #[serde(default)]

@@ -2,9 +2,9 @@ use super::*;
 use bitrouter::gateway::model::decision::DecisionRuntime;
 use bitrouter::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
 use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
+use bitrouter::managed_contract::protocol::ContextMode;
 use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter::storage::checkpoint::snapshot::context::inspection::InspectionExt;
-use bitrouter_ai::core::protocol::ContextMode;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -395,7 +395,7 @@ async fn routing_inspection_reports_the_serving_model_without_automatic_workflow
     )
     .await?;
     let mut task = input();
-    task.routing.model = bitrouter_ai::core::protocol::ModelMode::Policy;
+    task.routing.model = bitrouter_ai::harness::agent::ModelMode::Policy;
     task.routing.context = ContextMode::Auto;
     session
         .start("work", session.head().await.state_revision, task)

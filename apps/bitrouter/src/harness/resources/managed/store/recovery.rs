@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct Source {
     pub(crate) workspace: std::path::PathBuf,
-    pub(crate) grant: bitrouter_ai::core::protocol::OwnershipGrant,
+    pub(crate) grant: crate::managed_contract::protocol::OwnershipGrant,
     pub(crate) seeds: Vec<Seed>,
     pub(crate) steps: BTreeMap<String, Vec<bitrouter_ai::tenancy::identity::ExecutionId>>,
     pub(crate) pending_steps: BTreeSet<String>,

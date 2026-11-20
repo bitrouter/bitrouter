@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::evaluation::{canonical_digest, evidence_digest, validate_result_for_subject};
 use bitrouter_ai::eval::{
-    EVAL_RESULT_SCHEMA_VERSION, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
-    EvaluatorIdentity, EvaluatorKind, EvidenceItem, MetricUnit, MetricValue,
+    EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
+    EvidenceItem, MetricUnit, MetricValue,
 };
 
 use super::health::reduce;
@@ -151,7 +151,7 @@ pub(crate) fn build_operational_evaluation(
         snapshot.episode_id, snapshot.through_sequence
     );
     let subject = EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: eval_id.clone(),
         scope: EvalScope::Episode,
@@ -165,7 +165,7 @@ pub(crate) fn build_operational_evaluation(
         observed_at: settlement.captured_at.clone(),
     };
     let result = EvaluationResult {
-        schema_version: EVAL_RESULT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id,
         evidence_digest,
         evaluator: EvaluatorIdentity {
@@ -621,8 +621,8 @@ mod tests {
                     "route.experiment_challenger_propensity_ppm":100000},
                 "categorical":{
                     "route.eval_schema":"trajectory.v1", "route.policy":"retired-policy",
-                    "route.request_key":"semantic_route/v1|unknown|orchestrate|normal",
-                    "route.route_projection":"semantic_route/v1|unknown|orchestrate|normal",
+                    "route.request_key":"unknown|orchestrate|normal",
+                    "route.route_projection":"unknown|orchestrate|normal",
                     "route.baseline_tier":"reference", "route.preset":"auto:cost",
                     "route.projection":"agent_trace/v2|planning|normal", "route.workflow_state":"planning",
                     "route.selected_tier":"economy", "route.experiment_id":format!("sha256:{}", "a".repeat(64)),

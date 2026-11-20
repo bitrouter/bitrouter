@@ -2042,8 +2042,10 @@ fn finish_from_status(status: &str) -> Option<FinishReason> {
 
 /// Refuse items/content the input mapper would otherwise omit. Tool declarations
 /// are handled by the existing additional_tools promotion, not treated as history.
-fn ingress_admission(body: &serde_json::Value) -> bitrouter_ai::conversion::ConversionReport {
-    use bitrouter_ai::conversion::{
+fn ingress_admission(
+    body: &serde_json::Value,
+) -> crate::gateway::conversion_report::ConversionReport {
+    use crate::gateway::conversion_report::{
         ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
     };
     let mut report = ConversionReport::default();
@@ -2480,7 +2482,7 @@ impl OutboundAdapter for ResponsesAdapter {
         _target: &ModelTarget,
     ) -> Result<(
         serde_json::Value,
-        bitrouter_ai::conversion::ConversionReport,
+        crate::gateway::conversion_report::ConversionReport,
     )> {
         self.validate_managed_prompt(prompt)
             .map_err(ModelError::invalid_request)?;
@@ -2510,7 +2512,7 @@ impl OutboundAdapter for ResponsesAdapter {
         // the host supplies its origin/target proof and validates final auth.
         report.issues.retain(|issue| {
             issue.reason
-                != bitrouter_ai::conversion::ConversionReason::NativeReasoningAuthorityUnproven
+                != crate::gateway::conversion_report::ConversionReason::NativeReasoningAuthorityUnproven
         });
         report.require_admitted()?;
         Ok((render_responses_request(&normalized, true)?, report))

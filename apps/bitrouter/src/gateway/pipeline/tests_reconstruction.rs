@@ -26,7 +26,7 @@ impl RoutingTable for RebuildTable {
         let mut routes = NamedRoutingTable.route_chain(model, prefs, caller).await?;
         for route in &mut routes {
             route.model_constraints.input_token_counting =
-                Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses);
+                Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
         }
         Ok(routes)
     }
@@ -140,7 +140,7 @@ impl native::NativeExecutionControl for RebuildControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default)]
@@ -156,13 +156,15 @@ impl Executor for RebuildExecutor {
         _: &RoutingTarget,
         prompt: &Prompt,
         _: &PipelineContext,
-    ) -> Result<bitrouter_ai::core::evidence::NativeInputCount> {
+    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
         self.counts.lock().await.push(prompt.clone());
-        Ok(bitrouter_ai::core::evidence::NativeInputCount::Counted {
-            input_tokens: 100,
-            request_sha256: "fixture".into(),
-            source: "fixture".into(),
-        })
+        Ok(
+            crate::managed_contract::evidence::NativeInputCount::Counted {
+                input_tokens: 100,
+                request_sha256: "fixture".into(),
+                source: "fixture".into(),
+            },
+        )
     }
     async fn execute(
         &self,

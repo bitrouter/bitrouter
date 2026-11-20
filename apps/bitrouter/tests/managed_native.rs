@@ -15,9 +15,9 @@ use bitrouter::harness::resources::{
         store::NativeStore,
     },
 };
+use bitrouter::managed_contract::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
 use bitrouter::managed_store::DatabaseNativeStore;
 use bitrouter::storage::checkpoint::snapshot::RunStatus;
-use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, ToolOutcome};
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, GenerateResult, Usage};
 use serde_json::json;
@@ -380,7 +380,7 @@ impl NativeStore for DelayedCommitStore {
         // Pause a direct scheduler commit, while it holds the core commit lock.
         let journal: serde_json::Value = serde_json::from_slice(&bytes).map_err(|err| {
             CoreError::rejected(
-                bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable,
+                bitrouter::managed_contract::protocol::ErrorCode::CheckpointUnavailable,
                 err.to_string(),
             )
         })?;

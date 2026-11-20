@@ -1,19 +1,17 @@
 //! Owned Choice links share the native journal replacement and its ACK.
 use super::local::{Journal, NativePort};
+use crate::managed_contract::{
+    checkpoint::{CheckpointPayload, DurableHead},
+    protocol::{CoreError, ErrorCode},
+};
 use crate::{
     core::session::choice::wire,
     storage::checkpoint::{CheckpointBatchExt, sha256, snapshot::context::DecisionReceipt},
     tenancy::{execution::session::Binding, resources::execution::ChoiceProfile},
 };
-use bitrouter_ai::{
-    core::{
-        checkpoint::{CheckpointPayload, DurableHead},
-        protocol::{CoreError, ErrorCode},
-    },
-    tenancy::{
-        configuration::ResourceRef,
-        identity::{ExecutionId, InstallationId, RevisionId, TenantId},
-    },
+use bitrouter_ai::tenancy::{
+    configuration::ResourceRef,
+    identity::{ExecutionId, InstallationId, RevisionId, TenantId},
 };
 use serde::{Deserialize, Serialize};
 use std::{

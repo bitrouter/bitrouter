@@ -263,7 +263,7 @@ async fn native_control_envelope_digest_mutation_refuses_before_send() -> Result
     let binding = h
         .binding(vec![0], GenerationProtocol::Responses)
         .await?
-        .with_generation_defaults_envelope_v2(&envelope)?;
+        .with_generation_defaults_envelope(&envelope)?;
     let mut headers = caller_timeout::ordered_headers(&h, &binding)?;
     headers.insert(HEADER, PROVIDER_NATIVE_V1.parse()?);
     let mut body = json!({"model":MODEL,"input":"next",

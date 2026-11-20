@@ -5,11 +5,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::gateway::error::{BitrouterError, Result};
-use bitrouter_ai::core::evidence::{
+use crate::managed_contract::evidence::{
     NativeAttemptReport, NativeEvidenceCommitment, NativeReportRejection,
     NativeReportRejectionReason, NativeRoute,
 };
-use bitrouter_ai::core::evidence::{NativeTokenCost, NativeTokenRateBits};
+use crate::managed_contract::evidence::{NativeTokenCost, NativeTokenRateBits};
 
 pub(crate) fn rejection_byte_reserve(request_id: &str, route: &NativeRoute) -> Result<u64> {
     // Covers every fixed-schema field at maximum numeric width, two output
@@ -194,14 +194,14 @@ impl std::io::Write for HashCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::core::evidence::NativeTokenRates;
-    use bitrouter_ai::core::evidence::{
+    use crate::managed_contract::evidence::NativeTokenRates;
+    use crate::managed_contract::evidence::{
         ContinuationFailure, NativeContinuationInput, NativeContinuationOutput,
     };
-    use bitrouter_ai::core::evidence::{
+    use crate::managed_contract::evidence::{
         NativeOutputRejection, NativeOutputUsage, NativeRouteConstraints,
     };
-    use bitrouter_ai::core::evidence::{PrivateContextEvidence, PrivateContextFailure};
+    use crate::managed_contract::evidence::{PrivateContextEvidence, PrivateContextFailure};
     use bitrouter_ai::types::{NormalizedUsage, UsageOrigin};
     use serde_json::json;
 

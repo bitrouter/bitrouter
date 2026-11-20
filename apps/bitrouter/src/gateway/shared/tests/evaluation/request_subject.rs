@@ -57,7 +57,7 @@ fn fixture() -> Result<EvalSubject> {
         attributes,
     }];
     let subject = EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: format!("request:{request}"),
         scope: EvalScope::Request,
@@ -67,14 +67,14 @@ fn fixture() -> Result<EvalSubject> {
         decisions: vec![EvalDecisionRef {
             decision_id: "frozen-decision".into(),
             policy: "original-policy".into(),
-            route_projection: "original-route".into(),
-            request_key: request,
+            route_projection: "unknown|unknown|normal".parse().expect("valid route class"),
+            request_key: "unknown|implement|normal".parse()?,
             selected_tier: "standard".into(),
             selected_effort: None,
             baseline_tier: None,
             baseline_effort: None,
             policy_digest,
-            experiment: None,
+
             route_measurement: None,
         }],
         requested_dimensions: ["cost.usd_micros".into(), "latency.ms".into()].into(),

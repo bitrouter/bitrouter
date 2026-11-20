@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bitrouter_ai::types::{Content, Message};
 
+use crate::managed_contract::protocol::{CoreError, HarnessManifest};
 use crate::storage::checkpoint::snapshot::context::{ContextStore, digest, invalid};
-use bitrouter_ai::core::protocol::{CoreError, HarnessManifest};
 
 impl EvidenceArtifact {
     pub fn visible(&self, store: &ContextStore, task_id: &str, manifest: &HarnessManifest) -> bool {

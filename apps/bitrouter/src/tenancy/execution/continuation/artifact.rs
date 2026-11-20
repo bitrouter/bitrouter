@@ -5,8 +5,8 @@ use crate::gateway::pipeline::{
     native_context::clear_origins,
     native_continuation::{CONTINUATION_FIELD, clear_continuations},
 };
+use crate::managed_contract::evidence::{ContinuationFailure as Failure, FullHistoryReason};
 use bitrouter_ai::{
-    core::evidence::{ContinuationFailure as Failure, FullHistoryReason},
     tenancy::{
         configuration::ResourceRef,
         identity::{AttemptId, ExecutionId, RevisionId},

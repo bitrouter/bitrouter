@@ -40,8 +40,8 @@ pub enum ExecutionRecord {
     CoreDispatch,
     /// Exact Core bytes acknowledged by the same fenced Thread commit owner.
     CoreCheckpoint {
-        batch: bitrouter_ai::core::checkpoint::CheckpointBatch,
-        limits: bitrouter_ai::core::protocol::Limits,
+        batch: crate::managed_contract::checkpoint::CheckpointBatch,
+        limits: crate::managed_contract::protocol::Limits,
     },
     /// Contiguous pieces of one native checkpoint record, appended atomically.
     /// Readers verify the complete digest before interpreting any Core state.
@@ -53,7 +53,7 @@ pub enum ExecutionRecord {
     },
     /// Immutable artifact chunks precede every checkpoint that references them.
     CoreArtifact {
-        reference: bitrouter_ai::core::protocol::ArtifactRef,
+        reference: crate::managed_contract::protocol::ArtifactRef,
         offset: u64,
         content_base64: String,
     },

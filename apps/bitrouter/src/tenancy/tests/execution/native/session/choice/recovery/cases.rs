@@ -114,9 +114,9 @@ pub(super) async fn campaign(root: &Path, mode: &str) -> Result<()> {
         let (decision,link)=before["owned_choices"].as_object().context("persisted intent")?.iter().next().context("persisted link")?;
         let parent=link["parent_execution"].as_str().context("parent")?;
         let child=link["child_execution"].as_str().context("child")?;
-        let source_head: bitrouter_ai::core::checkpoint::DurableHead = serde_json::from_value(before["head"].clone())?;
-        let source_batch: bitrouter_ai::core::checkpoint::CheckpointBatch = serde_json::from_value(before["checkpoint"].clone())?;
-        let limits: bitrouter_ai::core::protocol::Limits = serde_json::from_value(before["limits"].clone())?;
+        let source_head: crate::managed_contract::checkpoint::DurableHead = serde_json::from_value(before["head"].clone())?;
+        let source_batch: crate::managed_contract::checkpoint::CheckpointBatch = serde_json::from_value(before["checkpoint"].clone())?;
+        let limits: crate::managed_contract::protocol::Limits = serde_json::from_value(before["limits"].clone())?;
         let source_state: SessionSnapshot = serde_json::from_value(source_batch.decode(&limits)?.checkpoint.state)?;
         let source_run = source_state.run.as_ref().context("stopped root run")?;
         let step_id = link["step_id"].as_str().context("actual Choice step")?;

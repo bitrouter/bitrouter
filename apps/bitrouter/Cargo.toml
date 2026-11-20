@@ -161,7 +161,7 @@ toml.workspace = true
 # Differential stored-history tests use the pinned schema without activating
 # an ACP runtime in the application's normal/build dependency closure.
 agent-client-protocol-schema.workspace = true
-bitrouter-sdk = { workspace = true, features = ["core"] }
+bitrouter-sdk.workspace = true
 bitrouter-ai = { workspace = true, features = ["testing"] }
 criterion = { version = "0.8", features = ["async_tokio"] }
 tonic = { workspace = true, features = ["server", "router"] }
@@ -278,10 +278,6 @@ required-features = ["core", "harness"]
 
 [[test]]
 name = "native_harness_resources"
-required-features = ["core", "harness"]
-
-[[test]]
-name = "harness_sdk"
 required-features = ["core", "harness"]
 
 [[test]]

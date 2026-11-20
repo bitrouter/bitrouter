@@ -18,14 +18,12 @@ impl GatewayClient {
     /// Insert immutable evidence using this client's service credential.
     /// An interrupted submission is never automatically retried.
     pub async fn put_eval_subject(&self, subject: &EvalSubject) -> Result<PutSubjectReport> {
-        if subject.schema_version != bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
-            || !matches!(
-                subject.identity,
-                bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
-            )
-        {
+        if !matches!(
+            subject.identity,
+            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+        ) {
             return Err(Error::Request(
-                "gateway eval requires a schema-2 gateway_generic subject",
+                "gateway eval requires a gateway_generic subject",
             ));
         }
         self.eval_post("v1/evals/subjects", subject).await
@@ -121,12 +119,10 @@ impl GatewayClient {
 }
 
 fn gateway_subject(subject: &EvalSubject) -> Result<()> {
-    if subject.schema_version == bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION
-        && matches!(
-            subject.identity,
-            bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
-        )
-    {
+    if matches!(
+        subject.identity,
+        bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
+    ) {
         Ok(())
     } else {
         Err(Error::Response(

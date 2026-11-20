@@ -7,7 +7,7 @@ use crate::storage::checkpoint::snapshot::accounting::RunTokenAccounting;
 pub(crate) mod claims;
 pub mod work;
 
-use bitrouter_ai::core::evidence::NativeTokenCost;
+use crate::managed_contract::evidence::NativeTokenCost;
 
 impl RunTokenAccounting {
     /// Called only while recording the first outcome for a committed attempt ID,
@@ -29,7 +29,7 @@ impl RunTokenAccounting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::core::evidence::NativeTokenRates;
+    use crate::managed_contract::evidence::NativeTokenRates;
 
     #[test]
     fn run_subtotal_overflow_stays_unknown_after_later_receipts() {

@@ -60,14 +60,6 @@ async fn relay_retains_done_and_only_allowlisted_metadata() -> TestResult {
         ("set-cookie", "secret".into()),
     ]);
     let server = serve(vec![reply]).await?;
-    // The former SDK path is exactly the AI-owned type, not another DTO.
-    let compatibility_event: bitrouter_sdk::stream::ServerEvent<()> =
-        bitrouter_ai::stream::ServerEvent {
-            event: "message".into(),
-            id: String::new(),
-            data: (),
-        };
-    assert_eq!(compatibility_event.event, "message");
     let client = GatewayClient::new(&server.url, None)?;
     let reply = client.chat_reply(&chat_request(true)?).await?;
     assert_eq!(reply.metadata.status, 200);

@@ -330,7 +330,7 @@ async fn corrupt(path: &Path, gateway: bool, expression: &str) -> Result<()> {
             .context("corrupted subject")?;
         let value: serde_json::Value =
             serde_json::from_str(&row.try_get::<String>("", "subject_json")?)?;
-        if value["schema_version"] == 2 {
+        if value["spec_version"] == bitrouter_ai::eval::SPEC_VERSION {
             // Namespace/profile negatives carry consistent canonical indexes;
             // they must fail the endpoint check rather than an incidental hash.
             let subject: EvalSubject = serde_json::from_value(value)?;
@@ -359,7 +359,7 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
         let path = home.path().join("current.sqlite");
         let fixture = seeded(&path, None).await?;
         for (index, (gateway, expression)) in [
-            (false, "subject_json=json_set(subject_json,'$.schema_version',1)"),
+            (false, "subject_json=json_remove(subject_json,'$.spec_version')"),
             (false, "subject_json=json_set(subject_json,'$.identity',json('{\"profile\":\"gateway_generic\"}'))"),
             (false, "subject_json=json_set(subject_json,'$.identity.tenant_id','other-tenant')"),
             (false, "subject_json=json_set(subject_json,'$.identity.installation_id','other-installation')"),
@@ -367,7 +367,7 @@ async fn isolated_retained_subjects_fail_startup_without_writes_and_current_mixe
             (false, "policy_digest='wrong-identity-index'"),
             (false, "content_digest='wrong-content-index'"),
             (false, "creator_principal_id=NULL"),
-            (true, "subject_json=json_set(subject_json,'$.schema_version',1)"),
+            (true, "subject_json=json_remove(subject_json,'$.spec_version')"),
             (true, "subject_json=json_set(subject_json,'$.identity',json('{\"profile\":\"tenant_generic\",\"installation_id\":\"forged-installation\",\"tenant_id\":\"forged-tenant\"}'))"),
             (true, "creator_principal_id='partial-owner'"),
             (true, "tenant_id='partial-tenant'"),
@@ -443,7 +443,7 @@ async fn actual_restore_rejects_isolated_old_subject_and_preserves_current_mixed
         corrupt(
             &bad,
             false,
-            "subject_json=json_set(subject_json,'$.schema_version',1)",
+            "subject_json=json_remove(subject_json,'$.spec_version')",
         )
         .await?;
         let bad_original = std::fs::read(&bad)?;

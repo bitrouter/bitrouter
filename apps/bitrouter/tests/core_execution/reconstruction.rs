@@ -1,7 +1,7 @@
 use super::*;
-use bitrouter_ai::core::evidence::InputTokenCounting;
-use bitrouter_ai::core::evidence::NativeInputCount;
-use bitrouter_ai::core::protocol::{ContextMode, DiscardableHistory};
+use bitrouter::managed_contract::evidence::InputTokenCounting;
+use bitrouter::managed_contract::evidence::NativeInputCount;
+use bitrouter::managed_contract::protocol::{ContextMode, DiscardableHistory};
 use bitrouter_ai::types::Role;
 
 struct RebuildExecutor {

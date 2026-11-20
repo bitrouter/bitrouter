@@ -10,7 +10,7 @@ struct FailAfterWrite;
 async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy()
 -> Result<()> {
     use crate::gateway::routing::preparation::Prepared;
-    use {crate::gateway::routing::ContextCapability, bitrouter_ai::routing::ContextStrategy};
+    use {crate::gateway::routing::ContextCapability, crate::gateway::routing::ContextTreatment};
     for (grant, preserve, valid_policy, rewrite_public, allowed) in [
         (true, false, true, false, true),
         (false, false, true, false, false),
@@ -51,9 +51,9 @@ async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_
         ctx.apply_routing_prompt(prompt.clone())?;
         ctx.insert_extension(Arc::new(prepared));
         ctx.insert_extension(Arc::new(if preserve {
-            ContextStrategy::Preserve
+            ContextTreatment::Preserve
         } else {
-            ContextStrategy::Evidence
+            ContextTreatment::Evidence
         }));
         ctx.insert_extension(Arc::new(NativePrivateContextRuntime::new(
             if valid_policy {

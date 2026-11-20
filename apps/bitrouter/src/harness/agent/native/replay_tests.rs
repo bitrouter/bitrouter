@@ -125,7 +125,8 @@ fn earlier_immutable_fact_rewrite_is_rejected_even_with_valid_digests() -> TestR
                 .and_then(|work| work.values_mut().next())
             {
                 work["text"] = serde_json::json!("rewritten prior evidence");
-                *batch = bitrouter_ai::core::checkpoint::CheckpointBatch::encode(&payload, limits)?;
+                *batch =
+                    crate::managed_contract::checkpoint::CheckpointBatch::encode(&payload, limits)?;
                 changed = true;
                 break;
             }

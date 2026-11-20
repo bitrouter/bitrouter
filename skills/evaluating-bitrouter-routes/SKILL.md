@@ -41,7 +41,7 @@ inside its run/source namespace; give separate attempts distinct evaluation IDs.
 4. Write a draft with an empty evidence digest and seal it locally:
 
    ```bash
-   bro eval subject seal subject-draft.json --output subject.json
+   bitrouter eval subject seal subject-draft.json --output subject.json
    ```
 
 5. Repeat the subject's exact ID and sealed evidence digest on its result.
@@ -62,8 +62,8 @@ Insert the sealed subject and submit its result using the matching SDK/HTTP
 profile. The gateway ledger also has local CLI operations:
 
 ```bash
-bro eval subject put subject.json --config bitrouter.yaml
-bro eval result submit result.json --config bitrouter.yaml
+bitrouter eval subject put subject.json --config bitrouter.yaml
+bitrouter eval result submit result.json --config bitrouter.yaml
 ```
 
 Preserve the packet, response, evidence references and actual admission status:

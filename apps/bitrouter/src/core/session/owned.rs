@@ -15,7 +15,7 @@ pub(super) struct Host {
 impl Host {
     pub(super) fn check(
         &self,
-        grant: &bitrouter_ai::core::protocol::OwnershipGrant,
+        grant: &crate::managed_contract::protocol::OwnershipGrant,
     ) -> Result<(), CoreError> {
         #[cfg(feature = "harness")]
         if let Some(binding) = &self.owned {
@@ -144,7 +144,7 @@ impl CoreSession {
 
     #[cfg(feature = "harness")]
     pub(crate) async fn restore_owned_registered<Register, Registered>(
-        request: bitrouter_ai::core::protocol::Restore,
+        request: crate::managed_contract::protocol::Restore,
         capabilities: &Capabilities,
         app: Arc<App>,
         binding: Arc<crate::tenancy::execution::session::Binding>,

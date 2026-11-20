@@ -1,7 +1,7 @@
 //! Shared host-policy, manifest, artifact and frozen tool-result checks for durable
 //! harness records. Wire data lives in AI; live connection admission stays core-owned.
 
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     ArtifactRef, COLLABORATION_TOOLS, Capabilities, CoreError, ErrorCode, HarnessManifest,
     HarnessTool, Limits, ToolObservation, ToolResult, ToolResultLimits, VERSION, validate_id,
 };
@@ -95,7 +95,7 @@ pub(crate) fn artifact_bytes(references: &[ArtifactRef]) -> Result<u64, CoreErro
     let mut bytes = 0u64;
     for reference in references {
         validate_id(&reference.artifact_id)?;
-        bitrouter_ai::core::checkpoint::validate_digest(&reference.sha256)?;
+        crate::managed_contract::checkpoint::validate_digest(&reference.sha256)?;
         if let Some(prior) = seen.insert(&reference.artifact_id, reference) {
             if prior != reference {
                 return Err(CoreError::rejected(
@@ -199,7 +199,7 @@ pub(crate) fn tool_result_limits(
     input_bytes: u64,
     output_bytes: u64,
 ) -> Result<ToolResultLimits, CoreError> {
-    use bitrouter_ai::core::protocol::{ClientMessage, Command, ToolOutcome};
+    use crate::managed_contract::protocol::{ClientMessage, Command, ToolOutcome};
     let result = ToolResult {
         invocation_id: "x".repeat(128),
         attempt_id: "x".repeat(128),

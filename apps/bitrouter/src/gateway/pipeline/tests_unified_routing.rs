@@ -10,7 +10,7 @@ use crate::gateway::model::decision::types::Question;
 use crate::gateway::routing::assessment;
 use crate::gateway::routing::preparation::Prepared;
 use crate::gateway::routing::preparation::Receipt;
-use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::policy::NextStep;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -72,7 +72,7 @@ impl ModelSelector for SemanticPolicy {
             .as_ref()
             .and_then(|receipt| receipt.assessment.as_ref())
             .ok_or_else(|| BitrouterError::internal("missing semantic assessment"))?;
-        assert_eq!(assessment.next_step_role, NextStepRole::Verify);
+        assert_eq!(assessment.next_step_role, NextStep::Verify);
         self.0.lock().await.push(assessment.clone());
         ctx.set_model("verification-model");
         Ok(())
@@ -105,7 +105,7 @@ impl native::NativeExecutionControl for SemanticControl {
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
     }
-    async fn after_attempt(&self, _: bitrouter_ai::core::evidence::NativeAttemptReport) {}
+    async fn after_attempt(&self, _: crate::managed_contract::evidence::NativeAttemptReport) {}
 }
 
 #[derive(Default, Clone)]

@@ -1,7 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::core::protocol::{Limits, TaskInput};
+use crate::managed_contract::protocol::{Limits, TaskInput};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 

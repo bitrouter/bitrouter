@@ -56,7 +56,7 @@ fn digest(byte: char) -> String {
 
 fn subject_value(id: &str) -> Value {
     json!({
-        "schema_version":2,"eval_id":id,"scope":"request","subject_id":"request-1",
+        "spec_version":"eval/1.0.0-beta.1","eval_id":id,"scope":"request","subject_id":"request-1",
         "identity":{"profile":"tenant_generic","installation_id":"installation","tenant_id":"tenant"},
         "cohort":null,"holdout":false,
         "decisions":[],"requested_dimensions":[],"evidence":[],
@@ -70,7 +70,7 @@ fn subject() -> TestResult<EvalSubject> {
 
 fn result() -> TestResult<EvaluationResult> {
     Ok(serde_json::from_value(json!({
-        "schema_version":1,"eval_id":"eval-1","evidence_digest":digest('b'),
+        "spec_version":"eval/1.0.0-beta.1","eval_id":"eval-1","evidence_digest":digest('b'),
         "evaluator":{"authority_id":"principal","evaluator_id":"evaluator", "kind":"generic",
             "version":"v1","config_digest":digest('c')},
         "verdict":"pass","metrics":{"task.pass":{"value":1,"unit":"boolean"}},
@@ -84,7 +84,7 @@ fn receipt() -> Value {
 }
 
 fn snapshot() -> Value {
-    json!({"evidence_root":digest('e'),"frozen_at":TIME,"entries":[{
+    json!({"spec_version":"eval/1.0.0-beta.1","evidence_root":digest('e'),"frozen_at":TIME,"entries":[{
         "result_id":digest('d'),"content_digest":digest('d'),
         "subject_content_digest":digest('f'),"eval_id":"eval-1"
     }]})

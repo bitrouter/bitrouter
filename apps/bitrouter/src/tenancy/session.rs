@@ -66,9 +66,9 @@ impl NativeFailure {
             disposition: super::transaction::Disposition::Ambiguous,
         }
     }
-    pub(crate) fn core(self) -> bitrouter_ai::core::protocol::CoreError {
+    pub(crate) fn core(self) -> crate::managed_contract::protocol::CoreError {
         use super::transaction::Disposition;
-        use bitrouter_ai::core::protocol::CommitStatus;
+        use crate::managed_contract::protocol::CommitStatus;
         let mut error = super::execution::session::core_error(self.failure);
         error.commit_status = match self.disposition {
             Disposition::NoTransaction | Disposition::RolledBack => CommitStatus::NotCommitted,

@@ -50,7 +50,7 @@ pub(crate) struct Metadata {
     // While retirement is incomplete the workspace can still retain the older
     // exact claim. It is never a wildcard or a standalone stopped-owner proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_grant: Option<bitrouter_ai::core::protocol::OwnershipGrant>,
+    pub workspace_grant: Option<crate::managed_contract::protocol::OwnershipGrant>,
 }
 impl Metadata {
     pub(crate) fn validate(&self) -> Result<()> {
@@ -92,8 +92,8 @@ pub(crate) struct CheckedRecovery {
     pub(crate) budget: Arc<Budget>,
     pub(in crate::tenancy) seeds: Vec<Seed>,
     pub(in crate::tenancy) workspace: std::path::PathBuf,
-    pub(in crate::tenancy) source_grant: bitrouter_ai::core::protocol::OwnershipGrant,
-    pub(in crate::tenancy) workspace_grant: bitrouter_ai::core::protocol::OwnershipGrant,
+    pub(in crate::tenancy) source_grant: crate::managed_contract::protocol::OwnershipGrant,
+    pub(in crate::tenancy) workspace_grant: crate::managed_contract::protocol::OwnershipGrant,
     pub(in crate::tenancy) steps:
         std::collections::BTreeMap<String, Vec<bitrouter_ai::tenancy::identity::ExecutionId>>,
     pub(in crate::tenancy) pending_steps: std::collections::BTreeSet<String>,
@@ -135,7 +135,9 @@ impl CheckedRecovery {
                         && grant.session_id == execution
                 })
     }
-    pub(crate) fn workspace_predecessor(&self) -> &bitrouter_ai::core::protocol::OwnershipGrant {
+    pub(crate) fn workspace_predecessor(
+        &self,
+    ) -> &crate::managed_contract::protocol::OwnershipGrant {
         &self.workspace_grant
     }
     pub(crate) fn retired(&self) -> bool {

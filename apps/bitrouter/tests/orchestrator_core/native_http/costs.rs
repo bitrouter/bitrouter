@@ -18,19 +18,19 @@ struct TimingHarness {
 impl bitrouter::core::session::HarnessPort for TimingHarness {
     async fn read_artifact(
         &self,
-        reference: &bitrouter_ai::core::protocol::ArtifactRef,
+        reference: &bitrouter::managed_contract::protocol::ArtifactRef,
         offset: u64,
         max_bytes: u64,
-    ) -> std::result::Result<Vec<u8>, bitrouter_ai::core::protocol::CoreError> {
+    ) -> std::result::Result<Vec<u8>, bitrouter::managed_contract::protocol::CoreError> {
         self.inner.read_artifact(reference, offset, max_bytes).await
     }
 
     async fn commit(
         &self,
-        batch: bitrouter_ai::core::checkpoint::CheckpointBatch,
+        batch: bitrouter::managed_contract::checkpoint::CheckpointBatch,
     ) -> std::result::Result<
-        bitrouter_ai::core::checkpoint::CheckpointAck,
-        bitrouter_ai::core::protocol::CoreError,
+        bitrouter::managed_contract::checkpoint::CheckpointAck,
+        bitrouter::managed_contract::protocol::CoreError,
     > {
         let payload = batch.decode(&Limits::default())?;
         if payload.events.iter().any(|event| {
@@ -43,8 +43,8 @@ impl bitrouter::core::session::HarnessPort for TimingHarness {
                 .acquire()
                 .await
                 .map_err(|_| {
-                    bitrouter_ai::core::protocol::CoreError::rejected(
-                        bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable,
+                    bitrouter::managed_contract::protocol::CoreError::rejected(
+                        bitrouter::managed_contract::protocol::ErrorCode::CheckpointUnavailable,
                         "fixture stopped",
                     )
                 })?
@@ -55,8 +55,8 @@ impl bitrouter::core::session::HarnessPort for TimingHarness {
 
     async fn send(
         &self,
-        message: bitrouter_ai::core::protocol::ServerMessage,
-    ) -> std::result::Result<(), bitrouter_ai::core::protocol::CoreError> {
+        message: bitrouter::managed_contract::protocol::ServerMessage,
+    ) -> std::result::Result<(), bitrouter::managed_contract::protocol::CoreError> {
         self.inner.send(message).await
     }
 }
@@ -410,7 +410,7 @@ async fn monetary_claims_unknown_usage_and_conflicting_receipts_never_become_fre
     let conflict = session.refresh_costs("conflict", &run_id).await;
     assert_eq!(
         conflict.err().map(|error| error.code),
-        Some(bitrouter_ai::core::protocol::ErrorCode::OperationConflict)
+        Some(bitrouter::managed_contract::protocol::ErrorCode::OperationConflict)
     );
     assert_eq!(session.head().await, head);
     assert_eq!(session.snapshot().await.cost_work, before.cost_work);

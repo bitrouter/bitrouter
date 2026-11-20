@@ -3,10 +3,10 @@ use crate::gateway::pipeline::native::NativeExecutionControl;
 use crate::gateway::pipeline::native::NativePlan;
 use crate::gateway::pipeline::native::NativePlanAdmission;
 use crate::gateway::pipeline::native_accounting::NativeCostEstimator;
-use bitrouter_ai::core::evidence::NativeAttemptReport;
-use bitrouter_ai::core::evidence::NativeRoute;
-use bitrouter_ai::core::evidence::NativeTokenCost;
-use bitrouter_ai::core::evidence::NativeTokenRates;
+use crate::managed_contract::evidence::NativeAttemptReport;
+use crate::managed_contract::evidence::NativeRoute;
+use crate::managed_contract::evidence::NativeTokenCost;
+use crate::managed_contract::evidence::NativeTokenRates;
 use bitrouter_ai::types::UsageOrigin;
 use tokio::sync::Mutex;
 

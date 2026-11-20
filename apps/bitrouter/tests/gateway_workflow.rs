@@ -58,13 +58,13 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "semantic_route/v1|unknown|unknown|normal",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
+            "unknown|unknown|normal",
+            "unknown|implement|guarded",
+            "unknown|implement|guarded",
+            "unknown|implement|guarded",
+            "unknown|implement|normal",
+            "unknown|implement|normal",
+            "unknown|implement|normal",
         ]
     );
     Ok(())

@@ -1,11 +1,11 @@
 //! Core acknowledgement barrier. Checkpoint codecs and append validation live
 //! in application storage; only this scheduler gate authorizes new dispatch.
 
-use crate::storage::checkpoint::{CheckpointBatchExt, ack_for_batch};
-use bitrouter_ai::core::checkpoint::{
+use crate::managed_contract::checkpoint::{
     CheckpointAck, CheckpointBatch, CheckpointPayload, DurableHead,
 };
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode, Limits, OwnershipGrant};
+use crate::managed_contract::protocol::{CoreError, ErrorCode, Limits, OwnershipGrant};
+use crate::storage::checkpoint::{CheckpointBatchExt, ack_for_batch};
 
 /// Pure core-side barrier. Provider/tool I/O must run outside scheduler locks
 /// and consult this barrier before every new dispatch. It is not a store.

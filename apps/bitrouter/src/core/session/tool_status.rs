@@ -1,8 +1,8 @@
 //! Authenticated harness lifecycle evidence, separate from tool outcomes.
 
 use super::*;
+use crate::managed_contract::protocol::{ToolObservation, ToolStatus};
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
-use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 impl CoreSession {
     /// Record a harness observation for an already dispatched invocation. This

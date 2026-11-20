@@ -4,9 +4,9 @@
 use super::*;
 use crate::gateway::pipeline::native::NativeInputCountRejection;
 use crate::gateway::pipeline::native::auxiliary_report_allowance;
+use crate::managed_contract::evidence::NativeEvidenceCommitment;
+use crate::managed_contract::evidence::NativeInputCount;
 use crate::storage::checkpoint::serialized_bytes;
-use bitrouter_ai::core::evidence::NativeEvidenceCommitment;
-use bitrouter_ai::core::evidence::NativeInputCount;
 
 pub(super) const VERSION: u32 = 1;
 const FAILURE_BYTES: u64 = 1024;

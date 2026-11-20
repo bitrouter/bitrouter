@@ -16,10 +16,8 @@ use crate::harness::resources::{
     HarnessConfig,
     managed::session::{NativeApproval, NativeSession},
 };
-use bitrouter_ai::{
-    core::protocol::{CoreError, TaskInput, ToolExecute},
-    harness::agent::ToolMode,
-};
+use crate::managed_contract::protocol::{CoreError, TaskInput, ToolExecute};
+use bitrouter_ai::harness::agent::ToolMode;
 use chrono::Utc;
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
@@ -214,7 +212,7 @@ async fn unbound_and_unauthenticated_native_openers_reject_before_workspace_read
         .await
         .err()
         .context("missing auth accepted")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let legacy_store = Arc::new(crate::managed_store::DatabaseNativeStore::new(
             fixture.db.clone(),
             "private".into(),
@@ -230,7 +228,7 @@ async fn unbound_and_unauthenticated_native_openers_reject_before_workspace_read
         .await
         .err()
         .context("Legacy entry accepted")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let mut duplicate = headers;
         duplicate.append("authorization", "Bearer forged".parse()?);
         ensure!(
@@ -467,7 +465,7 @@ async fn idle_host_keeps_no_execution_lease_and_every_run_uses_retained_r1() -> 
         .await
         .err()
         .context("changed revision restored")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.code == crate::managed_contract::protocol::ErrorCode::UnauthorizedScope);
         let row = fixture
             .db
             .query_one(Statement::from_string(

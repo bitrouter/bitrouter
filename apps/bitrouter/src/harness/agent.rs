@@ -30,12 +30,12 @@ const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Ins
 pub trait AgentConfigExt: Sized {
     fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self;
     fn read_only(self) -> Self;
-    fn with_model_mode(self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self;
+    fn with_model_mode(self, mode: bitrouter_ai::harness::agent::ModelMode) -> Self;
     fn with_output_reservation(self, tokens: Option<u32>) -> Self;
     fn tool_mode(&self) -> ToolMode;
     fn with_skill_constraints(
         self,
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
     ) -> Self;
 }
 
@@ -43,7 +43,7 @@ impl AgentConfigExt for AgentConfig {
     fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
         Self {
             model: model.into(),
-            model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
+            model_mode: bitrouter_ai::harness::agent::ModelMode::Fixed,
             effort,
             max_output_tokens: None,
             skills: None,
@@ -64,7 +64,7 @@ impl AgentConfigExt for AgentConfig {
         self
     }
 
-    fn with_model_mode(mut self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self {
+    fn with_model_mode(mut self, mode: bitrouter_ai::harness::agent::ModelMode) -> Self {
         self.model_mode = mode;
         self
     }
@@ -76,7 +76,7 @@ impl AgentConfigExt for AgentConfig {
 
     fn with_skill_constraints(
         mut self,
-        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+        skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
     ) -> Self {
         self.skills = skills;
         self

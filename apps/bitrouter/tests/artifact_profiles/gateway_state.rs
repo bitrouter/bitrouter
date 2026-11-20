@@ -413,7 +413,6 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
             && full.source_revision == minimum.source_revision
             && full.target == minimum.target
             && full.version == minimum.version
-            && full.handoff_build_id != minimum.handoff_build_id
     );
     let upstream = fixture.runtime.block_on(async {
         let upstream = MockServer::start().await;

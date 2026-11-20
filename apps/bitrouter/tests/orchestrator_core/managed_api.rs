@@ -4,10 +4,10 @@ use super::*;
 use bitrouter::auth::{db, keys};
 use bitrouter::gateway::http::AppState;
 use bitrouter::gateway::http::build_router;
+use bitrouter::managed_contract::protocol::{ToolExecute, ToolOutcome, ToolResult};
 use bitrouter::orchestrator_api::ManagedCoreApi;
 use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::protocol::{ToolExecute, ToolOutcome, ToolResult};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
@@ -28,7 +28,6 @@ mod provider_limits;
 mod collaboration;
 
 #[path = "managed_api/sdk.rs"]
-mod sdk;
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -238,11 +237,11 @@ async fn harness_with_limits(
 }
 
 fn binding(limits: Limits) -> Result<Bind> {
-    let tools = vec![bitrouter_ai::core::protocol::HarnessTool {
+    let tools = vec![bitrouter::managed_contract::protocol::HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
         parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
-        effect: bitrouter_ai::core::protocol::ToolEffect::Read,
+        effect: bitrouter::managed_contract::protocol::ToolEffect::Read,
         approval_required: false,
     }];
     let manifest = HarnessManifest {
@@ -624,7 +623,7 @@ async fn unmanaged_inference_stays_available_and_unknown_extensions_fail_before_
 
 #[tokio::test]
 async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host() -> Result<()> {
-    use bitrouter_ai::core::protocol::{
+    use bitrouter::managed_contract::protocol::{
         Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
     };
     let fixture = fixture().await?;
@@ -705,7 +704,7 @@ async fn disconnected_existing_session_restores_unstarted_tools_on_the_same_host
 
 #[tokio::test]
 async fn restore_ack_loss_keeps_the_registered_replacement_and_exact_batch() -> Result<()> {
-    use bitrouter_ai::core::protocol::{
+    use bitrouter::managed_contract::protocol::{
         Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
     };
     for committed in [false, true] {

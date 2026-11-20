@@ -2,6 +2,7 @@
 //! Message data and intrinsic contract checks do not confer execution or storage authority.
 
 use super::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter_ai::harness::agent::ModelMode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -99,14 +100,6 @@ pub struct Limits {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ModelMode {
-    #[default]
-    Fixed,
-    Policy,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ContextMode {
     #[default]
     Fixed,
@@ -121,7 +114,7 @@ pub struct RoutingSettings {
     #[serde(default)]
     pub context: ContextMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<super::skills::SkillConstraints>,
+    pub skills: Option<bitrouter_ai::harness::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -612,4 +605,10 @@ pub fn validate_id(value: &str) -> Result<(), CoreError> {
         ));
     }
     Ok(())
+}
+
+impl From<bitrouter_ai::harness::skills::SkillConstraintError> for CoreError {
+    fn from(error: bitrouter_ai::harness::skills::SkillConstraintError) -> Self {
+        Self::rejected(ErrorCode::ArtifactUnavailable, error.to_string())
+    }
 }

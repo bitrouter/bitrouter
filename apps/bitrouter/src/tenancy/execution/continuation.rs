@@ -2,9 +2,9 @@
 
 mod artifact;
 
+use crate::managed_contract::evidence::{ContinuationFailure, PrivateContextFailure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_ai::{
-    core::evidence::{ContinuationFailure, PrivateContextFailure},
     tenancy::identity::{ExecutionId, PrincipalId, RevisionId, TenantId},
     types::{Content, Prompt, Role},
 };

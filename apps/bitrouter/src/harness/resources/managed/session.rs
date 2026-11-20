@@ -18,14 +18,14 @@ use super::store::{MAX_STORE_BYTES, NativeStore};
 use super::{super::HarnessConfig, NativeResources};
 use crate::core::session::{CoreSession, HarnessPort};
 use crate::harness::service::workspace::WorkspaceFence;
-use crate::storage::checkpoint::sha256;
-use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
-use bitrouter_ai::core::checkpoint::{DurableHead, ToolStartFence};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::checkpoint::{DurableHead, ToolStartFence};
+use crate::managed_contract::protocol::{
     Bind, Capabilities, CoreError, ErrorCode, OperationReceipt, OwnershipGrant, Restore,
     ServerMessage, TaskInput, ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult,
     ToolStatus, VERSION,
 };
+use crate::storage::checkpoint::sha256;
+use crate::storage::checkpoint::snapshot::{RunStatus, SessionSnapshot};
 use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::harness::runtime::ExecutionOwner;
 
@@ -35,7 +35,7 @@ pub trait NativeApproval: Send + Sync {
     /// Generic command approval is never blanket consent for an MCP skill.
     async fn approve_skill(
         &self,
-        _request: &bitrouter_ai::core::skills::SkillConsentRequest,
+        _request: &crate::managed_contract::skills::SkillConsentRequest,
     ) -> Result<bool, CoreError> {
         Ok(false)
     }
@@ -847,7 +847,7 @@ async fn cancel_current_run(core: &CoreSession) -> Result<(), CoreError> {
             Err(err)
                 if err.code == ErrorCode::StaleRevision
                     && err.commit_status
-                        == bitrouter_ai::core::protocol::CommitStatus::NotCommitted =>
+                        == crate::managed_contract::protocol::CommitStatus::NotCommitted =>
             {
                 continue;
             }

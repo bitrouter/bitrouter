@@ -4,10 +4,10 @@
 #[cfg(feature = "multi-instance")]
 pub(crate) mod shared;
 
+use crate::gateway::routing::exploration::{AssignmentArm, RouteAssignment};
 use bitrouter_ai::eval::{
-    EVAL_RESULT_SCHEMA_VERSION, EVAL_SUBJECT_SCHEMA_VERSION, EvalExperimentRef, EvalSubject,
-    EvalSubjectIdentity, EvaluationResult, EvidenceItem, ExperimentArm,
-    ROUTE_MEASUREMENT_SCHEMA_VERSION, RouteActionCandidate, RouteDecisionMeasurement,
+    EvalSubject, EvalSubjectIdentity, EvaluationResult, EvidenceItem, RouteActionCandidate,
+    RouteDecisionMeasurement,
 };
 use std::collections::BTreeSet;
 
@@ -36,7 +36,6 @@ pub(crate) fn route_decision_measurement(
         .map_or(0, |candidate| candidate.logging_probability_ppm);
     let candidate_set_digest = route_candidate_set_digest(&candidates)?;
     let measurement = RouteDecisionMeasurement {
-        schema_version: ROUTE_MEASUREMENT_SCHEMA_VERSION,
         logging_action_tier,
         logging_action_model,
         logging_action_effort,
@@ -55,7 +54,7 @@ pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
 
 /// Current identity projection, domain-separated from source and evidence digests.
 pub(crate) fn identity_digest(identity: &EvalSubjectIdentity) -> Result<String> {
-    canonical_digest(&("bitrouter.eval.subject.identity.v2", identity))
+    canonical_digest(&("eval/1.0.0-beta.1/subject-identity", identity))
 }
 
 pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
@@ -64,9 +63,6 @@ pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
 }
 
 pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
-    if subject.schema_version != EVAL_SUBJECT_SCHEMA_VERSION {
-        anyhow::bail!("unsupported eval subject schema version")
-    }
     validate_identifier(&subject.eval_id, "eval_id")?;
     validate_identifier(&subject.subject_id, "subject_id")?;
     if let EvalSubjectIdentity::TenantModelPolicy {
@@ -110,27 +106,10 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
             anyhow::bail!("duplicate eval decision id '{}';", decision.decision_id)
         }
         validate_identifier(&decision.policy, "decision.policy")?;
-        validate_identifier(&decision.route_projection, "decision.route_projection")?;
-        validate_identifier(&decision.request_key, "decision.request_key")?;
         validate_identifier(&decision.selected_tier, "decision.selected_tier")?;
         validate_digest(&decision.policy_digest, "decision.policy_digest")?;
-        if let Some(experiment) = &decision.experiment {
-            validate_digest(
-                &experiment.experiment_id,
-                "decision.experiment.experiment_id",
-            )?;
-            validate_digest(
-                &experiment.assignment_id_digest,
-                "decision.experiment.assignment_id_digest",
-            )?;
-            if !(1..=1_000_000).contains(&experiment.challenger_propensity_ppm) {
-                anyhow::bail!(
-                    "decision.experiment.challenger_propensity_ppm must be between 1 and 1000000"
-                )
-            }
-        }
         if let Some(measurement) = &decision.route_measurement {
-            validate_route_measurement_for_experiment(measurement, decision.experiment.as_ref())?;
+            validate_route_measurement_for_experiment(measurement, None)?;
         }
     }
     for dimension in &subject.requested_dimensions {
@@ -167,9 +146,6 @@ pub fn validate_subject(subject: &EvalSubject) -> Result<()> {
 }
 
 pub(crate) fn validate_route_measurement(measurement: &RouteDecisionMeasurement) -> Result<()> {
-    if measurement.schema_version != ROUTE_MEASUREMENT_SCHEMA_VERSION {
-        anyhow::bail!("unsupported route measurement schema version")
-    }
     if measurement.candidates.is_empty() || measurement.candidates.len() > 64 {
         anyhow::bail!("route measurement must contain between 1 and 64 candidates")
     }
@@ -226,7 +202,7 @@ pub(crate) fn validate_route_measurement(measurement: &RouteDecisionMeasurement)
 
 pub(crate) fn validate_route_measurement_for_experiment(
     measurement: &RouteDecisionMeasurement,
-    experiment: Option<&EvalExperimentRef>,
+    experiment: Option<&RouteAssignment>,
 ) -> Result<()> {
     validate_route_measurement(measurement)?;
     let mut actual_positive = measurement
@@ -248,8 +224,8 @@ pub(crate) fn validate_route_measurement_for_experiment(
         .checked_sub(challenger)
         .ok_or_else(|| anyhow::anyhow!("experiment challenger propensity exceeds one million"))?;
     let expected_action = match experiment.arm {
-        ExperimentArm::Control => champion,
-        ExperimentArm::Challenger => challenger,
+        AssignmentArm::Control => champion,
+        AssignmentArm::Challenger => challenger,
     };
     if measurement.logging_action_probability_ppm != expected_action {
         anyhow::bail!("route measurement action probability contradicts experiment arm")
@@ -265,20 +241,17 @@ pub(crate) fn validate_route_measurement_for_experiment(
     Ok(())
 }
 
-fn candidate_key(
-    candidate: &RouteActionCandidate,
-) -> (&str, &str, &str, bitrouter_ai::routing::ContextStrategy) {
+fn candidate_key(candidate: &RouteActionCandidate) -> (&str, &str, &str) {
     (
         candidate.tier.as_str(),
         candidate.model.as_str(),
         candidate.effort.map_or("inherit", ReasoningEffort::as_str),
-        candidate.context,
     )
 }
 
 fn route_candidate_set_digest(candidates: &[RouteActionCandidate]) -> Result<String> {
     let targets = candidates.iter().map(candidate_key).collect::<Vec<_>>();
-    canonical_digest(&("bitrouter.route-candidate-set.v2", targets))
+    canonical_digest(&("eval/1.0.0-beta.1/route-candidate-set", targets))
 }
 
 fn validate_model_id(value: &str, field: &str) -> Result<()> {
@@ -289,9 +262,6 @@ fn validate_model_id(value: &str, field: &str) -> Result<()> {
 }
 
 pub fn validate_result(result: &EvaluationResult) -> Result<()> {
-    if result.schema_version != EVAL_RESULT_SCHEMA_VERSION {
-        anyhow::bail!("unsupported evaluation result schema version")
-    }
     validate_identifier(&result.eval_id, "eval_id")?;
     validate_digest(&result.evidence_digest, "evidence_digest")?;
     validate_identifier(&result.evaluator.authority_id, "authority_id")?;
@@ -459,8 +429,8 @@ fn attribute_looks_sensitive(key: &str, value: &str) -> bool {
 mod tests {
     use super::*;
     use bitrouter_ai::eval::{
-        EvalDecisionRef, EvalScope, EvalVerdict, EvaluatorIdentity, EvaluatorKind,
-        ExperimentAssignmentUnit, MetricUnit, MetricValue,
+        EvalDecisionRef, EvalScope, EvalVerdict, EvaluatorIdentity, EvaluatorKind, MetricUnit,
+        MetricValue,
     };
     use std::collections::BTreeMap;
 
@@ -504,7 +474,7 @@ mod tests {
         ] {
             let subject = subject_fixture();
             let result = EvaluationResult {
-                schema_version: EVAL_RESULT_SCHEMA_VERSION,
+                spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
                 eval_id: subject.eval_id.clone(),
                 evidence_digest: subject.evidence_digest.clone(),
                 evaluator: EvaluatorIdentity {
@@ -556,7 +526,7 @@ mod tests {
         let incomplete = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "request_key": "semantic_route/v1|unknown|implement|normal",
+            "request_key": "unknown|implement|normal",
             "selected_tier": "economy",
             "baseline_tier": "strong",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -569,8 +539,8 @@ mod tests {
         let mut retired = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "route_projection": "semantic_route/v1|code:generation|implement|normal",
-            "request_key": "semantic_route/v1|unknown|implement|normal",
+            "route_projection": "code:generation|implement|normal",
+            "request_key": "unknown|implement|normal",
             "selected_tier": "balanced",
             "baseline_tier": "balanced",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -587,39 +557,24 @@ mod tests {
     }
 
     #[test]
-    fn primary_projection_is_bounded() {
-        let mut subject = subject_fixture();
-        subject.decisions.push(EvalDecisionRef {
-            decision_id: "decision-1".into(),
-            policy: "auto".into(),
-            route_projection: "x".repeat(513),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
-            selected_tier: "balanced".into(),
-            selected_effort: None,
-            baseline_tier: Some("balanced".into()),
-            baseline_effort: None,
-            policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
-            experiment: None,
-            route_measurement: None,
-        });
-        assert!(validate_subject(&subject).is_err());
-    }
-
-    #[test]
     fn subject_rejects_duplicate_decision_ids() {
         let mut subject = subject_fixture();
         let decision = EvalDecisionRef {
             decision_id: "decision-duplicate".into(),
             policy: "auto".into(),
-            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
+            route_projection: "unknown|implement|normal"
+                .parse()
+                .expect("valid route class"),
+            request_key: "unknown|implement|normal"
+                .parse()
+                .expect("valid route class"),
             selected_tier: "balanced".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
-            experiment: None,
+
             route_measurement: None,
         };
         subject.decisions = vec![decision.clone(), decision];
@@ -630,195 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn decision_experiment_metadata_is_backward_compatible_and_canonical() -> anyhow::Result<()> {
-        let legacy = serde_json::json!({
-            "decision_id": "decision-1",
-            "policy": "auto",
-            "route_projection": "semantic_route/v1|code:generation|implement|normal",
-            "request_key": "semantic_route/v1|unknown|implement|normal",
-            "selected_tier": "strong",
-            "baseline_tier": "strong",
-            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        });
-        let old: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
-        assert_eq!(old.experiment, None);
-        assert_eq!(serde_json::to_value(old)?, legacy);
-
-        let experiment = EvalExperimentRef {
-            experiment_id:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            arm: ExperimentArm::Challenger,
-            assignment_unit: ExperimentAssignmentUnit::Task,
-            assignment_id_digest:
-                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
-            challenger_propensity_ppm: 100_000,
-        };
-        let mut decision: EvalDecisionRef = serde_json::from_value(legacy)?;
-        decision.experiment = Some(experiment);
-        assert_eq!(
-            serde_json::to_value(decision)?["experiment"],
-            serde_json::json!({
-                "experiment_id": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "arm": "challenger",
-                "assignment_unit": "task",
-                "assignment_id_digest": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                "challenger_propensity_ppm": 100000
-            })
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn route_measurement_is_backward_compatible_and_canonical() -> anyhow::Result<()> {
-        let legacy = serde_json::json!({
-            "decision_id": "decision-1",
-            "policy": "auto",
-            "route_projection": "semantic_route/v1|code:generation|implement|normal",
-            "request_key": "semantic_route/v1|unknown|implement|normal",
-            "selected_tier": "balanced",
-            "baseline_tier": "balanced",
-            "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        });
-        let old: EvalDecisionRef = serde_json::from_value(legacy.clone())?;
-        assert_eq!(old.route_measurement, None);
-        assert_eq!(serde_json::to_value(old)?, legacy);
-
-        let candidates = vec![
-            RouteActionCandidate {
-                context: Default::default(),
-                tier: "balanced".into(),
-                model: "bitrouter:balanced".into(),
-                effort: None,
-                logging_probability_ppm: 900_000,
-            },
-            RouteActionCandidate {
-                context: Default::default(),
-                tier: "economy".into(),
-                model: "bitrouter:economy".into(),
-                effort: Some(ReasoningEffort::Low),
-                logging_probability_ppm: 100_000,
-            },
-        ];
-        let measurement = crate::storage::evaluation::route_decision_measurement(
-            "economy",
-            "bitrouter:economy",
-            Some(ReasoningEffort::Low),
-            candidates,
-        )?;
-        let mut decision: EvalDecisionRef = serde_json::from_value(legacy)?;
-        decision.experiment = Some(EvalExperimentRef {
-            experiment_id:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            arm: ExperimentArm::Challenger,
-            assignment_unit: ExperimentAssignmentUnit::Task,
-            assignment_id_digest:
-                "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".into(),
-            challenger_propensity_ppm: 100_000,
-        });
-        decision.route_measurement = Some(measurement.clone());
-        let encoded = serde_json::to_value(&decision)?;
-        assert_eq!(encoded["route_measurement"]["schema_version"], 2);
-        assert_eq!(
-            encoded["route_measurement"]["logging_action_probability_ppm"],
-            100_000
-        );
-        assert_eq!(
-            encoded["route_measurement"]["candidate_set_digest"],
-            measurement.candidate_set_digest
-        );
-
-        let mut subject = subject_fixture();
-        subject.decisions = vec![decision];
-        validate_subject(&subject)?;
-        Ok(())
-    }
-
-    #[test]
-    fn route_measurement_must_match_experiment_arm_and_distribution() -> anyhow::Result<()> {
-        let mut subject = subject_fixture();
-        let base = EvalDecisionRef {
-            decision_id: "decision-1".into(),
-            policy: "auto".into(),
-            route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
-            selected_tier: "economy".into(),
-            selected_effort: None,
-            baseline_tier: Some("strong".into()),
-            baseline_effort: None,
-            policy_digest:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
-            experiment: Some(EvalExperimentRef {
-                experiment_id:
-                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        .to_owned(),
-                arm: ExperimentArm::Control,
-                assignment_unit: ExperimentAssignmentUnit::Task,
-                assignment_id_digest:
-                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        .to_owned(),
-                challenger_propensity_ppm: 100_000,
-            }),
-            route_measurement: Some(crate::storage::evaluation::route_decision_measurement(
-                "economy",
-                "bitrouter:economy",
-                None,
-                vec![
-                    RouteActionCandidate {
-                        context: Default::default(),
-                        tier: "economy".into(),
-                        model: "bitrouter:economy".into(),
-                        effort: None,
-                        logging_probability_ppm: 100_000,
-                    },
-                    RouteActionCandidate {
-                        context: Default::default(),
-                        tier: "strong".into(),
-                        model: "bitrouter:strong".into(),
-                        effort: None,
-                        logging_probability_ppm: 900_000,
-                    },
-                ],
-            )?),
-        };
-        subject.decisions = vec![base.clone()];
-        assert!(validate_subject(&subject).is_err());
-
-        let mut split = base;
-        split.experiment.as_mut().unwrap().arm = ExperimentArm::Challenger;
-        split.route_measurement = Some(crate::storage::evaluation::route_decision_measurement(
-            "economy",
-            "bitrouter:economy",
-            None,
-            vec![
-                RouteActionCandidate {
-                    context: Default::default(),
-                    tier: "economy".into(),
-                    model: "bitrouter:economy".into(),
-                    effort: None,
-                    logging_probability_ppm: 100_000,
-                },
-                RouteActionCandidate {
-                    context: Default::default(),
-                    tier: "standard".into(),
-                    model: "bitrouter:standard".into(),
-                    effort: None,
-                    logging_probability_ppm: 200_000,
-                },
-                RouteActionCandidate {
-                    context: Default::default(),
-                    tier: "strong".into(),
-                    model: "bitrouter:strong".into(),
-                    effort: None,
-                    logging_probability_ppm: 700_000,
-                },
-            ],
-        )?);
-        subject.decisions = vec![split];
-        assert!(validate_subject(&subject).is_err());
-        Ok(())
-    }
-
-    #[test]
     fn route_measurement_validation_rejects_forged_probability_evidence() -> anyhow::Result<()> {
         let valid = crate::storage::evaluation::route_decision_measurement(
             "balanced",
@@ -826,14 +592,12 @@ mod tests {
             None,
             vec![
                 RouteActionCandidate {
-                    context: Default::default(),
                     tier: "balanced".into(),
                     model: "bitrouter:balanced".into(),
                     effort: None,
                     logging_probability_ppm: 750_000,
                 },
                 RouteActionCandidate {
-                    context: Default::default(),
                     tier: "economy".into(),
                     model: "bitrouter:economy".into(),
                     effort: None,
@@ -879,7 +643,7 @@ mod tests {
     fn result_cannot_reference_missing_subject_evidence() -> anyhow::Result<()> {
         let subject = subject_fixture();
         let result = EvaluationResult {
-            schema_version: EVAL_RESULT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: subject.eval_id.clone(),
             evidence_digest: subject.evidence_digest.clone(),
             evaluator: EvaluatorIdentity {
@@ -915,7 +679,7 @@ mod tests {
             attributes: Default::default(),
         }];
         EvalSubject {
-            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
             eval_id: "eval-1".into(),
             scope: EvalScope::Request,

@@ -2029,7 +2029,7 @@ mod tests {
                 route_event_id: format!("route-{request_id}"),
                 guard_event_id: format!("guard-{request_id}"),
                 policy_name: "auto:cost".into(),
-                route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
+                route_projection: "code:generation|implement|normal".into(),
                 request_key: "agent_trace/v2|edit|normal".into(),
                 baseline_tier: Some("reference".into()),
                 baseline_effort: None,

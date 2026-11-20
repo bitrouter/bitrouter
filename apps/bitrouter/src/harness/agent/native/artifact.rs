@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::core::session::{CoreSession, HarnessPort};
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     ArtifactRef, HarnessTool, ServerMessage, ToolEffect, ToolExecute, ToolResult,
 };
 

@@ -1,6 +1,6 @@
 //! Host-authenticated provenance for private parts in managed agent history.
 
-use bitrouter_ai::core::evidence::{
+use crate::managed_contract::evidence::{
     NativePrivateContextObservation, PrivateContextEvidence, PrivateContextFailure,
 };
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use super::types::RoutingTarget;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::providers::auth::ContinuationAuthority;
-use bitrouter_ai::core::evidence::{
+use crate::managed_contract::evidence::{
     ContinuationFailure, FullHistoryReason, NativeContinuationObservation, NativeContinuationOutput,
 };
 use bitrouter_ai::types::{Content, GenerateResult, Prompt, ProviderMetadata};

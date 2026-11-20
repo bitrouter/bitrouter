@@ -1,12 +1,12 @@
-use bitrouter_ai::harness::inspection::NextStepRole;
 use bitrouter_ai::harness::inspection::ProgressState;
-use bitrouter_ai::harness::inspection::TaskFamily;
+use bitrouter_ai::policy::NextStep;
+use bitrouter_ai::policy::TaskFamily;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::parse_semantic_route_key;
+use bitrouter_ai::policy::{Risk, RouteClass};
 use bitrouter_ai::types::{Content, Prompt, Role};
 
 use crate::gateway::routing::workflow::extractors::generic::tool_result_reports_failure;
@@ -15,7 +15,7 @@ use crate::gateway::routing::workflow::extractors::terminus_2::{
 };
 use crate::gateway::routing::workflow::ir::{
     EvidenceLevel, NormalizedActionKind, RecoverySignal, RequirementLevel, RouteProjection,
-    RouteRisk, ToolDensity, WorkflowStateIR, WorkflowStateKind, parse_route_risk,
+    ToolDensity, WorkflowStateIR, WorkflowStateKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,12 +60,12 @@ pub struct PredictiveEvidence {
 pub struct PredictiveRouteIR {
     pub schema_version: u8,
     pub observed: RouteProjection,
-    pub next_step_role: NextStepRole,
+    pub next_step_role: NextStep,
     pub next_action_class: NextActionClass,
     pub task_complexity: TaskComplexity,
     pub progress_state: ProgressState,
     pub history_completeness: PredictiveHistoryCompleteness,
-    pub route_risk: RouteRisk,
+    pub route_risk: Risk,
     pub confidence: f32,
     pub evidence: Vec<PredictiveEvidence>,
     #[serde(default)]
@@ -98,16 +98,12 @@ pub struct PredictorContract {
 #[serde(deny_unknown_fields)]
 pub struct PredictiveRouteProjection {
     pub task_family: TaskFamily,
-    pub next_step_role: NextStepRole,
-    pub risk: RouteRisk,
+    pub next_step_role: NextStep,
+    pub risk: Risk,
 }
 
 impl PredictiveRouteProjection {
-    pub const fn new(
-        task_family: TaskFamily,
-        next_step_role: NextStepRole,
-        risk: RouteRisk,
-    ) -> Self {
+    pub const fn new(task_family: TaskFamily, next_step_role: NextStep, risk: Risk) -> Self {
         Self {
             task_family,
             next_step_role,
@@ -120,12 +116,7 @@ impl PredictiveRouteProjection {
     }
 
     pub fn key(&self) -> String {
-        format!(
-            "semantic_route/v1|{}|{}|{}",
-            self.task_family.key(),
-            self.next_step_role.key(),
-            self.risk
-        )
+        RouteClass::new(self.task_family, self.next_step_role, self.risk).to_string()
     }
 
     pub const fn unknown_baseline(&self) -> Self {
@@ -133,13 +124,11 @@ impl PredictiveRouteProjection {
     }
 
     pub fn parse_key(value: &str) -> Option<Self> {
-        let (task_family, next_step_role, risk) = parse_semantic_route_key(value)?;
-        let risk = parse_route_risk(risk)?;
-
+        let class = RouteClass::parse_key(value)?;
         Some(Self::new(
-            TaskFamily::parse_key(task_family)?,
-            NextStepRole::parse_key(next_step_role)?,
-            risk,
+            class.task_family,
+            class.next_step_role,
+            class.risk,
         ))
     }
 }
@@ -192,7 +181,7 @@ struct PredictorBehaviorV1 {
     tool_name_terms: BTreeMap<String, Vec<String>>,
     command_test_terms: Vec<String>,
     command_read_prefixes: Vec<String>,
-    role_tie_order: Vec<NextStepRole>,
+    role_tie_order: Vec<NextStep>,
     role_actions: BTreeMap<String, NextActionClass>,
     narrow_read_action: NextActionClass,
     algorithm_versions: BTreeMap<String, u8>,
@@ -443,11 +432,11 @@ fn compiled_predictor_behavior() -> &'static PredictorBehaviorV1 {
             "git status",
         ]),
         role_tie_order: vec![
-            NextStepRole::Orchestrate,
-            NextStepRole::Implement,
-            NextStepRole::Mechanical,
-            NextStepRole::Verify,
-            NextStepRole::Finalize,
+            NextStep::Orchestrate,
+            NextStep::Implement,
+            NextStep::Mechanical,
+            NextStep::Verify,
+            NextStep::Finalize,
         ],
         role_actions: BTreeMap::from([
             ("orchestrate".into(), NextActionClass::ReasonOrPlan),
@@ -1147,7 +1136,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         };
         add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             weight,
             &mut evidence,
             PredictiveReasonCode::OpeningBroadGoal,
@@ -1167,7 +1156,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         };
         add_score(
             &mut scores,
-            NextStepRole::Implement,
+            NextStep::Implement,
             weight,
             &mut evidence,
             code,
@@ -1177,7 +1166,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if instruction.verify {
         add_score(
             &mut scores,
-            NextStepRole::Verify,
+            NextStep::Verify,
             scorecard.weight("verification"),
             &mut evidence,
             PredictiveReasonCode::VerificationRequested,
@@ -1187,7 +1176,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if instruction.poll {
         add_score(
             &mut scores,
-            NextStepRole::Mechanical,
+            NextStep::Mechanical,
             scorecard.weight("narrow_poll"),
             &mut evidence,
             PredictiveReasonCode::NarrowPollRequested,
@@ -1197,7 +1186,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if instruction.narrow_read {
         add_score(
             &mut scores,
-            NextStepRole::Mechanical,
+            NextStep::Mechanical,
             scorecard.weight("narrow_read"),
             &mut evidence,
             PredictiveReasonCode::NarrowReadRequested,
@@ -1207,7 +1196,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if instruction.finalize {
         add_score(
             &mut scores,
-            NextStepRole::Finalize,
+            NextStep::Finalize,
             scorecard.weight("finalize"),
             &mut evidence,
             PredictiveReasonCode::FinalAnswerRequested,
@@ -1218,7 +1207,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     match (history.last_action, history.last_failed) {
         (Some(ObservedAction::Read), false) => add_score(
             &mut scores,
-            NextStepRole::Implement,
+            NextStep::Implement,
             scorecard.weight("read_result"),
             &mut evidence,
             PredictiveReasonCode::ReadResultAvailable,
@@ -1226,7 +1215,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         ),
         (Some(ObservedAction::Mutate), false) => add_score(
             &mut scores,
-            NextStepRole::Verify,
+            NextStep::Verify,
             scorecard.weight("mutation_result"),
             &mut evidence,
             PredictiveReasonCode::MutationResultAvailable,
@@ -1237,7 +1226,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         {
             add_score(
                 &mut scores,
-                NextStepRole::Implement,
+                NextStep::Implement,
                 scorecard.weight("test_failed_once"),
                 &mut evidence,
                 PredictiveReasonCode::TestFailedOnce,
@@ -1246,7 +1235,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         }
         (Some(ObservedAction::Test), true) => add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             scorecard.weight("repeated_failure"),
             &mut evidence,
             PredictiveReasonCode::RepeatedFailure,
@@ -1254,7 +1243,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         ),
         (Some(ObservedAction::Test), false) if history.successful_test_after_mutation => add_score(
             &mut scores,
-            NextStepRole::Finalize,
+            NextStep::Finalize,
             scorecard.weight("near_done"),
             &mut evidence,
             PredictiveReasonCode::ProgressNearDone,
@@ -1262,7 +1251,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         ),
         (Some(ObservedAction::Test), false) => add_score(
             &mut scores,
-            NextStepRole::Finalize,
+            NextStep::Finalize,
             scorecard.weight("test_succeeded"),
             &mut evidence,
             PredictiveReasonCode::TestSucceeded,
@@ -1272,7 +1261,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
         (Some(ObservedAction::Read | ObservedAction::Mutate | ObservedAction::Other), true) => {
             add_score(
                 &mut scores,
-                NextStepRole::Implement,
+                NextStep::Implement,
                 scorecard.weight("action_failed_once"),
                 &mut evidence,
                 PredictiveReasonCode::ActionFailedOnce,
@@ -1287,7 +1276,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     {
         add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             scorecard.weight("recovery_pressure"),
             &mut evidence,
             PredictiveReasonCode::RecoveryPressure,
@@ -1299,7 +1288,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     {
         add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             scorecard.weight("redo_penalty"),
             &mut evidence,
             PredictiveReasonCode::RedoPenaltyHigh,
@@ -1309,7 +1298,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     if observed.capability_constraints.context_pressure == RequirementLevel::High {
         add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             scorecard.weight("context_pressure"),
             &mut evidence,
             PredictiveReasonCode::ContextPressureHigh,
@@ -1321,7 +1310,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     {
         add_score(
             &mut scores,
-            NextStepRole::Verify,
+            NextStep::Verify,
             scorecard.weight("output_precision"),
             &mut evidence,
             PredictiveReasonCode::OutputPrecisionHigh,
@@ -1333,7 +1322,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     {
         add_score(
             &mut scores,
-            NextStepRole::Implement,
+            NextStep::Implement,
             scorecard.weight("tool_context"),
             &mut evidence,
             PredictiveReasonCode::ToolContextAvailable,
@@ -1347,7 +1336,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     {
         add_score(
             &mut scores,
-            NextStepRole::Orchestrate,
+            NextStep::Orchestrate,
             scorecard.weight("trajectory_pressure"),
             &mut evidence,
             PredictiveReasonCode::TrajectoryPressure,
@@ -1388,7 +1377,7 @@ pub fn predict_next_step(observed: &WorkflowStateIR, prompt: &Prompt) -> Predict
     }
 
     let next_action_class = action_for_role(role, instruction.narrow_read);
-    let task_complexity = if role == NextStepRole::Mechanical {
+    let task_complexity = if role == NextStep::Mechanical {
         TaskComplexity::Mechanical
     } else if instruction.broad || instruction.concrete || history.failure_count > 0 {
         TaskComplexity::Substantive
@@ -1512,22 +1501,18 @@ fn causal_instruction(prompt: &Prompt, normalized_plain_text_history: bool) -> C
 
 fn epoch_route_risk(
     observed: &WorkflowStateIR,
-    observed_risk: RouteRisk,
+    observed_risk: Risk,
     history: &HistoryFeatures,
     starts_new_epoch: bool,
     repeated_failure_count: u8,
-) -> RouteRisk {
+) -> Risk {
     if history.last_failed || history.failure_count >= repeated_failure_count {
-        RouteRisk::Guarded
+        Risk::Guarded
     } else if starts_new_epoch
         && history.failure_count == 0
         && observed.recovery_signal == RecoverySignal::LikelyRecovery
     {
-        if observed.capability_constraints.context_pressure == RequirementLevel::High {
-            RouteRisk::Context
-        } else {
-            RouteRisk::Normal
-        }
+        Risk::Normal
     } else {
         observed_risk
     }
@@ -1831,7 +1816,7 @@ fn command_has_head(command: &str, head: &str) -> bool {
 
 fn add_score(
     scores: &mut [i16; ROLE_COUNT],
-    role: NextStepRole,
+    role: NextStep,
     weight: i16,
     evidence: &mut Vec<PredictiveEvidence>,
     code: PredictiveReasonCode,
@@ -1843,18 +1828,18 @@ fn add_score(
     }
 }
 
-fn role_index(role: NextStepRole) -> Option<usize> {
+fn role_index(role: NextStep) -> Option<usize> {
     match role {
-        NextStepRole::Orchestrate => Some(0),
-        NextStepRole::Implement => Some(1),
-        NextStepRole::Mechanical => Some(2),
-        NextStepRole::Verify => Some(3),
-        NextStepRole::Finalize => Some(4),
-        NextStepRole::Unknown => None,
+        NextStep::Orchestrate => Some(0),
+        NextStep::Implement => Some(1),
+        NextStep::Mechanical => Some(2),
+        NextStep::Verify => Some(3),
+        NextStep::Finalize => Some(4),
+        NextStep::Unknown => None,
     }
 }
 
-fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStepRole, i16, i16) {
+fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStep, i16, i16) {
     let roles = &compiled_predictor_behavior().role_tie_order;
     let mut best_index = 0;
     let mut best_score = scores[0];
@@ -1871,9 +1856,9 @@ fn choose_role(scores: [i16; ROLE_COUNT]) -> (NextStepRole, i16, i16) {
     (roles[best_index], best_score, runner_up.max(0))
 }
 
-fn action_for_role(role: NextStepRole, narrow_read: bool) -> NextActionClass {
+fn action_for_role(role: NextStep, narrow_read: bool) -> NextActionClass {
     let behavior = compiled_predictor_behavior();
-    if role == NextStepRole::Mechanical && narrow_read {
+    if role == NextStep::Mechanical && narrow_read {
         return behavior.narrow_read_action;
     }
     behavior
@@ -1902,7 +1887,7 @@ fn push_evidence(
 
 fn unknown_prediction(
     observed: RouteProjection,
-    route_risk: RouteRisk,
+    route_risk: Risk,
     history_completeness: PredictiveHistoryCompleteness,
     evidence: Vec<PredictiveEvidence>,
     task_family: TaskFamily,
@@ -1913,7 +1898,7 @@ fn unknown_prediction(
         schema_version: 2,
         route_risk,
         observed,
-        next_step_role: NextStepRole::Unknown,
+        next_step_role: NextStep::Unknown,
         next_action_class: NextActionClass::Unknown,
         task_complexity: TaskComplexity::Ambiguous,
         progress_state: ProgressState::Unknown,
@@ -2075,20 +2060,17 @@ mod tests {
     fn predictive_projection_uses_a_stable_canonical_key() {
         let projection = PredictiveRouteProjection::new(
             TaskFamily::CodeGeneration,
-            NextStepRole::Implement,
-            RouteRisk::Normal,
+            NextStep::Implement,
+            Risk::Normal,
         );
 
-        assert_eq!(
-            projection.key(),
-            "semantic_route/v1|code:generation|implement|normal"
-        );
+        assert_eq!(projection.key(), "code:generation|implement|normal");
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
         assert!(RouteProjection::parse_key("agent_trace/v2|edit|normal").is_some());
-        let retired_short_v1 = format!("semantic_route/v1|{}|normal", "implement");
+        let retired_short_v1 = format!("{}|normal", "implement");
         let retired_v2 = format!(
             "semantic_route/{}|code:review|verify|normal",
             ["v", "2"].concat()
@@ -2099,25 +2081,16 @@ mod tests {
 
     #[test]
     fn predictive_projection_has_one_v1_task_aware_shape() {
-        let projection = PredictiveRouteProjection::new(
-            TaskFamily::CodeReview,
-            NextStepRole::Verify,
-            RouteRisk::Normal,
-        );
+        let projection =
+            PredictiveRouteProjection::new(TaskFamily::CodeReview, NextStep::Verify, Risk::Normal);
 
-        assert_eq!(
-            projection.key(),
-            "semantic_route/v1|code:review|verify|normal"
-        );
-        assert_eq!(
-            projection.unknown_baseline().key(),
-            "semantic_route/v1|unknown|verify|normal"
-        );
+        assert_eq!(projection.key(), "code:review|verify|normal");
+        assert_eq!(projection.unknown_baseline().key(), "unknown|verify|normal");
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
-        let retired_short_v1 = format!("semantic_route/v1|{}|normal", "verify");
+        let retired_short_v1 = format!("{}|normal", "verify");
         let retired_v2 = format!(
             "semantic_route/{}|code:review|verify|normal",
             ["v", "2"].concat()
@@ -2128,11 +2101,8 @@ mod tests {
 
     #[test]
     fn predictive_projection_round_trips_exactly() {
-        let projection = PredictiveRouteProjection::new(
-            TaskFamily::CodeReview,
-            NextStepRole::Verify,
-            RouteRisk::Normal,
-        );
+        let projection =
+            PredictiveRouteProjection::new(TaskFamily::CodeReview, NextStep::Verify, Risk::Normal);
 
         assert_eq!(projection.schema_version(), 1);
         assert_eq!(
@@ -2150,7 +2120,7 @@ mod tests {
     #[test]
     fn predictive_enums_serialize_as_stable_snake_case_values() {
         assert!(matches!(
-            serde_json::to_string(&NextStepRole::Orchestrate),
+            serde_json::to_string(&NextStep::Orchestrate),
             Ok(value) if value == "\"orchestrate\""
         ));
         assert!(matches!(
@@ -2188,12 +2158,12 @@ mod tests {
     fn predictive_key_excludes_source_specific_identity() {
         let projection = PredictiveRouteProjection::new(
             TaskFamily::CodeDebugging,
-            NextStepRole::Implement,
-            RouteRisk::Normal,
+            NextStep::Implement,
+            Risk::Normal,
         );
         let key = projection.key();
 
-        assert_eq!(key, "semantic_route/v1|code:debugging|implement|normal");
+        assert_eq!(key, "code:debugging|implement|normal");
         for source_identity in ["codex", "claude_code", "hermes", "smithers", "openclaw"] {
             assert!(!key.contains(source_identity), "{source_identity}");
         }
@@ -2205,37 +2175,37 @@ mod tests {
             (
                 "broad complex opening",
                 OPENING_PLAN_FIXTURE,
-                NextStepRole::Orchestrate,
+                NextStep::Orchestrate,
                 NextActionClass::ReasonOrPlan,
-                RouteRisk::Normal,
+                Risk::Normal,
             ),
             (
                 "successful repository read",
                 POST_READ_IMPLEMENT_FIXTURE,
-                NextStepRole::Implement,
+                NextStep::Implement,
                 NextActionClass::Mutate,
-                RouteRisk::Normal,
+                Risk::Normal,
             ),
             (
                 "successful mutation",
                 POST_EDIT_VERIFY_FIXTURE,
-                NextStepRole::Verify,
+                NextStep::Verify,
                 NextActionClass::ExecuteOrTest,
-                RouteRisk::Normal,
+                Risk::Normal,
             ),
             (
                 "repeated failure recovery pressure",
                 REPEATED_FAILURE_REPLAN_FIXTURE,
-                NextStepRole::Orchestrate,
+                NextStep::Orchestrate,
                 NextActionClass::ReasonOrPlan,
-                RouteRisk::Guarded,
+                Risk::Guarded,
             ),
             (
                 "successful final test",
                 NEAR_DONE_FINALIZE_FIXTURE,
-                NextStepRole::Finalize,
+                NextStep::Finalize,
                 NextActionClass::AnswerOrSummarize,
-                RouteRisk::Normal,
+                Risk::Normal,
             ),
         ];
 
@@ -2275,19 +2245,19 @@ mod tests {
             (
                 "concrete fix with file and error",
                 concrete_fix,
-                NextStepRole::Implement,
+                NextStep::Implement,
                 NextActionClass::Mutate,
             ),
             (
                 "first failed test",
                 first_failure,
-                NextStepRole::Implement,
+                NextStep::Implement,
                 NextActionClass::Mutate,
             ),
             (
                 "narrow status poll",
                 narrow_poll,
-                NextStepRole::Mechanical,
+                NextStep::Mechanical,
                 NextActionClass::WaitOrPoll,
             ),
         ];
@@ -2323,11 +2293,7 @@ mod tests {
 
             let prediction = predict_next_step(&observed(&failed_test), &failed_test);
 
-            assert_eq!(
-                prediction.next_step_role,
-                NextStepRole::Implement,
-                "{output}"
-            );
+            assert_eq!(prediction.next_step_role, NextStep::Implement, "{output}");
             assert_eq!(
                 prediction.next_action_class,
                 NextActionClass::Mutate,
@@ -2364,7 +2330,7 @@ mod tests {
         ] {
             let prediction = predict_next_step(&observed(&prompt), &prompt);
 
-            assert_eq!(prediction.next_step_role, NextStepRole::Unknown, "{name}");
+            assert_eq!(prediction.next_step_role, NextStep::Unknown, "{name}");
             assert_eq!(
                 prediction.next_action_class,
                 NextActionClass::Unknown,
@@ -2391,7 +2357,7 @@ mod tests {
             prediction.history_completeness,
             PredictiveHistoryCompleteness::BoundedPrefix
         );
-        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
+        assert_eq!(prediction.next_step_role, NextStep::Unknown);
         assert_eq!(prediction.next_action_class, NextActionClass::Unknown);
     }
 
@@ -2412,7 +2378,7 @@ mod tests {
             hidden_prediction.history_completeness,
             PredictiveHistoryCompleteness::Unknown
         );
-        assert_eq!(hidden_prediction.next_step_role, NextStepRole::Unknown);
+        assert_eq!(hidden_prediction.next_step_role, NextStep::Unknown);
         assert!(
             hidden_prediction
                 .evidence
@@ -2440,7 +2406,7 @@ mod tests {
             visible_prediction.history_completeness,
             PredictiveHistoryCompleteness::Complete
         );
-        assert_eq!(visible_prediction.next_step_role, NextStepRole::Implement);
+        assert_eq!(visible_prediction.next_step_role, NextStep::Implement);
     }
 
     #[test]
@@ -2728,12 +2694,12 @@ mod tests {
         let cases = [
             (
                 "Read src/parser.rs and report the current error enum.",
-                NextStepRole::Mechanical,
+                NextStep::Mechanical,
                 NextActionClass::InspectOrRead,
             ),
             (
                 "Inspect the repository and understand the architecture.",
-                NextStepRole::Orchestrate,
+                NextStep::Orchestrate,
                 NextActionClass::ReasonOrPlan,
             ),
         ];
@@ -2752,11 +2718,11 @@ mod tests {
     #[test]
     fn explicit_role_intent_uses_bounded_terms_and_first_action() {
         let explicit_roles = [
-            ("Implement a new module.", NextStepRole::Implement),
-            ("Verify the result.", NextStepRole::Verify),
-            ("Summarize the result.", NextStepRole::Finalize),
-            ("Review the bug fix.", NextStepRole::Verify),
-            ("Fix the bug found in code review.", NextStepRole::Implement),
+            ("Implement a new module.", NextStep::Implement),
+            ("Verify the result.", NextStep::Verify),
+            ("Summarize the result.", NextStep::Finalize),
+            ("Review the bug fix.", NextStep::Verify),
+            ("Fix the bug found in code review.", NextStep::Implement),
         ];
         for (instruction, expected_role) in explicit_roles {
             let prompt = prompt(vec![Message::text(Role::User, instruction)]);
@@ -2800,12 +2766,9 @@ mod tests {
         let valid_prediction = predict_next_step(&observed(&valid), &valid);
         let contradictory_prediction = predict_next_step(&observed(&contradictory), &contradictory);
 
-        assert_eq!(valid_prediction.next_step_role, NextStepRole::Implement);
+        assert_eq!(valid_prediction.next_step_role, NextStep::Implement);
         assert_eq!(valid_prediction.next_action_class, NextActionClass::Mutate);
-        assert_eq!(
-            contradictory_prediction.next_step_role,
-            NextStepRole::Unknown
-        );
+        assert_eq!(contradictory_prediction.next_step_role, NextStep::Unknown);
         assert!(
             contradictory_prediction
                 .evidence
@@ -2830,10 +2793,10 @@ mod tests {
     #[test]
     fn score_ties_follow_stable_role_order() {
         let cases = [
-            ([4, 4, 0, 0, 0], NextStepRole::Orchestrate, 4, 4),
-            ([0, 6, 6, 6, 6], NextStepRole::Implement, 6, 6),
-            ([0, 0, 5, 5, 5], NextStepRole::Mechanical, 5, 5),
-            ([0, 0, 0, 3, 3], NextStepRole::Verify, 3, 3),
+            ([4, 4, 0, 0, 0], NextStep::Orchestrate, 4, 4),
+            ([0, 6, 6, 6, 6], NextStep::Implement, 6, 6),
+            ([0, 0, 5, 5, 5], NextStep::Mechanical, 5, 5),
+            ([0, 0, 0, 3, 3], NextStep::Verify, 3, 3),
         ];
 
         for (scores, expected_role, expected_top, expected_runner_up) in cases {
@@ -2870,27 +2833,19 @@ mod tests {
     fn predictive_projection_rejects_noncanonical_family_and_segments() {
         let projection = PredictiveRouteProjection::new(
             TaskFamily::CodeDebugging,
-            NextStepRole::Implement,
-            RouteRisk::Guarded,
+            NextStep::Implement,
+            Risk::Guarded,
         );
 
-        assert_eq!(
-            projection.key(),
-            "semantic_route/v1|code:debugging|implement|guarded"
-        );
+        assert_eq!(projection.key(), "code:debugging|implement|guarded");
         assert_eq!(
             PredictiveRouteProjection::parse_key(&projection.key()),
             Some(projection)
         );
+        assert!(PredictiveRouteProjection::parse_key("debugging|implement|guarded").is_none());
         assert!(
-            PredictiveRouteProjection::parse_key("semantic_route/v1|debugging|implement|guarded")
+            PredictiveRouteProjection::parse_key("code:debugging|implement|guarded|extra")
                 .is_none()
-        );
-        assert!(
-            PredictiveRouteProjection::parse_key(
-                "semantic_route/v1|code:debugging|implement|guarded|extra"
-            )
-            .is_none()
         );
     }
 
@@ -3093,7 +3048,7 @@ mod tests {
         assert!(observed.normalized_action_history.is_none());
         let prediction = predict_next_step(&observed, &prompt);
 
-        assert_eq!(prediction.next_step_role, NextStepRole::Implement);
+        assert_eq!(prediction.next_step_role, NextStep::Implement);
         assert_eq!(prediction.task_family, TaskFamily::CodeGeneration);
     }
 
@@ -3115,7 +3070,7 @@ mod tests {
         assert!(observed.normalized_action_history.is_none());
         let prediction = predict_next_step(&observed, &prompt);
 
-        assert_eq!(prediction.next_step_role, NextStepRole::Verify);
+        assert_eq!(prediction.next_step_role, NextStep::Verify);
         assert_eq!(prediction.task_family, TaskFamily::CodeReview);
     }
 
@@ -3138,10 +3093,7 @@ mod tests {
 
         let summary_after_old_read = predict_next_step(&observed(&prompt), &prompt);
 
-        assert_eq!(
-            summary_after_old_read.next_step_role,
-            NextStepRole::Finalize
-        );
+        assert_eq!(summary_after_old_read.next_step_role, NextStep::Finalize);
     }
 
     #[test]
@@ -3172,7 +3124,7 @@ mod tests {
 
         assert_eq!(
             implementation_after_old_success.next_step_role,
-            NextStepRole::Implement
+            NextStep::Implement
         );
     }
 
@@ -3199,7 +3151,7 @@ mod tests {
 
         let new_epoch_after_old_failures = predict_next_step(&observed(&prompt), &prompt);
 
-        assert_eq!(new_epoch_after_old_failures.route_risk, RouteRisk::Normal);
+        assert_eq!(new_epoch_after_old_failures.route_risk, Risk::Normal);
     }
 
     #[test]
@@ -3227,7 +3179,7 @@ mod tests {
             &stale_recovery_with_context,
         );
 
-        assert_eq!(prediction.route_risk, RouteRisk::Context);
+        assert_eq!(prediction.route_risk, Risk::Normal);
     }
 
     #[test]
@@ -3257,7 +3209,7 @@ mod tests {
 
         let prediction = predict_next_step(&observed(&prompt), &prompt);
 
-        assert_eq!(prediction.route_risk, RouteRisk::Guarded);
+        assert_eq!(prediction.route_risk, Risk::Guarded);
     }
 
     #[test]
@@ -3276,8 +3228,8 @@ mod tests {
 
         let prediction = predict_next_step(&observed(&prompt), &prompt);
 
-        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
-        assert_eq!(prediction.route_risk, RouteRisk::Normal);
+        assert_eq!(prediction.next_step_role, NextStep::Unknown);
+        assert_eq!(prediction.route_risk, Risk::Normal);
     }
 
     #[test]
@@ -3303,7 +3255,7 @@ mod tests {
             &stale_recovery_with_context,
         );
 
-        assert_eq!(prediction.route_risk, RouteRisk::Context);
+        assert_eq!(prediction.route_risk, Risk::Normal);
     }
 
     #[test]
@@ -3325,7 +3277,7 @@ mod tests {
 
         let prediction = predict_next_step(&terminus_observed(&prompt), &prompt);
 
-        assert_eq!(prediction.route_risk, RouteRisk::Guarded);
+        assert_eq!(prediction.route_risk, Risk::Guarded);
     }
 
     #[test]
@@ -3342,8 +3294,8 @@ mod tests {
 
         let prediction = predict_next_step(&terminus_observed(&prompt), &prompt);
 
-        assert_eq!(prediction.next_step_role, NextStepRole::Unknown);
-        assert_eq!(prediction.route_risk, RouteRisk::Normal);
+        assert_eq!(prediction.next_step_role, NextStep::Unknown);
+        assert_eq!(prediction.route_risk, Risk::Normal);
     }
 
     #[test]
@@ -3370,7 +3322,7 @@ mod tests {
 
         let normalized_pivot = predict_next_step(&ir, &prompt);
 
-        assert_eq!(normalized_pivot.next_step_role, NextStepRole::Finalize);
+        assert_eq!(normalized_pivot.next_step_role, NextStep::Finalize);
     }
 
     #[test]
@@ -3398,11 +3350,8 @@ mod tests {
 
         let normalized_current_epoch = predict_next_step(&ir, &prompt);
 
-        assert_eq!(
-            normalized_current_epoch.next_step_role,
-            NextStepRole::Finalize
-        );
-        assert_eq!(normalized_current_epoch.route_risk, RouteRisk::Normal);
+        assert_eq!(normalized_current_epoch.next_step_role, NextStep::Finalize);
+        assert_eq!(normalized_current_epoch.route_risk, Risk::Normal);
     }
 
     #[test]

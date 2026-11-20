@@ -65,7 +65,7 @@ async fn smithers_terminal_reward_freezes_only_the_credited_feedback() -> anyhow
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
-    let target_key = "semantic_route/v1|unknown|orchestrate|normal";
+    let target_key = "unknown|orchestrate|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
         id: request_id.to_string(),
@@ -194,7 +194,10 @@ async fn smithers_terminal_reward_freezes_only_the_credited_feedback() -> anyhow
     assert_eq!(record.subject.subject_id, task_id);
     assert_eq!(record.subject.decisions.len(), 1);
     assert_eq!(record.subject.decisions[0].policy, "smithers");
-    assert_eq!(record.subject.decisions[0].route_projection, target_key);
+    assert_eq!(
+        record.subject.decisions[0].route_projection.to_string(),
+        target_key
+    );
     assert_eq!(record.subject.decisions[0].selected_tier, "economy");
     assert_eq!(record.result.verdict, bitrouter_ai::eval::EvalVerdict::Pass);
     let frozen = serde_json::to_vec(&evidence)?;

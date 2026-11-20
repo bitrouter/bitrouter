@@ -409,8 +409,10 @@ fn render_chat_annotations(result: &GenerateResult) -> Vec<serde_json::Value> {
 }
 
 /// Detect blocks the existing input mapper would skip or flatten before IR exists.
-fn ingress_admission(body: &serde_json::Value) -> bitrouter_ai::conversion::ConversionReport {
-    use bitrouter_ai::conversion::{
+fn ingress_admission(
+    body: &serde_json::Value,
+) -> crate::gateway::conversion_report::ConversionReport {
+    use crate::gateway::conversion_report::{
         ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
     };
     let mut report = ConversionReport::default();

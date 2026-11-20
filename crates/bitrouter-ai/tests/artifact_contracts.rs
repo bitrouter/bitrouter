@@ -29,8 +29,7 @@ fn missing_source_revision_stays_explicitly_unknown() -> Result<(), Box<dyn std:
         "version": "1.2.3",
         "target": "x86_64-unknown-linux-gnu",
         "features": ["harness", "mcp"],
-        "profile": "custom",
-        "handoff_build_id": "fixture-handoff"
+        "profile": "custom"
     });
     let identity: ArtifactIdentity = serde_json::from_value(wire.clone())?;
     assert!(identity.source_revision.is_none());
@@ -68,13 +67,7 @@ fn artifact_schema_exposes_nullable_revision_and_closed_profiles()
         .as_array()
         .ok_or("schema has no required fields")?;
     assert!(!required.contains(&json!("source_revision")));
-    for name in [
-        "version",
-        "target",
-        "features",
-        "profile",
-        "handoff_build_id",
-    ] {
+    for name in ["version", "target", "features", "profile"] {
         assert!(required.contains(&json!(name)));
     }
     Ok(())

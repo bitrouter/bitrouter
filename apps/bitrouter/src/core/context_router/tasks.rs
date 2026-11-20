@@ -4,10 +4,10 @@ use crate::storage::checkpoint::snapshot::context::{enabled, portable};
 
 use bitrouter_ai::types::{Message, Role};
 
+use crate::managed_contract::protocol::CoreError;
 use crate::storage::checkpoint::snapshot::context::evidence::{EvidenceBlock, EvidenceSource};
 use crate::storage::checkpoint::snapshot::context::invalid;
 use crate::storage::checkpoint::snapshot::{AgentTurn, SessionSnapshot};
-use bitrouter_ai::core::protocol::CoreError;
 
 pub(crate) fn inherited(state: &SessionSnapshot, turn: &AgentTurn) -> Vec<String> {
     let isolated = turn

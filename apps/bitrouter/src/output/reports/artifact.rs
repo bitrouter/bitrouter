@@ -14,7 +14,7 @@ impl CliReport for ArtifactIdentity {
             "source revision",
             self.source_revision.as_deref().unwrap_or("unknown"),
         )?;
-        h.field("handoff build", &self.handoff_build_id)
+        Ok(())
     }
 }
 

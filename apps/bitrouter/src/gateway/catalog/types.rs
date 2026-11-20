@@ -8,28 +8,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 
-use crate::types::ModelCompatibility;
-use crate::types::{ApiProtocol, Capability, ProtocolList};
+use bitrouter_ai::types::ModelCompatibility;
+use bitrouter_ai::types::{ApiProtocol, Capability, ProtocolList};
 
-/// Legacy internal projection envelope; not a Registry v1 wire document.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Envelope<T> {
-    /// The list of entries.
-    pub data: Vec<T>,
-}
-
-/// The merged registry data bitrouter caches and consumes: the provider list
-/// plus the canonical model vocabulary.
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
-pub struct RegistryData {
-    /// Understood UI metadata for every admitted provider.
-    pub providers: Vec<RegistryProvider>,
-    /// Understood UI metadata for the independent curated recommendation list.
-    pub canonical: Vec<CanonicalModel>,
-}
-
-/// Legacy internal UI vocabulary. Registry v1 uses pure protocol names and
-/// projects them here only after admission; execution uses [`ApiProtocol`].
+/// Provider protocol used by catalog views. Execution uses [`ApiProtocol`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryProtocol {
@@ -238,16 +220,9 @@ pub struct RegistryProvider {
     /// first-party / official upstream.
     #[serde(default)]
     pub community: bool,
-    /// How a caller obtains access to this provider — see [`RegistryAccess`].
-    /// `None` in an older dist that predates the field; resolve via
-    /// [`RegistryProvider::access`], which falls back to the derived `byok`.
+    /// How a caller obtains access to this provider.
     #[serde(default)]
     pub access: Option<RegistryAccess>,
-    /// Derived back-compat alias of `access` still emitted by the dist
-    /// (`byok` iff `access == api_key`). Only read as a fallback when `access`
-    /// is absent (an older dist / cache). `None` when neither is present.
-    #[serde(default)]
-    pub byok: Option<bool>,
     /// How a caller pays this provider (`usage_token` | `subscription`).
     #[serde(default)]
     pub billing: Billing,
@@ -259,14 +234,9 @@ impl RegistryProvider {
         self.status == "active"
     }
 
-    /// The credential-obtainment model — the explicit `access` when present,
-    /// else derived from the legacy `byok` alias (`byok: false` ⇒ private), else
-    /// the [`RegistryAccess::ApiKey`] default.
+    /// The published credential-obtainment model.
     pub fn access(&self) -> RegistryAccess {
-        self.access.unwrap_or(match self.byok {
-            Some(false) => RegistryAccess::Private,
-            _ => RegistryAccess::ApiKey,
-        })
+        self.access.unwrap_or(RegistryAccess::ApiKey)
     }
 
     /// Whether this catalog entry declares public access. This inspects metadata;
@@ -332,7 +302,7 @@ pub struct RegistryModel {
     pub capabilities: Vec<Capability>,
     /// Positively verified qualitative effort levels for this exact route.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
     /// Provider/model request-shape compatibility settings.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -360,8 +330,9 @@ pub struct RegistryPricing {
 
 /// Published processing-profile provenance; application pricing validates the
 /// effective endpoint rather than inferring premiums from this declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PricingEndpointProfile {
     /// OpenAI global processing.
@@ -448,6 +419,10 @@ pub struct CanonicalModel {
 
 #[cfg(test)]
 mod tests {
+    #[derive(serde::Deserialize)]
+    struct Fixture<T> {
+        data: Vec<T>,
+    }
     use super::*;
 
     /// A trimmed real-shape sample of the resolved `dist/providers.json`: no
@@ -461,7 +436,6 @@ mod tests {
                 "auth_scheme": "x-api-key",
                 "billing": "usage_token",
                 "access": "api_key",
-                "byok": true,
                 "community": false,
                 "status": "active",
                 "weight": 1,
@@ -497,7 +471,6 @@ mod tests {
                 "name": "private-relay",
                 "api_base": "https://private-relay.example/v1",
                 "access": "private",
-                "byok": false,
                 "status": "active",
                 "models": []
             },
@@ -506,7 +479,6 @@ mod tests {
                 "name": "github-copilot",
                 "api_base": "https://api.githubcopilot.com",
                 "access": "local_oauth",
-                "byok": false,
                 "status": "active",
                 "api_protocol": [ { "*": "openai" } ],
                 "auto_sync": { "feed": "v1_models" },
@@ -528,7 +500,7 @@ mod tests {
 
     #[test]
     fn parses_providers_envelope() -> Result<(), Box<dyn std::error::Error>> {
-        let env: Envelope<RegistryProvider> = serde_json::from_str(PROVIDERS_FIXTURE)?;
+        let env: Fixture<RegistryProvider> = serde_json::from_str(PROVIDERS_FIXTURE)?;
         assert_eq!(env.data.len(), 4);
         let anthropic = &env.data[0];
         assert_eq!(anthropic.name, "anthropic");
@@ -544,7 +516,7 @@ mod tests {
         assert!(m.reasoning_effort.is_some());
         assert_eq!(
             m.reasoning_effort.as_ref().and_then(|value| value.default),
-            Some(crate::types::ReasoningEffort::High)
+            Some(bitrouter_ai::types::ReasoningEffort::High)
         );
         // Resolved per-model protocol + rate limits (no glob to resolve here).
         assert_eq!(
@@ -588,24 +560,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_legacy_token_billing_alias() -> Result<(), Box<dyn std::error::Error>> {
-        let provider: RegistryProvider = serde_json::from_str(
-            r#"{
-                "name": "legacy",
-                "api_base": "https://legacy.test/v1",
-                "billing": "token",
-                "status": "active",
-                "models": []
-            }"#,
-        )?;
-
-        assert_eq!(provider.billing, Billing::UsageToken);
-        Ok(())
-    }
-
-    #[test]
     fn parses_models_envelope() -> Result<(), Box<dyn std::error::Error>> {
-        let env: Envelope<CanonicalModel> = serde_json::from_str(MODELS_FIXTURE)?;
+        let env: Fixture<CanonicalModel> = serde_json::from_str(MODELS_FIXTURE)?;
         assert_eq!(env.data.len(), 2);
         assert_eq!(env.data[0].id, "anthropic/claude-sonnet-4.6");
         assert_eq!(env.data[1].id, "deepseek/deepseek-v3.2");
@@ -619,7 +575,7 @@ mod tests {
             "name": "x", "api_base": "https://x.test/v1", "status": "active",
             "models": [], "some_future_field": { "nested": true }
         } ] }"#;
-        let env: Envelope<RegistryProvider> = serde_json::from_str(src)?;
+        let env: Fixture<RegistryProvider> = serde_json::from_str(src)?;
         assert_eq!(env.data[0].name, "x");
         Ok(())
     }
@@ -633,7 +589,7 @@ mod tests {
             "required_config": ["api_key", "base_url"],
             "models": []
         } ] }"#;
-        let env: Envelope<RegistryProvider> = serde_json::from_str(src)?;
+        let env: Fixture<RegistryProvider> = serde_json::from_str(src)?;
         let provider = &env.data[0];
         assert_eq!(provider.name, "workspace-provider");
         assert_eq!(provider.api_base.as_deref(), None);

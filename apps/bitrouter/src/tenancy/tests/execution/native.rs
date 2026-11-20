@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use crate::managed_contract::evidence::NativeAttemptReport;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use axum::{
@@ -18,7 +19,6 @@ use axum::{
     routing::post,
 };
 use bitrouter_ai::{
-    core::evidence::NativeAttemptReport,
     tenancy::{
         authority::{BindingPut, CredentialIssued, GrantScope, TenantPut, TenantRole, TenantState},
         configuration::{Limits, ResourceRef},

@@ -458,7 +458,7 @@ async fn packaged_gateway_independent_sdk_consumer() -> Result<()> {
             .is_some_and(|s| !s.is_empty()),
         "archive lacks revision identity"
     );
-    ensure!(!artifact.target.is_empty() && !artifact.handoff_build_id.is_empty());
+    ensure!(!artifact.target.is_empty());
 
     let mut signer = OwnedChild::spawn(
         host().args([

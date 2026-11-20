@@ -5,7 +5,7 @@ use super::*;
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
 use crate::storage::skills::state::*;
 use crate::storage::skills::{SkillCandidate, SkillSelection, SkillSource};
-use bitrouter_ai::core::skills::SkillSelector;
+use bitrouter_ai::harness::skills::SkillSelector;
 
 impl CoreSession {
     pub(super) async fn prepare_skills(&self, agent_id: &str) -> Result<bool, CoreError> {

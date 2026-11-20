@@ -116,7 +116,7 @@ impl EvalSettlementRecorder {
         evidence.extend(routing_evidence(context)?);
         let evidence_digest = evidence_digest(&evidence)?;
         Ok(EvalSubject {
-            schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             identity: match &self.owner {
                 RecorderOwner::Legacy { .. } => {
                     bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
@@ -141,15 +141,18 @@ impl EvalSettlementRecorder {
             decisions: vec![EvalDecisionRef {
                 decision_id: decision.decision_id.clone(),
                 policy: decision.policy.clone(),
-                route_projection: decision.route_projection.clone(),
-                request_key: decision.request_key.clone(),
+                route_projection: decision.route_projection.parse()?,
+                request_key: decision.request_key.parse()?,
                 selected_tier: decision.selected_tier.clone(),
                 selected_effort: decision.selected_effort,
                 baseline_tier: decision.baseline_tier.clone(),
                 baseline_effort: decision.baseline_effort,
                 policy_digest: decision.policy_digest.clone(),
-                experiment: decision.experiment.clone(),
-                route_measurement: decision.route_measurement.clone(),
+
+                route_measurement: decision
+                    .route_measurement
+                    .clone()
+                    .filter(|_| decision.experiment.is_none()),
             }],
             requested_dimensions: BTreeSet::from([
                 "cost.usd_micros".into(),
@@ -285,8 +288,9 @@ mod tests {
     use crate::trajectory::settlement::TrajectorySettlementRecorder;
     use crate::trajectory::store::TrajectoryStore;
     use {
-        bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
-        bitrouter_ai::eval::ExperimentAssignmentUnit,
+        crate::gateway::routing::exploration::AssignmentArm,
+        crate::gateway::routing::exploration::AssignmentUnit,
+        crate::gateway::routing::exploration::RouteAssignment,
     };
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -370,16 +374,16 @@ mod tests {
                 decision_id: "decision-1".into(),
                 policy: "auto:cost".into(),
                 policy_digest: DIGEST.into(),
-                route_projection: "opening".into(),
-                request_key: "opening".into(),
+                route_projection: "unknown|unknown|normal".into(),
+                request_key: "unknown|unknown|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: Some(ReasoningEffort::Low),
                 baseline_tier: Some("strong".into()),
                 baseline_effort: Some(ReasoningEffort::High),
-                experiment: Some(EvalExperimentRef {
+                experiment: Some(RouteAssignment {
                     experiment_id: DIGEST.into(),
-                    arm: ExperimentArm::Challenger,
-                    assignment_unit: ExperimentAssignmentUnit::Task,
+                    arm: AssignmentArm::Challenger,
+                    assignment_unit: AssignmentUnit::Task,
                     assignment_id_digest:
                         "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
                             .into(),
@@ -431,24 +435,6 @@ mod tests {
             subject.decisions[0].baseline_effort,
             Some(ReasoningEffort::High)
         );
-        assert_eq!(
-            subject.decisions[0]
-                .experiment
-                .as_ref()
-                .map(|experiment| experiment.arm),
-            Some(ExperimentArm::Challenger)
-        );
-        let experiment = subject.decisions[0]
-            .experiment
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("settlement must preserve experiment metadata"))?;
-        assert_eq!(experiment.experiment_id, DIGEST);
-        assert_eq!(experiment.assignment_unit, ExperimentAssignmentUnit::Task);
-        assert_eq!(
-            experiment.assignment_id_digest,
-            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-        );
-        assert_eq!(experiment.challenger_propensity_ppm, 100_000);
         assert!(subject.evidence.iter().all(|item| item.redacted));
         let evidence = subject
             .evidence
@@ -509,8 +495,8 @@ mod tests {
                 decision_id: "decision-1".into(),
                 policy: "auto:cost".into(),
                 policy_digest: DIGEST.into(),
-                route_projection: "opening".into(),
-                request_key: "opening".into(),
+                route_projection: "unknown|unknown|normal".into(),
+                request_key: "unknown|unknown|normal".into(),
                 selected_tier: "economy".into(),
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
@@ -578,8 +564,8 @@ mod tests {
             decision_id: "decision-1".into(),
             policy: "auto:cost".into(),
             policy_digest: DIGEST.into(),
-            route_projection: "opening".into(),
-            request_key: "opening".into(),
+            route_projection: "unknown|unknown|normal".into(),
+            request_key: "unknown|unknown|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),

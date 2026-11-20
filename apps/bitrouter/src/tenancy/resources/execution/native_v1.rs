@@ -359,7 +359,7 @@ struct Stage0Source<'a> {
     policy: Option<&'a str>,
     system_prompt: Option<&'a str>,
     params: &'a serde_json::Map<String, Value>,
-    routing: &'a bitrouter_ai::routing::RoutingConfig,
+    routing: &'a crate::config::router::RoutingConfig,
 }
 
 fn named_source<'a>(config: &'a Config, name: &str) -> Result<Option<Stage0Source<'a>>> {

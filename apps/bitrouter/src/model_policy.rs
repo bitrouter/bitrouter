@@ -3,12 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::policy::{Document, Target};
+use bitrouter_ai::policy::{Document, RouteClass, Target};
 use sha2::{Digest, Sha256};
 
-use crate::gateway::routing::workflow::predictive::{
-    PredictiveRouteProjection, compiled_predictor_contract,
-};
+use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
 
 const MAX_BYTES: usize = 1024 * 1024;
 
@@ -24,7 +22,7 @@ pub(crate) struct CompiledPolicy {
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSelection {
     pub(crate) tiers: BTreeMap<String, Target>,
-    pub(crate) routes: BTreeMap<String, String>,
+    pub(crate) routes: BTreeMap<RouteClass, String>,
     pub(crate) default_tier: String,
     pub(crate) tool_use_tier: Option<String>,
     pub(crate) tool_safe_tiers: Vec<String>,
@@ -151,24 +149,17 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
                 "policy tool-safe tier must exist"
             );
         }
-        let mut routes = BTreeMap::new();
-        for (class, tier) in &policy.routes {
-            let key = format!("semantic_route/v1|{class}");
-            ensure!(
-                PredictiveRouteProjection::parse_key(&key).is_some(),
-                "invalid policy route class"
-            );
+        for tier in policy.routes.values() {
             ensure!(
                 policy.tiers.contains_key(tier),
                 "policy route tier must exist"
             );
-            routes.insert(key, tier.clone());
         }
         selections.insert(
             name.clone(),
             CompiledSelection {
                 tiers: policy.tiers.clone(),
-                routes,
+                routes: policy.routes.clone(),
                 default_tier: policy.default_tier.clone(),
                 tool_use_tier: policy.tool_use_tier.clone(),
                 tool_safe_tiers: policy.tool_safe_tiers.clone(),

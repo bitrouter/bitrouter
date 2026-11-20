@@ -7,10 +7,10 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::storage::checkpoint::sha256;
-use bitrouter_ai::core::protocol::{
+use crate::managed_contract::protocol::{
     CoreError, ErrorCode, HarnessManifest, MaterialRef, SignalUpdate, validate_id,
 };
+use crate::storage::checkpoint::sha256;
 
 impl SignalState {
     pub fn apply(

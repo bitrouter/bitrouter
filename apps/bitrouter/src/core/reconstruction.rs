@@ -14,8 +14,8 @@ use serde::Serialize;
 use crate::storage::checkpoint::snapshot::{ModelStep, SessionSnapshot};
 
 use super::session::selected_materials;
+use crate::managed_contract::protocol::{ContextMode, CoreError, ErrorCode};
 use crate::storage::checkpoint::sha256;
-use bitrouter_ai::core::protocol::{ContextMode, CoreError, ErrorCode};
 
 pub(crate) struct RebuiltContext {
     pub prompt: Prompt,
@@ -68,7 +68,9 @@ pub(crate) fn candidate(
         .executions
         .get(&step.step_id)
         .and_then(|execution| execution.routing.as_ref())
-        .is_some_and(|routing| routing.strategy == bitrouter_ai::routing::ContextStrategy::Preserve)
+        .is_some_and(|routing| {
+            routing.strategy == crate::gateway::routing::ContextTreatment::Preserve
+        })
         && step.decision.as_ref().is_some_and(|decision| {
             decision.routes.iter().any(|route| {
                 route.rejection_reasons == ["protocol_incompatible:private_context_target_mismatch"]

@@ -43,7 +43,7 @@ async fn build_info_reports_the_executable_without_opening_configuration() -> Re
     let artifact: bitrouter_ai::artifact::ArtifactIdentity =
         serde_json::from_slice(&output.stdout)?;
     ensure!(artifact == bitrouter::artifact::current());
-    ensure!(!artifact.target.is_empty() && !artifact.handoff_build_id.is_empty());
+    ensure!(!artifact.target.is_empty());
     ensure!(std::fs::read(&config)? == bytes);
     ensure!(std::fs::read_dir(directory.path())?.count() == 1);
     Ok(())

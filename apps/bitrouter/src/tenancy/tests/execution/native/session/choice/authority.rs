@@ -71,8 +71,8 @@ async fn owned_choice_real_credential_wait_rechecks_authority_and_still_acks_cle
             if let Err(error) = outcome {
                 ensure!(matches!(
                     error.code,
-                    bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
-                        | bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable
+                    crate::managed_contract::protocol::ErrorCode::UnauthorizedScope
+                        | crate::managed_contract::protocol::ErrorCode::CheckpointUnavailable
                 ));
             }
             session.close().await?;

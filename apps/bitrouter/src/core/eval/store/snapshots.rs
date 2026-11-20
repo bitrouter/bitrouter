@@ -163,6 +163,7 @@ impl EvalStore {
             entries.sort_by(|a, b| a.result_id.cmp(&b.result_id));
         }
         let snapshot = EvalSnapshot {
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             evidence_root: self.snapshot_root(owner, frozen_at, &entries)?,
             frozen_at: frozen_at.to_owned(),
             entries,

@@ -89,13 +89,9 @@ async fn envelope_invalid_binding_and_raw_decoding_never_charge_arm_or_send() ->
         let raw = body.to_string();
         let payload = serde_json::to_string(&defaults)?;
         let valid = format!("{{\"{ENVELOPE_BODY_MEMBER}\":{payload},{}", &raw[1..]);
-        let canonical_hash = original
-            .clone()
-            .with_generation_defaults(defaults.canonical.as_ref().context("canonical")?)?;
         for (binding, body) in [
             (&bound, raw),
             (&original, valid.clone()),
-            (&canonical_hash, valid.clone()),
             (&bound, valid.replace("\"k\":1", "\"k\":2")),
             (&bound, valid.replace("\"k\":1", "\"k\":1,\"\\u006b\":1")),
             (
@@ -112,7 +108,7 @@ async fn envelope_invalid_binding_and_raw_decoding_never_charge_arm_or_send() ->
             (
                 &bound,
                 format!(
-                    "{{\"{BODY_MEMBER}\":{{\"schema_version\":1}},{}",
+                    "{{\"bitrouter_generation_defaults\":{{\"schema_version\":1}},{}",
                     &valid[1..]
                 ),
             ),

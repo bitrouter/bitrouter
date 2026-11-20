@@ -17,7 +17,7 @@ use crate::config::ProviderClass;
 use bitrouter_ai::types::{ApiProtocol, ProtocolList};
 
 use super::entry::{AuthScheme, ProtocolMapping, ProviderEntry};
-use bitrouter_ai::catalog::types::{
+use crate::gateway::catalog::types::{
     Billing, RegistryAuth, RegistryAuthKind, RegistryKind, RegistryProvider,
 };
 

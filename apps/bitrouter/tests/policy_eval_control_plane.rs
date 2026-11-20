@@ -2,9 +2,8 @@
 //! tenancy::tests::execution::model_policy, including real revision-bound inference.
 use bitrouter::eval::{EvalService, admission::SubmissionPrincipal, store::EvalStore};
 use bitrouter_ai::eval::{
-    EVAL_RESULT_SCHEMA_VERSION, EVAL_SUBJECT_SCHEMA_VERSION, EvalScope, EvalSubject,
-    EvalSubjectIdentity, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
-    FreezeRequest,
+    EvalScope, EvalSubject, EvalSubjectIdentity, EvalVerdict, EvaluationResult, EvaluatorIdentity,
+    EvaluatorKind, FreezeRequest,
 };
 use bitrouter_sdk::gateway::GatewayClient;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,7 +11,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 fn subject() -> anyhow::Result<EvalSubject> {
     Ok(EvalSubject {
-        schema_version: EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: EvalSubjectIdentity::GatewayGeneric {},
         eval_id: "client-eval".into(),
         scope: EvalScope::Task,
@@ -47,7 +46,7 @@ async fn gateway_sdk_exchange_preserves_current_versions_and_refuses_tenant_prof
         client.put_eval_subject(&input).await?;
         assert_eq!(client.eval_subject(&input.eval_id).await?, input);
         let result = EvaluationResult {
-            schema_version: EVAL_RESULT_SCHEMA_VERSION,
+            spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
             eval_id: input.eval_id.clone(),
             evidence_digest: input.evidence_digest.clone(),
             evaluator: EvaluatorIdentity {
@@ -129,7 +128,7 @@ async fn generic_results_only_freeze_their_own_immutable_subject() -> anyhow::Re
     let input = subject()?;
     store.insert_subject(&input).await?;
     let result = EvaluationResult {
-        schema_version: EVAL_RESULT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id: input.eval_id.clone(),
         evidence_digest: input.evidence_digest.clone(),
         evaluator: EvaluatorIdentity {

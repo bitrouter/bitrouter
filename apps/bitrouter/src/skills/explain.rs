@@ -60,8 +60,8 @@ pub enum Selector {
     ManagedNative {
         managed_session: String,
         request_id: String,
-        grant: bitrouter_ai::core::protocol::OwnershipGrant,
-        head: bitrouter_ai::core::checkpoint::DurableHead,
+        grant: crate::managed_contract::protocol::OwnershipGrant,
+        head: crate::managed_contract::checkpoint::DurableHead,
         released: bool,
     },
 }
@@ -135,7 +135,7 @@ pub async fn read(options: Options) -> Result<Report> {
         ensure!(
             receipt.error.is_none()
                 && receipt.disposition
-                    == bitrouter_ai::core::protocol::OperationDisposition::Accepted
+                    == crate::managed_contract::protocol::OperationDisposition::Accepted
                 && receipt.assigned_ids.get("agent_id") == Some(&snapshot.agent_id)
                 && receipt.assigned_ids.contains_key("agent_turn_id"),
             "operation is not an accepted managed input"

@@ -218,3 +218,48 @@ fn wrapper_schemas_describe_the_required_policy_contract() -> Result<(), Box<dyn
     }
     Ok(())
 }
+
+#[test]
+fn route_keys_use_exact_labels_and_reject_duplicate_entries()
+-> Result<(), Box<dyn std::error::Error>> {
+    use bitrouter_ai::policy::{NextStep, Risk, RouteClass, TaskFamily};
+
+    let key = "code:review|verify|normal";
+    let class: RouteClass = key.parse()?;
+    assert_eq!(
+        class,
+        RouteClass::new(TaskFamily::CodeReview, NextStep::Verify, Risk::Normal)
+    );
+    assert_eq!(
+        serde_json::to_value(class.task_family)?,
+        json!("code:review")
+    );
+    assert_eq!(serde_json::to_value(class.next_step_role)?, json!("verify"));
+    assert_eq!(serde_json::to_value(class.risk)?, json!("normal"));
+    assert_eq!(serde_json::to_value(class)?, json!(key));
+
+    let source = |routes: &str| {
+        format!(
+            r#"{{"spec_version":"{SPEC_VERSION}","policies":{{"auto":{{"tiers":{{"default":{{"model":"fixture:small"}}}},"default_tier":"default","routes":{{{routes}}}}}}}}}"#
+        )
+    };
+    let input = format!("\"{key}\":\"default\"");
+    let document: Document = serde_json::from_str(&source(&input))?;
+    assert_eq!(document.policies["auto"].routes[&class], "default");
+    assert!(serde_json::from_str::<Document>(&source(&format!("{input},{input}"))).is_err());
+
+    for invalid in [
+        "code_review|verify|normal",
+        "code:review|review|normal",
+        "code:review|verify|context",
+        "code:review|verify|normal|extra",
+        "code:review|verify",
+    ] {
+        let input = format!("\"{invalid}\":\"default\"");
+        assert!(
+            serde_json::from_str::<Document>(&source(&input)).is_err(),
+            "{invalid}"
+        );
+    }
+    Ok(())
+}

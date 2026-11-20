@@ -2358,7 +2358,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     .is_some_and(|constraints| constraints.include.iter().any(
                         |selector| matches!(
                             selector,
-                            bitrouter_ai::core::skills::SkillSelector::Mcp { .. }
+                            bitrouter_ai::harness::skills::SkillSelector::Mcp { .. }
                         )
                     )),
                 "unsupported: ACP skill delivery cannot preserve MCP-origin manifest/consent/cache/execution boundaries"
@@ -7109,8 +7109,8 @@ mod tests {
     {
       "decision_id": "decision-1",
       "policy": "auto",
-      "route_projection": "semantic_route/v1|code:generation|implement|normal",
-      "request_key": "semantic_route/v1|unknown|implement|normal",
+      "route_projection": "code:generation|implement|normal",
+      "request_key": "unknown|implement|normal",
       "selected_tier": "economy",
       "baseline_tier": "strong",
       "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -4,11 +4,9 @@ use crate::gateway::pipeline::{
     native_context::{ORIGIN_FIELD, ORIGIN_NAMESPACE, metadata, metadata_mut},
     native_continuation::{CONTINUATION_FIELD, NativeContinuationSource},
 };
+use crate::managed_contract::evidence::{NativeContinuationInput, NativeContinuationOutput};
 use crate::tenancy::store::StoredResponse;
-use bitrouter_ai::{
-    core::evidence::{NativeContinuationInput, NativeContinuationOutput},
-    types::GenerateResult,
-};
+use bitrouter_ai::types::GenerateResult;
 
 #[derive(Clone)]
 struct Endpoint {
@@ -90,7 +88,7 @@ async fn observed_native_stream_resumes_as_sse_and_json_with_evidence_and_usage(
         ensure!(matches!(
             first_report.continuation.input,
             NativeContinuationInput::FullHistory {
-                reason: bitrouter_ai::core::evidence::FullHistoryReason::NoHandle,
+                reason: crate::managed_contract::evidence::FullHistoryReason::NoHandle,
             }
         ));
         ensure!(matches!(

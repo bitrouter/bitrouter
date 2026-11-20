@@ -924,7 +924,7 @@ impl RetainedRoute {
             )
             || target.api_protocol != ApiProtocol::Responses
             || target.model_constraints.input_token_counting
-                != Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses)
+                != Some(crate::managed_contract::evidence::InputTokenCounting::Responses)
             || target.headers.iter().any(|rule| rule.passthrough())
         {
             return Err(ErrorCode::CapabilityMismatch);

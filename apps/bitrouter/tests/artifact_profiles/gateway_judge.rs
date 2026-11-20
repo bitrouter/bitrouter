@@ -98,7 +98,6 @@ fn exercise_judge(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Result<
             && full_identity.source_revision == minimum_identity.source_revision
             && full_identity.target == minimum_identity.target
             && full_identity.version == minimum_identity.version
-            && full_identity.handoff_build_id != minimum_identity.handoff_build_id
     );
     let upstream = fixture.runtime.block_on(async {
         let upstream = MockServer::start().await;

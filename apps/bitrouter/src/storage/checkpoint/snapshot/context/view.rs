@@ -5,7 +5,7 @@
 use super::digest;
 use super::evidence::SourceSpan;
 #[cfg(any(feature = "core", feature = "harness"))]
-use bitrouter_ai::core::protocol::CoreError;
+use crate::managed_contract::protocol::CoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -11,13 +11,16 @@ mod authority_tests;
 use std::sync::Arc;
 
 use crate::core::session::CoreSession;
+use crate::managed_contract::protocol::{
+    BETA, CoreError, ErrorCode, TaskInput, ToolResult, VERSION,
+};
 use crate::storage::checkpoint::snapshot::responses::{ResponseExchange, ResponseToolResult};
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use bitrouter_ai::core::protocol::{BETA, CoreError, ErrorCode, TaskInput, ToolResult, VERSION};
-use bitrouter_ai::core::responses::{CreateRequest as Create, FunctionOutput};
+mod contract;
+use contract::{CreateRequest as Create, FunctionOutput};
 use http::Method;
 use tokio::sync::watch;
 

@@ -9,13 +9,13 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bitrouter::core::session::{CoreSession, HarnessPort};
 use bitrouter::gateway::caller::CallerContext;
-use bitrouter::storage::checkpoint::sha256;
-use bitrouter::storage::checkpoint::snapshot::RunStatus;
-use bitrouter_ai::core::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead};
+use bitrouter::managed_contract::protocol::{
     Bind, Capabilities, ContextMode, CoreError, DiscardableHistory, ErrorCode, HarnessManifest,
     Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate, TaskInput,
 };
+use bitrouter::storage::checkpoint::sha256;
+use bitrouter::storage::checkpoint::snapshot::RunStatus;
 use bitrouter_ai::types::Role;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -49,7 +49,7 @@ struct Harness {
 impl HarnessPort for Harness {
     async fn read_artifact(
         &self,
-        _reference: &bitrouter_ai::core::protocol::ArtifactRef,
+        _reference: &bitrouter::managed_contract::protocol::ArtifactRef,
         _offset: u64,
         _max_bytes: u64,
     ) -> std::result::Result<Vec<u8>, CoreError> {
@@ -376,7 +376,7 @@ models:
             "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
         ))
         .await?;
-    let bitrouter_ai::core::evidence::NativeTokenCost::ConfiguredEstimate {
+    let bitrouter::managed_contract::evidence::NativeTokenCost::ConfiguredEstimate {
         pricing_version,
         normalized_usage,
         ..
@@ -405,8 +405,8 @@ async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions()
         store::TrajectoryStore,
         types::{RequestStatus, TrajectoryEventKind},
     };
-    use bitrouter_ai::core::protocol::ModelMode;
     use bitrouter_ai::eval::EvalScope;
+    use bitrouter_ai::harness::agent::ModelMode;
     use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
     use bitrouter_ai::types::ApiProtocol;
     use sea_orm::EntityTrait;
@@ -443,7 +443,7 @@ async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions()
                     ),
                 ]),
                 routes: BTreeMap::from([(
-                    "code:generation|implement|normal".into(),
+                    "code:generation|implement|normal".parse()?,
                     "cheap".into(),
                 )]),
                 classifier_digest: None,

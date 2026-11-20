@@ -248,9 +248,9 @@ pub async fn run(command: Command, output: &Output) -> Result<()> {
                 workspace: workspace.canonicalize()?,
                 model,
                 model_mode: if model_policy {
-                    bitrouter_ai::core::protocol::ModelMode::Policy
+                    bitrouter_ai::harness::agent::ModelMode::Policy
                 } else {
-                    bitrouter_ai::core::protocol::ModelMode::Fixed
+                    bitrouter_ai::harness::agent::ModelMode::Fixed
                 },
                 effort,
                 max_output_tokens,

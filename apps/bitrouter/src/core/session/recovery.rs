@@ -2,10 +2,10 @@
 //! occurs until the reconciled snapshot is acknowledged under the current grant.
 
 use super::*;
+use crate::managed_contract::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
 use crate::storage::checkpoint::CheckpointBatchExt;
 use crate::storage::checkpoint::serialized_bytes;
 use crate::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
 
 impl CoreSession {
     /// The host must authenticate the durable harness and current ownership
@@ -896,7 +896,7 @@ fn reconcile_tools(
                 if call.result.is_none() {
                     reconciled = true;
                     invalidate_workspace |= result.status == ToolOutcome::EffectUnknown
-                        || (call.effect != bitrouter_ai::core::protocol::ToolEffect::Read
+                        || (call.effect != crate::managed_contract::protocol::ToolEffect::Read
                             && !matches!(
                                 result.status,
                                 ToolOutcome::NotExecuted | ToolOutcome::Denied
@@ -999,7 +999,7 @@ pub(super) fn artifact_map(
     let mut artifacts = BTreeMap::new();
     for reference in references {
         validate_id(&reference.artifact_id)?;
-        bitrouter_ai::core::checkpoint::validate_digest(&reference.sha256)?;
+        crate::managed_contract::checkpoint::validate_digest(&reference.sha256)?;
         if artifacts
             .insert(reference.artifact_id.clone(), reference.clone())
             .is_some_and(|previous| previous != reference)

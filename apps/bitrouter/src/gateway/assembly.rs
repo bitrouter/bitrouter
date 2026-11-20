@@ -142,10 +142,10 @@ impl App {
     #[cfg(feature = "core")]
     pub(crate) fn require_legacy_core(
         &self,
-    ) -> std::result::Result<(), bitrouter_ai::core::protocol::CoreError> {
+    ) -> std::result::Result<(), crate::managed_contract::protocol::CoreError> {
         if self.tenancy.is_some() {
-            return Err(bitrouter_ai::core::protocol::CoreError::rejected(
-                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+            return Err(crate::managed_contract::protocol::CoreError::rejected(
+                crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
                 "tenant Core requires the authenticated native harness",
             ));
         }
@@ -155,10 +155,11 @@ impl App {
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) fn native_session_service(
         &self,
-    ) -> std::result::Result<crate::tenancy::Service, bitrouter_ai::core::protocol::CoreError> {
+    ) -> std::result::Result<crate::tenancy::Service, crate::managed_contract::protocol::CoreError>
+    {
         self.tenancy.clone().ok_or_else(|| {
-            bitrouter_ai::core::protocol::CoreError::rejected(
-                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+            crate::managed_contract::protocol::CoreError::rejected(
+                crate::managed_contract::protocol::ErrorCode::UnauthorizedScope,
                 "authenticated native harness requires tenancy",
             )
         })
@@ -527,7 +528,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheck
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,
-        route: &bitrouter_ai::core::evidence::NativeRoute,
+        route: &crate::managed_contract::evidence::NativeRoute,
     ) -> Result<Option<u64>> {
         self.inner.attempt_report_byte_limit(request_id, route)
     }
@@ -609,7 +610,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheck
     async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
         self.inner.before_attempt(request_id, index).await
     }
-    async fn after_attempt(&self, report: bitrouter_ai::core::evidence::NativeAttemptReport) {
+    async fn after_attempt(&self, report: crate::managed_contract::evidence::NativeAttemptReport) {
         self.inner.after_attempt(report).await
     }
     async fn before_provider_work(

@@ -232,6 +232,7 @@ impl RequestCheckerRunner for RequestCheckRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::router::RoutingConfig;
     use crate::config::router::{
         DEFAULT_CHECKER_MAX_INPUT_BYTES, RouterChecks, RouterConfig, RouterDefaults,
         RouterRequestCheck, RouterSelection,
@@ -240,7 +241,6 @@ mod tests {
         Callback as CheckCallback, ContentFragment, ContentFragmentKind, ContentRole, Decision,
         RequestCheckCoverage, RequestCheckCoverageScope,
     };
-    use bitrouter_ai::routing::RoutingConfig;
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
     fn binding(config: &Config) -> anyhow::Result<RequestCheckBinding> {

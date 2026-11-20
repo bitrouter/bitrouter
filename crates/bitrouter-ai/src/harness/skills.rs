@@ -79,3 +79,61 @@ pub struct McpSkillCatalog {
     pub skills: Vec<HeldMcpSkill>,
     pub excluded: Vec<McpSkillProblem>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SkillSelector {
+    Local {
+        scope: LocalScope,
+        directory_id: String,
+    },
+    Mcp {
+        server: String,
+        uri: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SkillConstraints {
+    #[serde(default)]
+    pub include: Vec<SkillSelector>,
+    #[serde(default)]
+    pub exclude: Vec<SkillSelector>,
+}
+
+/// Invalid local or MCP skill selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct SkillConstraintError(&'static str);
+
+impl SkillConstraints {
+    pub fn validate(&self) -> Result<(), SkillConstraintError> {
+        if self.include.len().saturating_add(self.exclude.len()) > 128 {
+            return Err(SkillConstraintError(
+                "skill constraint count exceeds host budget",
+            ));
+        }
+        for (index, selector) in self.include.iter().enumerate() {
+            if self.include[..index].contains(selector) || self.exclude.contains(selector) {
+                return Err(SkillConstraintError(
+                    "skill constraints contain duplicate or contradictory includes",
+                ));
+            }
+        }
+        for selector in self.include.iter().chain(&self.exclude) {
+            match selector {
+                SkillSelector::Local { directory_id, .. } if directory_id.trim().is_empty() => {
+                    return Err(SkillConstraintError("skill directory identity is empty"));
+                }
+                SkillSelector::Mcp { server, uri }
+                    if server.trim().is_empty() || uri.trim().is_empty() =>
+                {
+                    return Err(SkillConstraintError("MCP skill source identity is empty"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}

@@ -44,6 +44,4 @@ pub struct ArtifactIdentity {
     /// Cargo with `--no-default-features` to reproduce a custom capability set.
     pub features: Vec<String>,
     pub profile: DistributionProfile,
-    /// Build fingerprint including the existing handoff and migration sources.
-    pub handoff_build_id: String,
 }

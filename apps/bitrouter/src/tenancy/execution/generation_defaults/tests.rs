@@ -72,7 +72,7 @@ fn direct_body_decode_rejects_duplicate_reserved_and_inner_members_before_value_
         assert!(serde_json::from_str::<OrderedBody>(raw).is_err(), "{raw}");
     }
     let decoded: OrderedBody = serde_json::from_str(
-        r#"{"model":"r","bitrouter_generation_defaults":{"schema_version":1,"top_k":7}}"#,
+        r#"{"model":"r","bitrouter_generation_defaults_envelope":{"schema_version":2,"canonical":{"schema_version":1,"top_k":7},"supplemental":{},"configuration_defaults":"apply"}}"#,
     )?;
     assert_eq!(
         decoded.request,
@@ -80,8 +80,9 @@ fn direct_body_decode_rejects_duplicate_reserved_and_inner_members_before_value_
     );
     assert_eq!(
         decoded
-            .defaults
-            .ok_or_else(|| anyhow::anyhow!("defaults"))?
+            .envelope
+            .and_then(|envelope| envelope.canonical)
+            .context("defaults")?
             .top_k,
         Some(7)
     );
@@ -101,8 +102,8 @@ fn envelope_member_is_reserved_on_nonordered_protocol_parsing_only() -> Result<(
         };
         crate::gateway::http::parse_input(&protocol, body.clone())?;
         let mut old = body.clone();
-        old[BODY_MEMBER] = json!({"schema_version":1});
-        crate::gateway::http::parse_input(&protocol, old)?;
+        old[REMOVED_DEFAULTS_MEMBER] = json!({"schema_version":1});
+        assert!(crate::gateway::http::parse_input(&protocol, old).is_err());
         for value in [Value::Null, json!({"schema_version":1,"supplemental":{}})] {
             let mut new = body.clone();
             new[ENVELOPE_BODY_MEMBER] = value;
@@ -113,12 +114,10 @@ fn envelope_member_is_reserved_on_nonordered_protocol_parsing_only() -> Result<(
 }
 
 #[test]
-fn versioned_raw_envelope_decoder_preserves_exact_numeric_tokens_and_depth() -> Result<()> {
+fn raw_envelope_decoder_preserves_exact_numeric_tokens_and_depth() -> Result<()> {
     let raw = r#"{"bitrouter_generation_defaults_envelope":{"schema_version":2.0,"canonical":{"schema_version":1e0,"seed":9.223372036854775807e18},"supplemental":{},"configuration_defaults":"preserve_absence"}}"#;
     let decoded: OrderedBody = serde_json::from_str(raw)?;
-    let Envelope::V2(value) = decoded.envelope.context("envelope")? else {
-        anyhow::bail!("wrong version")
-    };
+    let value = decoded.envelope.context("envelope")?;
     ensure!(value.canonical.as_ref().context("canonical")?.seed == Some(i64::MAX));
     value.digest()?;
     for bad in [

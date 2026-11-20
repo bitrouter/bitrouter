@@ -20,9 +20,9 @@ use crate::gateway::{
     },
     routing::{plan::Plan, preparation::Prepared},
 };
+use crate::managed_contract::evidence::{NativeAttemptReport, NativeRoute};
 use async_trait::async_trait;
 use bitrouter_ai::{
-    core::evidence::{NativeAttemptReport, NativeRoute},
     tenancy::operation::ErrorCode,
     types::{Message, Prompt, StreamPart},
 };

@@ -2,6 +2,7 @@
 //! Only this module constructs the binding used for the local harness step.
 
 use super::local::{Journal, error};
+use crate::managed_contract::protocol::{CoreError, validate_id};
 use crate::{
     storage::checkpoint::{
         CheckpointBatchExt, ack_for_batch,
@@ -9,7 +10,6 @@ use crate::{
     },
     tenancy::execution::session::Binding,
 };
-use bitrouter_ai::core::protocol::{CoreError, validate_id};
 use bitrouter_ai::harness::inspection::AgentStatus;
 use std::sync::Arc;
 

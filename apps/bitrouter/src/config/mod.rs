@@ -23,7 +23,7 @@
 pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
 
 use bitrouter_ai::control::ControlScope;
-use bitrouter_ai::routing::PolicyModelTarget;
+use bitrouter_ai::policy::Target;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -523,15 +523,15 @@ impl RegistryConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyTableConfig {
     /// The predictor strategy used for `fingerprints`. Active policy routing
-    /// uses only canonical source-independent `semantic_route/v1` keys.
+    /// uses only canonical model route classes.
     pub key_strategy: PolicyKeyStrategy,
     /// Tier name → the model id every request on that tier is routed to. The
     /// value is fed straight into the routing table, so it may be a bare
     /// canonical id (resolved via the cascade/registry) or an explicit
     /// `provider:model` id (a Strategy-1 direct route). The section is inert
     /// while this map is empty.
-    pub tiers: HashMap<String, PolicyModelTarget>,
-    /// Canonical `semantic_route/v1|<task-family>|<role>|<risk>` key → tier name.
+    pub tiers: HashMap<String, Target>,
+    /// Canonical `<task-family>|<role>|<risk>` key → tier name.
     /// Lookup first tries the exact key, then the same role/risk under the
     /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
     pub fingerprints: HashMap<String, String>,
@@ -579,7 +579,7 @@ impl<'de> Deserialize<'de> for PolicyKeyStrategy {
         match value.as_str() {
             "agent_trace" => Ok(Self::AgentTrace),
             "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
-                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical semantic_route/v1 routes"
+                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with model route classes"
             ))),
             _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
         }
@@ -594,54 +594,10 @@ impl schemars::JsonSchema for PolicyKeyStrategy {
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Active policy routing uses canonical source-independent semantic_route/v1 predictive keys.",
+            "description": "Active policy routing uses canonical model route classes.",
             "enum": ["agent_trace"],
         })
     }
-}
-
-/// Parse the one canonical predictive policy-key shape.
-///
-/// The returned tuple is `(task_family, next_step_role, risk)`. Keeping this
-/// boundary in the SDK lets configuration validation and the runtime predictor
-/// share one public wire contract without making observed telemetry routable.
-pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
-    let mut segments = value.split('|');
-    let (Some(namespace), Some(task_family), Some(role), Some(risk), None) = (
-        segments.next(),
-        segments.next(),
-        segments.next(),
-        segments.next(),
-        segments.next(),
-    ) else {
-        return None;
-    };
-    if namespace != "semantic_route/v1"
-        || !matches!(
-            task_family,
-            "code:generation"
-                | "code:debugging"
-                | "code:review"
-                | "code:sql_database"
-                | "code:frontend_ui"
-                | "code:devops_config"
-                | "code:repository_analysis"
-                | "agent:multi_step_planning"
-                | "agent:workflow_execution"
-                | "agent:web_research"
-                | "agent:memory_operations"
-                | "agent:general"
-                | "unknown"
-        )
-        || !matches!(
-            role,
-            "orchestrate" | "implement" | "mechanical" | "verify" | "finalize" | "unknown"
-        )
-        || !matches!(risk, "normal" | "context" | "guarded")
-    {
-        return None;
-    }
-    Some((task_family, role, risk))
 }
 
 /// Online adequacy-learning settings — the `policy_table.adequacy` block.
@@ -1048,7 +1004,7 @@ pub struct PricingConfig {
     /// Published tariff's processing profile. A mismatch with the effective
     /// endpoint makes application price evidence unavailable.
     #[serde(default)]
-    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
@@ -1481,12 +1437,12 @@ pub struct ProviderModel {
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
-    pub token_limits: bitrouter_ai::core::evidence::ModelTokenLimits,
+    pub token_limits: crate::managed_contract::evidence::ModelTokenLimits,
     /// Explicit support for a provider input-token counting endpoint. Managed
     /// requests require a successful count when enabled; ordinary calls do not
     /// invoke it. API wire compatibility alone does not enable counting.
     #[serde(default)]
-    pub input_token_counting: Option<bitrouter_ai::core::evidence::InputTokenCounting>,
+    pub input_token_counting: Option<crate::managed_contract::evidence::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
@@ -1865,9 +1821,9 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
 /// Model-only source compilation has its own strict validator.
 pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
     for fingerprint in policy.fingerprints.keys() {
-        if parse_semantic_route_key(fingerprint).is_none() {
+        if bitrouter_ai::policy::RouteClass::parse_key(fingerprint).is_none() {
             return Err(BitrouterError::bad_request(format!(
-                "policy_table fingerprint '{fingerprint}' is not a canonical semantic_route/v1|<task-family>|<role>|<risk> key"
+                "policy_table fingerprint '{fingerprint}' is not a canonical <task-family>|<role>|<risk> key"
             )));
         }
     }

@@ -12,7 +12,6 @@
 //! rest of this file — and every caller — is platform-agnostic.
 
 use crate::reload::ReloadReportRuntime;
-use bitrouter_ai::control::status::HandoffActivity;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,6 +41,15 @@ use {
     bitrouter_ai::control::administration::PolicyReport,
     bitrouter_ai::control::administration::ProvidersReport,
 };
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HandoffActivity {
+    pub operations: usize,
+    pub supervised_runs: Option<usize>,
+    pub route_leases: usize,
+    pub acp_recordings: Option<u64>,
+    pub drain_in_progress: bool,
+}
 
 /// Instance-fenced local evolution control, distinct from handoff and ACP versions.
 pub const EVOLUTION_CONTROL_VERSION: u16 = 1;

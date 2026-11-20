@@ -1,7 +1,7 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
-use bitrouter_ai::core::evidence::NativeTokenCost;
+use crate::managed_contract::evidence::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderAttemptSource {
     pub attempt_index: u32,
-    pub route: bitrouter_ai::core::evidence::NativeRoute,
+    pub route: crate::managed_contract::evidence::NativeRoute,
     /// Canonical output contract remains live after the original turn retires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,

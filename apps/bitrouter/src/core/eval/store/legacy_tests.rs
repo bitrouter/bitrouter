@@ -15,7 +15,7 @@ async fn store() -> anyhow::Result<EvalStore> {
 pub(super) fn subject() -> anyhow::Result<EvalSubject> {
     let evidence = Vec::new();
     Ok(EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: "eval-1".into(),
         scope: EvalScope::Request,
@@ -32,7 +32,7 @@ pub(super) fn subject() -> anyhow::Result<EvalSubject> {
 
 pub(super) fn result(verdict: EvalVerdict) -> EvaluationResult {
     EvaluationResult {
-        schema_version: 1,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id: "eval-1".into(),
         evidence_digest: "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
             .into(),
@@ -97,15 +97,19 @@ async fn snapshot_root_commits_subject_decisions() -> anyhow::Result<()> {
         subject.decisions = vec![EvalDecisionRef {
             decision_id: "decision-1".into(),
             policy: "auto".into(),
-            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
-            request_key: "semantic_route/v1|unknown|implement|normal".into(),
+            route_projection: "unknown|implement|normal"
+                .parse()
+                .expect("valid route class"),
+            request_key: "unknown|implement|normal"
+                .parse()
+                .expect("valid route class"),
             selected_tier: selected_tier.into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             policy_digest:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
-            experiment: None,
+
             route_measurement: None,
         }];
         store.insert_subject(&subject).await?;

@@ -3,8 +3,8 @@
 use bitrouter_ai::{
     tenancy::{
         generation_defaults::{
-            BODY_MEMBER, CanonicalGenerationDefaultsV1, ConfigurationDefaults,
-            ENVELOPE_BODY_MEMBER, GenerationDefaultsEnvelopeV1, GenerationDefaultsEnvelopeV2,
+            CanonicalGenerationDefaultsV1, ConfigurationDefaults, ENVELOPE_BODY_MEMBER,
+            GenerationDefaultsEnvelope,
         },
         operation::ErrorCode,
     },
@@ -36,56 +36,23 @@ impl Submission {
             return self.parse_generate_content(body);
         }
         let invalid = || Failure::from(ErrorCode::InvalidRequest);
-        let (value, defaults, envelope) = if let Some(selection) = &self.binding.selection {
+        let (value, envelope) = if let Some(selection) = &self.binding.selection {
             let body: OrderedBody = serde_json::from_slice(body).map_err(|_| invalid())?;
-            let digest = match (&body.defaults, &body.envelope) {
-                (Some(defaults), None) => Some(defaults.digest()),
-                (None, Some(envelope)) => Some(envelope.digest()),
-                (None, None) => None,
-                _ => return Err(invalid()),
-            }
-            .transpose()
-            .map_err(|_| invalid())?;
-            if digest != selection.generation_defaults_digest {
+            if digest(body.envelope.as_ref()).map_err(|_| invalid())?
+                != selection.generation_defaults_digest
+            {
                 return Err(invalid());
             }
-            (Value::Object(body.request), body.defaults, body.envelope)
+            (Value::Object(body.request), body.envelope)
         } else {
-            // Strict v1 retains its existing protocol-body decoding contract.
-            (
-                serde_json::from_slice(body).map_err(|_| invalid())?,
-                None,
-                None,
-            )
+            (serde_json::from_slice(body).map_err(|_| invalid())?, None)
         };
         let mut input =
             crate::gateway::http::parse_input(protocol, value).map_err(|_| invalid())?;
-        if let Some(defaults) = defaults {
-            let prompt = input.generation_prompt_mut().ok_or_else(invalid)?;
-            apply(&defaults, &mut prompt.params);
-        }
         if let Some(envelope) = envelope {
-            let (canonical, supplemental, configuration_defaults) = match &envelope {
-                Envelope::V1(value) => (
-                    &value.canonical,
-                    &value.supplemental,
-                    ConfigurationDefaults::Apply,
-                ),
-                Envelope::V2(value) => (
-                    &value.canonical,
-                    &value.supplemental,
-                    value.configuration_defaults,
-                ),
-            };
             let prompt = input.generation_prompt_mut().ok_or_else(invalid)?;
-            if let Some(canonical) = canonical {
-                apply(canonical, &mut prompt.params);
-            }
-            crate::gateway::pipeline::context::apply_parameter_defaults(
-                &mut prompt.params,
-                supplemental.iter(),
-            );
-            self.configuration_defaults = configuration_defaults;
+            apply_envelope(&envelope, &mut prompt.params);
+            self.configuration_defaults = envelope.configuration_defaults;
         }
         Ok(input)
     }
@@ -95,67 +62,29 @@ impl Submission {
         let invalid = || Failure::from(ErrorCode::InvalidRequest);
         let selection = self.binding.selection.as_ref().ok_or_else(invalid)?;
         let body: NativeBody = serde_json::from_slice(bytes).map_err(|_| invalid())?;
-        let digest = match (&body.defaults, &body.envelope) {
-            (Some(defaults), None) => Some(defaults.digest()),
-            (None, Some(envelope)) => Some(envelope.digest()),
-            (None, None) => None,
-            _ => return Err(invalid()),
-        }
-        .transpose()
-        .map_err(|_| invalid())?;
-        if digest != selection.generation_defaults_digest {
+        if digest(body.envelope.as_ref()).map_err(|_| invalid())?
+            != selection.generation_defaults_digest
+        {
             return Err(invalid());
         }
-        // Serialize only retained original tokens; the native DTO consumes its
-        // request field directly through its duplicate-aware token reader.
+        // Preserve the original tokens for the native request decoder.
         let raw = serde_json::to_vec(&body.request).map_err(|_| invalid())?;
         let request = serde_json::from_slice(&raw).map_err(|_| invalid())?;
-        let default_layer = match (&body.defaults, &body.envelope) {
-            (Some(value), None) => Some((
-                BODY_MEMBER.into(),
-                serde_json::to_value(value).map_err(|_| invalid())?,
-            )),
-            (None, Some(value)) => Some((
-                ENVELOPE_BODY_MEMBER.into(),
-                serde_json::to_value(value).map_err(|_| invalid())?,
-            )),
-            (None, None) => None,
-            _ => return Err(invalid()),
-        };
+        let default_layer = body
+            .envelope
+            .as_ref()
+            .map(|value| {
+                serde_json::to_value(value).map(|value| (ENVELOPE_BODY_MEMBER.into(), value))
+            })
+            .transpose()
+            .map_err(|_| invalid())?;
         let mut input = Input::new(request, default_layer).map_err(|_| invalid())?;
-        // Native absence is preserved unless an explicit defaults envelope
-        // selects the configuration layer. The three ordinary wires retain
-        // their existing Apply default above.
         self.configuration_defaults = ConfigurationDefaults::PreserveAbsence;
-        if let Some(defaults) = &body.defaults {
-            if let Some(prompt) = input.projection_mut() {
-                apply(defaults, &mut prompt.params);
-            }
-            self.configuration_defaults = ConfigurationDefaults::Apply;
-        }
         if let Some(envelope) = &body.envelope {
-            let (canonical, supplemental, configuration) = match envelope {
-                Envelope::V1(value) => (
-                    &value.canonical,
-                    &value.supplemental,
-                    ConfigurationDefaults::Apply,
-                ),
-                Envelope::V2(value) => (
-                    &value.canonical,
-                    &value.supplemental,
-                    value.configuration_defaults,
-                ),
-            };
             if let Some(prompt) = input.projection_mut() {
-                if let Some(defaults) = canonical {
-                    apply(defaults, &mut prompt.params);
-                }
-                crate::gateway::pipeline::context::apply_parameter_defaults(
-                    &mut prompt.params,
-                    supplemental.iter(),
-                );
+                apply_envelope(envelope, &mut prompt.params);
             }
-            self.configuration_defaults = configuration;
+            self.configuration_defaults = envelope.configuration_defaults;
         }
         input.seal_defaults();
         self.generate_content = Some(input.clone());
@@ -163,47 +92,21 @@ impl Submission {
     }
 }
 
-// Keep the original JSON tokens through version selection. Serde's untagged
-// buffering would erase exact decimal/exponent spellings required by the integer
-// contract. Both concrete decoders reject unknown fields and duplicate keys;
-// digest() validates the exact version before any layer choice can take effect.
-#[derive(Clone, serde::Serialize)]
-#[serde(untagged)]
-enum Envelope {
-    V1(GenerationDefaultsEnvelopeV1),
-    V2(GenerationDefaultsEnvelopeV2),
+fn digest(
+    envelope: Option<&GenerationDefaultsEnvelope>,
+) -> Result<
+    Option<bitrouter_ai::tenancy::identity::Digest>,
+    bitrouter_ai::tenancy::validation::ValidationError,
+> {
+    envelope.map(GenerationDefaultsEnvelope::digest).transpose()
 }
 
-impl Envelope {
-    fn digest(
-        &self,
-    ) -> Result<
-        bitrouter_ai::tenancy::identity::Digest,
-        bitrouter_ai::tenancy::validation::ValidationError,
-    > {
-        match self {
-            Self::V1(value) => value.digest(),
-            Self::V2(value) => value.digest(),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Envelope {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
-        if let Ok(value) = serde_json::from_str::<GenerationDefaultsEnvelopeV1>(raw.get()) {
-            return Ok(Self::V1(value));
-        }
-        serde_json::from_str::<GenerationDefaultsEnvelopeV2>(raw.get())
-            .map(Self::V2)
-            .map_err(serde::de::Error::custom)
-    }
-}
+// This member is invalid on all routes and must never reach a provider.
+const REMOVED_DEFAULTS_MEMBER: &str = "bitrouter_generation_defaults";
 
 struct OrderedBody {
     request: Map<String, Value>,
-    defaults: Option<CanonicalGenerationDefaultsV1>,
-    envelope: Option<Envelope>,
+    envelope: Option<GenerationDefaultsEnvelope>,
 }
 
 impl<'de> Deserialize<'de> for OrderedBody {
@@ -217,21 +120,18 @@ impl<'de> Deserialize<'de> for OrderedBody {
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
                 let mut body = OrderedBody {
                     request: Map::new(),
-                    defaults: None,
                     envelope: None,
                 };
                 while let Some(key) = map.next_key::<String>()? {
-                    if key == BODY_MEMBER {
-                        if body.defaults.is_some() || body.envelope.is_some() {
-                            return Err(serde::de::Error::duplicate_field(BODY_MEMBER));
-                        }
-                        // Decode directly, before Value could erase duplicate keys.
-                        body.defaults = Some(map.next_value()?);
-                    } else if key == ENVELOPE_BODY_MEMBER {
-                        if body.defaults.is_some() || body.envelope.is_some() {
-                            return Err(serde::de::Error::custom(
-                                "competing generation defaults members",
-                            ));
+                    if key == REMOVED_DEFAULTS_MEMBER {
+                        return Err(serde::de::Error::unknown_field(
+                            &key,
+                            &[ENVELOPE_BODY_MEMBER],
+                        ));
+                    }
+                    if key == ENVELOPE_BODY_MEMBER {
+                        if body.envelope.is_some() {
+                            return Err(serde::de::Error::duplicate_field(ENVELOPE_BODY_MEMBER));
                         }
                         body.envelope = Some(map.next_value()?);
                     } else {
@@ -247,8 +147,7 @@ impl<'de> Deserialize<'de> for OrderedBody {
 
 struct NativeBody {
     request: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>>,
-    defaults: Option<CanonicalGenerationDefaultsV1>,
-    envelope: Option<Envelope>,
+    envelope: Option<GenerationDefaultsEnvelope>,
 }
 
 impl<'de> Deserialize<'de> for NativeBody {
@@ -262,18 +161,18 @@ impl<'de> Deserialize<'de> for NativeBody {
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
                 let mut body = NativeBody {
                     request: Default::default(),
-                    defaults: None,
                     envelope: None,
                 };
                 while let Some(key) = map.next_key::<String>()? {
-                    if key == BODY_MEMBER {
-                        if body.defaults.is_some() || body.envelope.is_some() {
-                            return Err(serde::de::Error::custom("duplicate native defaults"));
-                        }
-                        body.defaults = Some(map.next_value()?);
-                    } else if key == ENVELOPE_BODY_MEMBER {
-                        if body.defaults.is_some() || body.envelope.is_some() {
-                            return Err(serde::de::Error::custom("competing native defaults"));
+                    if key == REMOVED_DEFAULTS_MEMBER {
+                        return Err(serde::de::Error::unknown_field(
+                            &key,
+                            &[ENVELOPE_BODY_MEMBER],
+                        ));
+                    }
+                    if key == ENVELOPE_BODY_MEMBER {
+                        if body.envelope.is_some() {
+                            return Err(serde::de::Error::duplicate_field(ENVELOPE_BODY_MEMBER));
                         }
                         body.envelope = Some(map.next_value()?);
                     } else {
@@ -290,6 +189,16 @@ impl<'de> Deserialize<'de> for NativeBody {
         }
         d.deserialize_map(Body)
     }
+}
+
+fn apply_envelope(envelope: &GenerationDefaultsEnvelope, params: &mut GenerationParams) {
+    if let Some(defaults) = &envelope.canonical {
+        apply(defaults, params);
+    }
+    crate::gateway::pipeline::context::apply_parameter_defaults(
+        params,
+        envelope.supplemental.iter(),
+    );
 }
 
 fn apply(defaults: &CanonicalGenerationDefaultsV1, params: &mut GenerationParams) {

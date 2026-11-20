@@ -7,8 +7,7 @@ use bitrouter::eval::EvalService;
 use bitrouter::eval::api;
 use bitrouter::eval::store::EvalStore;
 use {
-    bitrouter::storage::evaluation::evidence_digest,
-    bitrouter_ai::eval::EVAL_RESULT_SCHEMA_VERSION, bitrouter_ai::eval::EvalScope,
+    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EvalScope,
     bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
     bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
     bitrouter_ai::eval::EvaluatorKind, bitrouter_ai::eval::MetricUnit,
@@ -146,7 +145,7 @@ fn path_text(path: &Path) -> anyhow::Result<&str> {
 fn subject() -> anyhow::Result<EvalSubject> {
     let evidence = Vec::new();
     Ok(EvalSubject {
-        schema_version: bitrouter_ai::eval::EVAL_SUBJECT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         identity: bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {},
         eval_id: "eval-equivalence".into(),
         scope: EvalScope::Task,
@@ -163,7 +162,7 @@ fn subject() -> anyhow::Result<EvalSubject> {
 
 fn result(subject: &EvalSubject) -> EvaluationResult {
     EvaluationResult {
-        schema_version: EVAL_RESULT_SCHEMA_VERSION,
+        spec_version: bitrouter_ai::eval::SpecVersion::Beta1,
         eval_id: subject.eval_id.clone(),
         evidence_digest: subject.evidence_digest.clone(),
         evaluator: EvaluatorIdentity {

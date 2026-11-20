@@ -305,8 +305,7 @@ fn named_policy_accepts_explicit_model_effort_context_actions() -> crate::gatewa
     strong:
       model: openai-codex:gpt-5.6-sol
       effort: high
-      context: evidence
-    economy: { model: openai-codex:gpt-5.6-sol, context: evidence }
+    economy: { model: openai-codex:gpt-5.6-sol }
   default_tier: strong
 "#,
     )?;
@@ -335,7 +334,6 @@ fn policy_table_rejects_unknown_compound_target_fields() -> crate::gateway::erro
     strong:
       model: openai-codex:gpt-5.6-sol
       effort: high
-      context: evidence
       typo: ignored-would-be-unsafe
   default_tier: strong
 "#,
@@ -1262,9 +1260,9 @@ fn policy_table_agent_trace_key_strategy_is_the_only_supported_strategy()
     let yaml = r#"
   key_strategy: agent_trace
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": cheap
+    "unknown|orchestrate|normal": cheap
 "#;
     let cfg = parse_named_table(yaml)?;
     assert_eq!(cfg.key_strategy, PolicyKeyStrategy::AgentTrace);
@@ -1273,7 +1271,8 @@ fn policy_table_agent_trace_key_strategy_is_the_only_supported_strategy()
     assert!(serialized.contains("key_strategy: agent_trace"));
 
     let retired = parse_named_table(
-        "  key_strategy: workflow_state\n  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n")
+        "  key_strategy: workflow_state\n  tiers: { cheap: { model: vendor/cheap } }\n",
+    )
     .expect_err("retired workflow_state strategy must fail");
     assert!(retired.to_string().contains("no longer supported"));
 
@@ -1293,7 +1292,8 @@ fn policy_key_strategy_serializes_as_the_only_canonical_strategy() {
 #[test]
 fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
     let err = parse_named_table(
-        "  key_strategy: legacy_fingerprint\n  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n")
+        "  key_strategy: legacy_fingerprint\n  tiers: { cheap: { model: vendor/cheap } }\n",
+    )
     .unwrap_err();
     assert!(
         err.to_string().contains(
@@ -1307,16 +1307,16 @@ fn policy_table_rejects_legacy_fingerprint_strategy_with_migration_guidance() {
 fn policy_table_rejects_retired_route_key_shapes() {
     for route_key in [
         "agent_trace/v2|edit|normal",
-        "semantic_route/v1|implement|normal",
+        "implement|normal",
         "semantic_route/v2|code:review|verify|normal",
-        "semantic_route/v1|code:review|developer|normal",
+        "code:review|developer|normal",
     ] {
         let yaml = format!(
-            "  tiers: {{ cheap: {{ model: vendor/cheap, context: evidence }} }}\n  fingerprints:\n    \"{route_key}\": cheap\n"
+            "  tiers: {{ cheap: {{ model: vendor/cheap }} }}\n  fingerprints:\n    \"{route_key}\": cheap\n"
         );
         let error = parse_named_table(&yaml).expect_err("retired route key must fail");
         assert!(
-            error.to_string().contains("canonical semantic_route/v1"),
+            error.to_string().contains("canonical"),
             "unexpected error for {route_key}: {error}"
         );
     }
@@ -1328,7 +1328,7 @@ fn inert_policy_table_still_rejects_retired_route_key_shapes() {
         .expect_err("an inert table must not hide a retired route key");
 
     assert!(
-        error.to_string().contains("canonical semantic_route/v1"),
+        error.to_string().contains("canonical"),
         "unexpected error: {error}"
     );
 }
@@ -1336,7 +1336,7 @@ fn inert_policy_table_still_rejects_retired_route_key_shapes() {
 #[test]
 fn policy_table_rejects_the_removed_session_downgrade_budget() {
     let err = parse_named_table(
-        "  tiers: { cheap: { model: vendor/cheap, context: evidence } }\n  adequacy:\n    max_downgraded_requests_per_session: 1\n")
+        "  tiers: { cheap: { model: vendor/cheap } }\n  adequacy:\n    max_downgraded_requests_per_session: 1\n")
     .unwrap_err();
     assert!(
         err.to_string().contains(
@@ -1376,11 +1376,11 @@ fn policy_schema_hides_the_removed_session_downgrade_budget() {
 fn parses_policy_table_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    flagship: { model: vendor/flagship, context: evidence }
+    cheap: { model: vendor/cheap }
+    flagship: { model: vendor/flagship }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": flagship
-    "semantic_route/v1|unknown|mechanical|normal": cheap
+    "unknown|orchestrate|normal": flagship
+    "unknown|mechanical|normal": cheap
   default_tier: flagship
   tool_use_tier: flagship
   tool_safe_tiers:
@@ -1388,12 +1388,12 @@ fn parses_policy_table_section() -> std::result::Result<(), Box<dyn std::error::
 "#;
     let cfg = parse_named_table(yaml)?;
     assert_eq!(
-        cfg.tiers.get("cheap").map(PolicyModelTarget::model),
+        cfg.tiers.get("cheap").map(Target::model),
         Some("vendor/cheap")
     );
     assert_eq!(
         cfg.fingerprints
-            .get("semantic_route/v1|unknown|orchestrate|normal")
+            .get("unknown|orchestrate|normal")
             .map(String::as_str),
         Some("flagship")
     );
@@ -1409,9 +1409,9 @@ fn policy_table_unknown_tier_is_a_400() {
     // not a silent fall-through.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   fingerprints:
-    "semantic_route/v1|unknown|orchestrate|normal": flagship
+    "unknown|orchestrate|normal": flagship
 "#;
     let err = parse_named_table(yaml).unwrap_err();
     assert!(
@@ -1426,8 +1426,8 @@ fn policy_table_tool_use_tier_must_be_tool_safe() {
     // clamps tool requests to is not actually safe.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   tool_use_tier: capable
   tool_safe_tiers:
     - cheap
@@ -1444,8 +1444,8 @@ fn policy_table_tool_use_tier_must_be_tool_safe() {
 fn parses_adequacy_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   default_tier: capable
   adequacy:
     enabled: true
@@ -1475,7 +1475,7 @@ fn adequacy_defaults_when_section_omitted() -> std::result::Result<(), Box<dyn s
     // A `policy_table:` with no `adequacy:` block is off, with sane defaults.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
 "#;
     let cfg = parse_named_table(yaml)?;
     let adequacy = &cfg.adequacy;
@@ -1496,7 +1496,7 @@ fn adequacy_defaults_when_section_omitted() -> std::result::Result<(), Box<dyn s
 fn invalid_reliability_window_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1514,7 +1514,7 @@ fn invalid_reliability_window_is_a_400() {
 fn invalid_reliability_error_rate_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1532,7 +1532,7 @@ fn invalid_reliability_error_rate_is_a_400() {
 fn adequacy_unknown_escalation_tier_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   adequacy:
     enabled: true
     escalation_tier: capable
@@ -1551,7 +1551,7 @@ fn adequacy_enabled_without_escalation_target_is_a_400() {
     // have nowhere to escalate to.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   adequacy:
     enabled: true
 "#;
@@ -1566,8 +1566,8 @@ fn adequacy_enabled_without_escalation_target_is_a_400() {
 fn parses_exploration_section() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
-    capable: { model: vendor/capable, context: evidence }
+    cheap: { model: vendor/cheap }
+    capable: { model: vendor/capable }
   default_tier: capable
   adequacy:
     enabled: true
@@ -1595,7 +1595,7 @@ fn parses_exploration_section() -> std::result::Result<(), Box<dyn std::error::E
 fn exploration_defaults_when_omitted() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
 "#;
     let cfg = parse_named_table(yaml)?;
     let adequacy = &cfg.adequacy;
@@ -1609,7 +1609,7 @@ fn exploration_defaults_when_omitted() -> std::result::Result<(), Box<dyn std::e
 fn exploration_unknown_explore_tier_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1627,7 +1627,7 @@ fn exploration_unknown_explore_tier_is_a_400() {
 fn exploration_enabled_without_target_is_a_400() {
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     enabled: true
@@ -1647,7 +1647,7 @@ fn exploration_requires_adequacy_enabled() {
     // only wired when learning is on) — reject it loudly.
     let yaml = r#"
   tiers:
-    cheap: { model: vendor/cheap, context: evidence }
+    cheap: { model: vendor/cheap }
   default_tier: cheap
   adequacy:
     explore_enabled: true

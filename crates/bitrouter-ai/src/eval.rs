@@ -1,6 +1,7 @@
 //! Evaluation exchange contracts. Authority, evidence admission, digest
 //! construction and persistence are service-owned; these types perform no I/O.
 
+use crate::policy::RouteClass;
 use crate::tenancy::{
     configuration::ResourceRef,
     identity::{ExecutionId, InstallationId, RevisionId, TenantId},
@@ -9,11 +10,17 @@ use crate::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Current closed subject identity contract.
-pub const EVAL_SUBJECT_SCHEMA_VERSION: u32 = 2;
-/// Result payloads inherit identity from their validated subject.
-pub const EVAL_RESULT_SCHEMA_VERSION: u32 = 1;
-pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;
+/// Current evaluation exchange and frozen-evidence contract.
+pub const SPEC_VERSION: &str = "eval/1.0.0-beta.1";
+
+/// Closed discriminator for evaluation exchange documents.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpecVersion {
+    /// The model-routing evaluation exchange.
+    #[serde(rename = "eval/1.0.0-beta.1")]
+    Beta1,
+}
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -24,43 +31,15 @@ pub enum EvalScope {
     Task,
 }
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentArm {
-    Control,
-    Challenger,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExperimentAssignmentUnit {
-    Task,
-    Episode,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvalExperimentRef {
-    pub experiment_id: String,
-    pub arm: ExperimentArm,
-    pub assignment_unit: ExperimentAssignmentUnit,
-    pub assignment_id_digest: String,
-    pub challenger_propensity_ppm: u32,
-}
-
 /// One semantic policy action declared by the immutable routing snapshot.
 ///
-/// Probabilities describe the logging policy before deterministic tool,
-/// progress, or continuation guards. The effective action remains
+/// Probabilities describe the logging policy before deterministic tool or
+/// continuation guards. The effective action remains
 /// [`EvalDecisionRef::selected_tier`].
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteActionCandidate {
-    pub context: crate::routing::ContextStrategy,
     pub tier: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,7 +53,6 @@ pub struct RouteActionCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteDecisionMeasurement {
-    pub schema_version: u32,
     pub logging_action_tier: String,
     pub logging_action_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,8 +68,8 @@ pub struct RouteDecisionMeasurement {
 pub struct EvalDecisionRef {
     pub decision_id: String,
     pub policy: String,
-    pub route_projection: String,
-    pub request_key: String,
+    pub route_projection: RouteClass,
+    pub request_key: RouteClass,
     pub selected_tier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_effort: Option<ReasoningEffort>,
@@ -99,8 +77,6 @@ pub struct EvalDecisionRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_effort: Option<ReasoningEffort>,
     pub policy_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub experiment: Option<EvalExperimentRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_measurement: Option<RouteDecisionMeasurement>,
 }
@@ -192,9 +168,8 @@ impl EvalSubjectIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalSubject {
-    #[serde(deserialize_with = "subject_schema_version")]
-    #[cfg_attr(feature = "schema", schemars(range(min = 2, max = 2)))]
-    pub schema_version: u32,
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
     /// Exact service-validated profile and resource ownership.
     pub identity: EvalSubjectIdentity,
     pub eval_id: String,
@@ -210,19 +185,6 @@ pub struct EvalSubject {
     pub evidence: Vec<EvidenceItem>,
     pub evidence_digest: String,
     pub observed_at: String,
-}
-
-fn subject_schema_version<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<u32, D::Error> {
-    let version = u32::deserialize(deserializer)?;
-    if version == EVAL_SUBJECT_SCHEMA_VERSION {
-        Ok(version)
-    } else {
-        Err(serde::de::Error::custom(
-            "unsupported eval subject schema version",
-        ))
-    }
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -289,7 +251,8 @@ pub struct DecisionCredit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationResult {
-    pub schema_version: u32,
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
     pub eval_id: String,
     pub evidence_digest: String,
     pub evaluator: EvaluatorIdentity,
@@ -336,7 +299,10 @@ pub struct EvalSnapshotEntry {
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvalSnapshot {
+    /// Exact evaluation exchange contract.
+    pub spec_version: SpecVersion,
     pub evidence_root: String,
     pub frozen_at: String,
     pub entries: Vec<EvalSnapshotEntry>,

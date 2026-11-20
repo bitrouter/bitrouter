@@ -5,10 +5,10 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
-use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
-use bitrouter_ai::core::protocol::{
+use bitrouter::managed_contract::protocol::{
     Capabilities, HarnessManifest, HarnessTool, Limits, ToolEffect, VERSION,
 };
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use serde_json::json;
 
 fn main() -> Result<()> {

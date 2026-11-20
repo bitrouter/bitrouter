@@ -2,7 +2,7 @@
 //! Scheduling and execution transitions are implemented by core.
 
 use super::collaboration::Work;
-use bitrouter_ai::core::protocol::{CoreError, MaterialRef, TaskInput};
+use crate::managed_contract::protocol::{CoreError, MaterialRef, TaskInput};
 use serde::{Deserialize, Serialize};
 
 /// Facts on which retained history depends. Keep all distinct sources across

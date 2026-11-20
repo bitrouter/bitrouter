@@ -1,9 +1,9 @@
 //! Native run limits use the Core ledger, including retired child work.
 
 use crate::harness::agent::RunReport;
+use crate::managed_contract::protocol::{CoreError, ErrorCode};
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
 use crate::storage::checkpoint::snapshot::accounting::work::{CostWorkKind, CostWorkState};
-use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use bitrouter_ai::harness::agent::AgentConfig;
 
 #[derive(Clone)]

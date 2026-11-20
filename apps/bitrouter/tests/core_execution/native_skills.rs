@@ -6,8 +6,8 @@ use bitrouter::gateway::model::decision::{DecisionExecutor, DecisionRuntime};
 use bitrouter::skills::mcp::HeldMcpSkillExt;
 use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
 use bitrouter::storage::skills::{SkillCatalog, SkillSource};
-use bitrouter_ai::core::skills::{SkillConstraints, SkillSelector};
 use bitrouter_ai::harness::skills::{LocalScope, LocalSkill};
+use bitrouter_ai::harness::skills::{SkillConstraints, SkillSelector};
 use bitrouter_ai::types::Tool;
 use std::collections::BTreeMap;
 use tokio_util::sync::CancellationToken;
@@ -182,7 +182,7 @@ struct NativeSkills {
     catalog: Mutex<SkillCatalog>,
     bytes: Mutex<BTreeMap<String, Vec<u8>>>,
     reads: AtomicUsize,
-    consent_requests: Mutex<Vec<bitrouter_ai::core::skills::SkillConsentRequest>>,
+    consent_requests: Mutex<Vec<bitrouter::managed_contract::skills::SkillConsentRequest>>,
     read_gate: Mutex<Option<Arc<tokio::sync::Semaphore>>>,
     read_seen: tokio::sync::Semaphore,
     read_token: Mutex<Option<CancellationToken>>,
@@ -1305,7 +1305,10 @@ async fn restore_rejects_tampered_skill_policy_and_consent_before_execution() ->
             _ => return Err("invalid test mutation".into()),
         }
         payload.checkpoint.state = serde_json::to_value(snapshot)?;
-        *batch = bitrouter_ai::core::checkpoint::CheckpointBatch::encode(&payload, &store.limits)?;
+        *batch = bitrouter::managed_contract::checkpoint::CheckpointBatch::encode(
+            &payload,
+            &store.limits,
+        )?;
         let ack = store
             .acknowledgements
             .get_mut(&batch.identity.batch_id)

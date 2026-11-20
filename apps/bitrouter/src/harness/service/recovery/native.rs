@@ -2,8 +2,8 @@
 
 use super::{Active, RecoveredCall, Step};
 use crate::harness::storage::ExecutionRecord;
+use crate::managed_contract::protocol::ToolOutcome;
 use crate::storage::checkpoint::snapshot::SessionSnapshot;
-use bitrouter_ai::core::protocol::ToolOutcome;
 use bitrouter_ai::harness::item::CallOrigin;
 use bitrouter_ai::harness::item::CallRecord;
 use bitrouter_ai::harness::runtime::EffectStatus;
@@ -145,8 +145,8 @@ pub(super) fn observe(
                     .any(|observation| {
                         matches!(
                             observation.status,
-                            bitrouter_ai::core::protocol::ToolStatus::Running
-                                | bitrouter_ai::core::protocol::ToolStatus::Stopped
+                            crate::managed_contract::protocol::ToolStatus::Running
+                                | crate::managed_contract::protocol::ToolStatus::Stopped
                         )
                     }),
                 result: invocation.result.as_ref().map(|result| {
