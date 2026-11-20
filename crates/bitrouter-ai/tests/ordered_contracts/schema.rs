@@ -111,10 +111,9 @@ fn schema_bounds_versions_and_required_nulls_are_explicit() -> TestResult {
             "generate_content"
         ])
     );
-    for name in ["OrderedCapabilities"] {
-        assert_eq!(schemas[name]["properties"]["attempt_limit"]["minimum"], 1);
-        assert_eq!(schemas[name]["properties"]["attempt_limit"]["maximum"], 64);
-    }
+    let attempt_limit = &schemas["OrderedCapabilities"]["properties"]["attempt_limit"];
+    assert_eq!(attempt_limit["minimum"], 1);
+    assert_eq!(attempt_limit["maximum"], 64);
     assert_eq!(
         schemas["ExecutionUsageEvidence"]["properties"]["extractor_version"]["enum"],
         json!([1, 2])

@@ -403,11 +403,9 @@ fn evidence_cases(cases: &mut Vec<Case>) -> TestResult {
         true,
         false,
     )?;
-    for field in ["auxiliary"] {
-        let mut extra = base.clone();
-        extra[field] = Value::Null;
-        push::<ExecutionUsageEvidence>(cases, &format!("forbidden {field}"), extra, false, false);
-    }
+    let mut extra = base.clone();
+    extra["auxiliary"] = Value::Null;
+    push::<ExecutionUsageEvidence>(cases, "forbidden auxiliary", extra, false, false);
     for (field, linked) in [
         ("parent_execution_id", json!("parent")),
         ("child_execution_ids", json!(["child"])),
