@@ -35,7 +35,6 @@ pub(super) async fn validate(
         "tenancy_credentials",
         "tenancy_operations",
     ];
-    crate::tenancy::audit::recovery::fresh_admission_metadata(db, installation, false).await?;
     for table in &inventory.tables {
         let permitted = authority.contains(&table.name.as_str())
             || matches!(
@@ -99,6 +98,7 @@ pub(super) async fn validate(
             == i64::from(crate::tenancy::AUTHORITY_SCHEMA_VERSION),
         "current authority store format required"
     );
+    crate::tenancy::audit::recovery::fresh_admission_metadata(db, installation, false).await?;
     ensure!(
         row.try_get::<i64, _>("singleton")? == 1
             && row.try_get::<i64, _>("operation_ids")? == operations.len() as i64
