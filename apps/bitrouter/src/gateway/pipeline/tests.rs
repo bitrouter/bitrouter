@@ -846,23 +846,41 @@ struct TimingSnapshot {
     has_error: bool,
 }
 
-struct TimingSnapshotRecorder(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
+struct TimingSnapshotObserver(Arc<std::sync::Mutex<Vec<TimingSnapshot>>>);
 
 #[async_trait]
-impl SettlementRecorder for TimingSnapshotRecorder {
-    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
-        self.0.lock().unwrap().push(TimingSnapshot {
-            provider_id: ctx.provider_id.clone(),
-            model_id: ctx.model_id.clone(),
-            request_duration_ms: ctx.request_duration_ms,
-            upstream_duration_ms: ctx.upstream_duration_ms,
-            ttft_ms: ctx.ttft_ms,
-            generation_duration_ms: ctx.generation_duration_ms,
-            first_token_kind: ctx.first_token_kind,
-            finish_reason: ctx.finish_reason.clone(),
-            has_error: ctx.error.is_some(),
-        });
-        Ok(())
+impl ObserveHook for TimingSnapshotObserver {
+    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
+
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+
+    async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
+        let target = ctx.serving_target();
+        let execution = ctx.execution_result.as_ref();
+        let first_token = ctx.first_token_timing();
+        let snapshot = TimingSnapshot {
+            provider_id: target
+                .as_ref()
+                .map(|target| target.provider_name.clone())
+                .unwrap_or_default(),
+            model_id: target
+                .as_ref()
+                .map(|target| target.service_id.clone())
+                .unwrap_or_default(),
+            request_duration_ms: ctx.request_duration_ms(),
+            upstream_duration_ms: execution.and_then(|execution| execution.upstream_duration_ms),
+            ttft_ms: first_token.map(|timing| timing.ttft_ms),
+            generation_duration_ms: ctx.generation_duration_ms(),
+            first_token_kind: first_token.map(|timing| timing.kind),
+            finish_reason: execution
+                .and_then(|execution| execution.result.generation())
+                .and_then(|result| result.finish_reason.clone()),
+            has_error: matches!(outcome, RequestOutcome::Failed(_)),
+        };
+        match self.0.lock() {
+            Ok(mut snapshots) => snapshots.push(snapshot),
+            Err(poisoned) => poisoned.into_inner().push(snapshot),
+        }
     }
 }
 
@@ -2591,7 +2609,7 @@ async fn collect_stream(
 }
 
 #[tokio::test]
-async fn streamed_settlement_has_positive_canonical_timing() {
+async fn streamed_request_has_positive_canonical_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -2604,7 +2622,7 @@ async fn streamed_settlement_has_positive_canonical_timing() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2638,7 +2656,7 @@ async fn streamed_settlement_has_positive_canonical_timing() {
 }
 
 #[tokio::test]
-async fn nonstream_settlement_carries_finish_reason() {
+async fn nonstream_observation_carries_finish_reason() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -2653,7 +2671,7 @@ async fn nonstream_settlement_carries_finish_reason() {
             },
         )])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2683,7 +2701,7 @@ async fn streamed_settlement_carries_finish_reason() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2718,7 +2736,7 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
             ]),
         ])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2746,7 +2764,7 @@ async fn streamed_fallback_attributes_timing_to_successful_target() {
 }
 
 #[tokio::test]
-async fn streamed_upstream_error_finalizes_timing_before_settlement() {
+async fn streamed_upstream_error_preserves_final_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -2754,7 +2772,7 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
             error: BitrouterError::UpstreamUnavailable,
         }),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2778,7 +2796,7 @@ async fn streamed_upstream_error_finalizes_timing_before_settlement() {
 }
 
 #[tokio::test]
-async fn streamed_hook_abort_finalizes_timing_before_settlement() {
+async fn streamed_hook_abort_preserves_final_timing() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
@@ -2801,7 +2819,7 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
                     mode: StreamMode::AbortOnText,
                     ended_with: ended.clone(),
                 })
-                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+                .observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2829,7 +2847,7 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
 }
 
 #[tokio::test]
-async fn dropped_stream_finalizes_timing_before_detached_settlement() {
+async fn dropped_stream_observes_timing_after_detached_settlement() {
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(
         routing_table(&["openai"]),
@@ -2840,7 +2858,7 @@ async fn dropped_stream_finalizes_timing_before_detached_settlement() {
             },
         ])])),
         |builder| {
-            builder.settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            builder.observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -2872,7 +2890,7 @@ async fn non_stream_request_duration_includes_pre_request_pipeline_time() {
         |builder| {
             builder
                 .pre_request_hook(DelayPreHook(std::time::Duration::from_millis(20)))
-                .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+                .observe_hook(TimingSnapshotObserver(captured.clone()));
         },
     );
 
@@ -4868,7 +4886,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
     let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(routing_table(&["openai"]), executor, |b| {
         b.server_tool_loop(server_loop)
-            .settlement_recorder(TimingSnapshotRecorder(captured.clone()));
+            .observe_hook(TimingSnapshotObserver(captured.clone()));
     });
 
     let resp = pipeline.execute(request()).await.expect("request succeeds");
@@ -5118,7 +5136,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
     let hops = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = pipeline_with(routing_table(&["first", "second"]), executor, |b| {
         b.server_tool_loop(server_loop)
-            .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+            .observe_hook(TimingSnapshotObserver(timings.clone()))
             .observe_hook(HopEventRecorder(hops.clone()));
     });
 
@@ -5217,7 +5235,7 @@ async fn server_tool_stream_handshake_failure_still_settles_and_observes_end() {
             #[cfg(feature = "server-tools")]
             builder.server_tool_loop(server_loop);
             builder
-                .settlement_recorder(TimingSnapshotRecorder(timings.clone()))
+                .observe_hook(TimingSnapshotObserver(timings.clone()))
                 .observe_hook(HopEventRecorder(hops.clone()));
         },
     );

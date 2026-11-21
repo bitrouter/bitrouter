@@ -1,6 +1,6 @@
 //! Pipeline contexts for the `language_model` protocol: `PipelineContext` (the
-//! whole-request water-flow context) and `StreamContext` (the StreamHook-stage
-//! view borrowed from it). `SettlementContext` lives in
+//! whole-request context) and `StreamContext` (the streaming view).
+//! `SettlementContext` lives in
 //! [`crate::gateway::pipeline::settlement`].
 
 use crate::gateway::model::protocol::values::render_tool_result_output;
@@ -97,9 +97,8 @@ static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 /// refcount bumps — cheap enough to copy from the [`PipelineContext`] into the
 /// per-stream [`StreamContext`]. This is the typed counterpart to the JSON
 /// `metadata` channel: it carries an *already-built* per-request value (e.g. a
-/// compiled guardrail rule set) that a Stage-1 hook resolves and a later
-/// [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads on the hot path
-/// without re-parsing.
+/// compiled guardrail rule set) that a request hook resolves and a later
+/// stream observer reads without re-parsing.
 #[derive(Clone, Default)]
 struct Extensions(http::Extensions);
 
@@ -116,7 +115,6 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     credential_authority: ContinuationAuthority,
-    effort_constraint: Option<Option<bitrouter_ai::types::ReasoningEffort>>,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -152,18 +150,7 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             credential_authority,
-            effort_constraint: None,
         }
-    }
-
-    /// Preserve an authoritative effort from the continuation record. `None`
-    /// means the recorded provider default, distinct from unknown provenance.
-    pub fn with_effort_constraint(
-        mut self,
-        effort: Option<bitrouter_ai::types::ReasoningEffort>,
-    ) -> Self {
-        self.effort_constraint = Some(effort);
-        self
     }
 
     pub(crate) fn response_id(&self) -> &str {
@@ -200,16 +187,6 @@ impl Extensions {
     fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         self.0.get::<Arc<T>>().cloned()
     }
-}
-
-/// Count media content blocks in a content stream (observability only).
-///
-/// Only `Content::File` is treated as media — it covers all non-text IANA
-/// media types (images, audio, video, documents). `Content::Text`,
-/// `Content::Reasoning`, and `Content::ToolCall`/`Content::ToolResult` are
-/// not media.
-fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
-    blocks.filter(|c| matches!(c, Content::File { .. })).count() as u64
 }
 
 /// The whole-request pipeline context. Follows a water-flow model: data flows
@@ -765,7 +742,7 @@ impl PipelineContext {
     /// Insert a typed, request-scoped extension, replacing any existing value
     /// of the same type. The value is shared (`Arc`) and copied into the
     /// per-stream [`StreamContext`], so a Stage-1 hook can deposit a value that
-    /// the downstream [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads —
+    /// a downstream stream observer reads —
     /// the channel JSON `metadata` can't provide because it neither survives
     /// into the stream stage nor holds non-serialisable values.
     pub fn insert_extension<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
@@ -824,7 +801,7 @@ impl PipelineContext {
         chars
     }
 
-    /// Borrow a `StreamContext` for the StreamHook stage.
+    /// Borrow a `StreamContext` for stream observation.
     pub fn stream_context(&self) -> StreamContext {
         StreamContext {
             request_id: self.request_id.clone(),
@@ -923,7 +900,6 @@ impl PipelineContext {
             inbound_protocol: self.inbound_protocol.clone(),
             response_id: generation.and_then(|result| result.response_id.clone()),
             finish_reason,
-            streamed,
             successful_terminal,
             native_response_completed: if streamed {
                 self.stream_native_response_completed
@@ -981,34 +957,9 @@ impl PipelineContext {
             usage_origin: usage.origin,
             raw_usage: usage.raw.as_deref().cloned(),
             web_search_count: usage.web_search_count,
-            media_input_count: match &self.input {
-                PipelineInput::GenerateContent(input) => input.projection().map_or(0, |prompt| {
-                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
-                }),
-                PipelineInput::Generation(prompt) => {
-                    count_media(prompt.messages.iter().flat_map(|m| &m.content))
-                }
-                PipelineInput::Decisions(request) => request.image_count(),
-            },
-            // Note: for streamed requests both fields below are 0 / empty.
-            // The streaming path only folds usage back (via `absorb_stream`);
-            // response content and server_tool_calls are not reconstructed in
-            // the IR. This is an intentional deferral, not a bug.
-            media_output_count: count_media(
-                exec.and_then(|e| e.result.generation())
-                    .map(|result| result.content.as_slice())
-                    .unwrap_or_default()
-                    .iter(),
-            ),
-            server_tool_calls: exec
-                .map(|e| e.server_tool_calls.clone())
-                .unwrap_or_default(),
             streamed: false,
             request_duration_ms: self.request_duration_ms(),
             upstream_duration_ms: exec.and_then(|e| e.upstream_duration_ms),
-            ttft_ms: self.first_token_timing.map(|timing| timing.ttft_ms),
-            generation_duration_ms: self.generation_duration_ms,
-            first_token_kind: self.first_token_timing.map(|timing| timing.kind),
             finish_reason: exec
                 .and_then(|e| e.result.generation())
                 .and_then(|result| result.finish_reason.clone()),
@@ -1058,7 +1009,7 @@ fn prompt_content_chars(content: &Content) -> u64 {
     }
 }
 
-/// The StreamHook-stage view, borrowed from `PipelineContext`. Carries the
+/// The streaming view, borrowed from `PipelineContext`. Carries the
 /// mutable state that accrues while a stream is being consumed.
 pub struct StreamContext {
     /// The request id.
@@ -1067,7 +1018,7 @@ pub struct StreamContext {
     pub caller: CallerContext,
     /// Per-part usage accumulator.
     pub accumulated_usage: UsageAccumulator,
-    /// Count of parts that entered the StreamHook stage.
+    /// Count of observed upstream stream parts.
     pub parts_emitted: u64,
     /// Usage finalised at `on_stream_end`, folded back into `PipelineContext`.
     pub final_usage: Option<Usage>,

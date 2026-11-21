@@ -2,7 +2,7 @@
 //!
 //! these are **not** shared across protocols — `mcp` /
 //! `acp` define their own, independently. The full set here:
-//! `PreRequestHook` / `RouteHook` / `ExecutionHook` / `StreamHook` /
+//! `PreRequestHook` / `RouteHook` / `ExecutionHook` /
 //! `SettlementRecorder` / `ObserveHook`. `SettlementRecorder` lives in
 //! [`crate::gateway::pipeline::settlement`]; this module defines the rest.
 
@@ -12,6 +12,7 @@ use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::context::StreamContext;
+#[cfg(test)]
 use crate::gateway::pipeline::stream::StreamAction;
 use crate::gateway::pipeline::stream::StreamInterest;
 use crate::gateway::pipeline::stream::StreamOutcome;
@@ -151,9 +152,9 @@ pub enum FallbackDecision {
     Fail(BitrouterError),
 }
 
-/// The StreamHook stage — inline-awaited interception of the canonical
-/// `StreamPart` stream, before outbound protocol conversion. Carries Guardrails
-/// downstream rewriting and MPP per-checkpoint settlement.
+/// Test-only stream mutation and lifecycle injection before wire conversion.
+/// Exercises evidence retention and continuation binding under output changes.
+#[cfg(test)]
 #[async_trait]
 pub trait StreamHook: Send + Sync {
     /// Which part kinds this hook wants. The pipeline only invokes the hook on
@@ -163,9 +164,7 @@ pub trait StreamHook: Send + Sync {
     /// Called for each (interesting) stream part. May rewrite, drop or abort.
     async fn on_part(&self, ctx: &mut StreamContext, part: StreamPart) -> Result<StreamAction>;
 
-    /// Called exactly once when the stream terminates — for any outcome.
-    /// This is v0's `finally` block made explicit: MPP finalises its last
-    /// checkpoint here, accumulated usage lands in the context for Settlement.
+    /// Called exactly once when the stream terminates, for any outcome.
     async fn on_stream_end(&self, ctx: &mut StreamContext, outcome: &StreamOutcome) -> Result<()>;
 }
 
@@ -224,7 +223,7 @@ pub enum StreamHopOutcome<'a> {
 }
 
 /// A cross-cutting, read-only observation hook. Invoked at every stage boundary
-/// (including the StreamHook stage). It returns no decision, cannot mutate data,
+/// (including stream delivery). It returns no decision, cannot mutate data,
 /// and **errors / panics inside it never affect the request** — the pipeline
 /// swallows them.
 #[async_trait]
@@ -288,7 +287,7 @@ pub trait ObserveHook: Send + Sync {
     }
 
     /// Called synchronously when a successfully opened provider stream body
-    /// ends. This boundary excludes later StreamHook and Settlement work.
+    /// ends. This boundary excludes later stream processing and settlement.
     fn on_stream_hop_end(
         &self,
         _request_id: &str,
