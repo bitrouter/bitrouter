@@ -101,17 +101,23 @@ impl LocalCore {
         }
         let name = SERVICE.binary();
         let found = if let Some(prefix) = prefix {
-            let path = prefix.join(name);
-            match path.symlink_metadata() {
-                Ok(_) => Some(path),
-                Err(err) if err.kind() == ErrorKind::NotFound => None,
-                Err(err) => return Err(err.into()),
+            let mut found = None;
+            for path in command_paths(prefix, &name) {
+                match path.symlink_metadata() {
+                    Ok(_) => {
+                        found = Some(path);
+                        break;
+                    }
+                    Err(err) if err.kind() == ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
             }
+            found
         } else {
             env::var_os("PATH").and_then(|path| {
                 env::split_paths(&path)
                     .filter(|dir| dir.is_absolute())
-                    .map(|dir| dir.join(&name))
+                    .flat_map(|dir| command_paths(&dir, &name))
                     .find(|path| path_executable(path))
             })
         };
@@ -122,7 +128,11 @@ impl LocalCore {
             .canonicalize()
             .ok()
             .filter(|path| path_executable(path));
-        if let Some(owner) = canonical.as_deref().and_then(package::Owner::discover) {
+        if let Some(owner) = canonical
+            .as_deref()
+            .and_then(package::Owner::discover)
+            .or_else(|| package::Owner::npm_shim(&executable))
+        {
             return Ok(Self::Package(owner));
         }
         let method = canonical.as_deref().map_or("unknown", |path| {
@@ -178,6 +188,14 @@ pub(crate) async fn run(action: Action) -> Result<()> {
 }
 
 async fn install(prefix: &Path, options: ReleaseOptions) -> Result<()> {
+    ensure!(prefix.is_absolute(), "install prefix must be absolute");
+    if let Some(install) = Installation::discover(SERVICE, None)? {
+        ensure!(
+            prefix.canonicalize().ok().as_deref() == install.executable().parent(),
+            "receipt belongs to a different bin directory: {}",
+            install.executable().display()
+        );
+    }
     match LocalCore::find(Some(prefix))? {
         LocalCore::External { executable, .. } => anyhow::bail!(
             "refusing to overwrite an unowned executable at {}",
@@ -293,18 +311,30 @@ fn path_executable(path: &Path) -> bool {
     meta.is_file()
 }
 
+fn command_paths(directory: &Path, native: &str) -> impl Iterator<Item = PathBuf> + use<> {
+    [
+        Some(directory.join(native)),
+        cfg!(windows).then(|| directory.join("bitrouter.cmd")),
+    ]
+    .into_iter()
+    .flatten()
+}
+
 fn npm_core(bro: &Path) -> Option<(PathBuf, PathBuf)> {
     let package = bitrouter_update::paired_npm_root(Product::Bro, bro)?;
-    let executable = package
-        .join("core/node_modules/.bin_real")
-        .join(SERVICE.binary());
-    if !path_executable(&executable)
-        || executable.canonicalize().ok()? != executable
-        || same_file::is_same_file(bro, &executable).ok()?
-    {
+    let executable = npm_native(package)?;
+    if same_file::is_same_file(bro, &executable).ok()? {
         return None;
     }
     Some((executable, package.to_owned()))
+}
+
+fn npm_native(package: &Path) -> Option<PathBuf> {
+    let executable = package
+        .join("core/node_modules/.bin_real")
+        .join(SERVICE.binary());
+    (path_executable(&executable) && executable.canonicalize().ok()? == executable)
+        .then_some(executable)
 }
 
 fn display(path: &Path) -> String {

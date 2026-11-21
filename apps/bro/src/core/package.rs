@@ -8,11 +8,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_update::{Product, paired_npm_root};
+use bitrouter_update::{Product, paired_npm_launcher, paired_npm_root};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use super::{SERVICE, display, path_executable};
+use super::{SERVICE, display, npm_native, path_executable};
 
 pub(super) enum Owner {
     Brew {
@@ -42,6 +42,20 @@ impl Owner {
             executable: executable.to_owned(),
             formula: formula.to_owned(),
         })
+    }
+
+    pub(super) fn npm_shim(shim: &Path) -> Option<Self> {
+        #[cfg(unix)]
+        let launcher = shim
+            .symlink_metadata()
+            .ok()?
+            .is_symlink()
+            .then(|| shim.canonicalize().ok())
+            .flatten()?;
+        #[cfg(windows)]
+        let launcher = super::windows::npm_launcher(shim)?;
+        let package = paired_npm_launcher(&launcher)?;
+        Some(Self::npm(npm_native(package)?, package.to_owned()))
     }
 
     pub(super) fn executable(&self) -> &Path {
@@ -463,4 +477,41 @@ fn succeeded(operation: &str, output: &Output) -> Result<()> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn npm_shim_selects_the_native_core_only_for_the_declared_launcher() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let root = root.path().canonicalize()?;
+        let package = root.join("node_modules/bitrouter-bro");
+        let native = package
+            .join("core/node_modules/.bin_real")
+            .join(SERVICE.binary());
+        fs::create_dir_all(native.parent().context("missing native parent")?)?;
+        fs::write(&native, b"native executable fixture")?;
+        fs::set_permissions(&native, fs::Permissions::from_mode(0o700))?;
+        let launcher = package.join("core/run-bitrouter.js");
+        fs::write(&launcher, b"launcher fixture")?;
+        let shim = root.join(SERVICE.binary());
+        symlink(&launcher, &shim)?;
+
+        let manifest = package.join("package.json");
+        fs::write(
+            &manifest,
+            r#"{"name":"bitrouter-bro","bin":{"bitrouter":"wrong.js"}}"#,
+        )?;
+        assert!(Owner::npm_shim(&shim).is_none());
+        fs::write(
+            &manifest,
+            r#"{"name":"bitrouter-bro","bin":{"bitrouter":"core/run-bitrouter.js"}}"#,
+        )?;
+        let owner = Owner::npm_shim(&shim).context("missing npm owner")?;
+        assert_eq!(owner.executable(), native);
+        Ok(())
+    }
 }

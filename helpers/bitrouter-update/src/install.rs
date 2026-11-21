@@ -80,6 +80,12 @@ pub struct Installation {
     record: Value,
 }
 
+enum Selection<'a> {
+    Any,
+    Directory(&'a Path),
+    Executable(&'a Path),
+}
+
 impl Installation {
     /// Locate the current product's receipt and validate its executable binding.
     ///
@@ -96,7 +102,7 @@ impl Installation {
         receipt: PathBuf,
     ) -> Result<Option<Self>> {
         let exe = exe.canonicalize()?;
-        let install = Self::inspect_at(product, Some(&exe), receipt)?;
+        let install = Self::inspect_at(product, Selection::Executable(&exe), receipt)?;
         if let Some(install) = &install {
             ensure!(
                 install.record["version"] == version,
@@ -108,25 +114,31 @@ impl Installation {
 
     /// Discover the product at the location in its guarded receipt.
     ///
-    /// If supplied, `directory` selects the bin directory. Discovery hashes
-    /// the executable from disk without running it.
+    /// If supplied, `directory` selects the bin directory. A receipt for a
+    /// different directory is outside the selection.
     ///
     /// # Errors
-    /// Refuses receipts that conflict with the selection or installed bytes.
+    /// Refuses malformed receipts or a selected executable with mismatched bytes.
     pub fn discover(product: Product, directory: Option<&Path>) -> Result<Option<Self>> {
-        let receipt = receipt_path(product)?;
-        let install = Self::inspect_at(product, None, receipt)?;
-        if let (Some(install), Some(directory)) = (&install, directory) {
-            ensure!(
-                directory.canonicalize()?.join(product.binary()) == install.exe,
-                "receipt belongs to a different bin directory: {}",
-                install.exe.display()
-            );
-        }
-        Ok(install)
+        let canonical;
+        let selection = if let Some(directory) = directory {
+            canonical = match directory.canonicalize() {
+                Ok(path) => path,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            Selection::Directory(&canonical)
+        } else {
+            Selection::Any
+        };
+        Self::inspect_at(product, selection, receipt_path(product)?)
     }
 
-    fn inspect_at(product: Product, exe: Option<&Path>, receipt: PathBuf) -> Result<Option<Self>> {
+    fn inspect_at(
+        product: Product,
+        selection: Selection<'_>,
+        receipt: PathBuf,
+    ) -> Result<Option<Self>> {
         let stored = read_record(&receipt)?;
         let lock = receipt.with_file_name(".install-lock");
         let pending = if marked(&lock)? {
@@ -137,14 +149,31 @@ impl Installation {
         let Some(record) = stored.as_ref().or(pending.as_ref()) else {
             return Ok(None);
         };
-        let owned = receipt_binary(product, record)?;
-        ensure!(
-            exe.is_none_or(|exe| exe == owned),
-            "receipt prefix or executable name mismatch"
-        );
+        let binding = receipt_directory(product, record)?;
+        let directory = match binding.canonicalize() {
+            Ok(path) => path,
+            Err(error)
+                if matches!(selection, Selection::Directory(_))
+                    && error.kind() == io::ErrorKind::NotFound =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error).context("resolve receipt prefix"),
+        };
+        let owned = directory.join(product.binary());
+        match selection {
+            Selection::Directory(selected) if selected != directory => return Ok(None),
+            Selection::Executable(exe) => {
+                ensure!(exe == owned, "receipt prefix or executable name mismatch")
+            }
+            _ => {}
+        }
         if let (Some(_), Some(pending)) = (&stored, &pending) {
             ensure!(
-                receipt_binary(product, pending)? == owned,
+                receipt_directory(product, pending)?
+                    .canonicalize()
+                    .context("resolve interrupted receipt prefix")?
+                    == directory,
                 "installed and interrupted receipt prefixes bind different executables"
             );
         }
@@ -261,7 +290,9 @@ impl Installation {
         fs::create_dir_all(receipt.parent().context("missing receipt directory")?)?;
         let (_bin_lock, lock) = lock_installation(product, &exe, &receipt)?;
         let digest = sha256(&candidate.path())?;
-        if let Some(install) = Self::inspect_at(product, Some(&exe), receipt.clone())? {
+        if let Some(install) =
+            Self::inspect_at(product, Selection::Executable(&exe), receipt.clone())?
+        {
             install.reconcile(&lock)?;
             ensure!(
                 install.version() == candidate.version && install.record["binary_sha256"] == digest,
@@ -347,7 +378,7 @@ impl Installation {
     }
 }
 
-fn receipt_binary(product: Product, r: &Value) -> Result<PathBuf> {
+fn receipt_directory(product: Product, r: &Value) -> Result<PathBuf> {
     let name = product.binary();
     ensure!(
         r["source"]["owner"] == "bitrouter"
@@ -369,14 +400,11 @@ fn receipt_binary(product: Product, r: &Value) -> Result<PathBuf> {
             .context("missing receipt prefix")?,
     );
     ensure!(prefix.is_absolute(), "receipt prefix must be absolute");
-    let dir = match r["install_layout"].as_str() {
+    Ok(match r["install_layout"].as_str() {
         Some("cargo-home") => prefix.join("bin"),
         Some("flat") => prefix.to_owned(),
         _ => bail!("unsupported receipt layout"),
-    }
-    .canonicalize()
-    .context("resolve receipt prefix")?;
-    Ok(dir.join(name))
+    })
 }
 
 fn peer_product(product: Product) -> Product {
@@ -672,12 +700,23 @@ mod tests {
             "install_prefix": dir.parent(),
         });
         fs::write(&receipt, serde_json::to_vec(&record)?)?;
-        let install = Installation::inspect_at(product, None, receipt.clone())?
-            .context("missing guarded service")?;
+        let selected = dir.canonicalize()?;
+        let install =
+            Installation::inspect_at(product, Selection::Directory(&selected), receipt.clone())?
+                .context("missing guarded service")?;
         assert_eq!(install.executable(), exe.canonicalize()?);
         assert_eq!(install.version(), "1.0.0");
         fs::write(&exe, b"unrelated service")?;
-        assert!(Installation::inspect_at(product, None, receipt).is_err());
+        let other = root.path().canonicalize()?;
+        assert!(
+            Installation::inspect_at(product, Selection::Directory(&other), receipt.clone())?
+                .is_none()
+        );
+        assert!(
+            Installation::inspect_at(product, Selection::Directory(&selected), receipt.clone())
+                .is_err()
+        );
+        assert!(Installation::inspect_at(product, Selection::Any, receipt).is_err());
         Ok(())
     }
 }

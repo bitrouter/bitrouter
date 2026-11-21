@@ -1,6 +1,6 @@
 # Continuous integration
 
-The required PR check is **test (ubuntu-latest)**. It always runs and requires
+The aggregate PR check is **test (ubuntu-latest)**. It always runs and requires
 repository hygiene, formatting, plugin validation, and every check selected
 for the change. A failed or cancelled dependency fails the aggregate check.
 
@@ -19,8 +19,9 @@ Documentation-only changes still report the aggregate status.
 
 Each product has one build job and one test job definition with native runner
 matrices. Build jobs upload revision- and platform-specific nextest archives
-through GitHub Actions. Test jobs verify the revision and checksums, then run
-the restored tests and process fixtures. BRO's Linux suite requires the workspace
+through GitHub Actions. Test jobs verify the revision and checksums, then restore
+each suite at its original Cargo target path so tests can launch subprocesses
+using paths embedded at compile time. BRO's Linux suite requires the workspace
 sandbox. macOS and Windows exercise native process and filesystem behavior.
 
 The gateway's Linux job tests the all-feature build, uses PostgreSQL and MySQL

@@ -19,7 +19,19 @@ function writeNpmMetadata(dir, digests) {
   }
   writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
   const installer = join(dir, 'binary-install.js');
-  const template = readFileSync(installer, 'utf8');
+  let template = readFileSync(installer, 'utf8');
+  // The Windows release ZIP is flat. Use the same native extraction tool as
+  // the Rust updater, with separate arguments for each path.
+  const windows = template.indexOf('                  // Windows does not have "unzip"');
+  const otherZip = template.indexOf('\n                } else {\n                  result = spawnSync("unzip"', windows);
+  assert.ok(windows >= 0 && otherZip > windows, 'Windows npm extractor template changed');
+  template = template.slice(0, windows)
+    + '                  result = spawnSync("tar.exe", ["xf", tempFile, "-C", this.installDirectory]);'
+    + template.slice(otherZip);
+  const extracted = '      .then(() => {\n        if (!suppressLogs) {';
+  template = insert(template, extracted, `      .then(() => {
+        if (!this.exists()) throw new Error(\`Archive did not install \${this.name}\`);
+        if (!suppressLogs) {`);
   const verify = `sink.on("close", async () => {
               const { createReadStream, rmSync } = require("node:fs");
               try {
@@ -113,19 +125,13 @@ if (!$Help -and !$BroOnly -and ($env:BITROUTER_BRO_UNMANAGED_INSTALL -or
 if (!$Help -and !$BroOnly) {
   $coreInstaller = [ScriptBlock]::Create([Text.Encoding]::UTF8.GetString(
     [Convert]::FromBase64String('${peer}')))
-  $previousUrl = $env:BITROUTER_DOWNLOAD_URL
-  $previousToken = $env:BITROUTER_GITHUB_TOKEN
   $previousInstallDir = $env:BITROUTER_INSTALL_DIR
   try {
-    $env:BITROUTER_DOWNLOAD_URL = $ArtifactDownloadUrls[0]
-    if ($auth_token) { $env:BITROUTER_GITHUB_TOKEN = $auth_token }
     if (!$previousInstallDir) { $env:BITROUTER_INSTALL_DIR = $env:BITROUTER_BRO_INSTALL_DIR }
     & $coreInstaller -NoModifyPath:$NoModifyPath
   } catch {
     throw "BRO was installed. Retry this installer to finish installing the BitRouter core. $_"
   } finally {
-    $env:BITROUTER_DOWNLOAD_URL = $previousUrl
-    $env:BITROUTER_GITHUB_TOKEN = $previousToken
     $env:BITROUTER_INSTALL_DIR = $previousInstallDir
   }
 }

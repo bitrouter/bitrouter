@@ -4,7 +4,11 @@
 pub mod channel;
 pub mod install;
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 /// The two packages distributed by the release plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,9 +94,42 @@ pub fn paired_npm_root(product: Product, exe: &Path) -> Option<&Path> {
     {
         return None;
     }
-    let manifest = std::fs::read(package.join("package.json")).ok()?;
-    let manifest: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
-    (manifest["name"] == Product::Bro.package()).then_some(package)
+    combined_manifest(package).map(|_| package)
+}
+
+/// Find the combined npm package owning a canonical BitRouter launcher.
+///
+/// Requires the installed package directory and its exact service bin entry.
+pub fn paired_npm_launcher(launcher: &Path) -> Option<&Path> {
+    const ENTRY: &str = "core/run-bitrouter.js";
+    let package = launcher.parent()?.parent()?;
+    if launcher != package.join(ENTRY)
+        || package.file_name()? != Product::Bro.package()
+        || package.parent()?.file_name()? != "node_modules"
+    {
+        return None;
+    }
+    let manifest = combined_manifest(package)?;
+    (manifest["bin"][Product::Service.command()] == ENTRY).then_some(package)
+}
+
+fn combined_manifest(package: &Path) -> Option<serde_json::Value> {
+    const MAX_MANIFEST: u64 = 128 * 1024;
+    let path = package.join("package.json");
+    if !path.symlink_metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_MANIFEST + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_MANIFEST {
+        return None;
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    (manifest["name"] == Product::Bro.package()).then_some(manifest)
 }
 
 /// Product-specific package-manager instructions for an unmanaged executable.

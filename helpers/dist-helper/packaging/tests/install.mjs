@@ -275,6 +275,20 @@ async function testCombinedInstallers() {
     const override = { BITROUTER_INSTALL_DIR: custom };
     const customBin = join(custom, 'bin');
     install({ ...other, bin: customBin }, 'bitrouter', version, undefined, undefined, [], override);
+    const archive = join(root, next, `bitrouter-${host}.zip`);
+    const original = readFileSync(archive);
+    const oldCore = readFileSync(join(customBin, 'bitrouter.exe'));
+    const oldReceipt = readFileSync(receipt(other, 'bitrouter'));
+    try {
+      appendFileSync(archive, 'damaged core archive');
+      install(other, 'bitrouter-bro', next,
+        /BRO was installed.*Archive checksum mismatch/s, undefined, [], override);
+      assert.equal(JSON.parse(execFileSync(binary(other, 'bitrouter-bro'))).version, next);
+      assert.deepEqual(readFileSync(join(customBin, 'bitrouter.exe')), oldCore);
+      assert.deepEqual(readFileSync(receipt(other, 'bitrouter')), oldReceipt);
+    } finally {
+      writeFileSync(archive, original);
+    }
     install(other, 'bitrouter-bro', next, undefined, undefined, [], override);
     assert.equal(JSON.parse(execFileSync(join(customBin, 'bitrouter.exe'))).version, next);
     assert.ok(!existsSync(binary(other, 'bitrouter')));
@@ -285,11 +299,11 @@ async function testCombinedInstallers() {
   const seen = [];
   let corruptCore = false;
   const server = createServer((req, res) => {
-    const name = req.url.slice(1);
+    const [, selected, name] = req.url.split('/');
     seen.push(name);
-    if (!archives.includes(name)) return res.writeHead(404).end();
+    if (!versions.includes(selected) || !archives.includes(name)) return res.writeHead(404).end();
     if (corruptCore && name === archives[0]) return res.end('damaged archive');
-    createReadStream(join(release, name)).pipe(res);
+    createReadStream(join(root, selected, name)).pipe(res);
   });
   const app = join(root, 'npm-both');
   mkdirSync(app);
@@ -301,17 +315,23 @@ async function testCombinedInstallers() {
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const source = `http://127.0.0.1:${server.address().port}`;
-    execFileSync('tar', ['xf', join(release, 'bitrouter-bro-npm-package.tar.gz'), '-C', app]);
     const binaries = { bro: 'run-bro.js', bitrouter: 'core/run-bitrouter.js' };
-    for (const file of ['package/package.json', 'package/core/package.json']) {
-      const path = join(app, file);
-      const pkg = JSON.parse(readFileSync(path));
-      if (file === 'package/package.json') assert.deepEqual(pkg.bin, binaries);
-      pkg.artifactDownloadUrls = [source];
-      write(path, JSON.stringify(pkg));
+    function npmArchive(selected) {
+      const directory = join(app, selected);
+      mkdirSync(directory);
+      execFileSync('tar', ['xf', join(root, selected, 'bitrouter-bro-npm-package.tar.gz'), '-C', directory]);
+      for (const file of ['package/package.json', 'package/core/package.json']) {
+        const path = join(directory, file);
+        const pkg = JSON.parse(readFileSync(path));
+        if (file === 'package/package.json') assert.deepEqual(pkg.bin, binaries);
+        pkg.artifactDownloadUrls = [`${source}/${selected}`];
+        write(path, JSON.stringify(pkg));
+      }
+      const archive = join(directory, 'bitrouter-bro.tgz');
+      execFileSync('tar', ['czf', archive, '-C', directory, 'package']);
+      return archive;
     }
-    const archive = join(app, 'bitrouter-bro.tgz');
-    execFileSync('tar', ['czf', archive, '-C', app, 'package']);
+    const archive = npmArchive(version);
     const cli = (prefix, ...args) => exec(npm[0],
       [...npm[1], '--global', '--prefix', prefix, ...args], { cwd: app, env, timeout: 180_000 });
     const installed = join(app, 'installed');
@@ -333,16 +353,23 @@ async function testCombinedInstallers() {
     seen.length = 0;
     await cli(installed, 'install', '--no-audit', '--no-fund', archive);
     assert.deepEqual(seen.sort(), [...archives].sort());
-    for (const [name, entry] of Object.entries(binaries)) {
-      const bin = windows ? join(installed, name + '.cmd') : join(installed, 'bin', name);
-      assert.ok(existsSync(bin), `missing npm command ${bin}`);
-      const [program, args] = windows
-        ? [process.execPath, [join(installed, 'node_modules/bitrouter-bro', entry)]]
-        : [bin, []];
-      const info = JSON.parse((await exec(program, args, { cwd: app, env })).stdout);
-      assert.equal(info.product, name === 'bro' ? 'bitrouter-bro' : 'bitrouter');
-      assert.equal(info.version, version);
+    async function checkInstalled(selected) {
+      for (const name of Object.keys(binaries)) {
+        const bin = windows ? join(installed, name + '.cmd') : join(installed, 'bin', name);
+        assert.ok(existsSync(bin), `missing npm command ${bin}`);
+        const output = windows
+          ? await exec('cmd.exe', ['/d', '/s', '/c', `""${bin}""`], { cwd: app, env, windowsVerbatimArguments: true })
+          : await exec(bin, [], { cwd: app, env });
+        const info = JSON.parse(output.stdout);
+        assert.equal(info.product, name === 'bro' ? 'bitrouter-bro' : 'bitrouter');
+        assert.equal(info.version, selected);
+      }
     }
+    await checkInstalled(version);
+    seen.length = 0;
+    await cli(installed, 'install', '--no-audit', '--no-fund', npmArchive(next));
+    assert.deepEqual(seen.sort(), [...archives].sort());
+    await checkInstalled(next);
     await cli(installed, 'uninstall', 'bitrouter-bro');
     for (const name of Object.keys(binaries)) {
       assert.ok(!existsSync(windows ? join(installed, name + '.cmd') : join(installed, 'bin', name)));

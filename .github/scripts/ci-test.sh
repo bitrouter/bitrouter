@@ -80,22 +80,42 @@ suite="${1:?suite required}"
 shift
 workspace="${GITHUB_WORKSPACE:?workspace required}"
 restore=ci-tests
-target="$restore/target"
 profile=ci
 suffix=
 if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
 
+# Match CARGO_TARGET_DIR in test-archive/build.sh. Test binaries embed this
+# absolute path through Cargo's CARGO_BIN_EXE_* variables at compile time.
+suite_target() {
+  case "$1" in
+    service|bro) printf '%s\n' target ;;
+    service-minimal|service-default|service-shared|service-grpc) printf 'target/%s\n' "$1" ;;
+    *) echo "Unknown CI suite: $1" >&2; return 1 ;;
+  esac
+}
+
+target="$(suite_target "$suite")"
 case "$suite" in
   service-minimal|service-default|service-shared) profile="ci-$suite" ;;
-  service|service-grpc|bro) ;;
-  *) echo "Unknown CI suite: $suite" >&2; exit 1 ;;
 esac
-if [[ ! -f "$restore/suite" || "$(cat "$restore/suite")" != "$suite" ]]; then
-  rm -rf "$restore"
+previous=
+if [[ -f "$restore/suite" ]]; then
+  previous="$(cat "$restore/suite")"
+fi
+if [[ "$previous" != "$suite" || ! -f "$target/nextest/binaries-metadata.json" ]]; then
+  if [[ -n "$previous" ]]; then
+    previous_target="$(suite_target "$previous")"
+    rm -rf -- "$previous_target"
+  fi
+  rm -rf -- "$restore/target"
   mkdir -p "$restore"
   cargo-nextest nextest list --list-type binaries-only \
     --archive-file "ci-artifacts/$suite.tar.zst" --extract-to "$workspace/$restore" \
     --workspace-remap "$workspace" >/dev/null
+  # Nextest can create its store in the workspace target while listing.
+  rm -rf -- "$target"
+  mkdir -p "$(dirname "$target")"
+  mv "$restore/target" "$target"
   printf '%s\n' "$suite" > "$restore/suite"
 fi
 
@@ -116,8 +136,16 @@ case "$suite" in
     ;;
 esac
 
-exec cargo-nextest nextest run \
+report="target/nextest/$profile/junit.xml"
+rm -f -- "$report"
+status=0
+cargo-nextest nextest run \
   --cargo-metadata "$workspace/$target/nextest/cargo-metadata.json" \
   --binaries-metadata "$workspace/$target/nextest/binaries-metadata.json" \
   --workspace-remap "$workspace" --target-dir-remap "$workspace/$target" \
-  --profile "$profile" --retries 0 --no-fail-fast --no-tests fail "$@"
+  --profile "$profile" --retries 0 --no-fail-fast --no-tests fail "$@" || status=$?
+if [[ -f "$report" ]]; then
+  mkdir -p ci-test-results
+  cp "$report" "ci-test-results/$suite.xml"
+fi
+exit "$status"
