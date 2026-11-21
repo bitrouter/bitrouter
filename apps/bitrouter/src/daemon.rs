@@ -645,22 +645,16 @@ pub async fn run_control_socket(
         listen,
         reloader,
         observe,
-        AcpControlPlane {
-            metering,
-            inventory: None,
-        },
+        AcpControlPlane { metering },
     )
     .await
 }
 
-/// Compatibility input for existing local control socket callers. Historical
-/// session spend is read from settled metering rows.
+/// Settled metering state used by the local control socket.
 #[derive(Clone)]
 pub struct AcpControlPlane {
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
-    /// Retained for existing callers. Recording registration is retired.
-    pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(

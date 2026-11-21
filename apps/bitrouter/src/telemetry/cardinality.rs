@@ -67,21 +67,13 @@ impl CardinalityLimiter {
             Err(poisoned) => poisoned.into_inner().len(),
         }
     }
-
-    /// Clear all seen values (useful for testing).
-    #[cfg(test)]
-    pub fn clear(&self) {
-        self.seen.lock().unwrap().clear();
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_cardinality_capping() {
-        let limiter = CardinalityLimiter::new(3);
+        let limiter = super::CardinalityLimiter::new(3);
 
         // First 3 values pass through
         assert_eq!(limiter.cap("key1"), "key1");

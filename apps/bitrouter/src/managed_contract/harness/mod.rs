@@ -13,9 +13,5 @@ macro_rules! redacted_contract_debug {
 
 pub mod agent;
 pub mod inspection;
-pub mod item;
 pub mod resources;
-pub mod runtime;
 pub mod skills;
-pub mod thread;
-pub mod turn;

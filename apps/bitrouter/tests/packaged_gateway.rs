@@ -1,4 +1,4 @@
-//! Bounded A03/A04/A14 acceptance using two supplied, independently built executables.
+//! Packaged gateway behavior using two supplied, independently built executables.
 //! No application library is imported or assembled by this test.
 
 use std::{

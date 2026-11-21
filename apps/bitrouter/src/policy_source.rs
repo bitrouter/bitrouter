@@ -712,7 +712,7 @@ pub async fn validate_routable_model(source: &crate::config::Config, route: &str
         anyhow::bail!("policy tier route '{route}' is not a concrete provider model");
     }
     let mut resolved = source.clone();
-    crate::merge_registry_into(&mut resolved).await;
+    crate::assemble::merge_registry_into(&mut resolved).await;
     crate::providers::apply::apply_builtin_defaults(&mut resolved);
     let provider_config = resolved.providers.get(provider).ok_or_else(|| {
         anyhow::anyhow!(
@@ -742,7 +742,7 @@ pub async fn validate_routable_effort(
         return Ok(());
     };
     let mut resolved = source.clone();
-    crate::merge_registry_into(&mut resolved).await;
+    crate::assemble::merge_registry_into(&mut resolved).await;
     crate::providers::apply::apply_builtin_defaults(&mut resolved);
     let chain = crate::config::routing_table::resolve_route_chain(
         &resolved,
@@ -1091,7 +1091,7 @@ where
         "strong and economy tiers must use different model/effort targets"
     );
     let mut capabilities = config.clone();
-    crate::merge_registry_into(&mut capabilities).await;
+    crate::assemble::merge_registry_into(&mut capabilities).await;
     crate::providers::apply::apply_builtin_defaults(&mut capabilities);
     let mut tool_safe_tiers = vec!["strong".to_string()];
     if route_supports_capability(

@@ -14,7 +14,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 const PTY_TIMEOUT: Duration = Duration::from_secs(15);
-const REMOTE_FIXTURE_TOKEN: &str = "remote-a12-fixture-token-0123456789";
+const REMOTE_FIXTURE_TOKEN: &str = "remote-administration-fixture-token-0123456789";
 #[derive(Debug, Clone, Copy)]
 enum RemoteScenario {
     Healthy,
@@ -64,7 +64,7 @@ impl RemoteFixture {
             .context("reading isolated remote-control fixture address")?;
         let endpoint = format!("http://{address}");
         let contexts = format!(
-            "version = 1\n\n[contexts.fixture]\nendpoint = {endpoint:?}\ntoken_env = \"BITROUTER_A12_TOKEN\"\n"
+            "version = 1\n\n[contexts.fixture]\nendpoint = {endpoint:?}\ntoken_env = \"BITROUTER_REMOTE_FIXTURE_TOKEN\"\n"
         );
         std::fs::write(bitrouter_home_path.join("contexts.toml"), contexts)
             .context("writing isolated remote context store")?;
@@ -262,31 +262,31 @@ fn remote_response(scenario: RemoteScenario, request: &RemoteRequest) -> (u16, &
     match (request.method.as_str(), target) {
         ("GET", "/control/v1/capabilities") => (
             200,
-            r#"{"protocol":"bitrouter-control","protocol_version":2,"server_version":"REMOTE_A12_CAPABILITIES","server_instance_id":"47da0290-4510-4f39-ab53-a0b09ba707c2","scopes":["control:read"],"action_descriptors":{"status":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}},"list_models":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"route":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"requests":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}}}}"#,
+            r#"{"protocol":"bitrouter-control","protocol_version":2,"server_version":"REMOTE_ADMINISTRATION_CAPABILITIES","server_instance_id":"47da0290-4510-4f39-ab53-a0b09ba707c2","scopes":["control:read"],"action_descriptors":{"status":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}},"list_models":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"route":{"version":2,"required_scope":"control:read","input_schema":{},"output_schema":{}},"requests":{"version":1,"required_scope":"control:read","input_schema":{},"output_schema":{}}}}"#,
         ),
         ("GET", "/control/v1/status") => (
             200,
-            r#"{"running":true,"pid":4242,"listen":"REMOTE_A12_STATUS","models":1,"providers":["REMOTE_A12_PROVIDER"]}"#,
+            r#"{"running":true,"pid":4242,"listen":"REMOTE_ADMINISTRATION_STATUS","models":1,"providers":["REMOTE_ADMINISTRATION_PROVIDER"]}"#,
         ),
         ("GET", "/control/v1/models") if matches!(scenario, RemoteScenario::ModelsFailure) => (
             502,
-            r#"{"error":{"code":"fixture_unavailable","message":"REMOTE_A12_MODELS_FAILURE"}}"#,
+            r#"{"error":{"code":"fixture_unavailable","message":"REMOTE_ADMINISTRATION_MODELS_FAILURE"}}"#,
         ),
         ("GET", "/control/v1/models") => (
             200,
-            r#"{"models":[{"id":"REMOTE_A12_MODEL","providers":["REMOTE_A12_PROVIDER"]}],"resolved_via":"live"}"#,
+            r#"{"models":[{"id":"REMOTE_ADMINISTRATION_MODEL","providers":["REMOTE_ADMINISTRATION_PROVIDER"]}],"resolved_via":"live"}"#,
         ),
         ("GET", "/control/v1/requests") => (
             200,
-            r#"{"mode":"live","daemon":{"pid":4242,"listen":"REMOTE_A12_REQUESTS","models":1},"window":"REMOTE_A12_WINDOW","scope":"REMOTE_A12_SCOPE","spend_micro_usd":0,"requests":1,"unpriced_requests":0,"requests_per_minute":1.0,"tokens_per_minute":2.0,"rows":[],"filters":{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z","model":null,"provider":null},"truncated":false,"metering":{"summary":"available","rate":"available","rows":"available"},"rate_scope":"all callers, trailing minute"}"#,
+            r#"{"mode":"live","daemon":{"pid":4242,"listen":"REMOTE_ADMINISTRATION_REQUESTS","models":1},"window":"REMOTE_ADMINISTRATION_WINDOW","scope":"REMOTE_ADMINISTRATION_SCOPE","spend_micro_usd":0,"requests":1,"unpriced_requests":0,"requests_per_minute":1.0,"tokens_per_minute":2.0,"rows":[],"filters":{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z","model":null,"provider":null},"truncated":false,"metering":{"summary":"available","rate":"available","rows":"available"},"rate_scope":"all callers, trailing minute"}"#,
         ),
         ("POST", "/control/v1/route/preview") => (
             200,
-            r#"{"requested_model":"REMOTE_A12_MODEL","effective_model":"REMOTE_A12_MODEL","resolved_via":"live","provider_chain":[{"provider":"REMOTE_A12_ROUTE_RESULT","service_id":"remote-a12-service","api_protocol":"fixture"}]}"#,
+            r#"{"requested_model":"REMOTE_ADMINISTRATION_MODEL","effective_model":"REMOTE_ADMINISTRATION_MODEL","resolved_via":"live","provider_chain":[{"provider":"REMOTE_ADMINISTRATION_ROUTE_RESULT","service_id":"remote-administration-service","api_protocol":"fixture"}]}"#,
         ),
         _ => (
             404,
-            r#"{"error":{"code":"fixture_not_found","message":"REMOTE_A12_UNEXPECTED_REQUEST"}}"#,
+            r#"{"error":{"code":"fixture_not_found","message":"REMOTE_ADMINISTRATION_UNEXPECTED_REQUEST"}}"#,
         ),
     }
 }
@@ -321,7 +321,7 @@ impl RemoteFixture {
             .env("BITROUTER_HOME", &self.bitrouter_home_path)
             .env("TMPDIR", &self.temporary_path)
             .env("NO_COLOR", "1")
-            .env("BITROUTER_A12_TOKEN", REMOTE_FIXTURE_TOKEN)
+            .env("BITROUTER_REMOTE_FIXTURE_TOKEN", REMOTE_FIXTURE_TOKEN)
             .current_dir(self._directory.path())
             .kill_on_drop(true);
         command
@@ -336,25 +336,25 @@ async fn remote_cli_reads_use_authenticated_remote_actions() -> Result<()> {
             vec!["status"],
             "GET",
             "/control/v1/status",
-            "REMOTE_A12_STATUS",
+            "REMOTE_ADMINISTRATION_STATUS",
         ),
         (
             vec!["models"],
             "GET",
             "/control/v1/models",
-            "REMOTE_A12_MODEL",
+            "REMOTE_ADMINISTRATION_MODEL",
         ),
         (
             vec!["requests"],
             "GET",
             "/control/v1/requests",
-            "REMOTE_A12_SCOPE",
+            "REMOTE_ADMINISTRATION_SCOPE",
         ),
         (
-            vec!["route", "REMOTE_A12_MODEL"],
+            vec!["route", "REMOTE_ADMINISTRATION_MODEL"],
             "POST",
             "/control/v1/route/preview",
-            "REMOTE_A12_ROUTE_RESULT",
+            "REMOTE_ADMINISTRATION_ROUTE_RESULT",
         ),
     ] {
         let output =
@@ -375,7 +375,7 @@ async fn remote_cli_reads_use_authenticated_remote_actions() -> Result<()> {
         remote.assert_bearer(&request)?;
         if method == "POST" {
             ensure!(
-                request.body.contains("REMOTE_A12_MODEL"),
+                request.body.contains("REMOTE_ADMINISTRATION_MODEL"),
                 "route preview lost the selected model: {request:?}"
             );
         }
@@ -395,7 +395,7 @@ async fn remote_cli_errors_do_not_fall_back_to_local_models() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     ensure!(
-        error.contains("REMOTE_A12_MODELS_FAILURE"),
+        error.contains("REMOTE_ADMINISTRATION_MODELS_FAILURE"),
         "remote failure missing: {error}"
     );
     for wrong in [
@@ -441,7 +441,7 @@ async fn remote_context_rejects_background_and_session_mutations_before_local_st
             .env("BITROUTER_HOME", &remote.bitrouter_home_path)
             .env("TMPDIR", &remote.temporary_path)
             .env("NO_COLOR", "1")
-            .env("BITROUTER_A12_TOKEN", REMOTE_FIXTURE_TOKEN)
+            .env("BITROUTER_REMOTE_FIXTURE_TOKEN", REMOTE_FIXTURE_TOKEN)
             .current_dir(remote._directory.path())
             .kill_on_drop(true)
             .output()

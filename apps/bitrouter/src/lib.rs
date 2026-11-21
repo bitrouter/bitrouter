@@ -15,64 +15,76 @@
 #![forbid(unsafe_code)]
 #![recursion_limit = "256"]
 
-pub mod actions;
-pub mod administration_target;
-pub mod artifact;
+pub(crate) mod actions;
+pub(crate) mod administration_target;
+pub(crate) mod artifact;
 pub mod assemble;
-pub mod auth;
-pub mod claude_code;
-pub mod client;
-pub mod cloud;
+pub(crate) mod auth;
+pub(crate) mod claude_code;
+pub(crate) mod client;
+pub(crate) mod cloud;
 mod codex_router;
-pub mod commands;
+pub(crate) mod commands;
 pub mod config;
-pub mod connected_agents;
-pub mod contexts;
-pub mod continuation;
-pub mod control_output;
-pub mod daemon;
-pub mod daemon_locator;
-pub mod db;
-pub mod error_report;
-pub mod eval;
+pub(crate) mod connected_agents;
+pub(crate) mod contexts;
+pub(crate) mod continuation;
+pub(crate) mod control_output;
+pub(crate) mod daemon;
+pub(crate) mod daemon_locator;
+pub(crate) mod db;
+pub(crate) mod error_report;
+pub(crate) mod eval;
 pub mod gateway;
 pub mod host;
-pub mod managed_contract;
-pub mod mcp_config;
-pub mod mcp_registry;
-pub mod metering;
+pub(crate) mod managed_contract;
+pub(crate) mod mcp_config;
+pub(crate) mod mcp_registry;
+pub(crate) mod metering;
 mod model_policy;
 
-pub mod offline;
-pub mod onboarding;
-pub mod output;
-pub mod paths;
-pub mod policy;
-pub mod policy_source;
-pub mod policy_table_router;
+pub(crate) mod offline;
+pub(crate) mod onboarding;
+pub(crate) mod output;
+pub(crate) mod paths;
+pub(crate) mod policy;
+pub(crate) mod policy_source;
+pub(crate) mod policy_table_router;
 mod prompt;
 mod provider_credentials;
-pub mod providers;
-pub mod reload;
-pub mod remote_control;
-pub mod request_checks;
+pub(crate) mod providers;
+pub(crate) mod reload;
+pub(crate) mod remote_control;
+pub(crate) mod request_checks;
 mod runtime_crypto;
-pub mod session_diagnostics;
-pub mod session_identity;
-pub mod skills;
-pub mod storage;
-pub mod style;
+pub(crate) mod session_diagnostics;
+pub(crate) mod session_identity;
+pub(crate) mod skills;
+pub(crate) mod storage;
+pub(crate) mod style;
 mod tenancy;
 #[cfg(feature = "mcp")]
-pub mod tools;
+pub(crate) mod tools;
 mod tracing_filter;
-pub mod trajectory;
-pub mod update;
-
-pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
+pub(crate) mod trajectory;
+pub(crate) mod update;
 
 /// Crate version string, surfaced by `bitrouter --version`.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Optional application telemetry transports.
-pub mod telemetry;
+pub(crate) mod telemetry;
+
+#[path = "main/cli.rs"]
+mod cli;
+
+/// Run the bundled operator CLI using this process’s arguments and environment.
+///
+/// This owns the runtime, standard streams and process exit status. Embedding
+/// hosts should use [`host::serve_with_extensions`] instead.
+pub fn run_cli() {
+    cli::entry();
+}
+
+#[cfg(test)]
+mod tests;
