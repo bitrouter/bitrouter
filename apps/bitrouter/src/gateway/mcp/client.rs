@@ -303,7 +303,7 @@ impl BoundedMcpClient {
         discovery: &Discovery,
     ) -> Result<(), String> {
         for server in servers {
-            let configuration_digest = crate::storage::checkpoint::sha256(
+            let configuration_digest = crate::storage::digest::sha256(
                 &serde_json::to_vec(&crate::skills::library::canonical(
                     serde_json::to_value(server).map_err(|error| error.to_string())?,
                 ))

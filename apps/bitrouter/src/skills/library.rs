@@ -1,7 +1,7 @@
 use crate::managed_contract::harness::resources::MaterialRef;
 use crate::managed_contract::harness::skills::LocalSkill;
 
-use crate::storage::checkpoint::sha256;
+use crate::storage::digest::sha256;
 
 pub trait LocalSkillExt: Sized {
     fn material(&self) -> Result<MaterialRef, String>;
