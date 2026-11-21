@@ -15,6 +15,7 @@ use crate::gateway::pipeline::hooks::ExecutionHook;
 use crate::gateway::pipeline::hooks::ObserveHook;
 use crate::gateway::pipeline::hooks::PreRequestHook;
 use crate::gateway::pipeline::hooks::RouteHook;
+#[cfg(test)]
 use crate::gateway::pipeline::hooks::StreamHook;
 use crate::gateway::pipeline::operations::HookRegistration;
 use crate::gateway::pipeline::operations::HookStage;
@@ -41,6 +42,7 @@ pub struct PipelineBuilder {
     model_selectors: Vec<HookRegistration<dyn ModelSelector>>,
     execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
     pub(crate) decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
+    #[cfg(test)]
     stream_hooks: Vec<Arc<dyn StreamHook>>,
     settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
     required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
@@ -75,6 +77,7 @@ impl PipelineBuilder {
             model_selectors: Vec::new(),
             decision_model: None,
             execution_hooks: Vec::new(),
+            #[cfg(test)]
             stream_hooks: Vec::new(),
             settlement_recorders: Vec::new(),
             required_finalizers: Vec::new(),
@@ -429,6 +432,7 @@ impl PipelineBuilder {
             model_selectors: self.model_selectors,
             decision_model: self.decision_model,
             execution_hooks: self.execution_hooks,
+            #[cfg(test)]
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,
             required_finalizers: self.required_finalizers,

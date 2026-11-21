@@ -2481,11 +2481,6 @@ impl RouteHook for ContinuationRuntime {
                     &selected,
                     credential_authority,
                 );
-                let continuation = if active.effort_authoritative {
-                    continuation.with_effort_constraint(active.effective_effort)
-                } else {
-                    continuation
-                };
                 ctx.insert_extension(Arc::new(continuation));
                 Ok(())
             }
@@ -4393,7 +4388,6 @@ mod tests {
             inbound_protocol: Some(ApiProtocol::Responses),
             response_id: Some(provider_response_id.into()),
             finish_reason: Some(bitrouter_ai::types::FinishReason::Stop),
-            streamed: true,
             successful_terminal: true,
             native_response_completed: true,
             credential_authority: Some(static_authority("credential")),
