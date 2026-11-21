@@ -8,6 +8,7 @@ use crate::managed_contract::evidence::NativeInputCount;
 pub(crate) struct NativeCountedRequests(std::sync::Mutex<Option<String>>);
 
 impl NativeCountedRequests {
+    #[cfg(test)]
     pub(crate) fn select(&self, count: Option<&NativeInputCount>) -> Result<()> {
         let mut current = self.0.lock().map_err(|_| {
             crate::gateway::error::BitrouterError::internal("input count binding unavailable")
@@ -37,10 +38,6 @@ pub(crate) struct NativeOutputReservation(pub u32);
 
 /// Every controlled call carries this marker, even before output admission.
 pub(crate) struct NativeManagedRequest;
-
-/// A model-only policy requires the complete admitted input, including when
-/// the native caller pins a model and bypasses policy selection.
-pub(crate) struct PreserveInput;
 
 /// Maximum decoded HTTP entity bytes consumed for one managed provider reply.
 pub(crate) struct NativeResponseByteLimit(pub u64);

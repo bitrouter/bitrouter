@@ -1,8 +1,6 @@
 //! Host-authenticated Responses continuation for managed canonical history.
 
-use crate::managed_contract::evidence::{
-    ContinuationFailure, FullHistoryReason, NativeContinuationInput,
-};
+use crate::managed_contract::evidence::{ContinuationFailure, FullHistoryReason};
 
 use super::native_context::{ORIGIN_NAMESPACE, metadata, metadata_mut};
 use crate::gateway::error::BitrouterError;
@@ -83,67 +81,12 @@ pub enum NativeContinuationPlan {
     Resume(NativeContinuationBinding),
 }
 
-impl NativeContinuationPlan {
-    pub(crate) fn observation(&self) -> NativeContinuationInput {
-        match self {
-            Self::FullHistory(reason) => NativeContinuationInput::FullHistory { reason: *reason },
-            Self::Resume(binding) => NativeContinuationInput::Resumed {
-                prefix_messages: binding.prefix_messages as u64,
-            },
-        }
-    }
-
-    pub(crate) fn execution_prompt(&self, prompt: &Prompt) -> Result<Prompt, ContinuationFailure> {
-        let mut effective = prompt.clone();
-        if let Self::Resume(binding) = self {
-            effective.messages = prompt
-                .messages
-                .get(binding.prefix_messages..)
-                .ok_or(ContinuationFailure::PrefixMismatch)?
-                .to_vec();
-        }
-        if effective
-            .messages
-            .iter()
-            .any(|message| message.content.iter().any(requires_stored_state))
-        {
-            return Err(ContinuationFailure::Required);
-        }
-        Ok(effective)
-    }
-
-    pub(crate) fn replayable(&self) -> bool {
-        match self {
-            Self::FullHistory(_) => true,
-            Self::Resume(binding) => binding.replayable,
-        }
-    }
-}
-
 /// Whether a part requires remote state in addition to its canonical projection.
 /// Presence, including malformed values, requires the source proof and a handle.
 pub fn requires_stored_state(part: &Content) -> bool {
     metadata(part)
         .get(ORIGIN_NAMESPACE)
         .is_some_and(|fields| fields.get(REQUIRED_STATE_FIELD).is_some())
-}
-
-pub(crate) fn mark_required_state(content: &mut Vec<Content>) {
-    if content.is_empty() {
-        content.push(Content::Text {
-            text: String::new(),
-            provider_metadata: Default::default(),
-        });
-    }
-    let fields = metadata_mut(&mut content[0])
-        .entry(ORIGIN_NAMESPACE.into())
-        .or_insert_with(|| serde_json::json!({}));
-    if !fields.is_object() {
-        *fields = serde_json::json!({});
-    }
-    // Bind each successful remote state independently, even when distinct raw
-    // provider outputs collapse to the same visible canonical content.
-    fields[REQUIRED_STATE_FIELD] = uuid::Uuid::new_v4().to_string().into();
 }
 
 /// Whether any message contains a native handle that requires host validation.

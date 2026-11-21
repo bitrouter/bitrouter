@@ -44,7 +44,7 @@ use crate::gateway::pipeline::stream::{StreamOutcome, StreamProcessor};
 use crate::gateway::pipeline::types::{
     ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
 };
-use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamPart};
+use bitrouter_ai::types::{ModelOperation, Prompt, StreamPart};
 
 /// The default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
@@ -755,6 +755,7 @@ impl Pipeline {
     ///
     /// Shared generations require the owned lifecycle instead; this legacy
     /// best-effort method logs misuse and returns zero without touching work.
+    #[cfg(test)]
     pub async fn drain_pending_settlements(&self) -> usize {
         if self.owned_tasks().is_some() {
             tracing::error!("Pipeline requires its owned lifecycle drain");
@@ -852,7 +853,7 @@ impl Pipeline {
     /// The work is spawned onto a shutdown-tracked task, so dropping the
     /// returned future does not cancel it. The connected caller still awaits
     /// the task's `JoinHandle` and gets the real response. Streaming requests
-    /// keep their own cancel-on-disconnect path ([`Pipeline::execute_stream`]).
+    /// keep their own cancel-on-disconnect path ([`Pipeline::execute_stream_prepared`]).
     pub async fn execute_detached(
         self: Arc<Self>,
         req: PipelineRequest,
@@ -1034,20 +1035,11 @@ impl Pipeline {
                         .await;
                     return Err(error);
                 }
-                // Managed execution retains terminal validity privately after
-                // removing the raw Responses ID from output and receipts.
-                let response_id_valid = ctx
-                    .extension::<super::native_context::NativePrivateContextRuntime>()
-                    .map_or_else(
-                        || {
-                            result
-                                .result
-                                .generation()
-                                .and_then(|result| result.response_id.as_deref())
-                                .is_some_and(|id| !id.is_empty())
-                        },
-                        |runtime| runtime.response_terminal_valid(),
-                    );
+                let response_id_valid = result
+                    .result
+                    .generation()
+                    .and_then(|result| result.response_id.as_deref())
+                    .is_some_and(|id| !id.is_empty());
                 let native_responses_terminal_invalid = provider_terminal_exposed
                     && ctx.successful_target().is_some_and(|target| {
                         target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses
@@ -1164,6 +1156,7 @@ impl Pipeline {
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
     /// failures are real errors), then the canonical `StreamPart` stream flows
     /// through the StreamHook stage; Settlement runs once the stream terminates.
+    #[cfg(test)]
     pub async fn execute_stream(
         self: Arc<Self>,
         req: PipelineRequest,
@@ -1172,6 +1165,7 @@ impl Pipeline {
         Ok(Self::deliver_stream(prepared))
     }
 
+    #[cfg(test)]
     fn deliver_stream(
         prepared: PreparedPipelineStream,
     ) -> Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>> {
@@ -1578,9 +1572,6 @@ impl Pipeline {
             .await
             .map_err(EntryPreparationFailure::pre_request)?;
 
-        super::native_context::validate_managed_history(ctx)
-            .map_err(EntryPreparationFailure::pre_request)?;
-
         // Freeze the ingress router identity and checker bindings before an
         // app hook can choose a different effective route.
         let mut binding = self
@@ -1658,20 +1649,16 @@ impl Pipeline {
     ) -> Result<()> {
         let operation = ctx.operation();
         for hook in hooks.iter().filter(|hook| hook.supports(operation)) {
-            async {
-                    match hook.check(ctx).await? {
-                        HookDecision::Allow => {
-                            if checked_selector.is_some_and(|selector| ctx.model() != selector) {
-                                return Err(BitrouterError::internal(
-                                    "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
-                                ));
-                            }
-                            Ok(())
-                        }
-                        HookDecision::Deny(reason) => Err(reason.into()),
+            match hook.check(ctx).await? {
+                HookDecision::Allow => {
+                    if checked_selector.is_some_and(|selector| ctx.model() != selector) {
+                        return Err(BitrouterError::internal(
+                            "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
+                        ));
                     }
                 }
-            .await?;
+                HookDecision::Deny(reason) => return Err(reason.into()),
+            }
         }
         Ok(())
     }
@@ -1766,7 +1753,6 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         bindings: &[RequestCheckBinding],
     ) -> Result<()> {
-        super::native_context::validate_managed_history(ctx)?;
         if bindings.is_empty() {
             return Ok(());
         }
@@ -2309,11 +2295,6 @@ impl Pipeline {
             };
             let mut technical_hop = super::provider_technical::begin_hop(ctx, false);
             self.observe_hop_start(ctx, target).await;
-            let private_context =
-                ctx.extension::<super::native_context::NativePrivateContextRuntime>();
-            if let Some(runtime) = &private_context {
-                runtime.begin_attempt();
-            }
             let mut outcome = match reached {
                 Err(error) => Err(error),
                 Ok(()) => self.executor.execute(target, prompt, ctx).await,
@@ -2341,11 +2322,7 @@ impl Pipeline {
             ) {
                 ExecutionCustody::from_context(ctx).record_pipeline_outcome(false);
             }
-            if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome)
-                && let Some(generation) = result.result.generation_mut()
-            {
-                runtime.seal_output(ctx, target, generation);
-            }
+
             match &outcome {
                 Ok(result) => {
                     self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
