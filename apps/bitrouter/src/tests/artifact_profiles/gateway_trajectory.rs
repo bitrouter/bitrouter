@@ -1,12 +1,11 @@
 //! Explicit trajectory observation and durable gateway facts across profiles.
-//! The former service cost-guard escalation/hold positive is retired: model-only
-//! source has no guard. Explicit correlation preserves settlement/outbox coverage.
+//! Explicit correlation binds model routing to settlement and outbox evidence.
 
 use super::persistence::table_rows;
 use super::*;
 use crate::policy_source::deterministic_yaml;
 use crate::trajectory::health::reduce;
-use crate::trajectory::types::{TrajectoryEvent, TrajectoryEventKind, TrajectorySnapshot};
+use crate::trajectory::types::{TrajectoryEvent, TrajectorySnapshot};
 use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use std::collections::BTreeMap;

@@ -52,7 +52,7 @@ pub(super) struct TenantRead {
 
 #[derive(Subcommand)]
 pub(super) enum Action {
-    /// Inspect a stopped local SQLite DB; no external state or cutover qualification.
+    /// Inspect a stopped local SQLite database and its snapshot artifacts.
     Offline {
         #[command(subcommand)]
         action: offline::Action,

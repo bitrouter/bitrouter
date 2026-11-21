@@ -125,7 +125,7 @@ async fn parser_rejection(arguments: &[&str], diagnostic: &str) -> Result<()> {
 }
 
 #[tokio::test]
-async fn retired_learning_commands_fail_parsing_without_side_effects() -> Result<()> {
+async fn unsupported_learning_commands_fail_parsing_without_side_effects() -> Result<()> {
     for arguments in [
         vec!["optimize", "run", "--config", "missing.yaml"],
         vec!["optimize", "status", "--config", "missing.yaml"],

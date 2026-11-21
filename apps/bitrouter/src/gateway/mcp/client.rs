@@ -125,7 +125,7 @@ impl BoundedMcpClient {
                 && (connection.catalog_generation != connection.generation.load(Ordering::SeqCst)
                     || connection.service.peer().is_transport_closed())
         }) {
-            return Err(reject("MCP catalog is no longer current"));
+            return Err(reject("MCP catalog is stale"));
         }
         Ok(())
     }
