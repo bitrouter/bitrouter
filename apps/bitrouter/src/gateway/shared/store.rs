@@ -352,19 +352,19 @@ impl Store {
             .collect()
     }
 
-    /// Retired guard records cannot be made current by replacing a store marker.
+    /// Unsupported guard records prevent joining even with a valid store marker.
     /// Ordinary trajectory observations and their schema remain independent.
-    pub(super) async fn reject_retired_guard_records(
+    pub(super) async fn reject_unsupported_guard_records(
         &self,
         tx: &DatabaseTransaction,
     ) -> Result<()> {
         let row = tx.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-            "SELECT EXISTS(SELECT 1 FROM gateway_shared_records WHERE namespace=$1 AND kind='episode_fence') OR EXISTS(SELECT 1 FROM gateway_shared_trajectory_events WHERE namespace=$1 AND (kind IN ('route_intent_recorded','guard_activated') OR event_json::jsonb->>'kind' IN ('route_intent_recorded','guard_activated'))) AS retired",
+            "SELECT EXISTS(SELECT 1 FROM gateway_shared_records WHERE namespace=$1 AND kind='episode_fence') OR EXISTS(SELECT 1 FROM gateway_shared_trajectory_events WHERE namespace=$1 AND (kind IN ('route_intent_recorded','guard_activated') OR event_json::jsonb->>'kind' IN ('route_intent_recorded','guard_activated'))) AS unsupported",
             [self.namespace.as_str().into()]
         )).await?.context("missing shared guard preflight")?;
         ensure!(
-            !row.try_get::<bool>("", "retired")?,
-            "retired shared guard history"
+            !row.try_get::<bool>("", "unsupported")?,
+            "unsupported shared guard history"
         );
         Ok(())
     }

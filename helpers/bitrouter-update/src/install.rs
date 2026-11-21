@@ -142,7 +142,7 @@ impl Installation {
                 && r["binary_sha256"].as_str().is_some_and(|h| h.len() == 64
                     && h.bytes()
                         .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())),
-            "receipt product, executable, aliases or version mismatch; preserve any M0 installation for migration"
+            "receipt product, executable, aliases or version mismatch; preserve the executable and receipts for manual recovery"
         );
         let prefix = Path::new(
             r["install_prefix"]
@@ -170,7 +170,7 @@ impl Installation {
         if peer.try_exists()? {
             ensure!(
                 !same_file::is_same_file(&owned, peer)?,
-                "linked product executables require M0 migration"
+                "linked product executables cannot be updated independently; preserve both executables and receipts for manual recovery"
             );
         }
         Ok(())
@@ -407,7 +407,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn live_and_legacy_locks_remain_exclusive() -> Result<()> {
+    fn active_and_unmarked_locks_remain_exclusive() -> Result<()> {
         let root = tempfile::tempdir()?;
         let path = root.path().join(".install-lock");
         let held = Lock::acquire(path.clone(), true)?;

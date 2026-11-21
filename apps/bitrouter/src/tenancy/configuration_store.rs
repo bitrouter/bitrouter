@@ -197,7 +197,7 @@ pub(super) fn execution_cache_binding(record: &StoredConfiguration) -> Result<Bo
 fn canonical(value: &JsonValue, limit: usize) -> Result<String> {
     json_depth(value, 0)?;
     // Bound serialization before cloning the tree. Sort object keys only;
-    // array order and serde_json number spelling are retained, as in M0.
+    // array order and serde_json number spelling are retained.
     let wire = bounded_json(value, limit)?;
     let mut value: JsonValue = serde_json::from_str(&wire)?;
     sort_json(&mut value);

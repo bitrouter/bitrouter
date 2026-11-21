@@ -866,7 +866,7 @@ impl Pipeline {
     /// response" (<https://openrouter.ai/docs/api/reference/streaming>).
     ///
     /// The work is spawned onto a shutdown-tracked task, so dropping the
-    /// returned future no longer cancels it. The connected caller still awaits
+    /// returned future does not cancel it. The connected caller still awaits
     /// the task's `JoinHandle` and gets the real response. Streaming requests
     /// keep their own cancel-on-disconnect path ([`Pipeline::execute_stream`]).
     pub async fn execute_detached(
@@ -3683,7 +3683,7 @@ impl Pipeline {
     /// Stage 4 — Settlement. Every `SettlementRecorder` runs in registration
     /// order against the immutable [`SettlementContext`]. Deployments that
     /// need exclusive-charging semantics implement them inside a single
-    /// recorder (the SDK no longer enforces a charge chain).
+    /// recorder. The application invokes all registered recorders.
     async fn run_settlement(
         &self,
         ctx: &mut PipelineContext,

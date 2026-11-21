@@ -126,7 +126,7 @@ fn requirements_retain_policy_authority_independent_of_core() -> Result<()> {
 }
 
 #[test]
-fn retired_guard_requirements_and_captures_are_rejected_from_current_shape() -> Result<()> {
+fn unsupported_guard_requirements_and_captures_are_rejected_from_current_shape() -> Result<()> {
     let original = serde_json::to_value(input()?)?;
     let mut requirement = original.clone();
     requirement["requirements"]["trajectory"] = "guarded_policies".into();

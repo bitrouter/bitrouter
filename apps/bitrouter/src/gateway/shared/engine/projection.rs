@@ -15,7 +15,7 @@ impl crate::gateway::shared::authority::Authority {
         &self,
         tx: &DatabaseTransaction,
     ) -> Result<()> {
-        self.store().reject_retired_guard_records(tx).await?;
+        self.store().reject_unsupported_guard_records(tx).await?;
         let mut after = String::new();
         loop {
             let page = self
@@ -32,7 +32,7 @@ impl crate::gateway::shared::authority::Authority {
                 );
                 ensure!(
                     execution.value.trajectory.is_none(),
-                    "retired guarded execution binding"
+                    "unsupported guarded execution binding"
                 );
                 ensure!(
                     execution.key() == execution.value.view.execution_id,
@@ -109,7 +109,7 @@ impl Engine {
         );
         ensure!(
             execution.value.trajectory.is_none(),
-            "retired guarded execution binding"
+            "unsupported guarded execution binding"
         );
         let mut attempts = Vec::with_capacity(event.execution.attempts.len());
         for view in &event.execution.attempts {

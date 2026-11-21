@@ -1,9 +1,9 @@
-//! [`GuardrailsPlugin`] — legacy [`Plugin`] assembly for trusted custom hosts.
+//! [`GuardrailsPlugin`] — global [`Plugin`] assembly for trusted custom hosts.
 //!
-//! The default OSS binary no longer installs this package. New router-bound
-//! input checks register [`super::checker::callback`] through
+//! Custom hosts explicitly install this adapter. Router-bound input checks
+//! register [`super::checker::callback`] through
 //! `bitrouter::gateway::extensions::registry::ExtensionApi`; they do not install global hooks.
-//! This compatibility API retains its existing global/per-request rule deposits
+//! This API supplies global/per-request rule deposits
 //! and stream block/redact behavior. Input-only request checks cannot replace
 //! those output or global protection guarantees, and these hooks do not inherit
 //! the router binding or bounded diagnostics of native request checks.

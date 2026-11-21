@@ -1,4 +1,4 @@
-//! Stock A03 candidates at committed Prepared and attempt-Terminal boundaries.
+//! Stock-worker recovery at committed Prepared and attempt-Terminal boundaries.
 //!
 //! The fixture owns a trigger and transaction advisory lock in its fresh PG
 //! database. The trigger delays only the selected status transition; it never

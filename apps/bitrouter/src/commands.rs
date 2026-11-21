@@ -1139,9 +1139,9 @@ mod tests {
         );
     }
 
-    /// Build a [`ProviderEntry`] from a registry-provider fixture — anthropic
-    /// and openai-codex are no longer compiled-in built-ins, so `login` resolves
-    /// their auth shape from the fetched registry via `entry_from_registry`.
+    /// Build a [`ProviderEntry`] from a registry-provider fixture. Login resolves
+    /// anthropic and openai-codex authentication from the fetched registry via
+    /// `entry_from_registry`.
     fn entry_for(json: serde_json::Value) -> crate::providers::entry::ProviderEntry {
         let p: crate::gateway::catalog::types::RegistryProvider =
             serde_json::from_value(json).expect("valid registry-provider fixture");

@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn ignores_unknown_provider_ids() -> anyhow::Result<()> {
-        // openai is no longer compiled in — it is a registry-merge provider, so
+        // openai receives its defaults from the registry merge, so
         // `apply_builtin_defaults` (which only knows the cloud gateway) leaves
         // it untouched.
         let mut config = config_with("openai", ProviderConfig::default());

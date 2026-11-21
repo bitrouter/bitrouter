@@ -1,4 +1,4 @@
-//! Stock-process candidates for parts of P1-A03/A08, not acceptance evidence.
+//! Recovery and reconciliation across stock gateway process failures.
 //!
 //! All authority changes use the stock executable or authenticated HTTP. SQL
 //! barriers in the UUID-owned fixture database hold a row or delay one status
