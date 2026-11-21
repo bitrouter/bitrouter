@@ -137,7 +137,7 @@ const ROLE_COUNT: usize = 5;
 const MAX_PREDICTIVE_EVIDENCE: usize = 8;
 const MAX_HISTORY_SIGNAL_COUNT: u8 = 3;
 const COMPILED_SCORECARD_DIGEST: &str =
-    "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37";
+    "sha256:65a49ef919ee97069e7be7b4259eb6c3623c149693b42888897f3c3f7ce89cf5";
 const PREDICTOR_ALGORITHM: &str = "deterministic_scorecard";
 const PREDICTOR_CONFIDENCE_KIND: &str = "heuristic_margin";
 
@@ -2584,7 +2584,7 @@ mod tests {
         assert_eq!(contract.config_digest, recomputed_digest);
         assert_eq!(
             contract.config_digest,
-            "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37"
+            "sha256:65a49ef919ee97069e7be7b4259eb6c3623c149693b42888897f3c3f7ce89cf5"
         );
         assert!(contract.config_digest.starts_with("sha256:"));
         assert_eq!(contract.config_digest.len(), 71);
@@ -2593,6 +2593,10 @@ mod tests {
 
     #[test]
     fn predictor_contract_digest_covers_every_behavior_component() -> anyhow::Result<()> {
+        assert_eq!(
+            predictor_behavior_digest(compiled_predictor_behavior())?,
+            compiled_scorecard_digest()
+        );
         let mut changed_lexicon = compiled_predictor_behavior().clone();
         changed_lexicon
             .instruction_terms
