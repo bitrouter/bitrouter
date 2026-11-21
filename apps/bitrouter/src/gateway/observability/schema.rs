@@ -1205,13 +1205,9 @@ mod tests {
 
     #[test]
     fn the_committed_artifact_matches_the_declaration() -> Result<(), Box<dyn std::error::Error>> {
-        // The diff-in-CI half of the guard. It rides the ordinary test job
-        // rather than a bespoke one: `cargo nextest run --all-features` is
-        // already what CI and CLAUDE.md run, and a schema artifact nobody
-        // regenerates is worse than no artifact at all. It runs under the
-        // crate's DEFAULT features — this module is behind no gate, and a
-        // staleness guard that only fires under `--all-features` would let the
-        // artifact rot in every other build.
+        // Unit tests include the declaration even without an OTLP transport,
+        // so the ordinary test job checks artifact freshness in every feature
+        // configuration.
         //
         // This gateway-owned artifact lives beside the application manifest.
         // It describes the gateway's telemetry interop surface; exporter

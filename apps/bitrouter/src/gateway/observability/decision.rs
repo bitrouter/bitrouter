@@ -201,6 +201,7 @@ impl PendingEvalDecision {
 }
 
 impl PredictionObservationSnapshot {
+    #[cfg(any(feature = "eval-publication", feature = "multi-instance"))]
     pub(crate) fn attributes(&self) -> BTreeMap<String, String> {
         let mut attributes = BTreeMap::new();
         if let Some(value) = &self.continuation_proposed_tier {
