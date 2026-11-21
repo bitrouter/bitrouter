@@ -44,7 +44,6 @@ use stream_bridge::BridgeCapture;
 
 /// Request-local terminal capture for controlled streaming. The HTTP executor
 /// retains full Responses output privately until the collected attempt settles.
-use crate::managed_contract::evidence::ContinuationFailure;
 
 fn record_native_dispatch(
     prompt: &Prompt,
@@ -1584,12 +1583,8 @@ impl Executor for HttpExecutor {
         let started = Instant::now();
         let technical = super::provider_technical::begin(ctx, target, started, false);
         let mut attempted_auth_refresh = false;
-        let requested_effort =
-            serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
-                crate::gateway::pipeline::native_continuation::continuation_error(
-                    ContinuationFailure::BindingChanged,
-                )
-            })?;
+        let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
+            .map_err(|_| BitrouterError::bad_request("invalid continuation reasoning effort"))?;
         let (
             text,
             successful_authority,

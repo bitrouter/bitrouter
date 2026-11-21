@@ -1,6 +1,5 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
-pub mod native_context;
 pub(crate) mod owned;
 #[cfg(all(test, feature = "multi-instance"))]
 #[path = "continuation/tests_owned.rs"]
