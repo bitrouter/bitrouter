@@ -103,8 +103,7 @@ async fn mcp_check_rejects_repeated_pagination_without_harness()
 }
 
 #[tokio::test]
-async fn shared_discovery_preserves_prefix_headers_and_server_instructions()
--> Result<(), Box<dyn std::error::Error>> {
+async fn shared_discovery_preserves_prefix_and_headers() -> Result<(), Box<dyn std::error::Error>> {
     use crate::gateway::mcp::client::BoundedMcpClient;
     use rmcp::model::ProtocolVersion;
 
@@ -126,14 +125,8 @@ async fn shared_discovery_preserves_prefix_headers_and_server_instructions()
             .collect::<Vec<_>>(),
         vec!["custom_echo", "custom_other"]
     );
-    assert_eq!(client.instructions().len(), 1);
-    assert_eq!(client.instructions()[0].server, "fixture");
-    assert_eq!(client.instructions()[0].text, "Use echo with text.");
-    assert_eq!(client.tool_peer("custom_echo")?.0, "echo");
     client.shutdown().await?;
     assert!(client.tools().is_empty());
-    assert!(client.instructions().is_empty());
-    assert!(client.tool_peer("custom_echo").is_err());
     let requests = upstream.received_requests().await.ok_or("requests")?;
     assert!(!requests.is_empty());
     assert!(requests.iter().all(|request| {

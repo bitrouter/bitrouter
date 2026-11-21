@@ -310,7 +310,8 @@ impl NativeTokenCost {
         }
     }
 
-    /// Known configured token estimate, never a claim of an authoritative bill.
+    /// Inspect a known configured estimate in accounting assertions.
+    #[cfg(test)]
     pub fn estimated_micro_usd(&self) -> Option<u64> {
         match self {
             Self::ConfiguredEstimate { micro_usd, .. }

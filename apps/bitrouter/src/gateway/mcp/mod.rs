@@ -1,14 +1,7 @@
 //! The `mcp` protocol module — Model Context Protocol routing.
 //!
-//! v1.0: **pure routing, no settlement**. The MCP
-//! pipeline has only `PreRequestHook` / `RouteHook` / `ExecutionHook` — there
-//! is no settlement stage. MCP tool calls are
-//! JSON-RPC; the canonical request/response here are JSON.
-//!
-//! these hook traits are **independent** of
-//! `language_model`'s — an `mcp::RouteHook` cannot be registered on a
-//! `language_model::Pipeline` (compile-time protocol isolation). Reuse of
-//! cross-cutting logic is via shared crate-root library code, not shared traits.
+//! Pure routing with pre-request authentication and policy checks. MCP tool
+//! calls use JSON-RPC; this pipeline does not perform settlement.
 //!
 //! Spec refs (modern stateless lifecycle: `2026-07-28`; stable
 //! `2025-11-25` and earlier revisions remain negotiable):
@@ -26,7 +19,7 @@
 //!
 //! ## Where the concrete executor lives
 //!
-//! The `Pipeline`, `Builder`, hook traits, and request/response types are
+//! The `Pipeline`, `PipelineBuilder`, authentication hook, and wire types are
 //! always available — they have no external dependencies, so a consumer can
 //! plug in a custom `Executor` for a non-standard transport.
 //!
@@ -136,8 +129,6 @@ pub enum ServerSelector {
 /// An inbound MCP request — a JSON-RPC call against one or more MCP servers.
 #[derive(Debug, Clone)]
 pub struct McpRequest {
-    /// Unique request id.
-    pub request_id: String,
     /// Which upstream(s) this request targets.
     pub selector: ServerSelector,
     /// The JSON-RPC method (e.g. `tools/call`, `tools/list`).
@@ -168,7 +159,7 @@ pub struct McpClientContext {
 }
 
 impl McpRequest {
-    /// Build a direct (single-server) request with a fresh uuid id.
+    /// Build a direct (single-server) request for an internal executor.
     pub fn direct(
         server: impl Into<String>,
         method: impl Into<String>,
@@ -176,7 +167,6 @@ impl McpRequest {
         caller: CallerContext,
     ) -> Self {
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
             selector: ServerSelector::Direct(server.into()),
             method: method.into(),
             params,
@@ -186,14 +176,13 @@ impl McpRequest {
         }
     }
 
-    /// Build an aggregate (fan-out) request with a fresh uuid id.
+    /// Build an aggregate (fan-out) request for an internal executor.
     pub fn aggregate(
         method: impl Into<String>,
         params: serde_json::Value,
         caller: CallerContext,
     ) -> Self {
         Self {
-            request_id: uuid::Uuid::new_v4().to_string(),
             selector: ServerSelector::Aggregate,
             method: method.into(),
             params,
@@ -221,8 +210,6 @@ impl McpRequest {
 /// An MCP response — the JSON-RPC result.
 #[derive(Debug, Clone)]
 pub struct McpResponse {
-    /// The request id this answers.
-    pub request_id: String,
     /// The JSON-RPC `result`.
     pub result: serde_json::Value,
 }
@@ -294,16 +281,13 @@ pub enum InvalidationKind {
     /// `notifications/prompts/list_changed` — drop the server's
     /// `prompts/list` cache.
     PromptsListChanged,
-    /// The connection re-handshook — drop every cached entry for the server.
-    Reinitialized,
 }
 
 /// One frame of a streaming MCP execution.
 ///
 /// `Final` terminates the stream — exactly one per stream, after which no more
-/// items follow. [`ExecutionHook::on_success`] fires once `Final` arrives, so
-/// implementers of [`Executor::execute_streaming`] MUST end every successful
-/// stream with `Final` and MUST NOT emit `Final` more than once.
+/// items follow. Implementers of [`Executor::execute_streaming`] MUST end every
+/// successful stream with `Final` and MUST NOT emit `Final` more than once.
 #[derive(Debug, Clone)]
 pub enum McpStreamPart {
     /// JSON-RPC notification with no `id` (progress / log / etc.).
@@ -347,25 +331,9 @@ pub trait PreRequestHook: Send + Sync {
     async fn check(&self, ctx: &mut McpContext) -> Result<HookDecision>;
 }
 
-/// Stage 2 — MCP route resolution / mutation.
-#[async_trait]
-pub trait RouteHook: Send + Sync {
-    /// Resolve / mutate the routing target.
-    async fn resolve(&self, target: &mut McpTarget, ctx: &mut McpContext) -> Result<()>;
-}
-
-/// Stage 3 — MCP execution observation.
-#[async_trait]
-pub trait ExecutionHook: Send + Sync {
-    /// Called when an upstream MCP call succeeds.
-    async fn on_success(&self, ctx: &McpContext, response: &McpResponse) -> Result<()>;
-}
-
-/// The MCP pipeline context — caller + request, plus accumulated route/result.
+/// The MCP authentication context: caller, request, and identity events.
 pub struct McpContext {
     request: McpRequest,
-    /// The resolved target (Stage 2).
-    pub target: Option<McpTarget>,
     events: crate::gateway::observability::event::EventBus,
 }
 
@@ -374,14 +342,8 @@ impl McpContext {
     pub fn new(request: McpRequest) -> Self {
         Self {
             request,
-            target: None,
             events: crate::gateway::observability::event::EventBus::new(),
         }
-    }
-
-    /// The inbound request.
-    pub fn request(&self) -> &McpRequest {
-        &self.request
     }
 
     /// The caller.
@@ -407,8 +369,8 @@ impl McpContext {
         &self.request.headers
     }
 
-    /// Downstream MCP identity/capabilities, when the request uses the
-    /// self-contained `2026-07-28` lifecycle.
+    /// Inspect the HTTP adapter's downstream context in protocol tests.
+    #[cfg(test)]
     pub fn client_context(&self) -> Option<&McpClientContext> {
         self.request.client_context.as_ref()
     }
@@ -418,7 +380,8 @@ impl McpContext {
         self.events.emit(event);
     }
 
-    /// Whether an event of type `E` was emitted.
+    /// Inspect authentication evidence in tests.
+    #[cfg(test)]
     pub fn has_event<E: crate::gateway::observability::event::PipelineEvent>(&self) -> bool {
         self.events.has::<E>()
     }
@@ -427,55 +390,24 @@ impl McpContext {
 /// The `mcp` pure-routing pipeline: PreRequest → Route → Execute. No settlement.
 pub struct Pipeline {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
-    route_hooks: Vec<Arc<dyn RouteHook>>,
-    execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     routing_table: Arc<dyn RoutingTable>,
     executor: Arc<dyn Executor>,
 }
 
 impl Pipeline {
-    /// Execute an MCP request through the three-stage pure-routing pipeline.
+    /// Authenticate, resolve, and execute an MCP request.
     pub async fn execute(&self, request: McpRequest) -> Result<McpResponse> {
-        let (mut ctx, target) = self.prepare(request).await?;
-        let response = self.executor.execute(&target, &ctx.request).await?;
-        for hook in &self.execution_hooks {
-            hook.on_success(&ctx, &response).await?;
-        }
-        // Consume `ctx` so it's gone after hooks fire — keeps the unused
-        // `target` slot from leaking past the call.
-        let _ = ctx.target.take();
-        Ok(response)
+        let (ctx, target) = self.prepare(request).await?;
+        self.executor.execute(&target, &ctx.request).await
     }
 
-    /// Streaming variant of [`execute`](Self::execute). The first two stages
-    /// (pre-request hooks, route resolution) run synchronously before the
-    /// stream is returned; the stream itself yields the execution frames.
-    /// [`ExecutionHook::on_success`] fires once the terminating
-    /// [`McpStreamPart::Final`] is observed.
+    /// Authenticate and resolve before returning the executor's stream.
     pub async fn execute_streaming(
         &self,
         request: McpRequest,
     ) -> Result<BoxStream<'static, Result<McpStreamPart>>> {
         let (ctx, target) = self.prepare(request).await?;
-        let inner = self
-            .executor
-            .execute_streaming(&target, &ctx.request)
-            .await?;
-        let hooks = self.execution_hooks.clone();
-        let ctx = Arc::new(ctx);
-        let stream = inner.then(move |item| {
-            let hooks = hooks.clone();
-            let ctx = ctx.clone();
-            async move {
-                if let Ok(McpStreamPart::Final(ref response)) = item {
-                    for hook in hooks.iter() {
-                        hook.on_success(&ctx, response).await?;
-                    }
-                }
-                item
-            }
-        });
-        Ok(stream.boxed())
+        self.executor.execute_streaming(&target, &ctx.request).await
     }
 
     async fn prepare(&self, request: McpRequest) -> Result<(McpContext, McpTarget)> {
@@ -490,15 +422,10 @@ impl Pipeline {
         }
 
         // Stage 2 — route resolution.
-        let mut target = self
+        let target = self
             .routing_table
             .resolve(&ctx.request.selector, ctx.caller())
             .await?;
-        for hook in &self.route_hooks {
-            hook.resolve(&mut target, &mut ctx).await?;
-        }
-        ctx.target = Some(target.clone());
-
         Ok((ctx, target))
     }
 }
@@ -507,8 +434,6 @@ impl Pipeline {
 #[derive(Default)]
 pub struct PipelineBuilder {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
-    route_hooks: Vec<Arc<dyn RouteHook>>,
-    execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     routing_table: Option<Arc<dyn RoutingTable>>,
     executor: Option<Arc<dyn Executor>>,
 }
@@ -537,18 +462,6 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a route hook.
-    pub fn route_hook(&mut self, hook: impl RouteHook + 'static) -> &mut Self {
-        self.route_hooks.push(Arc::new(hook));
-        self
-    }
-
-    /// Register an execution hook.
-    pub fn execution_hook(&mut self, hook: impl ExecutionHook + 'static) -> &mut Self {
-        self.execution_hooks.push(Arc::new(hook));
-        self
-    }
-
     /// Whether this builder has anything registered. The `App` reads this to
     /// decide whether to build an `mcp::Pipeline` and mount `/mcp/{name}`.
     pub fn is_configured(&self) -> bool {
@@ -559,8 +472,6 @@ impl PipelineBuilder {
     pub fn build(self) -> Result<Pipeline> {
         Ok(Pipeline {
             pre_request_hooks: self.pre_request_hooks,
-            route_hooks: self.route_hooks,
-            execution_hooks: self.execution_hooks,
             routing_table: self
                 .routing_table
                 .ok_or_else(|| BitrouterError::internal("mcp pipeline: routing_table required"))?,
@@ -605,7 +516,6 @@ mod tests {
     impl Executor for EchoExecutor {
         async fn execute(&self, _target: &McpTarget, request: &McpRequest) -> Result<McpResponse> {
             Ok(McpResponse {
-                request_id: request.request_id.clone(),
                 result: serde_json::json!({ "echoed": request.method }),
             })
         }
