@@ -212,7 +212,7 @@ async fn authenticated_policy_denial_finishes_captured_requests() -> Result<()> 
         let _ = response.bytes().await?;
     }
     fixture.finish().await?;
-    fixture.assert_failed(2, "forbidden").await?;
+    fixture.assert_failed(2, "permission_denied").await?;
     ensure!(calls.load(std::sync::atomic::Ordering::SeqCst) == 0);
     Ok(())
 }

@@ -71,8 +71,9 @@ mod tests {
     #[test]
     fn complete_history_requires_a_user_root_paired_tools_and_a_new_user_turn() -> anyhow::Result<()>
     {
-        let mut prompt: Prompt =
-            serde_json::from_value(serde_json::json!({"model":"fixture","messages":[]}))?;
+        let mut prompt: Prompt = serde_json::from_value(
+            serde_json::json!({"model":"fixture","messages":[],"stream":false}),
+        )?;
         let user = Message::text(Role::User, "Inspect the source");
         let assistant = Message::text(Role::Assistant, "Here is the answer");
         let followup = Message::text(Role::User, "Continue");
