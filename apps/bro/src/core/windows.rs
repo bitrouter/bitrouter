@@ -13,7 +13,8 @@ use windows_sys::Win32::{
     Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE},
     Security::{
         EqualSid, GetFileSecurityW, GetSecurityDescriptorOwner, GetTokenInformation,
-        OWNER_SECURITY_INFORMATION, SECURITY_MAX_SID_SIZE, TOKEN_USER, TokenUser,
+        OWNER_SECURITY_INFORMATION, SECURITY_MAX_SID_SIZE, TOKEN_OWNER, TOKEN_USER, TokenOwner,
+        TokenUser,
     },
 };
 
@@ -63,8 +64,8 @@ pub(super) fn owned_by_user(path: &Path) -> io::Result<bool> {
         (size_of::<TOKEN_USER>() + SECURITY_MAX_SID_SIZE as usize).div_ceil(size_of::<usize>());
     let mut token_info = [0usize; WORDS];
     let mut returned = 0;
-    // SAFETY: the aligned buffer holds TOKEN_USER and the longest valid SID.
-    // On success both SID pointers refer to buffers still owned by this call.
+    // SAFETY: the aligned buffer holds either token structure and the longest
+    // SID. Compare each SID while its backing buffer is still intact.
     unsafe {
         if GetTokenInformation(
             CURRENT_PROCESS_TOKEN,
@@ -77,7 +78,23 @@ pub(super) fn owned_by_user(path: &Path) -> io::Result<bool> {
             return Err(io::Error::last_os_error());
         }
         let user = &*token_info.as_ptr().cast::<TOKEN_USER>();
-        Ok(EqualSid(owner, user.User.Sid) != 0)
+        if EqualSid(owner, user.User.Sid) != 0 {
+            return Ok(true);
+        }
+        // A new directory can be owned by the token's default owner, such as
+        // the Administrators group for a process running with an elevated token.
+        if GetTokenInformation(
+            CURRENT_PROCESS_TOKEN,
+            TokenOwner,
+            token_info.as_mut_ptr().cast(),
+            size_of::<[usize; WORDS]>() as u32,
+            &mut returned,
+        ) == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let default_owner = &*token_info.as_ptr().cast::<TOKEN_OWNER>();
+        Ok(!default_owner.Owner.is_null() && EqualSid(owner, default_owner.Owner) != 0)
     }
 }
 
@@ -146,6 +163,13 @@ fn shim_points_to(contents: &str, relative: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_the_owner_of_a_new_directory() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        assert!(owned_by_user(&directory.path().canonicalize()?)?);
+        Ok(())
+    }
 
     #[test]
     fn cmd_shim_references_only_the_expected_launcher() {
