@@ -14,7 +14,7 @@ use crate::skills::wire::SkillEntry;
 use crate::skills::wire::SkillResource;
 use crate::skills::wire::SkillResources;
 
-use crate::storage::checkpoint::sha256;
+use crate::storage::digest::sha256;
 
 pub(crate) const MAX_ENTRY_BYTES: usize = 2 * 1024 * 1024;
 #[cfg(feature = "mcp")]
