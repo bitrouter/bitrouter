@@ -3,7 +3,81 @@ use bitrouter_ai::tenancy::operation::ErrorCode;
 use sea_orm::DbErr;
 use serde_json::{Value, json};
 
-async fn fixture() -> Result<(EvolutionStore, crate::tenancy::Service)> {
+#[tokio::test]
+async fn request_records_preserve_first_writer_owner_and_revision_across_restart() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("gateway.db").display()
+    );
+    let db = crate::db::connect(&url).await?;
+    crate::db::run_migrations(&db).await?;
+    let first = GatewayRecords::new(db.clone(), "principal-a")?;
+    let other = GatewayRecords::new(db.clone(), "principal-b")?;
+    let pending = json!({"settlement": null});
+    ensure!(
+        first
+            .initialize("gateway_request", "request", None, &pending)
+            .await?
+            == (0, pending.clone())
+    );
+    ensure!(
+        first
+            .initialize("gateway_request", "request", None, &json!({"forged": true}))
+            .await?
+            == (0, pending.clone())
+    );
+    ensure!(
+        other
+            .get::<Value>("gateway_request", "request")
+            .await?
+            .is_none()
+    );
+    let (revision, ()) = first
+        .update("gateway_request", "request", 0, |body: &mut Value| {
+            body["settlement"] = json!({"outcome": "completed"});
+            Ok(())
+        })
+        .await?;
+    ensure!(revision == 1);
+    ensure!(
+        first
+            .update("gateway_request", "request", 0, |_: &mut Value| Ok(()))
+            .await
+            .is_err()
+    );
+    let retained = first
+        .get::<Value>("gateway_request", "request")
+        .await?
+        .context("settlement missing")?;
+    ensure!(
+        other
+            .initialize("gateway_request", "request", None, &pending)
+            .await?
+            == (0, pending.clone())
+    );
+    drop(first);
+    drop(other);
+    db.close().await?;
+    let db = crate::db::connect(&url).await?;
+    crate::db::run_migrations(&db).await?;
+    ensure!(
+        GatewayRecords::new(db.clone(), "principal-a")?
+            .get::<Value>("gateway_request", "request")
+            .await?
+            == Some(retained)
+    );
+    ensure!(
+        GatewayRecords::new(db.clone(), "principal-b")?
+            .get::<Value>("gateway_request", "request")
+            .await?
+            == Some((0, pending))
+    );
+    db.close().await?;
+    Ok(())
+}
+
+async fn fixture() -> Result<(GatewayRecords, crate::tenancy::Service)> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let service = crate::tenancy::Service::open(db.clone(), None).await?;
@@ -11,7 +85,7 @@ async fn fixture() -> Result<(EvolutionStore, crate::tenancy::Service)> {
     cell.set(service.storage_budget())
         .map_err(|_| anyhow::anyhow!("budget already initialized"))?;
     Ok((
-        EvolutionStore::new(db, "read-failure-fixture")?.with_storage_budget(Some(cell)),
+        GatewayRecords::new(db, "read-failure-fixture")?.with_storage_budget(Some(cell)),
         service,
     ))
 }
@@ -34,7 +108,9 @@ async fn public_select_failure_fences_later_writes_before_any_effect() -> Result
             .await?;
         store
             .db
-            .execute_unprepared("ALTER TABLE checkpoint_evolution RENAME TO hidden_evolution")
+            .execute_unprepared(
+                "ALTER TABLE gateway_request_records RENAME TO hidden_request_records",
+            )
             .await?;
         let result = if list {
             store.list::<Value>("record").await.map(|_| ())
@@ -51,7 +127,9 @@ async fn public_select_failure_fences_later_writes_before_any_effect() -> Result
         // storage health, not from the still-missing table.
         store
             .db
-            .execute_unprepared("ALTER TABLE hidden_evolution RENAME TO checkpoint_evolution")
+            .execute_unprepared(
+                "ALTER TABLE hidden_request_records RENAME TO gateway_request_records",
+            )
             .await?;
         let mut changed = false;
         ensure!(
@@ -102,7 +180,7 @@ async fn borrowed_select_failure_stays_with_the_transaction_owner() -> Result<()
     let (store, service) = fixture().await?;
     store
         .db
-        .execute_unprepared("ALTER TABLE checkpoint_evolution RENAME TO hidden_evolution")
+        .execute_unprepared("ALTER TABLE gateway_request_records RENAME TO hidden_request_records")
         .await?;
     let (write, tx) = store.begin_write(false).await?;
     let result = store.get_in::<Value>(&tx, "record", "key").await;
@@ -120,7 +198,7 @@ async fn borrowed_select_failure_stays_with_the_transaction_owner() -> Result<()
     ));
     store
         .db
-        .execute_unprepared("ALTER TABLE hidden_evolution RENAME TO checkpoint_evolution")
+        .execute_unprepared("ALTER TABLE hidden_request_records RENAME TO gateway_request_records")
         .await?;
     service.shutdown().await?;
     Ok(())

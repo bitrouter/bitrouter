@@ -69,7 +69,7 @@ async fn reservation_insert_failure_fences_storage_before_any_provider_request()
     let service = crate::tenancy::Service::open(fixture.db.clone(), None).await?;
     cell.set(service.storage_budget())
         .map_err(|_| anyhow::anyhow!("budget set twice"))?;
-    fixture.db.execute_unprepared("CREATE TRIGGER test_inventory_insert BEFORE INSERT ON checkpoint_evolution WHEN NEW.kind='gateway_request' BEGIN SELECT RAISE(ABORT,'private-observation-payload'); END").await?;
+    fixture.db.execute_unprepared("CREATE TRIGGER test_inventory_insert BEFORE INSERT ON gateway_request_records WHEN NEW.kind='gateway_request' BEGIN SELECT RAISE(ABORT,'private-observation-payload'); END").await?;
     let error = fixture
         .pipeline
         .execute(request("fault", true)?)
@@ -114,7 +114,7 @@ async fn settlement_sql_failure_preserves_original_reservation_and_fences_storag
         anyhow::bail!("missing admission");
     };
     let before = serde_json::to_value(&observed)?;
-    fixture.db.execute_unprepared("CREATE TRIGGER test_inventory_update BEFORE UPDATE ON checkpoint_evolution WHEN OLD.kind='gateway_request' BEGIN SELECT RAISE(ABORT,'private-settlement-payload'); END").await?;
+    fixture.db.execute_unprepared("CREATE TRIGGER test_inventory_update BEFORE UPDATE ON gateway_request_records WHEN OLD.kind='gateway_request' BEGIN SELECT RAISE(ABORT,'private-settlement-payload'); END").await?;
     let settlement = ExecutionSettlement {
         settled_at: chrono::Utc::now().to_rfc3339(),
         hops: Vec::new(),
@@ -149,7 +149,7 @@ async fn ordinary_requests_do_not_need_the_inventory_or_its_budget() -> Result<(
     let fixture = fixture_with_storage(Failure::None, Some(Arc::new(OnceLock::new()))).await?;
     fixture
         .db
-        .execute_unprepared("DROP TABLE checkpoint_evolution")
+        .execute_unprepared("DROP TABLE gateway_request_records")
         .await?;
     let mut ordinary = request("ordinary", true)?;
     let id = crate::gateway::pipeline::types::new_request_id();

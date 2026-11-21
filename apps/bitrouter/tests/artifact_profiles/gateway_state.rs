@@ -3,7 +3,6 @@
 use super::*;
 use bitrouter::gateway::observability::inventory::GatewayInventory;
 use bitrouter::metering::entities::requests;
-use bitrouter::storage::evolution::EvolutionStore;
 use bitrouter_ai::policy::Document;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{Value, json};
@@ -33,12 +32,9 @@ fn database_url(fixture: &Fixture) -> String {
 struct RequestFacts {
     metering: requests::Model,
     inventory: Value,
-    execution: Option<(i64, Value)>,
-    intent: Option<(i64, Value)>,
 }
 
 async fn request_facts(db: &DatabaseConnection, request_id: &str) -> Result<RequestFacts> {
-    let owner = EvolutionStore::new(db.clone(), "local")?;
     Ok(RequestFacts {
         metering: requests::Entity::find_by_id(request_id)
             .one(db)
@@ -50,8 +46,6 @@ async fn request_facts(db: &DatabaseConnection, request_id: &str) -> Result<Requ
                 .await?
                 .context("inventory missing")?,
         )?,
-        execution: owner.get("execution", request_id).await?,
-        intent: owner.get("route_intent", request_id).await?,
     })
 }
 
@@ -71,10 +65,6 @@ fn check_gateway_ownership(fixture: &Fixture) -> Result<()> {
         ensure!(db.query_all(Statement::from_string(DbBackend::Sqlite,
             "SELECT name FROM sqlite_schema WHERE type = 'table' AND (name GLOB 'bro_*' OR name GLOB 'acp_*')"
         )).await?.is_empty(), "gateway created a local harness table");
-        let store = EvolutionStore::new(db.clone(), "local")?;
-        for kind in ["control", "enrollment", "route_intent", "judge_job"] {
-            ensure!(store.list::<Value>(kind).await?.is_empty(), "gateway created experimental {kind}");
-        }
         db.close().await?;
         Ok(())
     })
@@ -192,8 +182,7 @@ fn dispatch(
     };
     ensure!(
         sent["model"] == expected_model,
-        "wrong selected route for {id}: {sent}; route intent: {:?}",
-        facts.intent
+        "wrong selected route for {id}: {sent}"
     );
     ensure!(
         sent["reasoning_effort"] == expected.effort,
@@ -208,10 +197,6 @@ fn dispatch(
     ensure!(
         sent["messages"] == json!(messages),
         "policy changed the full context: {sent}"
-    );
-    ensure!(
-        facts.intent.is_none(),
-        "mature gateway retained a Block route intent"
     );
     ensure!(facts.metering.router_id.as_deref() == Some("coding"));
     ensure!(
@@ -240,8 +225,8 @@ fn dispatch(
     );
     ensure!(facts.inventory["request_id"] == id);
     ensure!(
-        facts.inventory["binding"].is_null() && facts.execution.is_none(),
-        "client-supplied session acquired gateway execution authority"
+        facts.inventory["route_scope_id"] == "local",
+        "caller session changed the authenticated request owner"
     );
     Ok(facts)
 }
@@ -323,7 +308,6 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
         upstream
     });
     let raw = seed::configuration(fixture, &upstream.uri(), true)?;
-    seed::assert_no_blocks(fixture)?;
     let source_a = seed::source("strong")?;
     let source_b = seed::source("cheap")?;
     let digest_a = bitrouter::policy_source::semantic_digest(&source_a)?;
@@ -389,11 +373,6 @@ fn exercise(fixture: &mut Fixture, full_binary: &Path, minimum_binary: &Path) ->
                 true,
                 &strong,
             )?;
-            ensure!(
-                facts.inventory["binding"].is_null()
-                    && facts.execution.is_none()
-                    && facts.intent.is_none()
-            );
             completed.push(("unresolved".into(), "missing-session".into(), facts));
         }
         check_gateway_ownership(fixture)?;

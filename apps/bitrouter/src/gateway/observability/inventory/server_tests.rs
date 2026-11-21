@@ -19,7 +19,7 @@ async fn database(scheme: &str) -> Result<DatabaseConnection> {
 
 async fn cleanup(
     db: DatabaseConnection,
-    store: &EvolutionStore,
+    store: &GatewayRecords,
     key: &str,
     result: Result<()>,
 ) -> Result<()> {

@@ -9,23 +9,32 @@ fn sql(s: impl Into<String>) -> Statement {
     Statement::from_string(DatabaseBackend::Sqlite, s)
 }
 
-fn statements() -> impl Iterator<Item = &'static str> {
-    include_str!("migration/gateway.sqlite.sql")
-        .lines()
-        .filter_map(|line| line.strip_suffix(';'))
+pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result<()> {
+    validate_selected(db, serving, None).await
 }
 
-pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result<()> {
+/// Validate the exact current objects used by an independent receipt/authority reader.
+pub(super) async fn validate_tables(db: &impl ConnectionTrait, tables: &[&str]) -> Result<()> {
+    validate_selected(db, false, Some(tables)).await
+}
+
+async fn validate_selected(
+    db: &impl ConnectionTrait,
+    serving: bool,
+    selected: Option<&[&str]>,
+) -> Result<()> {
     ensure!(
         db.get_database_backend() == DatabaseBackend::Sqlite,
         "SQLite required"
     );
     ensure!(db.query_one(sql("SELECT 1 FROM temp.sqlite_schema t JOIN main.sqlite_schema m ON t.name=m.name COLLATE NOCASE LIMIT 1")).await?.is_none(), "shadowed migration catalog");
-    let technical = !serving && provider_technical::available(db).await?;
+    ensure!(db.query_one(sql("SELECT 1 FROM temp.sqlite_schema t JOIN main.sqlite_schema m ON t.tbl_name=m.name COLLATE NOCASE WHERE t.type='trigger' LIMIT 1")).await?.is_none(), "temporary mutation hook on current storage");
+    let technical = selected.is_none() && !serving && provider_technical::available(db).await?;
     // Preserve SQL token boundaries and quoted literals.
     let tokens = regex::Regex::new(r#""(?:[^"]|"")*"|'(?:[^']|'')*'|[a-zA-Z0-9_]+|[^\x09-\x0d ]"#)?;
     let mut expected = BTreeMap::new();
-    for statement in statements() {
+    let statements = super::current_schema::statements(DatabaseBackend::Sqlite)?;
+    for statement in &statements {
         let parts = tokens
             .find_iter(statement)
             .map(|part| part.as_str())
@@ -36,6 +45,9 @@ pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result
             | ["CREATE", "INDEX", name, "ON", table, ..] => ("index", *name, *table),
             _ => anyhow::bail!("invalid compiled SQLite schema declaration"),
         };
+        if selected.is_some_and(|tables| !tables.contains(&table.trim_matches('"'))) {
+            continue;
+        }
         ensure!(
             expected
                 .insert(
@@ -44,6 +56,12 @@ pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result
                 )
                 .is_none(),
             "duplicate compiled SQLite schema object"
+        );
+    }
+    if let Some(tables) = selected {
+        ensure!(
+            tables.iter().all(|table| expected.contains_key(table)),
+            "unknown current table selection"
         );
     }
     // Each borrowed read fits the smallest audit page. Validate and release the
@@ -57,6 +75,11 @@ pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result
             let name: String = row.try_get("", "name")?;
             let kind: String = row.try_get("", "type")?;
             let table: String = row.try_get("", "tbl_name")?;
+            if selected
+                .is_some_and(|tables| !tables.iter().any(|name| name.eq_ignore_ascii_case(&table)))
+            {
+                continue;
+            }
             let actual: String = row.try_get("", "sql")?;
             if name == "sqlite_sequence" {
                 ensure!(
@@ -139,6 +162,7 @@ pub(super) async fn validate(db: &impl ConnectionTrait, serving: bool) -> Result
         }
     }
     ensure!(expected.is_empty(), "incomplete migration catalog");
+    super::current_schema::validate_sqlite_metadata(db, selected).await?;
     require_active_format(db).await
 }
 
@@ -170,8 +194,8 @@ pub(crate) async fn initialize_gateway_schema(db: &impl ConnectionTrait) -> Resu
             .is_none(),
         "gateway initialization requires an empty database"
     );
-    for statement in statements() {
-        db.execute_unprepared(statement).await?;
+    for statement in super::current_schema::statements(DatabaseBackend::Sqlite)? {
+        db.execute_unprepared(&statement).await?;
     }
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,

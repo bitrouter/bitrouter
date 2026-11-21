@@ -1,4 +1,5 @@
-//! Portable, compare-and-set persistence for jobs, assignments and block state.
+//! Owner-scoped gateway request admissions and metering settlements.
+//! Compare-and-set writes preserve the first admission and its exact settlement.
 
 use crate::storage::write::Write;
 use anyhow::{Context, Result, ensure};
@@ -19,7 +20,7 @@ pub fn digest(value: &impl Serialize) -> Result<String> {
 pub mod records {
     use sea_orm::entity::prelude::*;
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-    #[sea_orm(table_name = "checkpoint_evolution")]
+    #[sea_orm(table_name = "gateway_request_records")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub record_id: String,
@@ -35,19 +36,21 @@ pub mod records {
 }
 
 #[derive(Clone)]
-pub struct EvolutionStore {
+pub struct GatewayRecords {
     pub(crate) db: DatabaseConnection,
     pub scope_id: String,
-    pub(crate) owner: String,
+    #[cfg(test)]
+    owner: String,
     pub(crate) storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
-impl EvolutionStore {
+impl GatewayRecords {
     pub fn new(db: DatabaseConnection, owner: &str) -> Result<Self> {
-        ensure!(!owner.is_empty(), "evolution owner is required");
+        ensure!(!owner.is_empty(), "gateway request owner is required");
         Ok(Self {
             db,
-            scope_id: digest(&("checkpoint-evolution-v1", owner))?,
+            scope_id: digest(&("gateway-request-record-v1", owner))?,
+            #[cfg(test)]
             owner: owner.into(),
             storage_budget: None,
         })
@@ -68,8 +71,9 @@ impl EvolutionStore {
         Write::begin(&self.db, &self.storage_budget, maintenance).await
     }
 
+    #[cfg(test)]
     pub fn ensure_owner(&self, owner: &str) -> Result<()> {
-        ensure!(owner == self.owner, "evolution owner scope mismatch");
+        ensure!(owner == self.owner, "gateway request owner scope mismatch");
         Ok(())
     }
 
@@ -96,7 +100,7 @@ impl EvolutionStore {
         key: &str,
     ) -> Result<Option<(i64, T)>> {
         let row = records::Entity::find_by_id(self.id(kind, key)?)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .one(db)
             .await?;
         self.decode_record(kind, row)
@@ -110,16 +114,17 @@ impl EvolutionStore {
         row.map(|row| {
             ensure!(
                 row.scope_id == self.scope_id && row.kind == kind,
-                "evolution record scope mismatch"
+                "gateway request record scope mismatch"
             );
             Ok((row.revision, serde_json::from_str(&row.body)?))
         })
         .transpose()
     }
 
+    #[cfg(test)]
     pub async fn list<T: DeserializeOwned>(&self, kind: &str) -> Result<Vec<(String, i64, T)>> {
         records::Entity::find()
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .filter(records::Column::ScopeId.eq(&self.scope_id))
             .filter(records::Column::Kind.eq(kind))
             .all(&self.db)
@@ -137,7 +142,8 @@ impl EvolutionStore {
     }
 
     /// Returns the persisted first writer. The caller must validate immutable
-    /// input identity before treating an existing job/assignment as a retry.
+    /// request identity before treating an existing admission as a retry.
+    #[cfg(test)]
     pub async fn initialize<T: Serialize + DeserializeOwned>(
         &self,
         kind: &str,
@@ -196,25 +202,26 @@ impl EvolutionStore {
             revision: Set(0),
             body: Set(serde_json::to_string(body)?),
         });
-        crate::storage::legacy::insert(db, statement.into_query()).await?;
+        insert(db, statement.into_query()).await?;
         // A prior consistent read may predate the winning insert. Read the
         // current locked row instead of that MySQL repeatable-read snapshot.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
         let row = records::Entity::find_by_id(self.id(kind, key)?)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .lock_exclusive()
             .one(db)
             .await?
-            .context("evolution record missing after initialization")?;
+            .context("gateway request record missing after initialization")?;
         ensure!(
             row.scope_id == self.scope_id && row.kind == kind,
-            "evolution record scope mismatch"
+            "gateway request record scope mismatch"
         );
         Ok((row.revision, serde_json::from_str(&row.body)?))
     }
 
     /// Locks the record on every supported backend. No network/model work may
     /// execute in this closure. A stale caller cannot overwrite a newer epoch.
+    #[cfg(test)]
     pub async fn update<T, R>(
         &self,
         kind: &str,
@@ -229,6 +236,7 @@ impl EvolutionStore {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn update_with_maintenance<T, R>(
         &self,
         kind: &str,
@@ -245,7 +253,7 @@ impl EvolutionStore {
             let (row, mut body): (_, T) = self.lock_charged(&mut write, &tx, kind, key).await?;
             ensure!(
                 row.revision == expected,
-                "evolution generation changed; refresh before retrying"
+                "gateway request generation changed; refresh before retrying"
             );
             let result = change(&mut body)?;
             let revision = self.save_charged(&mut write, &tx, row, &body).await?;
@@ -255,8 +263,7 @@ impl EvolutionStore {
         write.finish(tx, result).await
     }
 
-    /// Callers lock the control record before any assignment record. This is the
-    /// shared serialization point for enrollment, mode changes and publication.
+    /// Charge the bounded locked record before decoding or changing its settlement.
     pub(crate) async fn lock_charged<T: DeserializeOwned>(
         &self,
         write: &mut Write,
@@ -266,11 +273,11 @@ impl EvolutionStore {
     ) -> Result<(records::Model, T)> {
         if write.enabled() {
             let row = records::Entity::find_by_id(self.id(kind, key)?)
-                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+                .filter(service_scope())
                 .lock_exclusive()
                 .one(tx)
                 .await?
-                .context("evolution record not found")?;
+                .context("gateway request record not found")?;
             let previous = (
                 &row.record_id,
                 &row.scope_id,
@@ -292,7 +299,7 @@ impl EvolutionStore {
     ) -> Result<(records::Model, T)> {
         let id = self.id(kind, key)?;
         records::Entity::update_many()
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .col_expr(
                 records::Column::Revision,
                 Expr::col(records::Column::Revision).into(),
@@ -304,14 +311,14 @@ impl EvolutionStore {
         // current revision after locking, even if this transaction read earlier.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
         let row = records::Entity::find_by_id(&id)
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .lock_exclusive()
             .one(tx)
             .await?
-            .context("evolution record not found")?;
+            .context("gateway request record not found")?;
         ensure!(
             row.scope_id == self.scope_id && row.kind == kind,
-            "evolution record scope mismatch"
+            "gateway request record scope mismatch"
         );
         let body = serde_json::from_str(&row.body)?;
         Ok((row, body))
@@ -325,14 +332,14 @@ impl EvolutionStore {
     ) -> Result<i64> {
         ensure!(
             row.scope_id == self.scope_id,
-            "evolution record scope mismatch"
+            "gateway request record scope mismatch"
         );
         let revision = row
             .revision
             .checked_add(1)
-            .context("evolution generation overflow")?;
+            .context("gateway request generation overflow")?;
         let updated = records::Entity::update_many()
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(service_scope())
             .filter(records::Column::RecordId.eq(&row.record_id))
             .filter(records::Column::ScopeId.eq(&self.scope_id))
             .filter(records::Column::Revision.eq(row.revision))
@@ -345,9 +352,50 @@ impl EvolutionStore {
             .await?;
         ensure!(
             updated.rows_affected == 1,
-            "evolution record changed before save"
+            "gateway request record changed before save"
         );
         Ok(revision)
+    }
+}
+
+use sea_orm::sea_query::{Alias, Condition, Expr};
+
+fn service_scope() -> Condition {
+    let mut condition = Condition::all();
+    for column in ["installation_id", "tenant_id", "creator_principal_id"] {
+        condition = condition
+            .add(Expr::col((Alias::new("gateway_request_records"), Alias::new(column))).is_null());
+    }
+    condition
+}
+
+/// Conflict-safe insert without a MySQL self-update of a foreign occupied key.
+/// Callers reload only service-owned rows and validate the request identity.
+/// https://dev.mysql.com/doc/refman/8.4/en/innodb-error-handling.html
+/// https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT
+/// https://sqlite.org/lang_upsert.html
+async fn insert(
+    db: &impl sea_orm::ConnectionTrait,
+    mut statement: sea_orm::sea_query::InsertStatement,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::{DatabaseBackend, SqlErr};
+    let backend = db.get_database_backend();
+    if backend != DatabaseBackend::MySql {
+        statement.on_conflict(
+            sea_orm::sea_query::OnConflict::new()
+                .do_nothing()
+                .to_owned(),
+        );
+    }
+    match db.execute(backend.build(&statement)).await {
+        Ok(_) => Ok(()),
+        Err(error)
+            if backend == DatabaseBackend::MySql
+                && matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -379,7 +427,7 @@ mod mysql_tests {
         let db = test_database().await?;
         let result = async {
             let owner = format!("mysql-initialize-{}", uuid::Uuid::new_v4());
-            let store = EvolutionStore::new(db.clone(), &owner)?;
+            let store = GatewayRecords::new(db.clone(), &owner)?;
             let reader = db
                 .begin_with_config(Some(IsolationLevel::RepeatableRead), None)
                 .await?;
@@ -422,7 +470,7 @@ mod mysql_tests {
         let db = test_database().await?;
         let result = async {
             let owner = format!("mysql-lock-{}", uuid::Uuid::new_v4());
-            let store = EvolutionStore::new(db.clone(), &owner)?;
+            let store = GatewayRecords::new(db.clone(), &owner)?;
             store
                 .initialize("snapshot", "record", None, &json!({"revision": 0}))
                 .await?;

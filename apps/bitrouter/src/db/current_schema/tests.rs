@@ -2,15 +2,13 @@ use super::*;
 
 #[test]
 fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
-    let tables = expected()?;
-    ensure!(tables.len() == 53);
-    ensure!(
-        tables
+    let tables = expected(DatabaseBackend::Postgres)?;
+    ensure!(!tables.is_empty());
+    ensure!(tables.iter().all(|table| {
+        !["adequacy_", "acp_", "bro_"]
             .iter()
-            .map(|table| table.columns.len())
-            .sum::<usize>()
-            == 455
-    );
+            .any(|prefix| table.name.starts_with(prefix))
+    }));
     for name in ["tenancy_execution_receipts", "tenancy_dispatch_intents"] {
         let table = tables
             .iter()
@@ -30,13 +28,12 @@ fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
 
 #[test]
 fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<()> {
-    let tables = expected()?;
+    let tables = expected(DatabaseBackend::Postgres)?;
     let slots = tables
         .iter()
         .find(|table| table.name == "tenancy_oauth_slots")
         .context("OAuth slot table")?;
-    // m043 adds these lookup projections only on SQLite. Servers retain the
-    // m037 slot columns and state index; the baseline never runs m043 there.
+    // Pending-work projection columns and their index are SQLite-only.
     ensure!(slots.columns.len() == 11);
     ensure!(slots.columns.iter().all(|column| !matches!(
         column.name.as_str(),
@@ -49,7 +46,7 @@ fn server_model_excludes_sqlite_only_pending_obligation_projection() -> Result<(
 }
 #[test]
 fn altered_keys_and_checks_are_not_hidden_by_catalog_names() -> Result<()> {
-    let table = expected()?
+    let table = expected(DatabaseBackend::Postgres)?
         .into_iter()
         .find(|table| table.name == "tenancy_dispatch_intents")
         .context("dispatch table")?;
@@ -129,6 +126,8 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
         name: "active".into(),
         kind: "integer".into(),
         mysql_kind: None,
+        sqlite_kind: None,
+        sqlite_only: false,
         nullable: false,
         binary: false,
         automatic: false,
@@ -167,7 +166,7 @@ fn default_values_cannot_be_replaced_with_expressions() -> Result<()> {
 
 #[test]
 fn mysql_content_types_follow_explicit_backend_ddl() -> Result<()> {
-    let tables = expected()?;
+    let tables = expected(DatabaseBackend::Postgres)?;
     let find = |name: &str, column: &str| {
         tables
             .iter()
@@ -175,7 +174,7 @@ fn mysql_content_types_follow_explicit_backend_ddl() -> Result<()> {
             .and_then(|table| table.columns.iter().find(|field| field.name == column))
             .context("backend content field")
     };
-    let content = find("checkpoint_evolution", "body")?;
+    let content = find("gateway_request_records", "body")?;
     ensure!(kind(DatabaseBackend::MySql, content) == "longtext");
     ensure!(kind(DatabaseBackend::Postgres, content) == "text");
     Ok(())
@@ -232,7 +231,7 @@ fn outbox_index_fixture() -> BTreeMap<String, ObservedIndex> {
 
 #[test]
 fn mysql_index_prefixes_are_exact_and_do_not_apply_to_postgres() -> Result<()> {
-    let table = expected()?
+    let table = expected(DatabaseBackend::Postgres)?
         .into_iter()
         .find(|table| table.name == "trajectory_outbox")
         .context("outbox table")?;

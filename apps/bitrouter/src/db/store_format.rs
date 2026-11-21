@@ -121,7 +121,7 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
     }
     let _: i64 = rows[0].try_get("", "applied_at")?;
     // Format selection is not content authentication. This cheap catalog pass
-    // catches retired compiler domains even when somebody has forged a marker.
+    // requires supported compiler domains even with a forged schema marker.
     // Policy-kind admission profiles retain their independent current compilers;
     // the authenticated decoder binds each compiler to the decrypted definition.
     // Resources authenticates every retained source before authority publication.
@@ -151,7 +151,7 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
             header.try_get::<i32>("", "singleton")? == 1
                 && header.try_get::<i32>("", "schema_version")?
                     == crate::tenancy::AUTHORITY_SCHEMA_VERSION,
-            "historical or future authority format is unsupported"
+            "unsupported authority format"
         );
     }
     let query = sea_orm::sea_query::Query::select()
@@ -173,7 +173,7 @@ async fn inspect_marker(db: &impl ConnectionTrait, marker: &str) -> Result<State
         .to_owned();
     ensure!(
         db.query_one(backend.build(&query)).await?.is_none(),
-        "retained historical Policy resource"
+        "unsupported Policy compiler"
     );
     Ok(State::Current)
 }
@@ -235,7 +235,7 @@ mod tests {
     async fn partial_future_and_old_markers_never_select_a_dataset() -> Result<()> {
         for marker in [
             None,
-            Some("m20240101_000048_native_generate_content"),
+            Some("unsupported-store-format"),
             Some("m20261118_000001_model_policy_store"),
             Some(GATEWAY_SQLITE),
             Some("m20261118_000004_bro_sqlite"),

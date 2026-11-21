@@ -3,23 +3,7 @@ use anyhow::Result;
 use bitrouter_ai::tenancy::identity::{InstallationId, TenantId};
 use sha2::{Digest, Sha256};
 
-pub(super) const LEARNING_PENDING: &str = "learning.pending";
-pub(super) const NATIVE_EXPERIMENT_PENDING: &str = "native.experiment.pending";
-
-/// Pending native experiment links remain a readiness fence in reduced builds.
-pub(crate) fn native_experiment_pending(
-    installation: &InstallationId,
-    tenant: &TenantId,
-) -> Result<String> {
-    tenant_key(installation, tenant, NATIVE_EXPERIMENT_PENDING, &[])
-}
-
-/// Common readiness may inspect this partition even without Core or Harness.
-pub(crate) fn learning_pending(installation: &InstallationId, tenant: &TenantId) -> Result<String> {
-    tenant_key(installation, tenant, LEARNING_PENDING, &[])
-}
-
-// Same v1 framing as Scope::physical_key; Legacy bypasses this helper entirely.
+// The same framing is used by Scope::physical_key for authenticated tenant keys.
 pub(super) fn tenant_key(
     installation: &InstallationId,
     tenant: &TenantId,
@@ -49,24 +33,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn common_pending_partition_preserves_v1_literal_and_identity_framing() -> Result<()> {
+    fn tenant_key_preserves_domain_and_identity_framing() -> Result<()> {
         let installation: InstallationId = "installation".try_into()?;
         let tenant: TenantId = "tenant".try_into()?;
-        assert_eq!(
-            learning_pending(&installation, &tenant)?,
-            "44cfc65d204e61ebc2d3d3af627011ed6ebad4b7a43b81d1d976cabbf28299f4"
-        );
         assert_eq!(
             tenant_key(&installation, &tenant, "eval.subject", &["logical"])?,
             "628cef0903080bc46e65b72bdc091f6d5cc51e17468c4bce830d73db3c6ab0e9"
         );
         assert_ne!(
-            learning_pending(&"a".try_into()?, &"bc".try_into()?)?,
-            learning_pending(&"ab".try_into()?, &"c".try_into()?)?
+            tenant_key(&"a".try_into()?, &"bc".try_into()?, "eval.subject", &[])?,
+            tenant_key(&"ab".try_into()?, &"c".try_into()?, "eval.subject", &[])?
         );
         assert_ne!(
-            learning_pending(&installation, &tenant)?,
-            learning_pending(&installation, &"Tenant".try_into()?)?
+            tenant_key(&installation, &tenant, "eval.subject", &[])?,
+            tenant_key(&installation, &"Tenant".try_into()?, "eval.subject", &[])?
         );
         Ok(())
     }

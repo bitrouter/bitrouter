@@ -914,7 +914,7 @@ const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
         ty: AttrType::String,
         requirement: Requirement::Required,
         note: "Calling key's id, replaced by an overflow sentinel once the configured cardinality \
-               cap is reached. Unprefixed for historical reasons — frozen, not exemplary.",
+               cap is reached. This counter uses the documented unprefixed metric name.",
     },
     AttrDef {
         key: "user_id",

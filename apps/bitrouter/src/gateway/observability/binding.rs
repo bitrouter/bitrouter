@@ -1,6 +1,5 @@
 //! Canonical execution identity and live gateway dispatch fences.
 
-use crate::gateway::observability::event::PipelineEvent;
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use sea_orm::DatabaseConnection;

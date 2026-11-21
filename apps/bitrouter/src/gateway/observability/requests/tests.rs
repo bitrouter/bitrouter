@@ -1,7 +1,5 @@
 use super::*;
-use crate::storage::evolution::EvolutionStore;
-use crate::storage::execution::{EXECUTION_KIND, ExecutionRecord};
-use crate::storage::session_identity::SessionIdentity;
+use crate::storage::gateway_records::GatewayRecords;
 use anyhow::{Context, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait, QueryFilter};
@@ -22,7 +20,7 @@ use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::{MeteringRecorder, MeteringStore, PricingTable};
 use crate::policy_source::PolicyRuntime;
 use crate::session_identity::{NativeSessionIdentity, RequestOrigin};
-use crate::storage::evolution::records;
+use crate::storage::gateway_records::records;
 
 mod binding;
 mod storage;
@@ -111,7 +109,6 @@ struct Fixture {
     policies: Arc<PolicyRuntime>,
     upstream: MockServer,
     pipeline: Pipeline,
-    identity: SessionIdentity,
 }
 
 async fn fixture(failure: Failure) -> Result<Fixture> {
@@ -125,11 +122,6 @@ async fn fixture_with_storage(
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let tracker = GatewayRequestTracker::new(db.clone());
-    let identity = SessionIdentity {
-        owner: "owner".into(),
-        source: "fixture".into(),
-        native_session_id: "session".into(),
-    };
     let bro_tables = db.query_one(sea_orm::Statement::from_string(
         sea_orm::DbBackend::Sqlite,
         "SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND (name LIKE 'acp_capture_%' OR name='acp_canonical_sessions')"
@@ -225,7 +217,6 @@ models:
         policies,
         upstream,
         pipeline: builder.build()?,
-        identity,
     })
 }
 
@@ -273,7 +264,6 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
             .drain_required_pending_settlements()
             .await?;
         let before = saved(&fixture, id).await?;
-        assert!(before.binding.is_none() && before.anchors.is_empty() && !before.coverage_ready);
         let settlement = before.settlement.as_ref().context("settlement missing")?;
         assert_eq!(settlement.outcome, Some(ExecutionOutcome::Completed));
         assert_eq!(settlement.hops.len(), 1);
@@ -304,20 +294,6 @@ async fn tracked_requests_settle_and_reject_replay_without_learning() -> Result<
             .context("requests missing")?
             .len(),
         2
-    );
-    assert_eq!(
-        records::Entity::find()
-            .filter(records::Column::Kind.is_in(["control", "enrollment", "route_intent"]))
-            .count(&fixture.db)
-            .await?,
-        0
-    );
-    assert_eq!(
-        records::Entity::find()
-            .filter(records::Column::Kind.eq(EXECUTION_KIND))
-            .count(&fixture.db)
-            .await?,
-        0
     );
     Ok(())
 }
@@ -360,48 +336,30 @@ async fn route_failure_retains_terminal_inventory_without_a_learning_consumer() 
 }
 
 #[tokio::test]
-async fn earlier_execution_is_protected_before_gateway_inventory_insertion() -> Result<()> {
+async fn interrupted_admission_keeps_its_identity_without_inventing_settlement() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let store = EvolutionStore::new(fixture.db.clone(), &fixture.identity.owner)?;
-    let prior = ExecutionRecord {
-        request_id: "earlier".into(),
-        attempt_id: "original-attempt".into(),
-        identity: fixture.identity.clone(),
-        connection_id: "capture".into(),
-        captured_watermark: 1,
-        started_at: "fixture".into(),
-        intent: None,
-        dispatch_route: "model".into(),
-        route_guard_reason: None,
-        settlement: None,
+    let inventory = fixture.tracker.inventory();
+    let BeginResult::Tracked(original) = inventory
+        .begin("scope", "controller", "interrupted")
+        .await?
+    else {
+        anyhow::bail!("fresh request was not admitted");
     };
-    store
-        .initialize(
-            EXECUTION_KIND,
-            "earlier",
-            Some(fixture.identity.key()?),
-            &prior,
-        )
-        .await?;
+    assert!(original.settlement.is_none());
     assert!(
         fixture
             .pipeline
-            .execute(request("earlier", true)?)
+            .execute(request("interrupted", true)?)
             .await
             .is_err()
     );
-    let (_, after) = store
-        .get::<ExecutionRecord>(EXECUTION_KIND, "earlier")
+    let after = inventory
+        .request("scope", "interrupted")
         .await?
-        .context("execution lost")?;
-    assert_eq!(serde_json::to_value(after)?, serde_json::to_value(prior)?);
-    assert!(
-        fixture
-            .tracker
-            .inventory()
-            .request("scope", "earlier")
-            .await?
-            .is_none()
+        .context("admission lost")?;
+    assert_eq!(
+        serde_json::to_value(after)?,
+        serde_json::to_value(&original)?
     );
     assert!(
         fixture
@@ -412,7 +370,7 @@ async fn earlier_execution_is_protected_before_gateway_inventory_insertion() -> 
             .is_empty()
     );
     assert!(
-        crate::metering::entities::requests::Entity::find_by_id("earlier")
+        crate::metering::entities::requests::Entity::find_by_id("interrupted")
             .one(&fixture.db)
             .await?
             .is_none()
@@ -566,52 +524,9 @@ async fn provider_failure_retains_failed_hop_and_never_replays_it() -> Result<()
 }
 
 #[tokio::test]
-async fn imported_controller_fact_and_global_charge_prevent_new_admission() -> Result<()> {
+async fn global_charge_prevents_new_admission_without_an_inventory_row() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
     let inventory = fixture.tracker.inventory();
-    let old_store = GatewayInventory::store_for(fixture.db.clone(), "scope", "retired-controller")?;
-    let historical = GatewayRequest {
-        request_id: "m0".into(),
-        attempt_id: "original-attempt".into(),
-        route_scope_id: "scope".into(),
-        controller_instance_id: "retired-controller".into(),
-        runtime_epoch: "m0-epoch".into(),
-        admitted_at: "m0".into(),
-        anchors: Default::default(),
-        binding: None,
-        coverage_ready: false,
-        settlement: None,
-    };
-    let original = old_store
-        .initialize("gateway_request", "m0", None, &historical)
-        .await?;
-    assert!(
-        fixture
-            .pipeline
-            .execute(binding::second_request("m0")?)
-            .await
-            .is_err()
-    );
-    assert!(inventory.request("scope", "m0").await?.is_none());
-    let after = old_store
-        .get::<GatewayRequest>("gateway_request", "m0")
-        .await?
-        .context("lost M0 fact")?;
-    assert_eq!(
-        serde_json::to_value(original)?,
-        serde_json::to_value(after)?
-    );
-    assert!(
-        fixture
-            .upstream
-            .received_requests()
-            .await
-            .context("mock")?
-            .is_empty()
-    );
-
-    // A pure metering fact also owns its primary key, including rows from
-    // before route scope or controller correlation was recorded.
     let mut ordinary = request("paid-before-inventory", false)?;
     ordinary.headers.remove("x-bitrouter-controller-id");
     fixture.pipeline.execute(ordinary).await?;
@@ -619,12 +534,12 @@ async fn imported_controller_fact_and_global_charge_prevent_new_admission() -> R
         .pipeline
         .drain_required_pending_settlements()
         .await?;
-    // Model the M0 ledger row whose original writer had no service inventory.
-    let inventory_store = crate::storage::evolution::EvolutionStore::new(
+    // A retained metering charge owns the ID even when admission data is missing.
+    let inventory_store = crate::storage::gateway_records::GatewayRecords::new(
         fixture.db.clone(),
-        "gateway-request-admission-v2",
+        "gateway-request-admission",
     )?;
-    let key = crate::storage::evolution::digest(&"paid-before-inventory")?;
+    let key = crate::storage::gateway_records::digest(&"paid-before-inventory")?;
     ensure!(
         records::Entity::delete_by_id(inventory_store.id("gateway_request", &key)?)
             .exec(&fixture.db)
@@ -675,38 +590,46 @@ async fn imported_controller_fact_and_global_charge_prevent_new_admission() -> R
 }
 
 #[tokio::test]
-async fn tagged_admission_excludes_marked_and_unrelated_imports_before_decoding() -> Result<()> {
+async fn request_namespace_excludes_foreign_rows_before_decoding() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let store = GatewayInventory::store_for(fixture.db.clone(), "scope", "old")?;
-    for id in ["unrelated", "marked"] {
-        store
-            .initialize("gateway_request", id, None, &json!({}))
-            .await?;
-        let record = store.id("gateway_request", id)?;
-        use sea_orm::{DbBackend, Statement};
-        fixture.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
-            "UPDATE checkpoint_evolution SET body='poison', creator_principal_id=? WHERE record_id=?",
-            [((id=="marked").then_some("other")).into(),record.into()])).await?;
-    }
+    let store = GatewayRecords::new(fixture.db.clone(), "gateway-request-admission")?;
+    let key = crate::storage::gateway_records::digest(&"marked")?;
+    store
+        .initialize("gateway_request", &key, None, &json!({}))
+        .await?;
+    let record = store.id("gateway_request", &key)?;
+    use sea_orm::{DbBackend, Statement};
+    fixture.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
+        "UPDATE gateway_request_records SET body='poison', creator_principal_id='other' WHERE record_id=?",
+        [record.clone().into()])).await?;
     let inventory = fixture.tracker.inventory();
-    assert!(matches!(
-        inventory.begin("scope", "controller", "marked").await?,
-        BeginResult::Tracked(_)
-    ));
+    assert!(inventory.request("scope", "marked").await?.is_none());
     assert!(
         inventory
-            .request("unrelated-principal", "marked")
+            .begin("scope", "controller", "marked")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        records::Entity::find_by_id(record)
+            .one(&fixture.db)
             .await?
-            .is_none()
+            .context("occupied key lost")?
+            .body,
+        "poison"
     );
     assert!(matches!(
+        inventory.begin("scope", "controller", "fresh").await?,
+        BeginResult::Tracked(_)
+    ));
+    assert!(inventory.request("other-scope", "fresh").await?.is_none());
+    assert!(matches!(
         inventory
-            .begin("other-scope", "controller", "marked")
+            .begin("other-scope", "controller", "fresh")
             .await?,
         BeginResult::Duplicate
     ));
-    ensure!(inventory.request("scope", "marked").await?.is_some());
-    ensure!(inventory.request("other-scope", "marked").await?.is_none());
+    ensure!(inventory.request("scope", "fresh").await?.is_some());
     Ok(())
 }
 

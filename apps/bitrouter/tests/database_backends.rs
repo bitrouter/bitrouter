@@ -27,7 +27,6 @@ use bitrouter::metering::pricing::{
     ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
 };
 use bitrouter::metering::store::{MeteringStore, TimeWindow, TokenUsage};
-use bitrouter::storage::evolution::{EvolutionStore, records};
 use bitrouter::trajectory::store::TrajectoryStore;
 use bitrouter::trajectory::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxPayload, OutboxWrite,
@@ -145,11 +144,9 @@ async fn exercise(database_url: &str) -> Result<()> {
             );
         }
         write_auth(&connection, &fixture).await?;
-        write_evolution(&connection, &fixture).await?;
         write_metering(&connection, &fixture).await?;
         write_trajectory(&connection, &fixture).await?;
         check_auth(&connection, &fixture).await?;
-        check_evolution(&connection, &fixture).await?;
         check_metering(&connection, &fixture).await?;
         let trajectory = read_trajectory(&connection, &fixture).await?;
         check_trajectory(&trajectory, &fixture)?;
@@ -178,7 +175,6 @@ async fn exercise(database_url: &str) -> Result<()> {
     let reopened = db::connect(database_url).await?;
     let result = async {
         check_auth(&reopened, &fixture).await?;
-        check_evolution(&reopened, &fixture).await?;
         check_metering(&reopened, &fixture).await?;
         ensure!(
             read_trajectory(&reopened, &fixture).await? == trajectory,
@@ -376,85 +372,6 @@ async fn check_auth(connection: &DatabaseConnection, fixture: &Fixture) -> Resul
             .is_none(),
         "unknown key hash must not resolve"
     );
-    Ok(())
-}
-
-async fn write_evolution(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
-    let kind = "database-backend-fixture";
-    let key = fixture.id("assignment");
-    let initial = serde_json::json!({"route": "economy", "epoch": 1});
-    let store = EvolutionStore::new(connection.clone(), &fixture.key("a").user_id)?;
-    ensure!(
-        store
-            .initialize(kind, &key, Some(fixture.id("session")), &initial)
-            .await?
-            == (0, initial.clone())
-    );
-    let replacement = serde_json::json!({"route": "uncommitted", "epoch": 9});
-    ensure!(
-        store.initialize(kind, &key, None, &replacement).await? == (0, initial),
-        "initialization must retain the first writer's body and revision"
-    );
-    let (revision, ()) = store
-        .update(kind, &key, 0, |body: &mut serde_json::Value| {
-            body["route"] = "balanced".into();
-            Ok(())
-        })
-        .await?;
-    ensure!(revision == 1);
-    ensure!(
-        store
-            .update(kind, &key, 0, |body: &mut serde_json::Value| {
-                body["route"] = "stale".into();
-                Ok(())
-            })
-            .await
-            .is_err(),
-        "stale revision must not overwrite committed state"
-    );
-    let expected = serde_json::json!({"route": "balanced", "epoch": 1});
-    ensure!(
-        store.initialize(kind, &key, None, &replacement).await? == (1, expected),
-        "reinitialization must not reset an updated record"
-    );
-    let other = EvolutionStore::new(connection.clone(), &fixture.key("b").user_id)?;
-    ensure!(other.get::<serde_json::Value>(kind, &key).await?.is_none());
-    ensure!(
-        other.initialize(kind, &key, None, &replacement).await? == (0, replacement),
-        "the same logical key must remain owner scoped"
-    );
-    Ok(())
-}
-
-async fn check_evolution(connection: &DatabaseConnection, fixture: &Fixture) -> Result<()> {
-    let kind = "database-backend-fixture";
-    let key = fixture.id("assignment");
-    for (owner, revision, body, session_key) in [
-        (
-            "a",
-            1,
-            serde_json::json!({"route": "balanced", "epoch": 1}),
-            Some(fixture.id("session")),
-        ),
-        (
-            "b",
-            0,
-            serde_json::json!({"route": "uncommitted", "epoch": 9}),
-            None,
-        ),
-    ] {
-        let store = EvolutionStore::new(connection.clone(), &fixture.key(owner).user_id)?;
-        ensure!(
-            store.get::<serde_json::Value>(kind, &key).await? == Some((revision, body.clone()))
-        );
-        let row = records::Entity::find_by_id(store.id(kind, &key)?)
-            .one(connection)
-            .await?
-            .context("scoped evolution record missing")?;
-        ensure!(row.scope_id == store.scope_id && row.kind == kind);
-        ensure!(row.session_key == session_key && row.revision == revision);
-        ensure!(serde_json::from_str::<serde_json::Value>(&row.body)? == body);
-    }
     Ok(())
 }
 

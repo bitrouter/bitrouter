@@ -153,6 +153,7 @@ async fn uncertain_close_keeps_connection_allowance_quarantined() -> Result<()> 
 
 #[tokio::test]
 async fn utf16_inventory_matches_v1_and_cache_stays_charged_after_inspection() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     for encoding in ["UTF-16le", "UTF-16be"] {
         let home = tempfile::tempdir()?;
         let path = home.path().join("utf16.sqlite");
@@ -183,8 +184,8 @@ async fn utf16_inventory_matches_v1_and_cache_stays_charged_after_inspection() -
             .context("copy missing")?
             .begin()
             .await?;
-        let old = inventory::inspect_in(&mut tx, &[1; 32]).await?;
-        let inspected = inspect_in(&mut tx, &[1; 32], &workspace).await?;
+        let old = inventory::inspect_in(&mut tx, &fingerprint_key).await?;
+        let inspected = inspect_in(&mut tx, &fingerprint_key, &workspace).await?;
         ensure!(inspected.value() == &old && inspected.value().encoding == encoding);
         drop(inspected);
         ensure!(workspace.available() == after_open);
@@ -199,6 +200,7 @@ async fn utf16_inventory_matches_v1_and_cache_stays_charged_after_inspection() -
 #[tokio::test]
 async fn oversized_cell_refuses_from_scalar_preflight_and_releases_acknowledged_phases()
 -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let path = home.path().join("oversized.sqlite");
     let mut db = database(&path).await?;
@@ -226,7 +228,7 @@ async fn oversized_cell_refuses_from_scalar_preflight_and_releases_acknowledged_
         .context("copy missing")?
         .begin()
         .await?;
-    let error = inspect_in(&mut tx, &[1; 32], &workspace)
+    let error = inspect_in(&mut tx, &fingerprint_key, &workspace)
         .await
         .err()
         .context("oversized cell accepted")?;
@@ -259,6 +261,7 @@ async fn check_inventory_case(
     invalid: &str,
     valid_rows: u64,
 ) -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     for corrupt in [false, true] {
         let home = tempfile::tempdir()?;
         let path = home.path().join("integrity.sqlite");
@@ -296,8 +299,8 @@ async fn check_inventory_case(
             .begin()
             .await?;
         ensure!(sea_orm::sqlx::query(valid).execute(&mut *tx).await.is_err());
-        let reference = inventory::inspect_in(&mut tx, &[9; 32]).await;
-        let actual = inspect_in(&mut tx, &[9; 32], &workspace).await;
+        let reference = inventory::inspect_in(&mut tx, &fingerprint_key).await;
+        let actual = inspect_in(&mut tx, &fingerprint_key, &workspace).await;
         if corrupt {
             let error = actual.err().context("corrupt database accepted")?;
             ensure!(error.to_string() == "SQLite integrity failed");
@@ -378,6 +381,7 @@ async fn readonly_checks_preserve_sqlite_null_affinity_collation_and_names() -> 
 #[tokio::test]
 async fn readonly_check_operand_budget_refuses_before_corruption_and_releases_phases() -> Result<()>
 {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let path = home.path().join("check-budget.sqlite");
     let mut db = database(&path).await?;
@@ -406,7 +410,7 @@ async fn readonly_check_operand_budget_refuses_before_corruption_and_releases_ph
             .context("copy missing")?
             .begin()
             .await?;
-        let error = inspect_in(&mut tx, &[1; 32], &workspace)
+        let error = inspect_in(&mut tx, &fingerprint_key, &workspace)
             .await
             .err()
             .context("invalid CHECK accepted")?;
@@ -426,6 +430,7 @@ async fn readonly_check_operand_budget_refuses_before_corruption_and_releases_ph
 
 #[tokio::test]
 async fn unsafe_check_schema_refuses_before_an_earlier_violating_predicate() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let path = home.path().join("unsafe-check.sqlite");
     let mut db = database(&path).await?;
@@ -452,11 +457,11 @@ async fn unsafe_check_schema_refuses_before_an_earlier_violating_predicate() -> 
         .context("copy missing")?
         .begin()
         .await?;
-    let reference = inventory::inspect_in(&mut tx, &[1; 32])
+    let reference = inventory::inspect_in(&mut tx, &fingerprint_key)
         .await
         .err()
         .context("v1 accepted executable CHECK")?;
-    let large = inspect_in(&mut tx, &[1; 32], &workspace)
+    let large = inspect_in(&mut tx, &fingerprint_key, &workspace)
         .await
         .err()
         .context("v2 accepted executable CHECK")?;
@@ -546,6 +551,7 @@ fn failed_spool_create_and_space_probe_never_replace_files() -> Result<()> {
 
 #[test]
 fn file_digest_matches_v1_and_source_refuses_sidecars_and_replacement() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let workspace = Workspace::create(
         &options(home.path(), 1024 * 1024)?,
@@ -554,8 +560,13 @@ fn file_digest_matches_v1_and_source_refuses_sidecars_and_replacement() -> Resul
     let source = home.path().join("source.sqlite");
     files::write_new(&source, b"same bytes, same domain")?;
     ensure!(
-        snapshot_digest(&source, &[7; 32], &workspace)?
-            == files::snapshot_digest(&source, &[7; 32])?
+        snapshot_digest(&source, &fingerprint_key, &workspace)?
+            == files::snapshot_digest(&source, &fingerprint_key)?
+    );
+    let different_key: [u8; 32] = rand::random();
+    ensure!(
+        snapshot_digest(&source, &fingerprint_key, &workspace)?
+            != snapshot_digest(&source, &different_key, &workspace)?
     );
     let witness = Source::inspect(&source)?;
     let copy = home.path().join("copy.sqlite");
@@ -564,7 +575,7 @@ fn file_digest_matches_v1_and_source_refuses_sidecars_and_replacement() -> Resul
     files::write_new(&home.path().join("source.sqlite-wal"), b"retained")?;
     ensure!(witness.check().is_err());
     ensure!(Source::inspect(&source).is_err());
-    ensure!(snapshot_digest(&source, &[7; 32], &workspace).is_err());
+    ensure!(snapshot_digest(&source, &fingerprint_key, &workspace).is_err());
     ensure!(std::fs::read(home.path().join("source.sqlite-wal"))? == b"retained");
     std::fs::remove_file(home.path().join("source.sqlite-wal"))?;
     std::fs::OpenOptions::new()
@@ -599,6 +610,7 @@ fn opaque_copy_accepts_adjacent_wal_named_selected_files() -> Result<()> {
 
 #[tokio::test]
 async fn database_snapshot_still_refuses_adjacent_sqlite_sidecars() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let workspace = Workspace::create(
         &options(home.path(), 1024 * 1024)?,
@@ -617,7 +629,7 @@ async fn database_snapshot_still_refuses_adjacent_sqlite_sidecars() -> Result<()
     )?;
     ensure!(witness.check().is_err());
     ensure!(Source::inspect(&source).is_err());
-    ensure!(snapshot_digest(&source, &[7; 32], &workspace).is_err());
+    ensure!(snapshot_digest(&source, &fingerprint_key, &workspace).is_err());
     ensure!(std::fs::read(home.path().join("snapshot.sqlite-wal"))? == b"retained sidecar");
     workspace.finish()?;
     Ok(())
@@ -637,6 +649,7 @@ async fn database(path: &Path) -> Result<SqliteConnection> {
 
 #[tokio::test]
 async fn complete_inventory_matches_v1_typed_values_and_empty_tables() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let workspace = Workspace::create(
         &options(home.path(), 64 * 1024 * 1024)?,
@@ -661,8 +674,8 @@ async fn complete_inventory_matches_v1_typed_values_and_empty_tables() -> Result
         .context("copy missing")?
         .begin()
         .await?;
-    let reference = inventory::inspect_in(&mut tx, &[3; 32]).await?;
-    let large = inspect_in(&mut tx, &[3; 32], &workspace).await?;
+    let reference = inventory::inspect_in(&mut tx, &fingerprint_key).await?;
+    let large = inspect_in(&mut tx, &fingerprint_key, &workspace).await?;
     ensure!(*large.value() == reference);
     ensure!(large.value().rows == 9);
     tx.rollback().await?;
@@ -674,6 +687,7 @@ async fn complete_inventory_matches_v1_typed_values_and_empty_tables() -> Result
 
 #[tokio::test]
 async fn legal_nine_mib_row_fits_default_and_low_working_bytes_is_typed() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let path = home.path().join("body.sqlite");
     let mut db = database(&path).await?;
@@ -696,7 +710,7 @@ async fn legal_nine_mib_row_fits_default_and_low_working_bytes_is_typed() -> Res
         .context("copy missing")?
         .begin()
         .await?;
-    let error = inspect_in(&mut tx, &[3; 32], &small)
+    let error = inspect_in(&mut tx, &fingerprint_key, &small)
         .await
         .err()
         .context("must refuse body allocation")?;
@@ -715,7 +729,7 @@ async fn legal_nine_mib_row_fits_default_and_low_working_bytes_is_typed() -> Res
         .context("copy missing")?
         .begin()
         .await?;
-    let inspected = inspect_in(&mut tx, &[3; 32], &large).await?;
+    let inspected = inspect_in(&mut tx, &fingerprint_key, &large).await?;
     ensure!(inspected.value().rows == 1 && inspected.value().value_bytes == 9 * 1024 * 1024);
     drop(inspected);
     tx.rollback().await?;
@@ -768,6 +782,7 @@ async fn clean_wal_close_immutable_source_uses_source_slot_and_creates_no_sideca
 #[tokio::test]
 #[ignore = "complete dense large-data regression; run explicitly with --ignored"]
 async fn dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget() -> Result<()> {
+    let fingerprint_key: [u8; 32] = rand::random();
     let home = tempfile::tempdir()?;
     let path = home.path().join("dense.sqlite");
     let mut db = database(&path).await?;
@@ -791,8 +806,12 @@ async fn dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget()
         .context("copy missing")?
         .begin()
         .await?;
-    ensure!(inventory::inspect_in(&mut tx, &[5; 32]).await.is_err());
-    let actual = inspect_in(&mut tx, &[5; 32], &workspace).await?;
+    ensure!(
+        inventory::inspect_in(&mut tx, &fingerprint_key)
+            .await
+            .is_err()
+    );
+    let actual = inspect_in(&mut tx, &fingerprint_key, &workspace).await?;
     ensure!(actual.value().rows == 1_000_001);
     ensure!(actual.value().value_bytes > crate::offline::format::MAX_FILE);
     drop(actual);
@@ -802,8 +821,8 @@ async fn dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget()
     let copy = home.path().join("copy.sqlite");
     copy_new(&path, &copy, &workspace)?;
     ensure!(
-        snapshot_digest(&path, &[5; 32], &workspace)?
-            == snapshot_digest(&copy, &[5; 32], &workspace)?
+        snapshot_digest(&path, &fingerprint_key, &workspace)?
+            == snapshot_digest(&copy, &fingerprint_key, &workspace)?
     );
     workspace.finish()?;
     Ok(())

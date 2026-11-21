@@ -377,7 +377,6 @@ pub(in crate::tenancy) async fn archive_one(
     if super::obligations::lookup(tx, &r.installation_id, &key, charge)
         .await?
         .is_some()
-        || select::held(tx, &saved, charge).await?
     {
         return Ok(false);
     }
