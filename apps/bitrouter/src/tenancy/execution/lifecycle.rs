@@ -60,6 +60,7 @@ pub(crate) struct Registry {
 }
 pub(crate) struct Registration {
     execution_id: ExecutionId,
+    #[cfg(any(test, feature = "server-tools"))]
     pipeline: Weak<Pipeline>,
     tasks: Arc<OwnedTasks>,
     _source: Source,
@@ -199,6 +200,7 @@ impl Registry {
         tasks.bind_snapshot()?;
         let source = tasks.acquire()?;
         tasks.close_sources();
+        #[cfg(any(test, feature = "server-tools"))]
         let pipeline_ref = Arc::downgrade(&pipeline);
         *attached = Attachment::Attached(Attached {
             pipeline,
@@ -217,6 +219,7 @@ impl Registry {
         entry.changed.notify_waiters();
         Ok(Registration {
             execution_id: id.clone(),
+            #[cfg(any(test, feature = "server-tools"))]
             pipeline: pipeline_ref,
             tasks,
             _source: source,
@@ -488,6 +491,7 @@ impl Registration {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "server-tools"))]
     pub(crate) fn pipeline(&self, expected: &Pipeline) -> Result<Arc<Pipeline>> {
         let pipeline = self
             .pipeline

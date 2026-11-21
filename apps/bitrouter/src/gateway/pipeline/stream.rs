@@ -44,6 +44,7 @@ impl StreamInterest {
     }
 
     /// Interested in every part kind.
+    #[cfg(any(test, feature = "otel-http", feature = "otel-grpc"))]
     pub const fn all() -> Self {
         Self(
             Self::TEXT_DELTA

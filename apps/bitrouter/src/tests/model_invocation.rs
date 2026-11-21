@@ -27,6 +27,7 @@ const DEADLINE: Duration = Duration::from_secs(5);
 enum Pause {
     Headers,
     Body,
+    Terminal,
 }
 
 struct CapturedRequest {
@@ -114,9 +115,15 @@ async fn fixture(
         let headers = format!(
             "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nRetry-After: 7\r\n\r\n"
         );
+        let split = if matches!(pause, Some(Pause::Terminal)) {
+            body.rfind("data: [DONE]")
+                .ok_or_else(|| io::Error::other("missing fixture SSE terminal"))?
+        } else {
+            body.len()
+        };
         if !matches!(pause, Some(Pause::Headers)) {
             socket.write_all(headers.as_bytes()).await?;
-            write_chunk(&mut socket, &body).await?;
+            write_chunk(&mut socket, &body[..split]).await?;
         }
         received_tx
             .send(request)
@@ -139,6 +146,9 @@ async fn fixture(
         if matches!(pause, Some(Pause::Headers)) {
             socket.write_all(headers.as_bytes()).await?;
             write_chunk(&mut socket, &body).await?;
+        }
+        if split < body.len() {
+            write_chunk(&mut socket, &body[split..]).await?;
         }
         socket.write_all(b"0\r\n\r\n").await?;
         socket.shutdown().await?;
@@ -883,7 +893,7 @@ async fn caller_can_complete_held_stream_without_total_cap() -> TestResult {
         200,
         response_stream(&ApiProtocol::ChatCompletions),
         true,
-        Some(Pause::Body),
+        Some(Pause::Terminal),
     )
     .await?;
     let stream = client

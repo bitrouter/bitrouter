@@ -21,6 +21,7 @@ use crate::gateway::providers::auth::credentials::OAuthToken;
 use crate::providers::import::{ImportError, ImportSource, Imported, home_dir, keychain};
 
 /// macOS Keychain generic-password service Claude Code stores its token under.
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// Human name for diagnostics.
 const CLI_NAME: &str = "Claude Code";

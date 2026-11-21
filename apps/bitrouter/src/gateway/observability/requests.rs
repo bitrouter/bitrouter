@@ -209,7 +209,10 @@ impl ObserveHook for GatewayRequestTracker {
         };
         let outcome = match outcome {
             RequestOutcome::Completed => ExecutionOutcome::Completed,
-            RequestOutcome::Failed(_) => ExecutionOutcome::Failed,
+            RequestOutcome::Failed(error) => {
+                tracing::debug!(request_id = ctx.request_id(), error_kind = ?error.kind(), "model request failed");
+                ExecutionOutcome::Failed
+            }
             RequestOutcome::ClientDisconnected => ExecutionOutcome::ClientDisconnected,
         };
         let save = self.inventory.terminal(&bound.request, outcome).await;

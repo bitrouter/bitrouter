@@ -857,6 +857,7 @@ impl Pipeline {
     /// returned future does not cancel it. The connected caller still awaits
     /// the task's `JoinHandle` and gets the real response. Streaming requests
     /// keep their own cancel-on-disconnect path ([`Pipeline::execute_stream_prepared`]).
+    #[cfg(any(test, feature = "server-tools"))]
     pub async fn execute_detached(
         self: Arc<Self>,
         req: PipelineRequest,
@@ -953,6 +954,7 @@ impl Pipeline {
     }
 
     /// Execute a non-streaming request: the four stages, in order.
+    #[cfg(any(test, feature = "server-tools"))]
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
         if req
             .extensions
@@ -1447,6 +1449,7 @@ impl Pipeline {
             .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
+            #[cfg(any(test, feature = "server-tools"))]
             server_tool_calls: Vec::new(),
         });
         self.observe_after(Phase::Execution, &ctx).await;

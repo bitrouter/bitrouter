@@ -343,6 +343,7 @@ pub struct SettlementContext {
     /// Resolved model id, including the attempted model on execution failure.
     pub model_id: String,
     /// Canonical effort applied to the settled request, when present.
+    #[cfg(any(test, feature = "eval-publication"))]
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Resolved provider id, including the attempted provider on execution
     /// failure.

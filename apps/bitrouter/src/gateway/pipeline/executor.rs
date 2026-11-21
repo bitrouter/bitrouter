@@ -260,6 +260,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(any(test, feature = "server-tools"))]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Stream(_) | MockResponse::Decisions(_) => Err(BitrouterError::internal(
@@ -314,6 +315,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(any(test, feature = "server-tools"))]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Error(error) => Err(error),
