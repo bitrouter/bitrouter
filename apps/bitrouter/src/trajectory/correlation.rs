@@ -4,7 +4,7 @@ use bitrouter_ai::types::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
 use super::canonical::{CanonicalPromptDigests, Canonicalizer};
-use super::store::{CorrelateAndBegin, GuardedRouteInput, GuardedRouteResult, TrajectoryStore};
+use super::store::{CorrelateAndBegin, RecordedRouteInput, RecordedRouteResult, TrajectoryStore};
 use super::types::{HistoryCompleteness, TrajectoryEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,15 +97,15 @@ impl TrajectoryRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) async fn begin_guarded_request(
+    pub(crate) async fn begin_recorded_request(
         &self,
         owner_user_id: &str,
         request_id: &str,
         inbound_protocol: ApiProtocol,
         prompt: &Prompt,
         captured_at: &str,
-        guarded_route: GuardedRouteInput,
-    ) -> Result<(CorrelatedRequest, GuardedRouteResult)> {
+        recorded_route: RecordedRouteInput,
+    ) -> Result<(CorrelatedRequest, RecordedRouteResult)> {
         let (correlated, result) = self
             .begin_request_inner(
                 owner_user_id,
@@ -113,11 +113,11 @@ impl TrajectoryRuntime {
                 inbound_protocol,
                 prompt,
                 captured_at,
-                Some(guarded_route),
+                Some(recorded_route),
             )
             .await?;
         let result = result.ok_or_else(|| {
-            anyhow::anyhow!("guarded trajectory request committed without a route intent")
+            anyhow::anyhow!("recorded trajectory request committed without a route intent")
         })?;
         Ok((correlated, result))
     }
@@ -129,8 +129,8 @@ impl TrajectoryRuntime {
         inbound_protocol: ApiProtocol,
         prompt: &Prompt,
         captured_at: &str,
-        guarded_route: Option<GuardedRouteInput>,
-    ) -> Result<(CorrelatedRequest, Option<GuardedRouteResult>)> {
+        recorded_route: Option<RecordedRouteInput>,
+    ) -> Result<(CorrelatedRequest, Option<RecordedRouteResult>)> {
         let canonical = self.canonicalizer.canonicalize(prompt)?;
         let request_id = self.request_identity(owner_user_id, request_id)?;
         let external_native_parent_id = native_parent_id(&inbound_protocol, prompt)?;
@@ -165,7 +165,7 @@ impl TrajectoryRuntime {
                     canonical_input_bytes: canonical.canonical_input_bytes,
                     protocol: protocol_name(&inbound_protocol).to_owned(),
                     captured_at: captured_at.to_owned(),
-                    guarded_route,
+                    recorded_route,
                 },
             )
             .await?;
@@ -178,7 +178,7 @@ impl TrajectoryRuntime {
                 prior_events: result.prior_events,
                 evidence,
             },
-            result.guarded_route,
+            result.recorded_route,
         ))
     }
 }
@@ -2003,10 +2003,9 @@ mod tests {
                 categorical: BTreeMap::from([
                     (
                         "route.projection".into(),
-                        "agent_trace/v2|opening|normal".into(),
+                        "code:generation|orchestrate|normal".into(),
                     ),
                     ("route.selected_tier".into(), "tier-a".into()),
-                    ("route.workflow_state".into(), "opening".into()),
                 ]),
                 digests: Default::default(),
                 route_measurement: None,

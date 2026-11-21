@@ -133,7 +133,7 @@ impl PolicyTable {
         })
     }
 
-    /// Resolve the exact task-aware predictive key, its unknown-family
+    /// Resolve the exact semantic route class, its unknown-family
     /// baseline, then the default. The returned key is the key that actually
     /// selected the tier, except that defaults retain the primary key.
     fn tier_for_class<'table, 'key>(
@@ -357,11 +357,7 @@ impl PolicyTableRouter {
     /// when the class resolves to no tier, or when the prompt is already on
     /// the resolved tier's model.
     #[cfg(test)]
-    pub fn apply(
-        &self,
-        prompt: &mut Prompt,
-        assessment: &crate::gateway::routing::assessment::Assessment,
-    ) -> bool {
+    pub fn apply(&self, prompt: &mut Prompt, assessment: &Assessment) -> bool {
         self.route_prompt(prompt, &HeaderMap::new(), assessment)
     }
 
@@ -371,7 +367,7 @@ impl PolicyTableRouter {
         _headers: &HeaderMap,
         respect_explicit_route: bool,
         apply_tool_floor: bool,
-        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
+        assessment: Option<&Assessment>,
     ) -> PolicyDecision {
         // Keep this exact immutable table alive through guards, recording, and
         // final target materialization, even if a concurrent reload swaps the
@@ -470,7 +466,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &mut Prompt,
         headers: &HeaderMap,
-        assessment: &crate::gateway::routing::assessment::Assessment,
+        assessment: &Assessment,
     ) -> bool {
         let input_model = prompt.model.clone();
         let input_effort = prompt.params.reasoning_effort;
@@ -497,7 +493,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &crate::gateway::routing::assessment::Assessment,
+        assessment: &Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, true, Some(assessment))
     }
@@ -507,7 +503,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &crate::gateway::routing::assessment::Assessment,
+        assessment: &Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, false, Some(assessment))
     }
@@ -516,7 +512,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
+        assessment: Option<&Assessment>,
         guarded: bool,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, !guarded, assessment)

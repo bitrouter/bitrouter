@@ -249,7 +249,6 @@ mod snapshot_tests {
             Some(&path),
             None,
             crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
-            None,
         )
         .await?;
         let active_before = runtime.administration_snapshot();

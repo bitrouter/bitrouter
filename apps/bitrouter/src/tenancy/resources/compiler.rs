@@ -187,12 +187,6 @@ pub(super) fn prepare_current_route(
                 selected.policy.is_none() && selected.request_checks.is_empty(),
                 "nested policy or native checker selection is not qualified"
             );
-            if block.is_some() {
-                ensure!(
-                    selected.overrides.is_empty(),
-                    "Block arm overrides are not qualified"
-                );
-            }
             Some(selected)
         };
         let (clean, prefs) = match &selected {

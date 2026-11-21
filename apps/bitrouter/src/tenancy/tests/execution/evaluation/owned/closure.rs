@@ -336,7 +336,6 @@ async fn missing_completion(selected: bool, terminal: Terminal) -> Result<()> {
                     .map_err(|code| anyhow::anyhow!("retained configuration: {code:?}"))?,
                 Some(policy.document().clone()),
                 pending.clone(),
-                None,
             )?;
             ensure!(pipeline.model_selectors.len() == 1);
             // Same production runtime and retained config; only the pending store

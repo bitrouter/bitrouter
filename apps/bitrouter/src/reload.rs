@@ -2843,7 +2843,6 @@ policies:
             Some(&config_path),
             None,
             crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
-            None,
         )
         .await?;
         let initial_policy_digest = policy_runtime

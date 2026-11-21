@@ -149,10 +149,7 @@ impl EvalSettlementRecorder {
                 baseline_effort: decision.baseline_effort,
                 policy_digest: decision.policy_digest.clone(),
 
-                route_measurement: decision
-                    .route_measurement
-                    .clone()
-                    .filter(|_| decision.experiment.is_none()),
+                route_measurement: decision.route_measurement.clone(),
             }],
             requested_dimensions: BTreeSet::from([
                 "cost.usd_micros".into(),
@@ -287,11 +284,6 @@ mod tests {
     use crate::trajectory::canonical::CorrelationKey;
     use crate::trajectory::settlement::TrajectorySettlementRecorder;
     use crate::trajectory::store::TrajectoryStore;
-    use {
-        crate::gateway::routing::exploration::AssignmentArm,
-        crate::gateway::routing::exploration::AssignmentUnit,
-        crate::gateway::routing::exploration::RouteAssignment,
-    };
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -380,15 +372,6 @@ mod tests {
                 selected_effort: Some(ReasoningEffort::Low),
                 baseline_tier: Some("strong".into()),
                 baseline_effort: Some(ReasoningEffort::High),
-                experiment: Some(RouteAssignment {
-                    experiment_id: DIGEST.into(),
-                    arm: AssignmentArm::Challenger,
-                    assignment_unit: AssignmentUnit::Task,
-                    assignment_id_digest:
-                        "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-                            .into(),
-                    challenger_propensity_ppm: 100_000,
-                }),
                 route_measurement: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
@@ -398,14 +381,8 @@ mod tests {
                 continuation_adjustment: Some("pin".into()),
                 predicted_role: None,
                 predicted_task_family: Some("code:review".into()),
-                predicted_action: None,
                 prediction_confidence_ppm: None,
                 task_family_confidence_ppm: Some(1_500_000),
-                task_family_reason_codes: vec![
-                    "task_code_review".into(),
-                    "customer_secret".into(),
-                    "task_code_review".into(),
-                ],
                 predictor_contract_digest: None,
                 prediction_confidence_kind: None,
                 observation: None,
@@ -464,10 +441,7 @@ mod tests {
             evidence.attributes.get("task_family_confidence_ppm"),
             Some(&"1000000".to_owned())
         );
-        assert_eq!(
-            evidence.attributes.get("task_family_reason_codes"),
-            Some(&"task_code_review".to_owned())
-        );
+        assert!(!evidence.attributes.contains_key("task_family_reason_codes"));
         assert_eq!(
             subject.requested_dimensions,
             BTreeSet::from([
@@ -501,7 +475,6 @@ mod tests {
                 selected_effort: None,
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
-                experiment: None,
                 route_measurement: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
@@ -511,10 +484,8 @@ mod tests {
                 continuation_adjustment: None,
                 predicted_role: Some("implement".into()),
                 predicted_task_family: Some("code:review".into()),
-                predicted_action: Some("mutate".into()),
                 prediction_confidence_ppm: Some(900_000),
                 task_family_confidence_ppm: Some(800_000),
-                task_family_reason_codes: Vec::new(),
                 predictor_contract_digest: Some(
                     "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec"
                         .into(),
@@ -570,7 +541,6 @@ mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            experiment: None,
             route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
@@ -580,10 +550,8 @@ mod tests {
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_task_family: Some("code:review".into()),
-            predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
             task_family_confidence_ppm: Some(800_000),
-            task_family_reason_codes: Vec::new(),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
