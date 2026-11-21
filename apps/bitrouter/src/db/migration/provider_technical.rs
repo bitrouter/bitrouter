@@ -1,5 +1,4 @@
 //! Optional diagnostic schema; never a required migration or serving gate.
-use super::m20240101_000028_resource_tenancy::{identity, payload};
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::prelude::*;
@@ -162,4 +161,44 @@ pub(crate) async fn install(db: &impl ConnectionTrait) -> Result<()> {
         .await
         .context("optional installation acknowledgement")?;
     Ok(())
+}
+
+fn identity(backend: DatabaseBackend, name: &str, length: u32, nullable: bool) -> ColumnDef {
+    let mut column = ColumnDef::new(Alias::new(name));
+    // IDs and issuer/subject pairs are byte-exact, including case and trailing
+    // spaces. MySQL's NO PAD binary Unicode collation avoids both default
+    // case-folding and the older *_bin collations' PAD SPACE equality.
+    // https://dev.mysql.com/doc/refman/8.4/en/charset-binary-collations.html
+    match backend {
+        DatabaseBackend::MySql => {
+            column.custom(Alias::new(format!(
+                "VARCHAR({length}) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin"
+            )));
+        }
+        DatabaseBackend::Postgres => {
+            column.custom(Alias::new(format!("VARCHAR({length}) COLLATE \"C\"")));
+        }
+        DatabaseBackend::Sqlite => {
+            column.string_len(length).extra("COLLATE BINARY");
+        }
+    }
+    if !nullable {
+        column.not_null();
+    }
+    column
+}
+
+fn payload(backend: DatabaseBackend, name: &str) -> ColumnDef {
+    let mut column = ColumnDef::new(Alias::new(name));
+    // Valid 256-key scopes exceed MySQL TEXT's 64 KiB ceiling. Application
+    // validation supplies the tighter semantic/byte bounds on these payloads.
+    // https://dev.mysql.com/doc/refman/8.4/en/blob.html
+    if backend == DatabaseBackend::MySql {
+        column.custom(Alias::new(
+            "LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin",
+        ));
+    } else {
+        column.text();
+    }
+    column.not_null().to_owned()
 }

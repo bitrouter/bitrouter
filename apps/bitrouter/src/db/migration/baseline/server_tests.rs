@@ -87,7 +87,7 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
         let db = &fixture.database;
         super::super::Migrator::install(db).await?;
         db.execute_unprepared(
-            "INSERT INTO seaql_migrations VALUES ('m20240101_000001_unrecognized_store',1)",
+            "INSERT INTO seaql_migrations VALUES ('unsupported-store-format',1)",
         ).await?;
         db.execute_unprepared("CREATE TABLE unrelated_records (id VARCHAR(64) PRIMARY KEY)")
             .await?;
@@ -165,7 +165,7 @@ async fn campaign(backend: DatabaseBackend) -> Result<()> {
 
     for marker in [
         None,
-        Some("m20240101_000048_native_generate_content"),
+        Some("unsupported-store-format"),
         Some("m20990101_future"),
     ] {
         let fixture = OwnedServer::new(backend, "BITROUTER_TEST_MIGRATION_DATABASE_URL").await?;

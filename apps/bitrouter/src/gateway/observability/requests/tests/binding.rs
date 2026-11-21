@@ -37,9 +37,8 @@ impl PreRequestHook for ChangeAfterAdmission {
                         .get_event::<GatewayRequestObserved>()
                         .context("missing observation")?
                         .request;
-                    let key = crate::storage::evolution::digest(&observed.request_id)?;
-                    let store =
-                        EvolutionStore::new(self.db.clone(), "gateway-request-admission-v2")?;
+                    let key = crate::storage::gateway_records::digest(&observed.request_id)?;
+                    let store = GatewayRecords::new(self.db.clone(), "gateway-request-admission")?;
                     ensure!(
                         records::Entity::delete_by_id(store.id("gateway_request", &key)?)
                             .exec(&self.db)

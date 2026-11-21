@@ -3,7 +3,6 @@
 use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
 use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::routing::exploration::RouteAssignment;
 use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::storage::evaluation::canonical_digest;
 use bitrouter_ai::eval::{EvidenceItem, RouteDecisionMeasurement};
@@ -120,7 +119,6 @@ pub struct PendingEvalDecision {
     pub selected_effort: Option<ReasoningEffort>,
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<ReasoningEffort>,
-    pub experiment: Option<RouteAssignment>,
     pub route_measurement: Option<RouteDecisionMeasurement>,
     pub preset: Option<String>,
     pub holdout: bool,
@@ -720,7 +718,6 @@ pub(crate) mod tests {
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            experiment: None,
             route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,

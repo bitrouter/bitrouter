@@ -27,7 +27,7 @@ struct TrajectoryFacts {
 }
 
 fn trajectory_facts(fixture: &Fixture) -> Result<TrajectoryFacts> {
-    seed::assert_no_blocks(fixture)?;
+    seed::assert_gateway_schema(fixture)?;
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
         let mut records = BTreeMap::new();
@@ -231,7 +231,7 @@ fn exercise_trajectory(fixture: &mut Fixture, full: &Path, minimum: &Path) -> Re
         upstream
     });
     configuration(fixture, &upstream.uri())?;
-    seed::assert_no_blocks(fixture)?;
+    seed::assert_gateway_schema(fixture)?;
     let source_bytes = fs::read(fixture.directory.path().join("policy.yaml"))?;
     let (pid, listen) = start(fixture, full, &full_identity)?;
     // Let the full gateway commit a real terminal fact/outbox while its separate

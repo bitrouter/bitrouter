@@ -131,16 +131,13 @@ pub(super) fn source(default_tier: &str) -> Result<Document> {
     })
 }
 
-pub(super) fn assert_no_blocks(fixture: &Fixture) -> Result<()> {
+pub(super) fn assert_gateway_schema(fixture: &Fixture) -> Result<()> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     fixture.runtime.block_on(async {
         let db = bitrouter::db::connect(&database_url(fixture)).await?;
-        ensure!(
-            EvolutionStore::new(db.clone(), "local")?
-                .list::<Value>("control")
-                .await?
-                .is_empty(),
-            "independent fixture contains Block state"
-        );
+        ensure!(db.query_all(Statement::from_string(DbBackend::Sqlite,
+            "SELECT name FROM sqlite_schema WHERE type='table' AND (name GLOB 'bro_*' OR name GLOB 'acp_*' OR name GLOB 'adequacy_*')"
+        )).await?.is_empty(), "gateway contains a harness-owned table");
         db.close().await?;
         Ok(())
     })

@@ -535,8 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn retired_predictive_v1_fallback_field_is_rejected() {
-        let mut retired = serde_json::json!({
+    fn unknown_predictive_fallback_field_is_rejected() {
+        let mut unknown = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
             "route_projection": "code:generation|implement|normal",
@@ -545,7 +545,7 @@ mod tests {
             "baseline_tier": "balanced",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         });
-        retired
+        unknown
             .as_object_mut()
             .expect("decision fixture is an object")
             .insert(
@@ -553,7 +553,7 @@ mod tests {
                 serde_json::json!("balanced"),
             );
 
-        assert!(serde_json::from_value::<EvalDecisionRef>(retired).is_err());
+        assert!(serde_json::from_value::<EvalDecisionRef>(unknown).is_err());
     }
 
     #[test]

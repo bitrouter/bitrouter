@@ -1,21 +1,18 @@
 //! Application-owned durable formats and their shared validation.
-//! Core and harness share codecs without sharing live execution authority.
+//! Gateway persistence never derives execution authority from stored observations.
 
-pub(crate) mod legacy;
 pub(crate) mod partition;
 
 pub(crate) mod scope;
 
-pub mod checkpoint;
-
 pub mod evaluation;
 
-pub mod evolution;
-pub mod execution;
-pub mod session_identity;
-
-pub mod skills;
+pub(crate) mod execution;
+pub(crate) mod session_identity;
 
 pub(crate) mod operation_budget;
 
 pub(crate) mod write;
+
+pub(crate) mod digest;
+pub(crate) mod gateway_records;

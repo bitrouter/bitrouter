@@ -1,34 +1,23 @@
 //! Service-owned, predispatch request reservations and their settlements.
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, ensure};
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
-};
+use sea_orm::{DatabaseConnection, EntityTrait, QuerySelect};
 use serde::{Deserialize, Serialize};
 
-use crate::storage::evolution::digest;
-use crate::storage::evolution::{EvolutionStore, records};
 use crate::storage::execution::ExecutionOutcome;
-use crate::storage::execution::{EXECUTION_KIND, ExecutionSettlement};
-use crate::storage::session_identity::SessionIdentity;
+use crate::storage::execution::ExecutionSettlement;
+use crate::storage::gateway_records::GatewayRecords;
+use crate::storage::gateway_records::digest;
+#[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
+use crate::storage::gateway_records::records;
 use crate::storage::write::Write;
 
 #[cfg(all(test, any(feature = "db-postgres", feature = "db-mysql")))]
 mod server_tests;
 
-pub const INVENTORY_VERSION: &str = "gateway-request-inventory-v1";
 pub(crate) const INVENTORY_KIND: &str = "gateway_request";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InventoryBinding {
-    pub identity: SessionIdentity,
-    pub connection_id: String,
-    pub watermark: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayRequest {
@@ -38,10 +27,6 @@ pub struct GatewayRequest {
     pub controller_instance_id: String,
     pub runtime_epoch: String,
     pub admitted_at: String,
-    /// Historical capture watermarks. Service-only reservations leave this empty.
-    pub anchors: BTreeMap<String, i64>,
-    pub binding: Option<InventoryBinding>,
-    pub coverage_ready: bool,
     pub settlement: Option<ExecutionSettlement>,
 }
 
@@ -79,19 +64,9 @@ impl GatewayInventory {
         self
     }
 
-    pub(crate) fn store_for(
-        db: DatabaseConnection,
-        principal: &str,
-        controller: &str,
-    ) -> Result<EvolutionStore> {
-        let scope = digest(&(INVENTORY_VERSION, principal, controller))?;
-        EvolutionStore::new(db, &format!("gateway:{scope}"))
-    }
-
-    // A single service storage scope lets the historical lookup range over only
-    // old ownership scopes. Metering and admission share a global request ID.
-    fn service_store(&self) -> Result<EvolutionStore> {
-        EvolutionStore::new(self.db.clone(), "gateway-request-admission-v2")
+    // Admission and metering share one service-owned request namespace.
+    fn service_store(&self) -> Result<GatewayRecords> {
+        GatewayRecords::new(self.db.clone(), "gateway-request-admission")
             .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
@@ -118,83 +93,6 @@ impl GatewayInventory {
             .transpose()
     }
 
-    /// M0 inventory and execution records have hashed keys under controller
-    /// and capture-owner scopes. Probe their original keys without parsing
-    /// unrelated payloads. In fresh stores both indexed ranges are empty.
-    async fn imported_id(
-        &self,
-        tx: &DatabaseTransaction,
-        service: &EvolutionStore,
-        id: &str,
-    ) -> Result<bool> {
-        let scopes = records::Entity::find()
-            .select_only()
-            .columns([records::Column::ScopeId, records::Column::Kind])
-            .distinct()
-            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-            .filter(records::Column::Kind.is_in([INVENTORY_KIND, EXECUTION_KIND]))
-            .filter(
-                sea_orm::Condition::any()
-                    .add(records::Column::ScopeId.lt(&service.scope_id))
-                    .add(records::Column::ScopeId.gt(&service.scope_id)),
-            )
-            .order_by_asc(records::Column::ScopeId)
-            .order_by_asc(records::Column::Kind)
-            .into_tuple::<(String, String)>();
-        let mut pages = scopes.paginate(tx, 128);
-        while let Some(scopes) = pages.fetch_and_next().await? {
-            let mut execution_ids = Vec::new();
-            let mut request_ids = Vec::new();
-            for (scope, kind) in scopes {
-                let key = digest(&(&scope, &kind, id))?;
-                if kind == EXECUTION_KIND {
-                    execution_ids.push(key);
-                } else {
-                    request_ids.push(key);
-                }
-            }
-            // M0 executions have no authenticated route scope. If one owns
-            // this ID, refuse it without reading its private session payload.
-            if !execution_ids.is_empty()
-                && records::Entity::find()
-                    .select_only()
-                    .column(records::Column::RecordId)
-                    .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-                    .filter(records::Column::Kind.eq(EXECUTION_KIND))
-                    .filter(records::Column::RecordId.is_in(execution_ids))
-                    .into_tuple::<String>()
-                    .one(tx)
-                    .await?
-                    .is_some()
-            {
-                return Ok(true);
-            }
-            if request_ids.is_empty() {
-                continue;
-            }
-            let prior = records::Entity::find()
-                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
-                .filter(records::Column::Kind.eq(INVENTORY_KIND))
-                .filter(records::Column::RecordId.is_in(request_ids))
-                .all(tx)
-                .await?;
-            if let Some(row) = prior.first() {
-                let request: GatewayRequest = serde_json::from_str(&row.body)?;
-                let original = Self::store_for(
-                    self.db.clone(),
-                    &request.route_scope_id,
-                    &request.controller_instance_id,
-                )?;
-                ensure!(
-                    request.request_id == id && original.scope_id == row.scope_id,
-                    "invalid imported request identity"
-                );
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     pub(crate) async fn begin(
         &self,
         principal: &str,
@@ -216,9 +114,6 @@ impl GatewayInventory {
             controller_instance_id: controller.into(),
             runtime_epoch: self.runtime_epoch.clone(),
             admitted_at: chrono::Utc::now().to_rfc3339(),
-            anchors: BTreeMap::new(),
-            binding: None,
-            coverage_ready: false,
             settlement: None,
         };
         let (mut write, tx) = Write::begin(&self.db, &self.storage_budget, false).await?;
@@ -233,8 +128,8 @@ impl GatewayInventory {
                 return Err(PriorRequest.into());
             }
             use crate::metering::entities::requests as metering;
-            // Metering has a global request_id primary key, including old rows
-            // without a route scope. No caller can replace an extant charge.
+            // Metering has a global request_id primary key. No caller may
+            // replace an extant charge, even if its admission is missing.
             if metering::Entity::find_by_id(request_id)
                 .select_only()
                 .column(metering::Column::RequestId)
@@ -242,7 +137,6 @@ impl GatewayInventory {
                 .one(&tx)
                 .await?
                 .is_some()
-                || self.imported_id(&tx, &store, request_id).await?
             {
                 return Err(PriorRequest.into());
             }

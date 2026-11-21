@@ -121,7 +121,7 @@ pub(super) struct Report {
 }
 impl crate::output::CliReport for Report {
     fn render(&self, human: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
-        human.line("DB-only offline evidence verified; INCOMPLETE for recovery/cutover.")?;
+        human.line("Database snapshot verified; external state requires separate validation.")?;
         human.line(&format!(
             "Tables: {}; rows: {}; typed bytes: {}",
             self.evidence.inventory.tables.len(),

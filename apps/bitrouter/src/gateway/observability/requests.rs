@@ -32,7 +32,7 @@ pub(crate) struct GatewayRequestObserved {
 
 impl PipelineEvent for GatewayRequestObserved {
     fn event_name(&self) -> &'static str {
-        "evolution.gateway_request_observed"
+        "gateway.request_observed"
     }
 }
 
