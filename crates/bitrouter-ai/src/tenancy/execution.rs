@@ -230,7 +230,7 @@ pub enum ReceiptState {
 
 /// Owner-bound facts of one actual invocation. Correlation never deduplicates it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct ExecutionReceipt {
     /// Strict or ordered dispatch, including the accepted ordered selection.
     pub dispatch: Dispatch,
@@ -256,6 +256,34 @@ pub struct ExecutionReceipt {
     pub usage: Usage,
     /// UTC recording timestamp.
     pub recorded_at: Timestamp,
+}
+
+impl Serialize for ExecutionReceipt {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecutionReceipt {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object;
+        impl<'de> serde::de::Visitor<'de> for Object {
+            type Value = ExecutionReceipt;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an execution receipt JSON object")
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                // Forward original field tokens to the closed derived decoder.
+                ExecutionReceipt::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            }
+        }
+        deserializer.deserialize_map(Object)
+    }
 }
 
 /// One bounded, ASCII-ordered correlation query page.

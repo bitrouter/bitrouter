@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "ordered_contracts/dispatch.rs"]
+mod dispatch;
 #[path = "ordered_contracts/evidence.rs"]
 mod evidence;
 #[path = "ordered_contracts/receipt.rs"]

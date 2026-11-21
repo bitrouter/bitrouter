@@ -378,6 +378,81 @@ async fn one_receipt_endpoint_accepts_both_dispatch_modes_and_binds_evidence() -
     Ok(())
 }
 
+#[tokio::test]
+async fn receipt_and_evidence_reject_alternate_wire_shapes_over_http() -> TestResult {
+    let ordered = receipt(1)?;
+    let mut strict = ordered.clone();
+    strict.dispatch = bitrouter_ai::tenancy::execution::Dispatch::Strict;
+    strict.attempts[0].candidate_index = None;
+    for (version, wire) in versions() {
+        for original in [&strict, &ordered] {
+            original.validate()?;
+            let dispatch = serde_json::to_value(&original.dispatch)?;
+            let mode = dispatch["mode"].as_str().ok_or("mode")?;
+            let positional = if mode == "strict" {
+                json!([mode])
+            } else {
+                json!([
+                    mode,
+                    dispatch["accepted_selection"],
+                    dispatch["attempt_limit"]
+                ])
+            };
+            let mut tagged_mode = dispatch.clone();
+            tagged_mode["mode"] = json!({(mode): null});
+            let mut replies = Vec::new();
+            for invalid in [positional, tagged_mode] {
+                for mut document in [
+                    serde_json::to_value(original)?,
+                    serde_json::to_value(evidence(original)?)?,
+                ] {
+                    document["dispatch"] = invalid.clone();
+                    replies.push(Some(server::json(document)?));
+                }
+            }
+            for document in [
+                serde_json::to_value(original)?,
+                serde_json::to_value(evidence(original)?)?,
+            ] {
+                let positional = Value::Array(
+                    document
+                        .as_object()
+                        .ok_or("wire object")?
+                        .values()
+                        .cloned()
+                        .collect(),
+                );
+                replies.push(Some(server::json(positional)?));
+            }
+            let server = server::serve(wire, replies).await?;
+            let client = control_client(&server, version)?;
+            for _ in 0..3 {
+                let receipt_result = client
+                    .execution(
+                        &original.installation_id,
+                        &original.tenant_id,
+                        &original.execution_id,
+                    )
+                    .await
+                    .map(|_| ());
+                let evidence_result = client.usage_evidence(original).await.map(|_| ());
+                for result in [receipt_result, evidence_result] {
+                    let Err(Error::Tenancy(failure)) = result else {
+                        return Err("alternate wire shape did not fail decoding".into());
+                    };
+                    assert_eq!(failure.status, 200);
+                    assert!(matches!(
+                        failure.body_error,
+                        Some(Error::Response("invalid tenancy response shape"))
+                    ));
+                }
+            }
+            assert_eq!(server.records.lock().await.len(), 6);
+        }
+    }
+    Ok(())
+}
+
 fn assert_limit<T>(result: bitrouter_sdk::error::Result<T>) -> TestResult {
     let Err(Error::Tenancy(failure)) = result else {
         return Err("expected bounded failure".into());

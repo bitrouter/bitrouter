@@ -3,11 +3,20 @@ use super::Dispatch;
 use crate::tenancy::ordered::AcceptedSelection;
 use serde::{Deserialize, Deserializer, de::Error};
 
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
 enum Mode {
     Strict,
     Ordered,
+}
+
+impl<'de> Deserialize<'de> for Mode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mode = String::deserialize(deserializer)?;
+        match mode.as_str() {
+            "strict" => Ok(Self::Strict),
+            "ordered" => Ok(Self::Ordered),
+            _ => Err(D::Error::unknown_variant(&mode, &["strict", "ordered"])),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for Dispatch {
@@ -15,6 +24,10 @@ impl<'de> Deserialize<'de> for Dispatch {
         // Serde's internally tagged buffering cannot preserve RawValue integer
         // tokens. Select the mode, then decode its closed shape from those bytes.
         let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        // Derived structs also accept positional arrays; the wire requires a map.
+        if !raw.get().trim_start().starts_with('{') {
+            return Err(D::Error::custom("dispatch must be a JSON object"));
+        }
         #[derive(Deserialize)]
         struct Header {
             mode: Mode,
