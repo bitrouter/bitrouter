@@ -162,11 +162,6 @@ impl ContinuationAuthority {
         self.effective_scheme
     }
 
-    /// Verify that the request still has the proven authentication scheme.
-    pub fn validates_final_request(&self, request: &reqwest::Request) -> bool {
-        request_effective_auth_scheme(request) == Some(self.effective_scheme)
-    }
-
     /// Bind an explicitly resolved set of account-selection headers.
     pub fn with_request_scope(mut self, headers: &reqwest::header::HeaderMap) -> Self {
         if headers.is_empty() {
@@ -572,6 +567,7 @@ impl AuthAppliers {
     }
 
     /// Chained-builder form of [`register`](Self::register).
+    #[cfg(test)]
     pub fn with(mut self, provider_id: impl Into<String>, applier: Arc<dyn AuthApplier>) -> Self {
         self.register(provider_id, applier);
         self
@@ -580,36 +576,6 @@ impl AuthAppliers {
     /// Look up an applier for `provider_id`.
     pub fn lookup(&self, provider_id: &str) -> Option<&Arc<dyn AuthApplier>> {
         self.by_provider.get(provider_id)
-    }
-
-    /// Whether any appliers are registered.
-    pub fn is_empty(&self) -> bool {
-        self.by_provider.is_empty()
-    }
-
-    /// Resolve a target's stable continuation authority. Registered dynamic
-    /// appliers own the proof; static transport auth derives it from the
-    /// effective configured credential without retaining the secret.
-    pub async fn continuation_authority(
-        &self,
-        target: &ModelTarget,
-    ) -> Result<Option<CredentialAuthority>> {
-        if let Some(applier) = self.lookup(&target.provider_name) {
-            return applier
-                .continuation_authority(target)
-                .await
-                .map_err(|error| {
-                    normalize_auth_extension_error(
-                        error,
-                        AuthOperation::ContinuationAuthorityResolution,
-                    )
-                });
-        }
-        let credential = target.api_key.as_str();
-        Ok(Some(CredentialAuthority::derive(
-            "static-transport-credential",
-            credential,
-        )))
     }
 
     /// Resolve the selected credential principal and effective wire scheme.

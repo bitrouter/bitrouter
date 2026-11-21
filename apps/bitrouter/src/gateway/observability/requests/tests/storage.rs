@@ -9,7 +9,7 @@ async fn shared_cell_refuses_before_initialization_then_serves_hooks_and_daemon_
 {
     let cell = Arc::new(OnceLock::new());
     let fixture = fixture_with_storage(Failure::None, Some(cell.clone())).await?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     let held = fixture.db.begin().await?;
     let error = inventory
         .begin("scope", "controller", "not-ready")
@@ -84,7 +84,8 @@ async fn reservation_insert_failure_fences_storage_before_any_provider_request()
     ensure!(
         fixture
             .tracker
-            .inventory()
+            .inventory
+            .clone()
             .request("scope", "fault")
             .await?
             .is_none()
@@ -108,7 +109,7 @@ async fn settlement_sql_failure_preserves_original_reservation_and_fences_storag
     let service = crate::tenancy::Service::open(fixture.db.clone(), None).await?;
     cell.set(service.storage_budget())
         .map_err(|_| anyhow::anyhow!("budget set twice"))?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     let BeginResult::Tracked(observed) = inventory.begin("scope", "controller", "fault").await?
     else {
         anyhow::bail!("missing admission");
@@ -201,7 +202,8 @@ async fn a_controller_claim_without_authenticated_scope_cannot_reserve_a_paid_id
     ensure!(
         fixture
             .tracker
-            .inventory()
+            .inventory
+            .clone()
             .request("scope", "spoofed")
             .await?
             .is_none()
@@ -212,7 +214,7 @@ async fn a_controller_claim_without_authenticated_scope_cannot_reserve_a_paid_id
 #[tokio::test]
 async fn an_invalid_controller_header_cannot_fall_through_to_untracked_dispatch() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     for (id, header) in [("blank", &b" "[..]), ("invalid", &[0xff][..])] {
         let mut tagged = request(id, true)?;
         tagged.headers.insert(

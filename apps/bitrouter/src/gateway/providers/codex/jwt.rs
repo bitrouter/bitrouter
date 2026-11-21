@@ -25,10 +25,6 @@ pub struct CodexClaims {
     /// `exp` is just a useful sanity check.
     #[serde(default)]
     pub exp: Option<u64>,
-    /// Email associated with the ChatGPT account, when present in the
-    /// `https://api.openai.com/profile` claim block.
-    #[serde(default)]
-    pub email: Option<String>,
     /// The `chatgpt_account_id` Codex's backend uses to scope quotas + the
     /// `chatgpt-account-id` request header.
     #[serde(default)]
@@ -41,20 +37,12 @@ struct RawPayload {
     exp: Option<u64>,
     #[serde(default, rename = "https://api.openai.com/auth")]
     auth: Option<AuthClaim>,
-    #[serde(default, rename = "https://api.openai.com/profile")]
-    profile: Option<ProfileClaim>,
 }
 
 #[derive(Deserialize)]
 struct AuthClaim {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ProfileClaim {
-    #[serde(default)]
-    email: Option<String>,
 }
 
 /// Errors raised by the JWT payload decoder.
@@ -87,7 +75,6 @@ pub fn decode_codex_claims(jwt: &str) -> Result<CodexClaims, JwtError> {
     let raw: RawPayload = serde_json::from_str(&payload_str)?;
     Ok(CodexClaims {
         exp: raw.exp,
-        email: raw.profile.and_then(|p| p.email),
         chatgpt_account_id: raw.auth.and_then(|a| a.chatgpt_account_id),
     })
 }
@@ -118,7 +105,6 @@ mod tests {
         );
         let claims = decode_codex_claims(&jwt)?;
         assert_eq!(claims.chatgpt_account_id.as_deref(), Some("acct-abc-123"));
-        assert_eq!(claims.email.as_deref(), Some("user@example.com"));
         assert_eq!(claims.exp, Some(1700000000));
         Ok(())
     }
@@ -129,7 +115,6 @@ mod tests {
         let jwt = make_jwt(r#"{"exp": 1700000000}"#);
         let claims = decode_codex_claims(&jwt)?;
         assert!(claims.chatgpt_account_id.is_none());
-        assert!(claims.email.is_none());
         Ok(())
     }
 

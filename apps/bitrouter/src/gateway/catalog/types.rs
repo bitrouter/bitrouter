@@ -244,11 +244,6 @@ impl RegistryProvider {
         self.access() != RegistryAccess::Private
     }
 
-    /// Whether this provider requires a user/deployment-supplied base URL.
-    pub fn requires_base_url(&self) -> bool {
-        self.required_config.contains(&RequiredConfig::BaseUrl)
-    }
-
     /// The env var holding this provider's credential, or `None` when it does
     /// not use one. `oauth` / `native` providers authenticate via a local
     /// interactive login (a request-time `AuthApplier`), so they have no env

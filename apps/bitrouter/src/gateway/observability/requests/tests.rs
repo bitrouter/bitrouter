@@ -245,7 +245,8 @@ fn request(id: &str, bound: bool) -> Result<PipelineRequest> {
 async fn saved(fixture: &Fixture, id: &str) -> Result<GatewayRequest> {
     fixture
         .tracker
-        .inventory()
+        .inventory
+        .clone()
         .request("scope", id)
         .await?
         .context("inventory missing")
@@ -335,7 +336,7 @@ async fn route_failure_retains_terminal_inventory_without_a_learning_consumer() 
 #[tokio::test]
 async fn interrupted_admission_keeps_its_identity_without_inventing_settlement() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     let BeginResult::Tracked(original) = inventory
         .begin("scope", "controller", "interrupted")
         .await?
@@ -523,7 +524,7 @@ async fn provider_failure_retains_failed_hop_and_never_replays_it() -> Result<()
 #[tokio::test]
 async fn global_charge_prevents_new_admission_without_an_inventory_row() -> Result<()> {
     let fixture = fixture(Failure::None).await?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     let mut ordinary = request("paid-before-inventory", false)?;
     ordinary.headers.remove("x-bitrouter-controller-id");
     fixture.pipeline.execute(ordinary).await?;
@@ -599,7 +600,7 @@ async fn request_namespace_excludes_foreign_rows_before_decoding() -> Result<()>
     fixture.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
         "UPDATE gateway_request_records SET body='poison', creator_principal_id='other' WHERE record_id=?",
         [record.clone().into()])).await?;
-    let inventory = fixture.tracker.inventory();
+    let inventory = fixture.tracker.inventory.clone();
     assert!(inventory.request("scope", "marked").await?.is_none());
     assert!(
         inventory
@@ -667,7 +668,8 @@ async fn global_claim_excludes_foreign_billed_requests_before_settlement() -> Re
         ensure!(
             fixture
                 .tracker
-                .inventory()
+                .inventory
+                .clone()
                 .request("other-scope", "in-flight")
                 .await?
                 .is_none()

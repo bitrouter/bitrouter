@@ -44,28 +44,6 @@ struct ClaudeAiOauth {
     expires_at: Option<u64>,
 }
 
-/// Import the Claude Code credential from its default locations: the macOS
-/// Keychain (`Claude Code-credentials`) first, then
-/// `~/.claude/.credentials.json`. Returns `Ok(None)` when neither carries a
-/// Claude Code OAuth credential.
-pub fn import() -> Result<Option<Imported>, ImportError> {
-    // Keychain first (macOS). A malformed or absent item falls through to the
-    // file, which is the authoritative error surface.
-    if let Some(blob) = keychain::read_generic_password(KEYCHAIN_SERVICE, None)
-        && let Ok(Some(token)) = parse_blob(&blob, "keychain")
-    {
-        return Ok(Some(Imported {
-            token,
-            source: ImportSource::Keychain(KEYCHAIN_SERVICE),
-        }));
-    }
-    let path = home_dir()
-        .ok_or(ImportError::NoHome)?
-        .join(".claude")
-        .join(".credentials.json");
-    from_file(&path)
-}
-
 /// Import from a specific `.credentials.json`. `Ok(None)` when the file is
 /// absent or carries no `claudeAiOauth` block.
 pub fn from_file(path: &Path) -> Result<Option<Imported>, ImportError> {
@@ -188,7 +166,8 @@ impl ClaudeCodeStore {
 
     /// A file-only store at `path`, never touching the Keychain. Used on
     /// non-macOS hosts and in tests so a real Keychain is never read/written.
-    pub fn file_only(path: impl Into<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn file_only(path: impl Into<PathBuf>) -> Self {
         Self {
             keychain_service: None,
             file_path: path.into(),
@@ -253,21 +232,6 @@ impl ClaudeCodeStore {
             })),
             None => Ok(None),
         }
-    }
-
-    /// Persist a refreshed `token` back to `source`, preserving every other
-    /// field Claude Code wrote. File writes are atomic and `0600`; Keychain
-    /// writes upsert the existing `(service, account)` item.
-    pub fn write_back(
-        &self,
-        token: &OAuthToken,
-        source: &ClaudeCodeSource,
-    ) -> Result<(), ImportError> {
-        let _guard = WRITES.lock().map_err(|_| ImportError::Io {
-            path: self.file_path.clone(),
-            source: std::io::Error::other("credential write lock unavailable"),
-        })?;
-        self.write_back_locked(token, source)
     }
 
     fn write_back_locked(
@@ -502,14 +466,15 @@ mod tests {
             r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"oldr","expiresAt":1700000000000,"scopes":["user:inference"],"subscriptionType":"max"},"otherTop":42}"#,
         )?;
         let store = ClaudeCodeStore::file_only(&path);
+        let original = store.read()?.context("missing original credential")?;
         store
-            .write_back(
+            .write_back_checked(
                 &OAuthToken {
                     access_token: "new".into(),
                     expires_at: 1_700_000_500,
                     refresh_token: Some("newr".into()),
                 },
-                &ClaudeCodeSource::File(path.clone()),
+                &original,
             )
             .context("required fixture value")?;
         let raw: serde_json::Value =
@@ -536,23 +501,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn write_back_creates_fresh_file_0600() -> anyhow::Result<()> {
+    fn atomic_credential_writer_creates_fresh_file_0600() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         // Start from a unique path that does NOT yet exist (macOS Keychain-only
         // machines have no file until something writes one).
         let path = tmp_file("{}")?;
         std::fs::remove_file(&path).context("required fixture value")?;
         let store = ClaudeCodeStore::file_only(&path);
-        store
-            .write_back(
-                &OAuthToken {
-                    access_token: "a".into(),
-                    expires_at: 1_700_000_000,
-                    refresh_token: Some("r".into()),
-                },
-                &ClaudeCodeSource::File(path.clone()),
-            )
-            .context("required fixture value")?;
+        let token = OAuthToken {
+            access_token: "a".into(),
+            expires_at: 1_700_000_000,
+            refresh_token: Some("r".into()),
+        };
+        write_file_atomic_0600(&path, &updated_envelope_bytes(None, &token)?)?;
         let mode = std::fs::metadata(&path)
             .context("required fixture value")?
             .permissions()

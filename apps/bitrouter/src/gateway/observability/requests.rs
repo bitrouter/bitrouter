@@ -109,11 +109,6 @@ impl GatewayRequestTracker {
         self
     }
 
-    /// The control listener must share this exact runtime epoch with serving.
-    pub fn inventory(&self) -> GatewayInventory {
-        self.inventory.clone()
-    }
-
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
         let controller_tagged = ctx.headers().contains_key("x-bitrouter-controller-id");
         let allocated = allocation(ctx).is_some();

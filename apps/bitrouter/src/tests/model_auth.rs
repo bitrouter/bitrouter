@@ -7,8 +7,8 @@ use std::time::Duration;
 use crate::gateway::model::error::{ModelError, Result as ModelResult};
 use crate::gateway::providers::auth::credentials::{Credential, OAuthToken};
 use crate::gateway::providers::auth::store::{
-    CredentialKey, CredentialStore, CredentialTransaction, Durability, MemoryCredentialStore,
-    OAuthRefresher, OAuthSession, StoreError,
+    CredentialKey, CredentialStore, CredentialTransaction, Durability, OAuthRefresher,
+    OAuthSession, StoreError, memory_fixture::MemoryCredentialStore,
 };
 use crate::gateway::providers::auth::{
     AppliedAuth, AuthOperation, CredentialAuthority, normalize_auth_extension_error,
@@ -79,9 +79,9 @@ async fn concurrent_calls_commit_one_rotation_and_share_its_replacement() -> Tes
     for _ in 0..8 {
         // Separate session instances must still share the store's account lease.
         let session = session(store.clone(), refresh.clone());
-        calls.push(tokio::spawn(
-            async move { session.resolve(&key("one")).await },
-        ));
+        calls.push(tokio::spawn(async move {
+            session.resolve_with_fallback(&key("one"), None).await
+        }));
     }
     tokio::time::timeout(DEADLINE, refresh.entered.notified()).await?;
     refresh.release.notify_one();
@@ -109,7 +109,7 @@ async fn dropping_caller_during_rotation_still_commits_returned_refresh_token() 
         ..Default::default()
     });
     let session = session(store.clone(), refresh.clone());
-    let call = tokio::spawn(async move { session.resolve(&key("one")).await });
+    let call = tokio::spawn(async move { session.resolve_with_fallback(&key("one"), None).await });
     tokio::time::timeout(DEADLINE, refresh.entered.notified()).await?;
     call.abort();
     assert!(call.await.is_err_and(|error| error.is_cancelled()));
@@ -197,7 +197,7 @@ async fn commit_failure_is_honest_and_next_call_persists_without_rotating_again(
     let refresh = Arc::new(Refresh::default());
     let session = session(store.clone(), refresh.clone());
     let error = session
-        .resolve(&key("one"))
+        .resolve_with_fallback(&key("one"), None)
         .await
         .err()
         .ok_or("failed commit was reported as success")?;
@@ -221,7 +221,10 @@ async fn commit_failure_is_honest_and_next_call_persists_without_rotating_again(
             Some(&Credential::Oauth(replacement()))
         );
     }
-    assert_eq!(session.resolve(&key("one")).await?, replacement());
+    assert_eq!(
+        session.resolve_with_fallback(&key("one"), None).await?,
+        replacement()
+    );
     assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
@@ -231,7 +234,7 @@ async fn dropping_caller_during_commit_does_not_discard_rotation() -> TestResult
     let store = controlled_store(false, true);
     let refresh = Arc::new(Refresh::default());
     let session = session(store.clone(), refresh);
-    let call = tokio::spawn(async move { session.resolve(&key("one")).await });
+    let call = tokio::spawn(async move { session.resolve_with_fallback(&key("one"), None).await });
     tokio::time::timeout(DEADLINE, store.commit_entered.notified()).await?;
     call.abort();
     assert!(call.await.is_err_and(|error| error.is_cancelled()));
@@ -255,7 +258,7 @@ async fn missing_wrong_kind_and_other_account_never_switch_to_another_credential
     let session = session(store, refresh.clone());
     for account in ["missing", "wrong"] {
         assert!(matches!(
-            session.resolve(&key(account)).await,
+            session.resolve_with_fallback(&key(account), None).await,
             Err(ModelError::Provider { status: 401, .. })
         ));
     }
@@ -275,12 +278,14 @@ fn continuation_proofs_reject_ambiguous_wire_auth_and_redact_request_debug() -> 
     let proof = CredentialAuthority::derive("provider/account", "private-principal");
     let (mut request, authority) = AppliedAuth::proven(request, proof.clone()).into_parts();
     let authority = authority.ok_or("valid Bearer did not prove authority")?;
-    assert!(authority.validates_final_request(&request));
+    assert_eq!(
+        authority.effective_scheme(),
+        crate::gateway::model::target::AuthScheme::Bearer
+    );
     request.headers_mut().insert(
         "x-api-key",
         reqwest::header::HeaderValue::from_static("other-secret"),
     );
-    assert!(!authority.validates_final_request(&request));
     let applied = AppliedAuth::proven(request, proof);
     let debug = format!("{applied:?}");
     assert!(!debug.contains("private"));
@@ -533,7 +538,7 @@ async fn copilot_releases_read_leases_after_exchange_cache_hit_and_failure() -> 
         );
         for _ in 0..2 {
             let auth = applier
-                .obtain_copilot_token(&read_lease_target("github-copilot"))
+                .fixture_token(&read_lease_target("github-copilot"))
                 .await;
             if status == 200 {
                 assert_eq!(auth?.token, "ephemeral-token");
@@ -567,7 +572,7 @@ async fn copilot_releases_invalid_credentials_without_attempting_exchange() -> T
     for _ in 0..2 {
         assert!(matches!(
             applier
-                .obtain_copilot_token(&read_lease_target("github-copilot"))
+                .fixture_token(&read_lease_target("github-copilot"))
                 .await,
             Err(ModelError::Provider { status: 401, .. })
         ));
@@ -604,7 +609,7 @@ async fn copilot_does_not_expose_cached_auth_when_read_lease_release_fails() -> 
     );
     assert!(matches!(
         applier
-            .obtain_copilot_token(&read_lease_target("github-copilot"))
+            .fixture_token(&read_lease_target("github-copilot"))
             .await,
         Err(ModelError::CredentialStorage {
             failure: StoreError::Unavailable
