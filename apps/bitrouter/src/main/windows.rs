@@ -1,4 +1,4 @@
-//! CLI-owned Windows handle preparation before any subprocess is spawned.
+//! Binary-owned Windows handle preparation before the CLI runtime starts.
 //! https://learn.microsoft.com/windows/win32/api/handleapi/nf-handleapi-sethandleinformation
 
 use std::io;
@@ -10,7 +10,7 @@ use windows_sys::Win32::Foundation::{
 
 /// A redirected child must not retain the launcher's original standard pipes.
 /// Command still duplicates the explicitly selected child streams as needed.
-pub fn prevent_stdio_inheritance() -> io::Result<()> {
+pub(super) fn prevent_stdio_inheritance() -> io::Result<()> {
     for handle in [
         io::stdin().as_raw_handle(),
         io::stdout().as_raw_handle(),

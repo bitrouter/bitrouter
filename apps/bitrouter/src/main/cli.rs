@@ -11,9 +11,6 @@ mod shared_operator;
 mod shared_tests;
 #[path = "../commands/tenancy.rs"]
 mod tenancy;
-#[cfg(windows)]
-#[path = "windows.rs"]
-mod windows;
 use crate::tracing_filter::resolve_env_filter;
 
 use anyhow::{Context, Result};
@@ -884,11 +881,6 @@ fn parse_cli(invoked: &'static str) -> Cli {
 }
 
 pub(crate) fn entry() {
-    #[cfg(windows)]
-    if let Err(error) = windows::prevent_stdio_inheritance() {
-        eprintln!("error: failed to prepare CLI standard handles: {error}");
-        std::process::exit(1);
-    }
     let worker = std::thread::Builder::new()
         .name("bitrouter-main".to_owned())
         .stack_size(CLI_MAIN_STACK_SIZE)
