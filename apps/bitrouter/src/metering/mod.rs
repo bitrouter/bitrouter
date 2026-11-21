@@ -39,17 +39,10 @@ mod tests;
 #[cfg(test)]
 mod decisions_tests;
 
-pub use db::{ReconciliationStatus, RequestMetric};
-pub use pricing::{
-    ChargeEvidence, ChargeStatus, ContextTier, EffectivePricingRates, ModelPricing, PricingSource,
-    PricingTable, calculate_charge_evidence, calculate_charge_micro_usd,
-};
-pub use reconciliation::{ReconciliationSummary, reconcile_requests};
+pub use db::ReconciliationStatus;
+pub use pricing::{ModelPricing, PricingTable};
 pub use recorder::{MeteringRecorder, MeteringSettlementEvent};
-pub use store::{
-    MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
-    UsagePriceOverride,
-};
+pub use store::{MeteringStore, TimeWindow, UsagePriceOverride};
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`
 /// spend recap, the MCP tool-result footer, the `spawn` exit summary):

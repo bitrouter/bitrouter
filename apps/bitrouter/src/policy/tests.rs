@@ -7,10 +7,11 @@ use crate::gateway::extensions::plugin::PluginId;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use crate::gateway::pipeline::types::PipelineRequest;
-use crate::metering::{
-    ChargeEvidence, ChargeStatus, EffectivePricingRates, MeteringStore, PricingSource,
-    RequestMetric,
+use crate::metering::db::RequestMetric;
+use crate::metering::pricing::{
+    ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
 };
+use crate::metering::store::MeteringStore;
 use crate::policy::hook::PolicyHook;
 use crate::policy::policy::Policy;
 use crate::policy::store::PolicyStore;
