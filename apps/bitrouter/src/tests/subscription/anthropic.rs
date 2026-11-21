@@ -185,7 +185,9 @@ async fn api_key_prepare_body_leaves_system_untouched() -> TestResult {
 #[tokio::test]
 async fn explicit_key_wins_and_wrong_stored_kind_never_uses_fallback()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use crate::gateway::providers::auth::store::{CredentialKey, MemoryCredentialStore};
+    use crate::gateway::providers::auth::store::{
+        CredentialKey, memory_fixture::MemoryCredentialStore,
+    };
     let key = CredentialKey {
         provider: PROVIDER_ID.into(),
         account: DEFAULT_ACCOUNT.into(),

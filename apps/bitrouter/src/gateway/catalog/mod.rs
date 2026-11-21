@@ -104,17 +104,6 @@ impl Catalog {
         Ok(())
     }
 
-    /// Fetch, validate and save one complete document before replacement.
-    /// Failed/disabled refreshes retain the previous snapshot and its timestamp.
-    pub async fn refresh(
-        &mut self,
-        client: &reqwest::Client,
-        policy: fetch::NetworkPolicy,
-    ) -> Result<Durability, CatalogError> {
-        let snapshot = self.download(client, policy).await?;
-        Ok(self.admit(snapshot))
-    }
-
     /// Stage a complete admitted response without changing memory or disk.
     pub(crate) async fn download(
         &self,

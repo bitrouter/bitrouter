@@ -63,7 +63,10 @@ fn legacy_read_is_nonmutating_and_writes_preserve_unrelated_slots() -> TestResul
     assert_eq!(
         final_store
             .get_any("elsewhere", "other-account")
-            .and_then(Credential::as_api_key),
+            .and_then(|credential| match credential {
+                Credential::ApiKey { value } => Some(value.as_str()),
+                _ => None,
+            }),
         Some("two-secret")
     );
     Ok(())
@@ -135,7 +138,7 @@ async fn cancelling_a_caller_preserves_owned_refresh_and_file_commit() -> TestRe
         refresh.clone(),
         Duration::from_secs(60),
     );
-    let caller = tokio::spawn(async move { session.resolve(&key()).await });
+    let caller = tokio::spawn(async move { session.resolve_with_fallback(&key(), None).await });
     tokio::time::timeout(Duration::from_secs(2), refresh.entered.notified()).await?;
     caller.abort();
     assert!(
@@ -158,7 +161,7 @@ async fn cancelling_a_caller_preserves_owned_refresh_and_file_commit() -> TestRe
     );
     drop(lease);
     let fresh = OAuthSession::new(Arc::new(other), refresh.clone(), Duration::from_secs(60))
-        .resolve(&selected_key)
+        .resolve_with_fallback(&selected_key, None)
         .await?;
     assert_eq!(fresh.refresh_token.as_deref(), Some("new-refresh"));
     assert_eq!(refresh.calls.load(Ordering::SeqCst), 1);
