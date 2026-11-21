@@ -45,6 +45,8 @@ fn retired_learned_checkpoint_rejects_old_valid_evidence_and_mutations() -> Resu
 #[tokio::test]
 async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closure() -> Result<()> {
     let (db, resources) = fixture().await?;
+    let key = rand::random();
+    let resources = Resources::with_key(resources.installation, key)?;
     import(
         &resources,
         &db,
@@ -80,8 +82,7 @@ async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closur
         assert!(resources.provision_bytes(&db, &bytes).await.is_err());
         #[cfg(all(feature = "core", feature = "harness"))]
         {
-            let bro =
-                Resources::with_key(resources.installation.clone(), [7; 32])?.for_bro_capture();
+            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
             assert!(bro.provision_bytes(&db, &bytes).await.is_err());
         }
         assert_eq!(storage::references(&db).await?, references);
@@ -100,7 +101,8 @@ async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closur
 
 #[test]
 fn authenticated_retired_checkpoint_is_rejected_even_with_current_bro_markers() -> Result<()> {
-    let resources = Resources::with_key("installation".to_owned().try_into()?, [7; 32])?;
+    let key = rand::random();
+    let resources = Resources::with_key("installation".to_owned().try_into()?, key)?;
     let parent = reference("tenant", ResourceKind::Policy, "parent")?;
     let document = document(Vec::new(), Some(parent.clone()))?;
     let current = policy("tenant", "parent")?;
@@ -140,8 +142,7 @@ fn authenticated_retired_checkpoint_is_rejected_even_with_current_bro_markers() 
         ));
         #[cfg(all(feature = "core", feature = "harness"))]
         {
-            let bro =
-                Resources::with_key(resources.installation.clone(), [7; 32])?.for_bro_capture();
+            let bro = Resources::with_key(resources.installation.clone(), key)?.for_bro_capture();
             assert_eq!(
                 bro.validate_compiled(&stored),
                 Err(ErrorCode::AuthorityUnavailable)

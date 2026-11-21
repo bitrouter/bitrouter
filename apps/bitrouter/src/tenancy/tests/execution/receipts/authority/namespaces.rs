@@ -64,6 +64,7 @@ async fn second_tenant(first: &Fixture) -> Result<Fixture> {
         _ => anyhow::bail!("binding operation"),
     };
     Ok(Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),

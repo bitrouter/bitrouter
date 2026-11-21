@@ -53,7 +53,7 @@ async fn epoch_guard_projects_null_before_transferring_oversized_or_wrong_type_f
     .await?;
     let resources = Resources {
         installation: "installation".try_into()?,
-        key: Some(DeploymentKey::from_bytes([71; 32])?),
+        key: Some(DeploymentKey::from_bytes(rand::random())?),
         approved_origins: Vec::new(),
         bro_capture: false,
     };

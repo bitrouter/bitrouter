@@ -218,6 +218,7 @@ async fn tenant_with_pool(
             .map_err(failure)?,
     )?;
     Ok(Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),

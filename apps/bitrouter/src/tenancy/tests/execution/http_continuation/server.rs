@@ -62,7 +62,7 @@ async fn campaign(database: &mut database::Fixture) -> Result<()> {
             initial,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 ready.fixture.installation.clone(),
-                [29; 32],
+                ready.fixture.wrapping_key,
             )?),
         )
         .await?;

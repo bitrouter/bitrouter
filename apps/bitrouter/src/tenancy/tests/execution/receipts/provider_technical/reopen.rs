@@ -44,6 +44,10 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
             ),
         )
         .await?;
+        private(
+            &root.join("wrapping-key.private"),
+            &harness.fixture.wrapping_key,
+        )?;
         let checked:Result<()>=async {
             let client=Harness::client(false)?;
             let response=harness.send(&client).send().await?;
@@ -89,11 +93,14 @@ async fn child(root: &std::path::Path, role: &str) -> Result<()> {
                 .await?;
         let initial = crate::tenancy::store::load(&db, chrono::Utc::now()).await?;
         let installation = initial.installation.clone();
+        let wrapping_key = std::fs::read(root.join("wrapping-key.private"))?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("fixture wrapping key must be exactly 32 bytes"))?;
         let service = Service::start_prepared(
             db.clone(),
             Some(owner),
             initial,
-            Arc::new(Resources::with_key(installation.clone(), [29; 32])?),
+            Arc::new(Resources::with_key(installation.clone(), wrapping_key)?),
         )
         .await?;
         let checked: Result<()> = async {

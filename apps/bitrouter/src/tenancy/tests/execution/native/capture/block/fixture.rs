@@ -121,7 +121,8 @@ impl Host {
                     scope: crate::tenancy::mutation::tenant_scope(), expires_at: expiry()?,
                     expected_management_owner: None, installation_id: fixture.installation.clone(),
                 })).await.map_err(failure)?)?;
-                Some(Fixture { service: fixture.service.clone(), db: fixture.db.clone(), operator: fixture.operator.clone(),
+                Some(Fixture { wrapping_key: fixture.wrapping_key,
+                    service: fixture.service.clone(), db: fixture.db.clone(), operator: fixture.operator.clone(),
                     installation: fixture.installation.clone(), tenant, principal: fixture.principal.clone(),
                     binding: fixture.binding.clone(), binding_result })
             } else { None };

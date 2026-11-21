@@ -62,13 +62,14 @@ async fn legacy(db: &DatabaseConnection) -> Result<Value> {
     Ok(Value::Object(fields))
 }
 
-async fn seed(directory: &Path) -> Result<()> {
+async fn seed(directory: &Path, wrapping_key: [u8; 32]) -> Result<()> {
     let mut provider = Server::start().await?;
     let path = directory.join("state.sqlite");
     let lease = crate::tenancy::ownership::acquire_path(&path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &lease)
         .await?;
-    let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
+    let mut fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
+    fixture.wrapping_key = wrapping_key;
     let (fixture, route, _) = super::super::provision_protocol_with_fixture(
         fixture,
         &provider.url,
@@ -256,12 +257,17 @@ async fn production_profile_restart_child() -> Result<()> {
 #[tokio::test]
 async fn production_profile_restart_automatically_reconciles_persisted_owned_rows() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    tokio::time::timeout(Duration::from_secs(20), seed(directory.path())).await??;
+    let wrapping_key = rand::random();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        seed(directory.path(), wrapping_key),
+    )
+    .await??;
     ensure!(std::fs::metadata(directory.path().join("state.sqlite"))?.len() > 0);
     let status = tokio::time::timeout(Duration::from_secs(30), tokio::process::Command::new(std::env::current_exe()?)
         .args(["--exact", "tenancy::tests::execution::http_continuation::production_restart::production_profile_restart_child", "--ignored", "--nocapture"])
         .env(DIRECTORY, directory.path())
-        .env(KEY, base64::engine::general_purpose::STANDARD.encode([29; 32]))
+        .env(KEY, base64::engine::general_purpose::STANDARD.encode(wrapping_key))
         .kill_on_drop(true).status()).await??;
     ensure!(
         status.success(),

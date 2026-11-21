@@ -207,6 +207,7 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
         revision,
     } = owner.take().context("closed combined owner")?;
     let Fixture {
+        wrapping_key,
         service,
         db,
         operator,
@@ -227,6 +228,7 @@ async fn restart(owner: &mut Option<Bound>, root: &Path) -> Result<()> {
     service.dispatch_test_ready.store(true, Ordering::Release);
     *owner = Some(Bound {
         fixture: Fixture {
+            wrapping_key,
             service,
             db,
             operator,

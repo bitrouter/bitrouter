@@ -67,7 +67,10 @@ async fn same_installation_tenant_route_and_revision_transplants_do_not_send() -
     let mut tenant_slot = first_slot.clone();
     tenant_slot.owner_id = tenant_route.owner_id.clone();
     let credential = |reference: &ResourceRef| json!({"reference":reference,"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"owned-upstream-secret"}}}});
-    let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+    let resources = Resources::with_key(
+        ready.fixture.installation.clone(),
+        ready.fixture.wrapping_key,
+    )?;
     resources.provision_bytes(&ready.fixture.db,&serde_json::to_vec(&json!({"format":1,"installation_id":ready.fixture.installation,"resources":[
         credential(&second_slot),credential(&tenant_slot),route_record(&alias,&first_slot,&provider.url),route_record(&revised,&second_slot,&provider.url),route_record(&tenant_route,&tenant_slot,&provider.url)
     ]}))?).await?;
@@ -142,6 +145,7 @@ async fn same_installation_tenant_route_and_revision_transplants_do_not_send() -
                 .map_err(failure)?,
         )?;
         let other = Fixture {
+            wrapping_key: ready.fixture.wrapping_key,
             service: ready.fixture.service.clone(),
             db: ready.fixture.db.clone(),
             operator: ready.fixture.operator.clone(),

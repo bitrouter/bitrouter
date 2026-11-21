@@ -456,15 +456,12 @@ impl OrderedHarness {
         .await?;
         fixture.service.execution_settings.ordered_attempt_limit = limit;
         fixture.service.execution_settings.ordered_native_controls = native_controls;
-        if adapter.is_some() {
+        if let Some(adapter) = adapter {
             let endpoint = base
                 .replace("/v1", "/adapter/v1/chat/completions")
                 .parse()?;
             fixture.service.private_adapter = Some(Arc::new(
-                crate::tenancy::execution::private_adapter::Peer::for_test(
-                    endpoint,
-                    private_adapter::KEY,
-                )?,
+                crate::tenancy::execution::private_adapter::Peer::for_test(endpoint, adapter.key)?,
             ));
         }
         let revision = if profiles.is_some() {

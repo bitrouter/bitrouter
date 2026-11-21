@@ -34,7 +34,7 @@ async fn restart(ready: &Ready) -> Result<Service> {
         crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?,
         Arc::new(Resources::with_key(
             ready.fixture.installation.clone(),
-            [29; 32],
+            ready.fixture.wrapping_key,
         )?),
     )
     .await
@@ -58,7 +58,7 @@ fn historic_payload(
     row: &configuration_store::StoredConfiguration,
     field: &str,
 ) -> Result<Value> {
-    let key = crate::runtime_crypto::DeploymentKey::from_bytes([29; 32])?;
+    let key = crate::runtime_crypto::DeploymentKey::from_bytes(ready.fixture.wrapping_key)?;
     let binding = (
         &ready.fixture.installation,
         &row.revision.tenant_id,
@@ -256,7 +256,10 @@ async fn sealed_reserved_defaults_remain_readable_but_cannot_execute_or_activate
         .await?
         .context("stored revision")?;
         row.compiled = historic_payload(&ready, &row, field)?;
-        let resources = Resources::with_key(ready.fixture.installation.clone(), [29; 32])?;
+        let resources = Resources::with_key(
+            ready.fixture.installation.clone(),
+            ready.fixture.wrapping_key,
+        )?;
         ensure!(
             resources.validate_compiled(&row).is_ok(),
             "fixture must reconstruct, not merely authenticate"

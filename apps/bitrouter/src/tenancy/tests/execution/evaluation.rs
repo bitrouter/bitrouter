@@ -126,7 +126,7 @@ async fn policy_fixture_with_existing(
     };
     let resources = super::super::super::resources::Resources::with_key(
         fixture.installation.clone(),
-        [29; 32],
+        fixture.wrapping_key,
     )?;
     let mut imports = vec![json!({"reference":policy,
         "definition":{"kind":"policy","name":name,"document":document}})];

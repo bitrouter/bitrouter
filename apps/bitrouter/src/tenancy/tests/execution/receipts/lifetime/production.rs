@@ -38,7 +38,15 @@ async fn configured_provider_idle_child() -> Result<()> {
         AbortOnDropHandle::new(tokio::spawn(
             async move { axum::serve(listener, router).await },
         ));
-    let (mut fixture, route, _) = provision_protocol(&url, "chat_completions").await?;
+    let (mut fixture, route, _) = crate::tenancy::tests::execution::provision_protocol_observed(
+        Fixture::new().await?,
+        &url,
+        "chat_completions",
+        &mut |_| {},
+        Some(KEY),
+        (crate::telemetry::receipt_latency::Sink::default(), None),
+    )
+    .await?;
     let revision = draft(&fixture, &route, "configured-idle", 25).await?;
     let credential = fixture.issue("configured-idle-caller").await?;
     fixture.service.shutdown().await?;
@@ -142,7 +150,7 @@ async fn configured_provider_idle_is_applied_by_production_service() -> Result<(
     let ack = directory.path().join("idle-passed");
     let status = tokio::time::timeout(Duration::from_secs(40), tokio::process::Command::new(std::env::current_exe()?)
         .args(["--exact", "tenancy::tests::execution::receipts::lifetime::production::configured_provider_idle_child", "--ignored", "--nocapture"])
-        .env(KEY, base64::engine::general_purpose::STANDARD.encode([29; 32]))
+        .env(KEY, base64::engine::general_purpose::STANDARD.encode(rand::random::<[u8; 32]>()))
         .env(ACK, &ack)
         .kill_on_drop(true).status()).await??;
     ensure!(status.success(), "configured idle child failed: {status}");

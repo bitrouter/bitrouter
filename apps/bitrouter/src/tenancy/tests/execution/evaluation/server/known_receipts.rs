@@ -68,7 +68,7 @@ pub(super) async fn check(database: &mut database::Fixture) -> Result<()> {
         crate::tenancy::store::load(&db, Utc::now()).await?,
         Arc::new(crate::tenancy::resources::Resources::with_key(
             installation.clone(),
-            [29; 32],
+            fixture.wrapping_key,
         )?),
     )
     .await?;

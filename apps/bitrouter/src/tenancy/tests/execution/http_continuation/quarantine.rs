@@ -28,7 +28,10 @@ async fn exercise(path: &Path) -> Result<()> {
         db.clone(),
         Some(owner),
         initial,
-        Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+        Arc::new(Resources::with_key(
+            fixture.installation.clone(),
+            fixture.wrapping_key,
+        )?),
     )
     .await?;
     let revision = draft(&fixture, &route, "http-commit-fault-draft", 32).await?;

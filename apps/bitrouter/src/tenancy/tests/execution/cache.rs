@@ -1096,6 +1096,7 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
             .map_err(failure)?,
     )?;
     let second = Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),

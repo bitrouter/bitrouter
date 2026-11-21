@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 mod boundaries;
 
 struct NativePeer {
+    key: [u8; 32],
     ordinal: usize,
     reject: AtomicBool,
     bad_mac: AtomicBool,
@@ -54,7 +55,7 @@ async fn reply(peer: &NativePeer, request: Request) -> Result<Response> {
     let (payload, tag) = wire.split_once('.').context("claim envelope")?;
     let tag = URL_SAFE_NO_PAD.decode(tag)?;
     let payload = URL_SAFE_NO_PAD.decode(payload)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&private_adapter::KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&peer.key)?;
     mac.update(ATTEMPT_DOMAIN);
     mac.update(&payload);
     mac.verify_slice(&tag)
@@ -121,7 +122,7 @@ async fn reply(peer: &NativePeer, request: Request) -> Result<Response> {
         retry_after,
     };
     let payload = serde_json::to_vec(&outcome)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&private_adapter::KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&peer.key)?;
     mac.update(OUTCOME_DOMAIN);
     mac.update(&tag);
     mac.update(&payload);
@@ -203,6 +204,7 @@ impl Harness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base = format!("http://{}/v1", listener.local_addr()?);
         let peer = Arc::new(NativePeer {
+            key: rand::random(),
             ordinal: native_ordinal,
             reject: AtomicBool::new(native_ordinal == 1),
             bad_mac: AtomicBool::new(false),
@@ -222,20 +224,14 @@ impl Harness {
         let transport = if h2 {
             #[cfg(feature = "http2")]
             {
-                crate::tenancy::execution::private_adapter::Peer::for_test_h2(
-                    endpoint,
-                    private_adapter::KEY,
-                )?
+                crate::tenancy::execution::private_adapter::Peer::for_test_h2(endpoint, peer.key)?
             }
             #[cfg(not(feature = "http2"))]
             {
                 anyhow::bail!("h2 test requires feature")
             }
         } else {
-            crate::tenancy::execution::private_adapter::Peer::for_test(
-                endpoint,
-                private_adapter::KEY,
-            )?
+            crate::tenancy::execution::private_adapter::Peer::for_test(endpoint, peer.key)?
         };
         ordered.fixture.service.private_adapter = Some(Arc::new(transport));
         // Install the same real service with its exact paired peer before capability observation.
