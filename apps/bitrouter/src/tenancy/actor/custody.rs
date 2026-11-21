@@ -486,9 +486,9 @@ impl Worker {
                 // capability before publishing readiness; markers have no sender.
                 self.http_continuation
                     .initialize(crypto.as_ref().map(|key| key.http()))?;
-                Ok(crypto)
+                Ok(())
             });
-            let result = result.and_then(|crypto| {
+            let result = result.and_then(|()| {
                 if let Some(startup) = &self.startup {
                     startup
                         .publish(&self.proof)
@@ -508,7 +508,6 @@ impl Worker {
                     None
                 };
                 Ok(super::Initialized {
-                    crypto,
                     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                     capacity,
                 })

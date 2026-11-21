@@ -1,4 +1,4 @@
-//! Native artifact key custody. Legacy continuation keys and rows are untouched.
+//! Tenant continuation key custody and acknowledged bootstrap.
 
 pub(crate) mod http;
 
@@ -8,10 +8,10 @@ use sea_orm::{
     ConnectionTrait, DatabaseConnection,
     sea_query::{Alias, Expr, Query},
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 
 use super::transaction::Control;
-use crate::runtime_crypto::{DeploymentKey, SealedSecret};
+use crate::runtime_crypto::DeploymentKey;
 
 #[cfg(test)]
 mod tests;
@@ -55,70 +55,6 @@ impl Crypto {
 
     pub(super) fn id(&self) -> &str {
         self.key.id()
-    }
-
-    pub(super) fn seal(
-        &self,
-        purpose: &str,
-        owner: &impl Serialize,
-        value: &impl Serialize,
-        limit: usize,
-    ) -> Result<Vec<u8>> {
-        ensure!(
-            matches!(purpose, "continuation.native.v1" | "continuation.origin.v1"),
-            "invalid native crypto domain"
-        );
-        let plain = bounded_json(value, limit)?;
-        let sealed = self
-            .key
-            .seal_bound(purpose, &(&self.installation, owner), &plain)?;
-        bounded_json(&sealed, limit)
-    }
-
-    pub(super) fn open<T: DeserializeOwned>(
-        &self,
-        purpose: &str,
-        owner: &impl Serialize,
-        bytes: &[u8],
-        limit: usize,
-    ) -> Result<T> {
-        ensure!(
-            matches!(purpose, "continuation.native.v1" | "continuation.origin.v1"),
-            "invalid native crypto domain"
-        );
-        ensure!(bytes.len() <= limit, "native artifact exceeds limit");
-        let sealed: SealedSecret = serde_json::from_slice(bytes)?;
-        let plain = self
-            .key
-            .open_bound(purpose, &(&self.installation, owner), &sealed)?;
-        ensure!(plain.len() <= limit, "native artifact exceeds limit");
-        Ok(serde_json::from_slice(&plain)?)
-    }
-
-    pub(super) fn tag_bytes(&self, purpose: &str, bytes: &[u8]) -> Result<String> {
-        ensure!(
-            purpose == "continuation.candidate.v1",
-            "invalid native crypto domain"
-        );
-        ensure!(bytes.len() <= 1024 * 1024, "native binding exceeds limit");
-        self.key
-            .fingerprint(self.installation.as_str(), purpose, bytes)
-    }
-
-    pub(super) fn tag(&self, purpose: &str, value: &impl Serialize) -> Result<String> {
-        ensure!(
-            matches!(
-                purpose,
-                "continuation.credential.v1"
-                    | "continuation.route.v1"
-                    | "continuation.authority.v1"
-            ),
-            "invalid native crypto domain"
-        );
-        // Exact retained target projections are bounded by the compiler envelope.
-        let bytes = bounded_json(value, 1024 * 1024)?;
-        self.key
-            .fingerprint(self.installation.as_str(), purpose, &bytes)
     }
 }
 

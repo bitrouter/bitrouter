@@ -250,49 +250,7 @@ async fn oversized_epoch_projection_fails_closed() -> Result<()> {
 }
 
 #[test]
-fn domain_owner_and_budget_are_enforced_without_exposing_the_key() -> Result<()> {
-    let crypto = Crypto::new(
-        "installation".try_into()?,
-        DeploymentKey::from_bytes([55; 32])?,
-    );
-    let owner = ("tenant", "principal");
-    let bytes = crypto.seal("continuation.native.v1", &owner, &"opaque", 4096)?;
-    let clear: String = crypto.open("continuation.native.v1", &owner, &bytes, 4096)?;
-    ensure!(clear == "opaque");
-    ensure!(
-        crypto
-            .open::<String>("continuation.origin.v1", &owner, &bytes, 4096)
-            .is_err()
-    );
-    ensure!(
-        crypto
-            .open::<String>(
-                "continuation.native.v1",
-                &("tenant-other", "principal"),
-                &bytes,
-                4096
-            )
-            .is_err()
-    );
-    ensure!(
-        crypto
-            .seal("configuration", &owner, &"opaque", 4096)
-            .is_err()
-    );
+fn serialized_output_budget_is_enforced() -> Result<()> {
     ensure!(bounded_json(&"x".repeat(4096), 64).is_err());
-    ensure!(
-        crypto
-            .seal("continuation.native.v1", &owner, &"x".repeat(4096), 64)
-            .is_err()
-    );
-    ensure!(
-        crypto
-            .open::<String>("continuation.native.v1", &owner, &bytes, 16)
-            .is_err()
-    );
-    let decoded: String = crypto
-        .open("continuation.native.v1", &owner, &bytes, 4096)
-        .context("failed operations must leave key usable")?;
-    ensure!(decoded == "opaque");
     Ok(())
 }
