@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod fixtures;
+
 use anyhow::{Context, Result};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
@@ -266,20 +269,6 @@ impl TrajectoryStore {
         Self { db }
     }
 
-    pub async fn begin_request(&self, owner_user_id: &str, input: BeginRequest) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_begin(owner_user_id, &input)?;
-        let request_id = input
-            .event
-            .request_id
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("request start event must identify its request"))?;
-        let txn = self.db.begin().await?;
-        begin_request_in_tx(&txn, owner_user_id, &request_id, input).await?;
-        txn.commit().await?;
-        Ok(())
-    }
-
     pub(crate) async fn correlate_and_begin(
         &self,
         owner_user_id: &str,
@@ -526,94 +515,6 @@ impl TrajectoryStore {
         )))
     }
 
-    pub async fn append_route_intent(
-        &self,
-        owner_user_id: &str,
-        event: TrajectoryEvent,
-    ) -> Result<()> {
-        self.append_request_event(
-            owner_user_id,
-            event,
-            TrajectoryEventKind::RouteIntentRecorded,
-            "route intent",
-        )
-        .await
-    }
-
-    async fn append_request_event(
-        &self,
-        owner_user_id: &str,
-        event: TrajectoryEvent,
-        expected_kind: TrajectoryEventKind,
-        label: &str,
-    ) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_event(&event)?;
-        if event.kind != expected_kind || event.owner_user_id != owner_user_id {
-            anyhow::bail!("{label} event must belong to its owner")
-        }
-        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
-            match self.append_request_event_once(owner_user_id, &event).await {
-                Ok(()) => return Ok(()),
-                Err(error) if mutation_error_is_retryable(&error) => {
-                    if self.persisted_event_matches(&event).await? {
-                        return Ok(());
-                    }
-                    tokio::time::sleep(contention_backoff(attempt)).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        anyhow::bail!(
-            "trajectory {label} contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
-        )
-    }
-
-    async fn append_request_event_once(
-        &self,
-        owner_user_id: &str,
-        event: &TrajectoryEvent,
-    ) -> Result<()> {
-        let txn = self.db.begin().await?;
-        if event_matches_existing(&txn, event).await? {
-            txn.commit().await?;
-            return Ok(());
-        }
-        let episode = owned_episode(&txn, owner_user_id, &event.episode_id).await?;
-        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
-        validate_episode_head(&episode, &events)?;
-        if episode.closed_at.is_some() {
-            anyhow::bail!("trajectory episode is closed and cannot accept new events")
-        }
-        validate_sequence(&episode, event)?;
-        validate_event_request(&txn, owner_user_id, event).await?;
-        validate_candidate_history(&events, event)?;
-        append_event(&txn, event).await?;
-        update_episode_head(&txn, episode, event, None).await?;
-        txn.commit().await?;
-        Ok(())
-    }
-
-    pub async fn settle_request(&self, owner_user_id: &str, settlement: Settlement) -> Result<()> {
-        validate_owner(owner_user_id)?;
-        validate_settlement(owner_user_id, &settlement)?;
-        for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
-            match self.settle_request_once(owner_user_id, &settlement).await {
-                Ok(()) => return Ok(()),
-                Err(error) if mutation_error_is_retryable(&error) => {
-                    if self.persisted_event_matches(&settlement.event).await? {
-                        return self.settle_request_once(owner_user_id, &settlement).await;
-                    }
-                    tokio::time::sleep(contention_backoff(attempt)).await;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        anyhow::bail!(
-            "trajectory settlement contention exhausted after {MAX_LEDGER_MUTATION_ATTEMPTS} attempts"
-        )
-    }
-
     /// Build and append a settlement against the transaction's current episode
     /// head. The builder is invoked again after a contention retry, so its event
     /// sequence and any sequence-addressed outbox payload cannot become stale.
@@ -740,98 +641,6 @@ impl TrajectoryStore {
         }
         txn.commit().await?;
         Ok(settlement)
-    }
-
-    async fn settle_request_once(
-        &self,
-        owner_user_id: &str,
-        settlement: &Settlement,
-    ) -> Result<()> {
-        let txn = self.db.begin().await?;
-        let request_id = settlement.event.request_id.as_deref().unwrap_or_default();
-        let request = request_entity::Entity::find()
-            .filter(legacy_scope("trajectory_requests"))
-            .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-            .filter(request_entity::Column::RequestId.eq(request_id))
-            .one(&txn)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'")
-            })?;
-        if request.settlement_event_id.is_some() {
-            if request.settlement_event_id.as_deref() == Some(settlement.event.event_id.as_str())
-                && event_matches_existing(&txn, &settlement.event).await?
-                && request.status == request_status_name(settlement.status.clone())
-                && settlement_outbox_matches(
-                    &txn,
-                    owner_user_id,
-                    request.settlement_outbox_id.as_deref(),
-                    settlement.outbox.as_ref(),
-                )
-                .await?
-            {
-                txn.commit().await?;
-                return Ok(());
-            }
-            anyhow::bail!("trajectory request '{request_id}' already has a different settlement")
-        }
-        if request.episode_id != settlement.event.episode_id {
-            anyhow::bail!("settlement event belongs to a different episode")
-        }
-        let episode = owned_episode(&txn, owner_user_id, &settlement.event.episode_id).await?;
-        let events = events_for_episode_in_tx(&txn, owner_user_id, &episode.episode_id).await?;
-        validate_episode_head(&episode, &events)?;
-        if episode.closed_at.is_some() {
-            anyhow::bail!("trajectory episode is closed and cannot accept new events")
-        }
-        validate_sequence(&episode, &settlement.event)?;
-        validate_candidate_history(&events, &settlement.event)?;
-        append_event(&txn, &settlement.event).await?;
-
-        let request_key = request.request_id.clone();
-        let mut active = request.into_active_model();
-        active.settlement_event_id = Set(Some(settlement.event.event_id.clone()));
-        active.settlement_outbox_id = Set(settlement
-            .outbox
-            .as_ref()
-            .map(|outbox| outbox.outbox_id.clone()));
-        active.status = Set(request_status_name(settlement.status.clone()).into());
-        let changed = request_entity::Entity::update_many()
-            .set(active)
-            .filter(legacy_scope("trajectory_requests"))
-            .filter(request_entity::Column::RequestId.eq(request_key))
-            .exec(&txn)
-            .await?;
-        anyhow::ensure!(
-            changed.rows_affected == 1,
-            "trajectory request changed during settlement"
-        );
-        update_episode_head(&txn, episode, &settlement.event, None).await?;
-        if let Some(outbox) = &settlement.outbox {
-            insert_outbox(&txn, owner_user_id, outbox.clone()).await?;
-        }
-        txn.commit().await?;
-        Ok(())
-    }
-
-    async fn persisted_event_matches(&self, event: &TrajectoryEvent) -> Result<bool> {
-        let row = event_entity::Entity::find()
-            .filter(legacy_scope("trajectory_events"))
-            .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
-            .filter(event_entity::Column::EventId.eq(&event.event_id))
-            .one(&self.db)
-            .await?;
-        let Some(row) = row else {
-            return Ok(false);
-        };
-        let stored = stored_event(row)?;
-        if stored == *event {
-            return Ok(true);
-        }
-        anyhow::bail!(
-            "trajectory event '{}' already exists with different content",
-            event.event_id
-        )
     }
 
     pub async fn events_for_episode(
@@ -2540,37 +2349,6 @@ async fn append_event(txn: &DatabaseTransaction, event: &TrajectoryEvent) -> Res
     Ok(())
 }
 
-async fn event_matches_existing(
-    txn: &DatabaseTransaction,
-    event: &TrajectoryEvent,
-) -> Result<bool> {
-    let existing = event_entity::Entity::find()
-        .filter(legacy_scope("trajectory_events"))
-        .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
-        .filter(event_entity::Column::EventId.eq(&event.event_id))
-        .one(txn)
-        .await?;
-    if let Some(existing) = existing {
-        let existing = stored_event(existing)?;
-        if existing == *event {
-            return Ok(true);
-        }
-        anyhow::bail!(
-            "trajectory event '{}' already exists with different content",
-            event.event_id
-        )
-    }
-    if event_entity::Entity::find_by_id(&event.event_id)
-        .filter(legacy_scope("trajectory_events"))
-        .one(txn)
-        .await?
-        .is_some()
-    {
-        anyhow::bail!("trajectory event id is already owned by another user")
-    }
-    Ok(false)
-}
-
 /// Holds a new request start at the episode head when the wall clock disagrees
 /// with the episode's own ordering.
 ///
@@ -2628,27 +2406,6 @@ fn validate_sequence(episode: &episode_entity::Model, event: &TrajectoryEvent) -
             "trajectory event sequence must be {expected} for episode '{}'",
             event.episode_id
         )
-    }
-    Ok(())
-}
-
-async fn validate_event_request(
-    txn: &DatabaseTransaction,
-    owner_user_id: &str,
-    event: &TrajectoryEvent,
-) -> Result<()> {
-    let Some(request_id) = &event.request_id else {
-        return Ok(());
-    };
-    let request = request_entity::Entity::find()
-        .filter(legacy_scope("trajectory_requests"))
-        .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
-        .filter(request_entity::Column::RequestId.eq(request_id))
-        .one(txn)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("unknown owner-scoped trajectory request '{request_id}'"))?;
-    if request.episode_id != event.episode_id {
-        anyhow::bail!("trajectory event request belongs to a different episode")
     }
     Ok(())
 }

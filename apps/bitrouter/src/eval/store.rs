@@ -21,6 +21,8 @@ mod owned;
 #[cfg(test)]
 mod owned_tests;
 pub(crate) mod retained;
+#[cfg(test)]
+pub(crate) mod snapshot_fixtures;
 mod snapshots;
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use io::Budget;
@@ -66,6 +68,8 @@ use {
 };
 
 mod entities;
+#[cfg(test)]
+mod fixtures;
 use entities::{admission_entity, result_entity, snapshot_entity, subject_entity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,11 +101,6 @@ pub struct StoredEvaluationResult {
     pub result_id: String,
     pub content_digest: String,
     pub result: EvaluationResult,
-}
-
-pub(crate) struct SnapshotRecords {
-    pub(crate) snapshot: EvalSnapshot,
-    pub(crate) records: Vec<(StoredEvaluationResult, EvalSubject)>,
 }
 
 #[derive(Clone)]
@@ -307,10 +306,6 @@ impl EvalStore {
         })
     }
 
-    pub async fn subject(&self, eval_id: &str) -> Result<Option<EvalSubject>> {
-        self.read_subject(eval_id, None).await
-    }
-
     pub async fn subject_for_owner(
         &self,
         eval_id: &str,
@@ -347,10 +342,6 @@ impl EvalStore {
         Ok(value)
     }
 
-    pub async fn list_subjects(&self) -> Result<Vec<EvalSubject>> {
-        self.list_subjects_in_owner(None).await
-    }
-
     pub async fn list_subjects_for_owner(&self, owner_user_id: &str) -> Result<Vec<EvalSubject>> {
         self.legacy_only()?;
         self.list_subjects_in_owner(Some(owner_user_id)).await
@@ -372,20 +363,6 @@ impl EvalStore {
         }
         tx.commit().await?;
         Ok(values)
-    }
-
-    pub async fn insert_result(&self, result: &EvaluationResult) -> Result<ResultInsertOutcome> {
-        let owner = self.owner("local")?;
-        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
-        let (write, tx) = self.write_transaction(write).await?;
-        let result = async {
-            let outcome = self
-                .insert_result_in(&tx, result, &owner, &mut Budget::new(self))
-                .await?;
-            Ok(outcome)
-        }
-        .await;
-        write.finish(tx, result).await
     }
 
     pub async fn insert_result_owned(
@@ -485,31 +462,6 @@ impl EvalStore {
                 result_id: content_digest,
             }
         })
-    }
-
-    pub async fn result(&self, result_id: &str) -> Result<Option<StoredEvaluationResult>> {
-        let tx = self.transaction(false).await?;
-        let mut budget = Budget::new(self);
-        let row = io::one(
-            &tx,
-            self.results().filter(
-                result_entity::Column::ResultId.eq(self.key(KeyDomain::EvalResult, result_id)?),
-            ),
-            &mut budget,
-        )
-        .await?;
-        let result = if let Some(row) = row {
-            let value = self.checked_result(&tx, &row, &mut budget).await?;
-            ensure!(
-                value.result_id == result_id,
-                "eval result logical identity conflict"
-            );
-            Some(value)
-        } else {
-            None
-        };
-        tx.commit().await?;
-        Ok(result)
     }
 
     async fn checked_result(

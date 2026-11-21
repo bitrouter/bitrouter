@@ -63,10 +63,6 @@ impl TrajectoryRuntime {
         }
     }
 
-    pub fn store(&self) -> &TrajectoryStore {
-        &self.store
-    }
-
     pub(crate) fn request_identity(
         &self,
         owner_user_id: &str,
@@ -239,6 +235,13 @@ pub(crate) fn stable_id(kind: &str, owner_user_id: &str, request_id: &str) -> St
     hash.update([0]);
     hash.update(request_id.as_bytes());
     format!("{kind}-{}", hex::encode(hash.finalize()))
+}
+
+#[cfg(test)]
+impl TrajectoryRuntime {
+    pub(crate) fn store(&self) -> &TrajectoryStore {
+        &self.store
+    }
 }
 
 #[cfg(test)]

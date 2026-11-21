@@ -774,13 +774,6 @@ fn validate_tier_model(model: &str, tier: &str) -> Result<()> {
     Ok(())
 }
 
-/// Publish a main-config edit only if the file still matches the caller's
-/// snapshot. File permissions are retained across the atomic replacement.
-pub fn write_text_atomic(path: &Path, expected: &str, updated: &str) -> Result<()> {
-    let _publication_lock = acquire_publication_lock(path)?;
-    write_text_atomic_unlocked(path, expected, updated)
-}
-
 /// Replace text while the caller holds the target publication lock.
 pub fn write_text_atomic_unlocked(path: &Path, expected: &str, updated: &str) -> Result<()> {
     write_text_atomic_unlocked_with_parent_sync(path, expected, updated, sync_parent)
@@ -963,8 +956,9 @@ fn sync_parent(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Create a new source or replace exactly the expected current source.
-pub fn write_atomic(
+/// Test setup for publication races; serving uses the locked transaction paths.
+#[cfg(test)]
+pub(crate) fn write_atomic(
     path: &Path,
     expected_digest: Option<&str>,
     document: &Document,
@@ -1000,7 +994,6 @@ pub fn write_atomic_unlocked(
 pub struct PolicyFileUpdate {
     pub path: PathBuf,
     pub digest: String,
-    pub document: Document,
     /// Management metadata for transactional reload recovery, never source data.
     pub parent_digest: Option<String>,
     pub changes: Vec<String>,
@@ -1200,7 +1193,6 @@ where
     Ok(PolicyFileUpdate {
         path: policy_path,
         digest,
-        document,
         parent_digest: expected,
         changes,
     })
@@ -1235,22 +1227,13 @@ pub async fn publish_candidate_file(
     candidate_path: &Path,
     expected_digest: &str,
 ) -> Result<PolicyFileUpdate> {
-    publish_candidate_file_inner(config_path, candidate_path, expected_digest, false).await
-}
-
-pub async fn publish_candidate_file_unlocked(
-    config_path: &Path,
-    candidate_path: &Path,
-    expected_digest: &str,
-) -> Result<PolicyFileUpdate> {
-    publish_candidate_file_inner(config_path, candidate_path, expected_digest, true).await
+    publish_candidate_file_inner(config_path, candidate_path, expected_digest).await
 }
 
 async fn publish_candidate_file_inner(
     config_path: &Path,
     candidate_path: &Path,
     expected_digest: &str,
-    lock_held: bool,
 ) -> Result<PolicyFileUpdate> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
@@ -1268,15 +1251,10 @@ async fn publish_candidate_file_inner(
     );
     let changes = diff_explanations(&active.document, &candidate.document);
     let history_dir = default_history_dir(path);
-    let record = if lock_held {
-        publish_candidate_unlocked(path, expected_digest, &candidate.document, &history_dir)?
-    } else {
-        publish_candidate(path, expected_digest, &candidate.document, &history_dir)?
-    };
+    let record = publish_candidate(path, expected_digest, &candidate.document, &history_dir)?;
     Ok(PolicyFileUpdate {
         path: path.to_path_buf(),
         digest: record.child_digest,
-        document: candidate.document,
         parent_digest: Some(record.parent_digest),
         changes,
     })
@@ -1287,22 +1265,13 @@ pub async fn rollback_files(
     target_digest: &str,
     expected_digest: &str,
 ) -> Result<PolicyFileUpdate> {
-    rollback_files_inner(config_path, target_digest, expected_digest, false).await
-}
-
-pub async fn rollback_files_unlocked(
-    config_path: &Path,
-    target_digest: &str,
-    expected_digest: &str,
-) -> Result<PolicyFileUpdate> {
-    rollback_files_inner(config_path, target_digest, expected_digest, true).await
+    rollback_files_inner(config_path, target_digest, expected_digest).await
 }
 
 async fn rollback_files_inner(
     config_path: &Path,
     target_digest: &str,
     expected_digest: &str,
-    lock_held: bool,
 ) -> Result<PolicyFileUpdate> {
     let raw = tokio::fs::read_to_string(config_path)
         .await
@@ -1316,15 +1285,10 @@ async fn rollback_files_inner(
     let document = load_history_snapshot(&history_dir, target_digest)?;
     validate_for_config(&config, &document)?;
     let changes = diff_explanations(&active.document, &document);
-    let record = if lock_held {
-        rollback_to_digest_unlocked(path, expected_digest, target_digest, &history_dir)?
-    } else {
-        rollback_to_digest(path, expected_digest, target_digest, &history_dir)?
-    };
+    let record = rollback_to_digest(path, expected_digest, target_digest, &history_dir)?;
     Ok(PolicyFileUpdate {
         path: path.to_path_buf(),
         digest: record.child_digest,
-        document,
         parent_digest: Some(record.parent_digest),
         changes,
     })
@@ -1332,8 +1296,6 @@ async fn rollback_files_inner(
 
 #[derive(Default)]
 struct PolicySnapshot {
-    path: Option<PathBuf>,
-    digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
     administration: Option<bitrouter_ai::control::administration::PolicyReport>,
     #[cfg(feature = "multi-instance")]
@@ -1345,7 +1307,7 @@ pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
 impl PolicyRoutingSnapshot {
     #[cfg(feature = "multi-instance")]
     pub(crate) fn digest(&self) -> Option<&str> {
-        self.0.digest.as_deref()
+        self.0.compiled.as_ref().map(CompiledPolicy::digest)
     }
     #[cfg(feature = "multi-instance")]
     pub(crate) fn document(&self) -> Option<&Document> {
@@ -1524,10 +1486,6 @@ impl PolicyRuntime {
             }
         }
         Ok(PreparedPolicySnapshot(Arc::new(PolicySnapshot {
-            path: loaded.as_ref().and_then(|loaded| loaded.path.clone()),
-            digest: compiled
-                .as_ref()
-                .map(|compiled| compiled.digest().to_owned()),
             routers,
             #[cfg(feature = "multi-instance")]
             compiled,
@@ -1572,15 +1530,6 @@ impl PolicyRuntime {
                     bitrouter_ai::control::administration::PolicyView::Active,
                 )
             })
-    }
-
-    pub fn status(&self) -> PolicyRuntimeStatus {
-        let snapshot = self.routing_snapshot();
-        PolicyRuntimeStatus {
-            path: snapshot.0.path.clone(),
-            digest: snapshot.0.digest.clone(),
-            policies: snapshot.0.routers.keys().cloned().collect(),
-        }
     }
 }
 
@@ -1705,13 +1654,6 @@ fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineConte
     if bitrouter_ai::policy::RouteClass::parse_key(route_projection).is_some() {
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PolicyRuntimeStatus {
-    pub path: Option<PathBuf>,
-    pub digest: Option<String>,
-    pub policies: Vec<String>,
 }
 
 #[cfg(test)]
