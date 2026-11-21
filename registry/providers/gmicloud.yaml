@@ -778,21 +778,21 @@
       }
     },
     {
-      "provider_model_id": "gmicloud/Ripple-65B-Preview",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
       "interfaces": [],
+      "name": "ricursiveAI/Ripple-65B-Preview",
+      "provider_model_id": "gmicloud/Ripple-65B-Preview",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "name": "ricursiveAI/Ripple-65B-Preview",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.gmi-serving.com/v1/models",
-        "checked_at": "2026-11-14T05:57:13.164289978Z",
-        "scope": "account"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -958,21 +958,39 @@
       }
     },
     {
-      "provider_model_id": "google/gemini-4-carbon",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
       "interfaces": [],
+      "name": "Gemini-4-Carbon",
+      "provider_model_id": "google/gemini-4-carbon",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "name": "Gemini-4-Carbon",
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://api.gmi-serving.com/v1/models",
-        "checked_at": "2026-11-14T05:57:13.164289978Z",
-        "scope": "account"
+        "checked_at": "2026-11-17T04:24:28.151142970Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
+      "interfaces": [],
+      "name": "Gemini-4-Hydrogen",
+      "provider_model_id": "google/gemini-4-hydrogen",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1544,21 +1562,39 @@
       }
     },
     {
-      "provider_model_id": "tencent/hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
       "interfaces": [],
+      "name": "tencent/hy4",
+      "provider_model_id": "tencent/hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "name": "tencent/hy4",
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://api.gmi-serving.com/v1/models",
-        "checked_at": "2026-11-14T05:57:13.164289978Z",
-        "scope": "account"
+        "checked_at": "2026-11-21T03:04:36.040354270Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
+      "interfaces": [],
+      "name": "tencent/hy4-flash",
+      "provider_model_id": "tencent/hy4-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1616,21 +1652,21 @@
       }
     },
     {
-      "provider_model_id": "xai/grok4.7",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.164289978Z",
+        "scope": "account",
+        "source_url": "https://api.gmi-serving.com/v1/models"
+      },
       "interfaces": [],
+      "name": "Grok 4.7",
+      "provider_model_id": "xai/grok4.7",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "name": "Grok 4.7",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.gmi-serving.com/v1/models",
-        "checked_at": "2026-11-14T05:57:13.164289978Z",
-        "scope": "account"
+        },
+        "owner": "catalog"
       }
     },
     {

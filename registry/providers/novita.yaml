@@ -1464,6 +1464,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-18T03:32:19.354581511Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "The Qwen3 series VL models effectively integrates thinking and non-thinking modes, achieving world-leading performance in visual agent capabilities on public benchmark datasets such as OS World. This version features comprehensive upgrades in areas like visual coding, spatial perception, and multimodal reasoning, significantly enhancing visual perception and recognition abilities, and supporting the understanding of ultra-long videos.",
+      "interfaces": [],
+      "name": "Qwen3 VL Plus",
+      "provider_model_id": "qwen/qwen3-vl-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:17.285377385Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
@@ -1734,6 +1754,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-17T04:24:31.347216910Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "Qwen4‑max is the new‑generation MoE flagship model of the Qwen4 family, with 2.4T total parameters and 71B activated parameters. Boasting million‑token context window and native vision capability, it delivers major improvements in coding and office productivity. It can autonomously drive long‑cycle projects and deliver complete outputs in tens of days, supporting hundreds of professional domains such as law, finance, design and scientific research for end‑to‑end production‑grade results. Native visual understanding runs through planning, execution and verification, enabling deep semantic analysis of ultra‑long documents and long‑form videos. Powered by Live‑Delivery mechanism, it performs self‑planning and closed‑loop iteration for long‑horizon tasks, steadily iterating deliverables for real‑world complex workflows。",
+      "interfaces": [],
+      "name": "Qwen4 Max",
+      "provider_model_id": "qwen/qwen4-max",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:17.285377385Z",
         "scope": "public",
         "source_url": "https://api.novita.ai/openai/models"
@@ -1813,23 +1853,43 @@
       }
     },
     {
-      "provider_model_id": "tencent/hy4",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "Tencent: The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity tasks. It also introduces visual understanding for the first time.",
       "interfaces": [],
+      "name": "Hy4",
+      "provider_model_id": "tencent/hy4",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-17T04:24:31.347216910Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
       },
       "description": "Tencent: The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity tasks. It also introduces visual understanding for the first time.",
-      "name": "Hy4",
+      "interfaces": [],
+      "name": "Hy4 Flash",
+      "provider_model_id": "tencent/hy4-flash",
       "status": "active",
-      "availability": {
-        "source_url": "https://api.novita.ai/openai/models",
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
-        "scope": "public"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -2163,23 +2223,23 @@
       }
     },
     {
-      "provider_model_id": "zai-org/glm-5.3-flashX",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:17.285377385Z",
+        "scope": "public",
+        "source_url": "https://api.novita.ai/openai/models"
+      },
+      "description": "GLM-5.3-FlashX is a speed-optimized version built on the same foundation as GLM-5.3-Flash. Targeted at low-latency use cases including programming, Agents and real-time customer service, it features a 1 million token context window.",
       "interfaces": [],
+      "name": "GLM 5.3 FlashX",
+      "provider_model_id": "zai-org/glm-5.3-flashX",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "GLM-5.3-FlashX is a speed-optimized version built on the same foundation as GLM-5.3-Flash. Targeted at low-latency use cases including programming, Agents and real-time customer service, it features a 1 million token context window.",
-      "name": "GLM 5.3 FlashX",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.novita.ai/openai/models",
-        "checked_at": "2026-11-14T05:57:17.285377385Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {

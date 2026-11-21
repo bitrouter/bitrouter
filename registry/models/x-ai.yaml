@@ -1,5 +1,10 @@
 [
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "grok",
     "id": "x-ai/grok-4.5",
     "input_modalities": [
@@ -12,14 +17,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-07-08",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-07-08"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "xAI flagship for coding, reasoning, knowledge work, and agentic tool use.",
     "family": "grok",
     "id": "x-ai/grok-4.6",
@@ -34,14 +39,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-08-12",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-08-12"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "grok",
     "id": "x-ai/grok-4.3",
     "input_modalities": [
@@ -55,32 +60,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-05-01",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-05-01"
   },
   {
-    "family": "grok",
-    "id": "x-ai/grok-build-0.1",
-    "input_modalities": [
-      "text"
-    ],
-    "max_input_tokens": 256000,
-    "name": "xAI: Grok Build 0.1",
-    "open_weights": false,
-    "output_modalities": [
-      "text"
-    ],
     "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "x-ai/grok-4.7",
     "input_modalities": [
       "file",
@@ -93,11 +80,6 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-21",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-21"
   }
 ]

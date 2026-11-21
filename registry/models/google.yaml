@@ -67,14 +67,14 @@
     "release_date": "2026-10-13"
   },
   {
-    "id": "google/gemini-4-carbon",
+    "context_window": 1048576,
     "curation": {
+      "checked_at": "2026-11-14T05:57:35.294067680Z",
       "reason": "Eligible release in approved family retention window",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-11-14T05:57:35.294067680Z"
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
     },
-    "name": "Google: Gemini 4 Carbon",
     "description": "Gemini 4 Carbon is a frontier Gemini 4 model from Google for coding, agentic and complex reasoning work. It takes text, image, audio, video and file input, supports long decode...",
+    "id": "google/gemini-4-carbon",
     "input_modalities": [
       "audio",
       "file",
@@ -82,20 +82,20 @@
       "text",
       "video"
     ],
+    "name": "Google: Gemini 4 Carbon",
     "output_modalities": [
       "text"
-    ],
-    "context_window": 1048576
+    ]
   },
   {
-    "id": "google/gemini-4-hydrogen",
+    "context_window": 1048576,
     "curation": {
+      "checked_at": "2026-11-14T05:57:35.294067680Z",
       "reason": "Eligible release in approved family retention window",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-11-14T05:57:35.294067680Z"
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
     },
-    "name": "Google: Gemini 4 Hydrogen",
     "description": "Gemini 4 Hydrogen is the high-efficiency workhorse model of the Gemini 4 family from Google, built for high-throughput agentic workflows, coding and multi-model routing at lower cost and latency than...",
+    "id": "google/gemini-4-hydrogen",
     "input_modalities": [
       "audio",
       "file",
@@ -103,9 +103,30 @@
       "text",
       "video"
     ],
+    "name": "Google: Gemini 4 Hydrogen",
     "output_modalities": [
       "text"
+    ]
+  },
+  {
+    "context_window": 1048576,
+    "curation": {
+      "checked_at": "2026-11-19T03:05:02.213569870Z",
+      "reason": "Eligible release in approved family retention window",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
+    "description": "Gemini 4 Neon is a fast, mid-priced model in the Gemini 4 family from Google, built for coding and agentic work. It is suited for repository and terminal coding, web...",
+    "id": "google/gemini-4-neon",
+    "input_modalities": [
+      "audio",
+      "file",
+      "image",
+      "text",
+      "video"
     ],
-    "context_window": 1048576
+    "name": "Google: Gemini 4 Neon",
+    "output_modalities": [
+      "text"
+    ]
   }
 ]

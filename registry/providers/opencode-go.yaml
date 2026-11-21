@@ -330,6 +330,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-17T04:24:32.686152312Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/go/v1/models"
+      },
+      "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
+      "interfaces": [],
+      "name": "Hy4 flash Free",
+      "provider_model_id": "hy4-flash-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:18.740533923Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/go/v1/models"

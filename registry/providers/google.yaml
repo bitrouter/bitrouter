@@ -1001,63 +1001,83 @@
       }
     },
     {
-      "provider_model_id": "gemini-4-carbon",
-      "interfaces": [],
-      "sync": {
-        "owner": "catalog",
-        "field_owners": {
-          "/description": "catalog",
-          "/name": "catalog",
-          "/status": "catalog"
-        }
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
       "description": "Gemini 4 Carbon",
-      "name": "Gemini 4 Carbon",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
-      }
-    },
-    {
-      "provider_model_id": "gemini-4-hydrogen",
       "interfaces": [],
+      "name": "Gemini 4 Carbon",
+      "provider_model_id": "gemini-4-carbon",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
       "description": "Gemini 4 Hydrogen",
-      "name": "Gemini 4 Hydrogen",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
-      }
-    },
-    {
-      "provider_model_id": "gemini-decision-1",
       "interfaces": [],
+      "name": "Gemini 4 Hydrogen",
+      "provider_model_id": "gemini-4-hydrogen",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:42.035653715Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 4 Neon",
+      "interfaces": [],
+      "name": "Gemini 4 Neon",
+      "provider_model_id": "gemini-4-neon",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
       },
       "description": "Gemini Decision 1",
+      "interfaces": [],
       "name": "Gemini Decision 1",
+      "provider_model_id": "gemini-decision-1",
       "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1201,23 +1221,23 @@
       }
     },
     {
-      "provider_model_id": "gemini-omni-1.2-flash",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:13.333157667Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Omni 1.2 Flash",
       "interfaces": [],
+      "name": "Gemini Omni 1.2 Flash",
+      "provider_model_id": "gemini-omni-1.2-flash",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Gemini Omni 1.2 Flash",
-      "name": "Gemini Omni 1.2 Flash",
-      "status": "active",
-      "availability": {
-        "source_url": "https://generativelanguage.googleapis.com/v1beta/models",
-        "checked_at": "2026-11-14T05:57:13.333157667Z",
-        "scope": "account"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1330,6 +1350,26 @@
       "interfaces": [],
       "name": "Gemma 4 31B IT",
       "provider_model_id": "gemma-4-31b-it",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:08.459040956Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Real-time audio-video generation model",
+      "interfaces": [],
+      "name": "Genie 4",
+      "provider_model_id": "genie-4",
       "status": "active",
       "sync": {
         "field_owners": {

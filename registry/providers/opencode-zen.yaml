@@ -79,6 +79,26 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Multilingual embedding model combining dense, sparse, and multi-vector retrieval",
+      "interfaces": [],
+      "name": "BGE M3",
+      "provider_model_id": "bge-m3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
@@ -160,23 +180,23 @@
       }
     },
     {
-      "provider_model_id": "claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "claude-fable-5-2",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -520,6 +540,66 @@
     },
     {
       "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Embedding model for code search, retrieval, and code-aware RAG pipelines",
+      "interfaces": [],
+      "name": "Codestral Embed",
+      "provider_model_id": "codestral-embed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Faster, lighter Embed 5 model sharing Embed 5 Pro's embedding space",
+      "interfaces": [],
+      "name": "Embed 5 Fast",
+      "provider_model_id": "cohere-embed-v5-fast",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Cohere's most capable multimodal embedding model for text, images, and mixed documents",
+      "interfaces": [],
+      "name": "Embed 5 Pro",
+      "provider_model_id": "cohere-embed-v5-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
         "checked_at": "2026-11-14T05:57:18.809347795Z",
         "scope": "public",
         "source_url": "https://opencode.ai/zen/v1/models"
@@ -759,43 +839,143 @@
       }
     },
     {
-      "provider_model_id": "gemini-4-carbon",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
       "interfaces": [],
+      "name": "Gemini 4 Carbon",
+      "provider_model_id": "gemini-4-carbon",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Google's most capable reasoning model for complex software engineering, deep math and science, high factual accuracy, and long-horizon autonomous agents",
-      "name": "Gemini 4 Carbon",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "gemini-4-hydrogen",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
       "interfaces": [],
+      "name": "Gemini 4 Hydrogen",
+      "provider_model_id": "gemini-4-hydrogen",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Google's Gemini 4 model for everyday coding and agentic workflows, with four thinking levels and a 1M-token context window",
-      "name": "Gemini 4 Hydrogen",
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        "checked_at": "2026-11-19T03:04:47.828286370Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Google's Gemini 4 model for fast, frontier-level coding, knowledge work and science workflows, with four thinking levels and a 1M-token context window",
+      "interfaces": [],
+      "name": "Gemini 4 Neon",
+      "provider_model_id": "gemini-4-neon",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Google's decision model that returns calibrated probabilities for typed yes/no, choice and score questions about text, images, audio, video and PDFs",
+      "interfaces": [],
+      "name": "Gemini Decision 1",
+      "provider_model_id": "gemini-decision-1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "interfaces": [],
+      "name": "Gemini Embedding 001",
+      "provider_model_id": "gemini-embedding-001",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Multimodal embedding model mapping text, images, video, audio, and PDFs into a unified embedding space",
+      "interfaces": [],
+      "name": "Gemini Embedding 2",
+      "provider_model_id": "gemini-embedding-2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Image model for prompt-driven generation, multi-turn editing, and visual design workflows",
+      "interfaces": [],
+      "name": "Nano Banana 2.1",
+      "provider_model_id": "gemini-nano-banana-2.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1444,6 +1624,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "GPT-6 Luna on OpenAI's Decisions API, returning typed yes/no, choice and score answers about text and images",
+      "interfaces": [],
+      "name": "GPT-6 Luna Decision",
+      "provider_model_id": "gpt-6-luna-decision",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "openai/gpt-6-sol",
       "description": "OpenAI model for complex coding and agentic workflows",
       "interfaces": [
@@ -1503,6 +1703,86 @@
           "/description": "catalog",
           "/name": "catalog"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:21.296431905Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "gpt-6.2-astra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-18T03:32:21.296431905Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "gpt-6.2-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+      "interfaces": [],
+      "name": "GPT Image 2.5 Sunburst",
+      "provider_model_id": "gpt-image-2.5-sunburst",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Full-duplex voice model for natural conversations that delegates reasoning and tools to a backend agent",
+      "interfaces": [],
+      "name": "GPT-Live 1",
+      "provider_model_id": "gpt-live-1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1596,7 +1876,6 @@
       }
     },
     {
-      "canonical_id": "x-ai/grok-build-0.1",
       "description": "Fast Grok coding model tuned for agentic engineering and iterative edits",
       "interfaces": [
         {
@@ -1626,43 +1905,123 @@
       }
     },
     {
-      "provider_model_id": "iceman-free",
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Image model for prompt-driven generation, editing, and visual design workflows",
       "interfaces": [],
+      "name": "Grok Imagine Image 2.0",
+      "provider_model_id": "grok-imagine-image-2.0",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Stealth model, free for a limited time",
-      "name": "Iceman Free",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "inkling-2-small-free",
+      "availability": {
+        "checked_at": "2026-11-17T04:24:32.884281298Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
       "interfaces": [],
+      "name": "Hy4 flash Free",
+      "provider_model_id": "hy4-flash-free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Stealth model, free for a limited time",
+      "interfaces": [],
+      "name": "Iceman Free",
+      "provider_model_id": "iceman-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
       },
       "description": "Inkling 2 Small, free for a limited time",
+      "interfaces": [],
       "name": "Inkling 2 Small Free",
+      "provider_model_id": "inkling-2-small-free",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "System One model for fast, typed probabilistic decisions over text or structured state",
+      "interfaces": [],
+      "name": "Jev 1.13",
+      "provider_model_id": "jev-1.13",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-20T02:56:13.070242426Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "System One model for fast, typed probabilistic decisions over text or structured state",
+      "interfaces": [],
+      "name": "Jev 1.13 Free",
+      "provider_model_id": "jev-1.13-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1766,23 +2125,23 @@
       }
     },
     {
-      "provider_model_id": "longcat-2.5-free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
       "interfaces": [],
+      "name": "LongCat 2.5 Free",
+      "provider_model_id": "longcat-2.5-free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Meituan's multimodal reasoning model for long-horizon coding and agent tasks, with visual understanding and a 1M-token context window",
-      "name": "LongCat 2.5 Free",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1886,23 +2245,43 @@
       }
     },
     {
-      "provider_model_id": "minimax-m3.1-flash-free",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
       "interfaces": [],
+      "name": "MiniMax M3.1 Flash Free",
+      "provider_model_id": "minimax-m3.1-flash-free",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Frontier multimodal coding model with 1M context window and tunable thinking depth",
-      "name": "MiniMax M3.1 Flash Free",
-      "status": "active",
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+      "interfaces": [],
+      "name": "Mistral Embed",
+      "provider_model_id": "mistral-embed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -1926,23 +2305,23 @@
       }
     },
     {
-      "provider_model_id": "muse-ember-1.0",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:18.809347795Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Reasoning model from Meta with text, image, video and PDF input and tool use",
       "interfaces": [],
+      "name": "Muse Ember 1.0",
+      "provider_model_id": "muse-ember-1.0",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Reasoning model from Meta with text, image, video and PDF input and tool use",
-      "name": "Muse Ember 1.0",
-      "status": "active",
-      "availability": {
-        "source_url": "https://opencode.ai/zen/v1/models",
-        "checked_at": "2026-11-14T05:57:18.809347795Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {
@@ -2035,6 +2414,26 @@
       "interfaces": [],
       "name": "Nemotron 3.5 Super VL Free",
       "provider_model_id": "nemotron-3.5-super-vl-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Multilingual text embedding model for retrieval, code search, classification, and clustering",
+      "interfaces": [],
+      "name": "Qwen3 Embedding 8B",
+      "provider_model_id": "qwen3-embedding-8b",
       "status": "active",
       "sync": {
         "field_owners": {
@@ -2155,6 +2554,106 @@
           "/description": "catalog",
           "/name": "catalog"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Most capable OpenAI embedding model for English and non-English text",
+      "interfaces": [],
+      "name": "text-embedding-3-large",
+      "provider_model_id": "text-embedding-3-large",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Small, efficient OpenAI text embedding model",
+      "interfaces": [],
+      "name": "text-embedding-3-small",
+      "provider_model_id": "text-embedding-3-small",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:47.828286370Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Stealth reasoning model, free for a limited time",
+      "interfaces": [],
+      "name": "Tidepool Alpha Free",
+      "provider_model_id": "tidepool-alpha-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "General-purpose and multilingual embedding model balancing retrieval quality and cost",
+      "interfaces": [],
+      "name": "voyage-4",
+      "provider_model_id": "voyage-4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-21T03:04:41.582335836Z",
+        "scope": "public",
+        "source_url": "https://opencode.ai/zen/v1/models"
+      },
+      "description": "Code embedding model for code retrieval and coding agents",
+      "interfaces": [],
+      "name": "voyage-code-4",
+      "provider_model_id": "voyage-code-4",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
       }
     }
   ],
