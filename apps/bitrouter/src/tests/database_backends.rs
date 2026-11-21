@@ -304,10 +304,9 @@ impl Fixture {
             TrajectoryEventKind::RouteIntentRecorded => BTreeMap::from([
                 (
                     "route.projection".into(),
-                    "agent_trace/v2|opening|normal".into(),
+                    "code:generation|implement|normal".into(),
                 ),
                 ("route.selected_tier".into(), "economy".into()),
-                ("route.workflow_state".into(), "opening".into()),
             ]),
             _ => BTreeMap::new(),
         };

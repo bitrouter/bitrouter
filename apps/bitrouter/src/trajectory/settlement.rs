@@ -855,8 +855,8 @@ mod tests {
 
     #[cfg(feature = "eval-publication")]
     #[tokio::test]
-    async fn eval_recorder_uses_exactly_one_owner_and_preserves_pending_on_storage_failure()
-    -> anyhow::Result<()> {
+    async fn eval_recorder_preserves_both_scopes_and_retries_storage_failure() -> anyhow::Result<()>
+    {
         let (db, store) = store().await?;
         let eval_store = EvalStore::new(db.clone());
         let identity_key = CorrelationKey::from_bytes(rand::random())?;
@@ -934,13 +934,26 @@ mod tests {
 
         assert!(pending.peek(&invocation, "owner-a").is_none());
         let subjects = eval_store.list_subjects_for_owner("owner-a").await?;
-        assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, bitrouter_ai::eval::EvalScope::Episode);
-        assert!(
-            eval_store
-                .subject("request:external-request")
-                .await?
-                .is_none()
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(
+            subjects
+                .iter()
+                .filter(|subject| subject.scope == bitrouter_ai::eval::EvalScope::Episode)
+                .count(),
+            1
+        );
+        let request = eval_store
+            .subject("request:external-request")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing request Eval subject"))?;
+        assert_eq!(request.scope, bitrouter_ai::eval::EvalScope::Request);
+        assert_eq!(request.decisions.len(), 1);
+        assert_eq!(request.decisions[0].policy_digest, POLICY_DIGEST);
+        recorder.record(&mut metered).await?;
+        publisher.wait_for_idle().await;
+        assert_eq!(
+            eval_store.list_subjects_for_owner("owner-a").await?,
+            subjects
         );
         Ok(())
     }
