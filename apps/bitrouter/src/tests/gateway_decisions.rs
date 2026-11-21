@@ -550,10 +550,6 @@ impl RoutingTable for BoundTable {
     fn model_info(&self, model: &str) -> Option<ModelInfo> {
         self.routes.model_info(model)
     }
-
-    async fn reload(&self) -> Result<()> {
-        self.routes.reload().await
-    }
 }
 
 struct LivePrices {
@@ -575,9 +571,6 @@ impl RoutingTable for LivePrices {
     }
     fn model_info(&self, model: &str) -> Option<ModelInfo> {
         self.routes.model_info(model)
-    }
-    async fn reload(&self) -> Result<()> {
-        self.routes.reload().await
     }
     fn usage_pricing(
         &self,

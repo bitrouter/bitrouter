@@ -1535,10 +1535,6 @@ impl PolicyRuntime {
 
 #[async_trait::async_trait]
 impl ModelSelector for PolicyRuntime {
-    fn preserves_context(&self) -> bool {
-        true
-    }
-
     async fn prepare_selection(
         &self,
         policy: &str,

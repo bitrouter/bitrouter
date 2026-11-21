@@ -11,22 +11,14 @@ use bitrouter_ai::types::{ModelOperation, OperationScope};
 pub enum HookStage {
     /// Local identity and authorization before router resolution.
     PreResolution,
-    /// Preparation after the ingress router binding is frozen.
-    RouterPreparation,
     /// Local request policy.
     PreRequest,
     /// Final route preparation.
     Route,
-    /// Bound effective-model selection.
-    ModelSelection,
-    /// Upstream execution callbacks.
-    Execution,
     /// Settlement recording.
     Settlement,
     /// Success-critical finalization.
     Finalization,
-    /// Request and hop observations.
-    Observation,
 }
 
 pub(crate) struct HookRegistration<T: ?Sized> {

@@ -92,12 +92,6 @@ impl ModelResolution {
 /// an explicit literal policy binding.
 #[async_trait]
 pub trait ModelSelector: Send + Sync {
-    /// Require complete admitted context even when native execution pins a model
-    /// and bypasses selection. This is a constraint, not a context transformation.
-    fn preserves_context(&self) -> bool {
-        false
-    }
-
     /// Freeze and validate named-policy inputs after entry admission and before
     /// paid semantic inference. Selection must consume this same snapshot.
     async fn prepare_selection(&self, _policy: &str, _ctx: &mut PipelineContext) -> Result<()> {
@@ -162,24 +156,12 @@ pub trait RoutingTable: Send + Sync {
 
     /// Look up one model's info.
     fn model_info(&self, model: &str) -> Option<ModelInfo>;
-
-    /// Hot-reload the underlying config.
-    async fn reload(&self) -> Result<()>;
-
-    /// Stage-0 preset prompt-body overrides for `model`. Implementations that
-    /// don't know about presets return an empty [`PromptOverrides`]; the
-    /// pipeline applies these (shallow-merge into params, set system prompt)
-    /// before execution. Default impl returns nothing so non-preset-aware
-    /// tables work unchanged.
-    async fn preset_overrides(&self, _model: &str) -> Result<PromptOverrides> {
-        Ok(PromptOverrides::default())
-    }
 }
 
 /// Prompt body overrides carried by a preset, shallow-merged into the request.
 ///
-/// Returned by [`RoutingTable::preset_overrides`] and applied by the pipeline
-/// *before* the request is dispatched: a non-empty `system_prompt` is set on
+/// Carried by [`ModelResolution::overrides`] and applied by the pipeline
+/// before dispatch: a non-empty `system_prompt` is set on
 /// the canonical [`Prompt`](bitrouter_ai::types::Prompt) when it has none,
 /// and `params` entries are inserted into
 /// [`GenerationParams::supplemental_extra`](bitrouter_ai::types::GenerationParams::supplemental_extra)
@@ -321,10 +303,6 @@ mod fixtures {
                 id: model.to_string(),
                 providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
             })
-        }
-
-        async fn reload(&self) -> Result<()> {
-            Ok(())
         }
     }
 }
