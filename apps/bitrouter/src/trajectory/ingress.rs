@@ -21,7 +21,7 @@ const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 
 /// In-process binding between authenticated ingress and its durable request.
 #[derive(Clone, Serialize)]
-pub(super) struct CapturedRequest {
+pub(crate) struct CapturedRequest {
     #[serde(skip)]
     external_id: String,
     #[serde(skip)]
@@ -96,19 +96,20 @@ impl PreRequestHook for CaptureIngress {
             .checked_sub_signed(elapsed)
             .ok_or_else(|| BitrouterError::internal("trajectory request start exceeds time range"))?
             .to_rfc3339();
-        let captured = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.runtime.begin_request(
+        // The owning pipeline task retains this commit until its outcome is
+        // known; cancellation must not strand a committed request without the
+        // binding needed by settlement.
+        let captured = self
+            .runtime
+            .begin_request(
                 ctx.caller().user_id(),
                 ctx.request_id(),
                 protocol.clone(),
                 prompt,
                 &captured_at,
-            ),
-        )
-        .await
-        .map_err(|_| BitrouterError::internal("trajectory capture timed out"))?
-        .map_err(|_| BitrouterError::internal("trajectory capture failed"))?;
+            )
+            .await
+            .map_err(|_| BitrouterError::internal("trajectory capture failed"))?;
         let binding = CapturedRequest {
             external_id: ctx.request_id().into(),
             owner: ctx.caller().user_id().into(),
@@ -153,3 +154,6 @@ impl io::Write for CaptureBudget {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lifecycle_tests;
