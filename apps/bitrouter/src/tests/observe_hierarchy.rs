@@ -28,6 +28,7 @@
 //! - OTel HTTP semantic conventions: <https://opentelemetry.io/docs/specs/semconv/http/>
 //! - W3C Trace Context: <https://www.w3.org/TR/trace-context/>
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config;
