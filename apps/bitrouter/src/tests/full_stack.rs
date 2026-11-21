@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::config;
 use crate::gateway::extensions::request_check::Decision;
 use crate::gateway::http::AppState;
-use crate::gateway::http::build_router;
+use crate::gateway::http::tests::build_router;
 use axum_test::TestServer;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path as wm_path};

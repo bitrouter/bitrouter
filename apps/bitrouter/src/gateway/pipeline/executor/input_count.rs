@@ -11,7 +11,6 @@ use crate::gateway::pipeline::types::RoutingTarget;
 use crate::managed_contract::evidence::NativeInputCount;
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use tokio_util::sync::CancellationToken;
-pub(crate) mod owned;
 
 fn invalid(message: &str) -> BitrouterError {
     BitrouterError::bad_request(message)
@@ -143,9 +142,6 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<NativeInputCount> {
-        if let Some(execution) = super::tenancy::execution(ctx) {
-            return self.count_owned_input(target, prompt, ctx, execution).await;
-        }
         if self.shared_authority || super::shared::has_admission(ctx) {
             return Err(invalid(
                 "managed input counting is unavailable on a shared gateway",

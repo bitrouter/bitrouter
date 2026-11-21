@@ -18,7 +18,7 @@ mod decision;
 
 use crate::config;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use crate::gateway::pipeline::types::PipelineRequest;
 use crate::metering::entities::requests;
 use axum_test::TestServer;
@@ -418,14 +418,21 @@ fn chat_prompt() -> Prompt {
 }
 
 #[tokio::test]
-async fn native_stream_and_http_cannot_share_a_billing_identity() -> anyhow::Result<()> {
+async fn stream_and_http_cannot_share_a_billing_identity() -> anyhow::Result<()> {
     use futures::StreamExt;
     let upstream = mock_streaming_chat_completions_upstream("test-model").await;
     let assembled = crate::assemble::build_app(&config_for(&upstream.uri())).await?;
-    let (id, mut stream) = assembled
+    let request = PipelineRequest::new("test-model", CallerContext::local(), chat_prompt());
+    let id = request.request_id.clone();
+    let pipeline = assembled
         .app
-        .execute_native_stream(chat_prompt(), CallerContext::local())
-        .await?;
+        .language_model()
+        .ok_or_else(|| anyhow::anyhow!("missing pipeline"))?;
+    let mut stream = pipeline
+        .clone()
+        .execute_stream_prepared(request)
+        .await?
+        .parts;
     let state = AppState {
         language_model: assembled.app.language_model().unwrap().clone(),
         mcp: assembled.app.mcp().cloned(),
@@ -444,7 +451,9 @@ async fn native_stream_and_http_cannot_share_a_billing_identity() -> anyhow::Res
         response.assert_status(axum::http::StatusCode::BAD_REQUEST);
     }
     while let Some(part) = stream.next().await {
-        part?;
+        if let Some(delivery) = part?.delivery {
+            delivery.deliver().await?;
+        }
     }
     assembled
         .app
@@ -463,7 +472,7 @@ async fn native_stream_and_http_cannot_share_a_billing_identity() -> anyhow::Res
     let row = requests::Entity::find_by_id(&id)
         .one(&assembled.db)
         .await?
-        .expect("native charge");
+        .expect("stream charge");
     anyhow::ensure!(row.model_id == "test-model");
     Ok(())
 }

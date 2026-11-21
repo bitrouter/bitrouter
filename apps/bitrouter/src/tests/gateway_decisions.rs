@@ -10,7 +10,7 @@ use crate::gateway::assembly::App;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::extensions::request_check::{ContentFragmentKind, Decision, Input};
-use crate::gateway::http::{AppState, build_router};
+use crate::gateway::http::{AppState, tests::build_router};
 use crate::gateway::model::protocol::decisions::DecisionsCodec;
 use crate::gateway::pipeline::builder::PipelineBuilder;
 use crate::gateway::pipeline::context::PipelineContext;

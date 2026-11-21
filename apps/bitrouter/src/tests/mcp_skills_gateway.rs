@@ -400,7 +400,7 @@ fn gateway(target: McpTarget, executor: Arc<dyn Executor>) -> TestResult<axum::R
         })
         .skip_auth(true)
         .build()?;
-    Ok(crate::gateway::http::build_router(
+    Ok(crate::gateway::http::tests::build_router(
         crate::gateway::http::AppState {
             language_model: app
                 .language_model()

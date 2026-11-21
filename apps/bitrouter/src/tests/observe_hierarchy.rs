@@ -261,8 +261,12 @@ plugins:
         metrics_renderer: assembled.app.metrics_renderer().cloned(),
         prompt_transforms: assembled.app.prompt_transforms().to_vec(),
     };
-    let options = RouterOptions::default()
-        .with_router_wrapper(crate::telemetry::http_layer::router_wrapper(exporter));
+    let options = RouterOptions {
+        router_wrapper: Some(Arc::new(crate::telemetry::http_layer::router_wrapper(
+            exporter,
+        ))),
+        ..Default::default()
+    };
     let router = build_router_with_options(state, options);
     let server = TestServer::new(router);
 

@@ -54,15 +54,6 @@ const PROVIDER_ID: &str = "claude-code";
 pub struct ClaudeCodeRouter;
 
 impl PromptTransform for ClaudeCodeRouter {
-    fn validate_context_rebuild(
-        &self,
-        _original: &Prompt,
-        _rebuilt: &Prompt,
-    ) -> crate::gateway::error::Result<()> {
-        // Only model qualification changes here; managed reconstruction freezes it.
-        Ok(())
-    }
-
     fn apply(&self, _prompt: &mut Prompt) {
         // Detection needs the inbound `anthropic-beta` header, so all the work
         // is in `apply_with_headers` (which the HTTP server always calls). With

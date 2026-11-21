@@ -5,7 +5,7 @@ mod decision;
 
 use crate::config;
 use crate::gateway::http::AppState;
-use crate::gateway::http::build_router;
+use crate::gateway::http::tests::build_router;
 use crate::policy_source::deterministic_yaml;
 use anyhow::{Context, Result};
 use axum_test::TestServer;
