@@ -15,6 +15,7 @@ use serde::Serialize;
 /// release bump, turning a guard that should be silent into routine noise. The
 /// crate version reaches the wire through the instrumentation scope instead
 /// (see [`SpanSchema::scope_version`]).
+#[cfg(test)]
 const SCHEMA_VERSION: &str = "3";
 
 /// Attribute-key prefixes this schema owns outright. See [`ExtensionRegion`].
@@ -115,6 +116,7 @@ pub struct SpanDef {
 }
 
 /// Metric instrument kind.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Instrument {
@@ -127,6 +129,7 @@ pub enum Instrument {
 }
 
 /// One metric instrument and the dimensions it is recorded with.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct MetricDef {
     /// Instrument name, verbatim.
@@ -162,6 +165,7 @@ pub struct MetricDef {
 /// [`is_reserved_attribute_key`]). A validated list would have to grow for
 /// every deployment-specific attribute, which is exactly the coupling
 /// `SpanAttributes` exists to avoid.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ExtensionRegion {
     /// The pipeline event that carries extension attributes.
@@ -181,6 +185,7 @@ pub struct ExtensionRegion {
 
 /// A rule that a re-implementation can break without any error surfacing —
 /// the class this whole declaration exists for.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Invariant {
     /// Stable slug, so a review comment can name one.
@@ -192,6 +197,7 @@ pub struct Invariant {
 }
 
 /// The whole declaration.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SpanSchema {
     /// Version of the declaration, bumped when a consumer would have to react.
@@ -201,9 +207,7 @@ pub struct SpanSchema {
     pub scope_name: &'static str,
     /// Instrumentation scope version. A placeholder rather than a literal so
     /// this artifact does not churn on every release; the emitted value is
-    /// the rendering crate's own version — `bitrouter-telemetry`'s for the
-    /// OTLP exporter. The workspace releases in lockstep, so this reads the
-    /// same as `bitrouter-sdk`'s; do not depend on that.
+    /// the rendering crate's own version — `bitrouter`'s for the OTLP exporter.
     pub scope_version: &'static str,
     /// OTel resource attributes stamped once per exporter, not per span.
     pub resource_attributes: &'static [AttrDef],
@@ -221,6 +225,7 @@ pub struct SpanSchema {
 }
 
 /// The declaration itself.
+#[cfg(test)]
 pub const SCHEMA: SpanSchema = SpanSchema {
     schema_version: SCHEMA_VERSION,
     scope_name: "io.bitrouter.observe",
@@ -233,6 +238,7 @@ pub const SCHEMA: SpanSchema = SpanSchema {
     invariants: INVARIANTS,
 };
 
+#[cfg(test)]
 const RESOURCE_ATTRIBUTES: &[AttrDef] = &[
     AttrDef {
         key: "service.name",
@@ -908,6 +914,7 @@ const TOOL_CALL_STARTED_EVENT: EventDef = EventDef {
 };
 
 /// Dimensions carried by every request-scoped metric point.
+#[cfg(test)]
 const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
     AttrDef {
         key: "api_key_id",
@@ -948,6 +955,7 @@ const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
     },
 ];
 
+#[cfg(test)]
 const METRICS: &[MetricDef] = &[
     MetricDef {
         name: "bitrouter.receipt.capacity.bytes",
@@ -1088,6 +1096,7 @@ const METRICS: &[MetricDef] = &[
     },
 ];
 
+#[cfg(test)]
 const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
     AttrDef {
         key: "api_key_id",
@@ -1133,6 +1142,7 @@ const TOKEN_USAGE_DIMENSIONS: &[AttrDef] = &[
     },
 ];
 
+#[cfg(test)]
 const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
     carrier: "observe.span_attributes",
     target_span: "chat {gen_ai.request.model} or decisions {gen_ai.request.model}",
@@ -1147,6 +1157,7 @@ const EXTENSION_REGION: ExtensionRegion = ExtensionRegion {
                  target.",
 };
 
+#[cfg(test)]
 const INVARIANTS: &[Invariant] = &[
     Invariant {
         id: "single-generation",

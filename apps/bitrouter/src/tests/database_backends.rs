@@ -25,7 +25,7 @@ use crate::metering::entities::requests;
 use crate::metering::pricing::{
     ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
 };
-use crate::metering::store::{MeteringStore, TimeWindow, TokenUsage};
+use crate::metering::store::{MeteringStore, TimeWindow};
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, OutboxPayload, OutboxWrite,
@@ -36,7 +36,10 @@ use crate::trajectory::types::{
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{Usage, UsageOrigin};
 use chrono::Utc;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, Statement};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
+    Statement,
+};
 use sea_orm_migration::MigratorTrait;
 use uuid::Uuid;
 
@@ -362,8 +365,12 @@ async fn check_auth(connection: &DatabaseConnection, fixture: &Fixture) -> Resul
             stored.id == key.id && stored.user_id == key.user_id,
             "API key lookup returned another key or owner"
         );
-        ensure!(stored.spend_limit_micro_usd == key.spend_limit_micro_usd);
-        ensure!(stored.rpm_limit == key.rpm_limit && stored.policy_id == key.policy_id);
+        let row = crate::auth::entities::api_keys::Entity::find_by_id(&key.id)
+            .one(connection)
+            .await?
+            .context("API key row missing")?;
+        ensure!(row.spend_limit_micro_usd == key.spend_limit_micro_usd);
+        ensure!(row.rpm_limit == key.rpm_limit && stored.policy_id == key.policy_id);
         ensure!(stored.active && stored.expires_at.is_none());
     }
     ensure!(
@@ -409,25 +416,20 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
     let store = MeteringStore::new(connection.clone());
     for (owner, count, spend, prompt, completion) in [("a", 2, 120, 35, 5), ("b", 1, 150, 50, 5)] {
         let key = fixture.key(owner);
-        ensure!(store.get_request_count(&key.id, fixture.window).await? == count);
-        ensure!(
-            store
-                .get_request_count(&key.id.to_ascii_uppercase(), fixture.window)
-                .await?
-                == 0
-        );
-        ensure!(store.get_spend(&key.id, fixture.window).await? == spend);
         ensure!(store.get_enforceable_spend(&key.id, fixture.window).await? == Some(spend));
         ensure!(
             store
-                .get_token_usage(&key.id, &fixture.id("model"), fixture.window)
+                .get_enforceable_spend(&key.id.to_ascii_uppercase(), fixture.window)
                 .await?
-                == TokenUsage {
-                    prompt_tokens: prompt,
-                    completion_tokens: completion,
-                    total_tokens: prompt + completion
-                }
+                == Some(0)
         );
+        let rows = requests::Entity::find()
+            .filter(requests::Column::ApiKeyId.eq(&key.id))
+            .all(connection)
+            .await?;
+        ensure!(rows.len() as u64 == count);
+        ensure!(rows.iter().map(|row| row.prompt_tokens).sum::<i64>() == prompt);
+        ensure!(rows.iter().map(|row| row.completion_tokens).sum::<i64>() == completion);
         // The two owners deliberately declare the same controller and session.
         let summary = store
             .spend_summary_for_acp_session(
@@ -452,8 +454,9 @@ async fn check_metering(connection: &DatabaseConnection, fixture: &Fixture) -> R
         .await?;
     ensure!(unknown.requests == 0 && unknown.spend_micro_usd == 0);
     let recent = store
-        .recent_requests(fixture.window, 4, Some(&fixture.id("launch")))
-        .await?;
+        .recent_requests_filtered(fixture.window, Some(&fixture.id("model")), None, 4)
+        .await?
+        .rows;
     ensure!(
         recent.len() == 3,
         "metering upsert inserted a duplicate request"

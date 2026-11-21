@@ -725,9 +725,7 @@ mod tests {
     #[tokio::test]
     async fn independent_observation_settles_and_publishes_one_episode_without_route_intent()
     -> anyhow::Result<()> {
-        use crate::metering::{
-            pricing::PricingTable, recorder::MeteringRecorder, store::MeteringStore,
-        };
+        use crate::metering::{recorder::MeteringRecorder, store::MeteringStore};
 
         let (db, store) = store().await?;
         let key = CorrelationKey::from_bytes(rand::random())?;
@@ -782,7 +780,7 @@ mod tests {
         );
         // The actual metering writer, rather than a fabricated settlement event,
         // supplies the authority consumed by the trajectory settlement bridge.
-        MeteringRecorder::new(MeteringStore::new(db), Arc::new(PricingTable::new()))
+        MeteringRecorder::new(MeteringStore::new(db))
             .record(&mut settlement)
             .await?;
         recorder.record(&mut settlement).await?;

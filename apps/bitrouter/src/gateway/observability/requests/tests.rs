@@ -17,7 +17,7 @@ use crate::gateway::pipeline::execution::Pipeline;
 use crate::gateway::pipeline::executor::HttpExecutor;
 use crate::gateway::pipeline::hooks::RouteHook;
 use crate::gateway::pipeline::types::PipelineRequest;
-use crate::metering::{MeteringRecorder, MeteringStore, PricingTable};
+use crate::metering::{MeteringRecorder, MeteringStore};
 use crate::policy_source::PolicyRuntime;
 use crate::session_identity::{NativeSessionIdentity, RequestOrigin};
 use crate::storage::gateway_records::records;
@@ -184,10 +184,7 @@ models:
         .router_preparation_hook(binding.clone())
         .route_hook(binding.clone())
         .observe_hook(tracker.clone())
-        .settlement_recorder(MeteringRecorder::new(
-            MeteringStore::new(db.clone()),
-            Arc::new(PricingTable::new()),
-        ))
+        .settlement_recorder(MeteringRecorder::new(MeteringStore::new(db.clone())))
         .settlement_recorder(tracker.clone());
     match failure {
         Failure::None | Failure::Upstream => {}
