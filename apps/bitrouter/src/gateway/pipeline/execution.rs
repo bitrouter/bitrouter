@@ -632,7 +632,7 @@ pub struct Pipeline {
     /// [`Pipeline::drain_required_pending_settlements`]; shared generations
     /// retain them in their owned lifecycle.
     pub(super) pending_settlements: super::tasks::Settlements,
-    /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
+    /// Owned non-streaming execution and pre-header streaming preparation.
     /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
     /// request runs here, so completed tasks must be reaped automatically
     /// rather than retained until shutdown. The graceful drain methods close
@@ -1217,7 +1217,7 @@ impl Pipeline {
             tasks.spawn_execution(async move {
                 // Cancel transport I/O, not the owning preparation future. Its
                 // error path still owes settlement and external callback ACKs.
-                let result={let preparing=self.prepare_stream(req,#[cfg(feature="server-tools")]run_server_tools);
+                let result={let preparing=self.prepare_stream(req,None,#[cfg(feature="server-tools")]run_server_tools);
                     tokio::pin!(preparing);
                     tokio::select!{biased;()=receipt.cancelled.cancelled()=>preparing.await,()=sender.closed()=>{receipt.cancel();preparing.await},result=&mut preparing=>result}};
                 let result=match result {
@@ -1244,6 +1244,7 @@ impl Pipeline {
                 let result = self
                     .prepare_stream(
                         req,
+                        None,
                         #[cfg(feature = "server-tools")]
                         run_server_tools,
                     )
@@ -1266,14 +1267,42 @@ impl Pipeline {
             })?;
         }
 
-        // Ordinary and shared-generation streams retain their existing inline
-        // preparation/cancellation contract; only tenant registrations detach.
-        self.prepare_stream(
-            req,
-            #[cfg(feature = "server-tools")]
-            run_server_tools,
-        )
-        .await
+        // Keep ownership from authenticated preparation through upstream headers.
+        // Disconnect cancels provider work, but cannot cancel durable capture or
+        // the settlement that closes it. Shutdown drains this preparation task
+        // before draining any stream guard it produces.
+        let pipeline = self.clone();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let (mut prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        let work = async move {
+            let preparing = pipeline.prepare_stream(
+                req,
+                Some(cancellation.clone()),
+                #[cfg(feature = "server-tools")]
+                run_server_tools,
+            );
+            tokio::pin!(preparing);
+            let result = tokio::select! {
+                result = &mut preparing => result,
+                () = prepared_tx.closed() => {
+                    cancellation.cancel();
+                    preparing.await
+                }
+            };
+            // An undeliverable stream drops its guard before this task exits.
+            let _ = prepared_tx.send(result);
+        }
+        .instrument(tracing::Span::current());
+        if let Some(owner) = self.owned_tasks() {
+            owner.spawn_execution(work);
+        } else {
+            self.detached_executions.spawn(work);
+        }
+        prepared_rx.await.map_err(|error| {
+            BitrouterError::internal(format!(
+                "stream preparation task failed to complete: {error}"
+            ))
+        })?
     }
 
     fn own_tenant_stream(
@@ -1313,6 +1342,7 @@ impl Pipeline {
     async fn prepare_stream(
         self: Arc<Self>,
         req: PipelineRequest,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
         #[cfg(feature = "server-tools")] run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
@@ -1321,20 +1351,21 @@ impl Pipeline {
         // Route Stage 3 through the server-side tool loop when configured: the
         // merged stream becomes the "upstream" the settlement guard drains, so
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
-        let upstream_result = match self.as_ref() {
-            #[cfg(feature = "server-tools")]
-            Self {
-                server_tool_loop: Some(server_loop),
-                ..
-            } if run_server_tools => {
-                let tool_ctx = ToolContext::from_pipeline(&ctx);
-                let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
-                    pipeline: self.clone(),
-                    chain: chain.clone(),
-                    context: ctx.fork_for_prompt(ctx.require_generation_prompt()?.clone()),
-                    latest_attempt: latest_attempt.clone(),
-                });
-                match server_loop
+        let upstream = async {
+            match self.as_ref() {
+                #[cfg(feature = "server-tools")]
+                Self {
+                    server_tool_loop: Some(server_loop),
+                    ..
+                } if run_server_tools => {
+                    let tool_ctx = ToolContext::from_pipeline(&ctx);
+                    let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
+                        pipeline: self.clone(),
+                        chain: chain.clone(),
+                        context: ctx.fork_for_prompt(ctx.require_generation_prompt()?.clone()),
+                        latest_attempt: latest_attempt.clone(),
+                    });
+                    match server_loop
                     .clone()
                     .run_stream(ctx.require_generation_prompt()?, &tool_ctx, upstream_impl)
                     .await
@@ -1352,21 +1383,31 @@ impl Pipeline {
                         }),
                     Err(error) => Err(error),
                 }
-            }
-            _ => match self.execute_stream_with_fallback(&chain, &ctx).await {
-                Ok(execution) => {
-                    store_stream_attempt(
-                        &latest_attempt,
-                        StreamAttempt {
-                            target: execution.target.clone(),
-                            #[cfg(feature = "server-tools")]
-                            provider_started_at: execution.provider_started_at,
-                        },
-                    );
-                    Ok(execution)
                 }
-                Err(error) => Err(error),
-            },
+                _ => match self.execute_stream_with_fallback(&chain, &ctx).await {
+                    Ok(execution) => {
+                        store_stream_attempt(
+                            &latest_attempt,
+                            StreamAttempt {
+                                target: execution.target.clone(),
+                                #[cfg(feature = "server-tools")]
+                                provider_started_at: execution.provider_started_at,
+                            },
+                        );
+                        Ok(execution)
+                    }
+                    Err(error) => Err(error),
+                },
+            }
+        };
+        let upstream_result = if let Some(cancellation) = cancellation {
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => Err(BitrouterError::Cancelled),
+                result = upstream => result,
+            }
+        } else {
+            upstream.await
         };
         let upstream = match upstream_result {
             Ok(upstream) => upstream,
@@ -1374,8 +1415,12 @@ impl Pipeline {
                 self.run_settlement(&mut ctx, false, Some(error.clone()))
                     .await;
                 self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
-                    .await;
+                let outcome = if matches!(error, BitrouterError::Cancelled) {
+                    RequestOutcome::ClientDisconnected
+                } else {
+                    RequestOutcome::Failed(error.clone())
+                };
+                self.observe_end(&ctx, outcome).await;
                 return Err(error);
             }
         };
@@ -1550,7 +1595,11 @@ impl Pipeline {
             }
             Err(failure) => {
                 log_request_resolve_failed(&ctx, &failure.error);
-                if failure.requires_settlement {
+                if failure.requires_settlement
+                    || ctx
+                        .extension::<crate::trajectory::ingress::CapturedRequest>()
+                        .is_some()
+                {
                     self.run_settlement(&mut ctx, false, Some(failure.error.clone()))
                         .await;
                     self.observe_after(Phase::Settlement, &ctx).await;
