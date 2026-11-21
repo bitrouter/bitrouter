@@ -249,3 +249,27 @@ async fn disconnect_before_upstream_headers_is_settled_and_drained() -> Result<(
     fixture.assert_failed(1, "request_cancelled").await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn unadmitted_caller_ids_cannot_leave_started_trajectories() -> Result<()> {
+    let upstream = Server::start(Router::new()).await?;
+    let mut fixture = Fixture::new(upstream.address, false).await?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    for _ in 0..2 {
+        let response = client
+            .post(format!("http://{}/v1/chat/completions", fixture.server.address))
+            .bearer_auth(&fixture.secret)
+            .header("x-bitrouter-request-id", "unadmitted-request")
+            .json(&json!({"model":"bitrouter/missing","messages":[{"role":"user","content":"unknown router"}]}))
+            .send()
+            .await?;
+        ensure!(response.status().is_client_error());
+        let _ = response.bytes().await?;
+    }
+    fixture.finish().await?;
+    ensure!(fixture.request_ids().await?.is_empty());
+    Ok(())
+}

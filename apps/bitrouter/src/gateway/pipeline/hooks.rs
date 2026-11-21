@@ -15,6 +15,7 @@ use crate::gateway::pipeline::context::StreamContext;
 #[cfg(test)]
 use crate::gateway::pipeline::stream::StreamAction;
 use crate::gateway::pipeline::stream::StreamInterest;
+#[cfg(test)]
 use crate::gateway::pipeline::stream::StreamOutcome;
 use crate::gateway::pipeline::types::ExecutionResult;
 use crate::gateway::pipeline::types::RoutingTarget;

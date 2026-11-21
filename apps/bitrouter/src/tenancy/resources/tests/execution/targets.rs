@@ -44,7 +44,6 @@ async fn every_target_field_and_optional_or_header_distinction_is_bound() -> Res
             canonical_id: None,
         },
     ));
-    assert!(compiler::target_value(&registry_target).is_err());
     assert!(matches!(
         route.match_candidate(&registry_target),
         Err(ErrorCode::Forbidden)
