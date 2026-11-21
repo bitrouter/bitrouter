@@ -257,12 +257,21 @@ jobs:
           threads: 2
           filter: kind(test)
   test-product-process:
-    name: test (BRO through BitRouter)
+    name: test (BRO and independent SDK clients)
     needs: [build-service-process, build-bro]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache: false
+    - name: Build the independent ordered protocol SDK consumer
+      run: |
+        cargo build --locked \
+          --manifest-path apps/bitrouter/tests/fixtures/native_generate_content_ap/Cargo.toml \
+          --target-dir target/native-ap-sdk-consumer --bin native-ap-sdk-consumer
     - uses: ./.github/actions/test-archive
       with:
         product: service-process
@@ -271,6 +280,12 @@ jobs:
       run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run gateway routing through the BRO harness
       run: bash .github/scripts/ci-test.sh --run-ignored only -E 'binary(=product_process)'
+    - name: Verify ordered native JSON and SSE with the independent AP SDK
+      env:
+        BITROUTER_NATIVE_AP_CLIENT: ${{ github.workspace }}/target/native-ap-sdk-consumer/debug/native-ap-sdk-consumer
+      run: |
+        bash .github/scripts/ci-test.sh --run-ignored only --test-threads 1 \
+          -E 'kind(lib) & test(=tenancy::tests::execution::receipts::ordered::generate_content_native::boundaries::process_consumer::native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_json_sse_h1_h2)'
   test-service-profile:
     name: test (gateway ${{ matrix.profile }})
     needs: changes
