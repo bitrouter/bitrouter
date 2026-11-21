@@ -2111,7 +2111,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<PredictiveRouteProjection>(
-                r#"{"task_family":"code_review","next_step_role":"verify","risk":"normal","compatibility":true}"#
+                r#"{"task_family":"code:review","next_step_role":"verify","risk":"normal","compatibility":true}"#
             )
             .is_err()
         );
@@ -2141,7 +2141,7 @@ mod tests {
         ));
         assert!(matches!(
             serde_json::to_string(&TaskFamily::CodeDebugging),
-            Ok(value) if value == "\"code_debugging\""
+            Ok(value) if value == "\"code:debugging\""
         ));
     }
 
@@ -2582,6 +2582,10 @@ mod tests {
         assert_eq!(contract.calibration_digest, None);
         assert_eq!(contract.config_digest, compiled_scorecard_digest());
         assert_eq!(contract.config_digest, recomputed_digest);
+        assert_eq!(
+            contract.config_digest,
+            "sha256:7039bc16f3ac2e306d7855a193aee8bb4cd4395a92a58a09768d60d628f70f37"
+        );
         assert!(contract.config_digest.starts_with("sha256:"));
         assert_eq!(contract.config_digest.len(), 71);
         Ok(())

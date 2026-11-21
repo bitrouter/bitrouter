@@ -273,7 +273,7 @@ mod tests {
                     "next_step_role": "implement",
                     "next_action_class": "mutate",
                     "route_risk": "normal",
-                    "task_family": "code_debugging"
+                    "task_family": "code:debugging"
                 }
             }
         }))
