@@ -3,6 +3,28 @@ use super::*;
 use bitrouter_ai::tenancy::execution::ReceiptState;
 use sea_orm::Statement;
 
+pub(super) async fn observed_snapshot(
+    service: &crate::tenancy::Service,
+) -> Result<crate::telemetry::receipt_latency::capacity::Snapshot> {
+    use crate::telemetry::receipt_latency::capacity::ReadError;
+    // Observation deliberately uses try_lock. The actor checks archive demand
+    // under the same mutex after replying, so a settled job can still contend.
+    // Retry only an unavailable read, never invalid data or a changed snapshot.
+    tokio::time::timeout(TIMEOUT, async {
+        loop {
+            match service.admission.observed_capacity() {
+                Ok(value) => return Ok(value),
+                Err(ReadError::Invalid) => anyhow::bail!("invalid capacity snapshot"),
+                Err(ReadError::Unavailable) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
+    })
+    .await
+    .context("capacity snapshot remained unavailable")?
+}
+
 pub(super) async fn stored_policy_bytes(h: &Harness) -> Result<u64> {
     // Derive this witness from actual stored UTF-8 bytes, independently of
     // Admission, Candidate and restart inventory. Every receipt and retained
@@ -184,10 +206,7 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
             None,
         ))
         .await?;
-        let observed = restarted
-            .admission
-            .observed_capacity()
-            .map_err(|_| anyhow::anyhow!("restart snapshot"))?;
+        let observed = observed_snapshot(&restarted).await?;
         ensure!(observed.accounted == bytes && observed.live_unknown == u64::from(unknown));
         Box::pin(super::escalation::restored_unknown_keeps_evidence(
             &h, &restarted, &receipt, bytes,
@@ -303,12 +322,7 @@ pub(super) async fn queued_cancel_and_unknown_length_ingress() -> Result<()> {
     queued.abort();
     ensure!(queued.await.is_err_and(|e| e.is_cancelled()));
     wait_current(&collector, "queued", 0).await?;
-    let before = h
-        .fixture
-        .service
-        .admission
-        .observed_capacity()
-        .map_err(|_| anyhow::anyhow!("snapshot"))?;
+    let before = observed_snapshot(&h.fixture.service).await?;
     let polled = Arc::new(tokio::sync::Notify::new());
     let signal = polled.clone();
     let body = Body::from_stream(async_stream::stream! {
