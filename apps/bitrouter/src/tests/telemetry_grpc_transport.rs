@@ -126,7 +126,7 @@ async fn collect_exports() -> TestResult {
     config.traces.batch.flush_ms = 3_600_000;
     config.metrics.enabled = true;
     config.metrics.export_interval_ms = 3_600_000;
-    let exporter = Arc::new(OtelExporter::new(config, None)?);
+    let exporter = Arc::new(OtelExporter::new(config)?);
     let hook = OtelObserveHook::new(exporter.clone());
     let prompt = Prompt {
         model: "grpc-model".into(),
