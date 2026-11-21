@@ -79,6 +79,8 @@ mod cli;
 ///
 /// This owns the runtime, standard streams and process exit status. Embedding
 /// hosts should use [`host::serve_with_extensions`] instead.
+/// The bundled executable prepares Windows standard-handle inheritance before
+/// calling this entry point.
 pub fn run_cli() {
     cli::entry();
 }
