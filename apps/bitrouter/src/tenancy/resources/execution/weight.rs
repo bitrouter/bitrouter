@@ -26,8 +26,9 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
 };
 
-use crate::gateway::model::capabilities::ReasoningEffortConfig;
-use crate::managed_contract::evidence::{ModelTokenLimits, NativeRouteConstraints};
+use crate::config::model::ModelTokenLimits;
+use crate::config::model::ReasoningEffortConfig;
+use crate::managed_contract::evidence::NativeRouteConstraints;
 use bitrouter_ai::{
     policy::{Document, Policy, Target},
     tenancy::{

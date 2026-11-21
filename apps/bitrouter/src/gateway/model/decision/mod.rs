@@ -3,7 +3,6 @@
 //! The caller owns durable intent/result commits and authority checks. Executors
 //! never retry: a lost response may already have been billed by the provider.
 
-pub mod policy;
 pub mod types;
 pub mod typesafe;
 
@@ -33,7 +32,7 @@ pub struct DecisionRuntime {
     /// Single-attempt executor; durable scheduling belongs to the harness.
     pub executor: Arc<dyn DecisionExecutor>,
     /// Host bounds for evidence selection, frozen by each admitted intent.
-    pub policy: policy::DecisionPolicy,
+    pub policy: crate::config::decision::DecisionPolicy,
     /// Optional declared prices used only for token estimates.
-    pub pricing: Option<policy::DecisionPricing>,
+    pub pricing: Option<crate::config::decision::DecisionPricing>,
 }

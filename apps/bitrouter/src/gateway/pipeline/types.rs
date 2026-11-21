@@ -2,8 +2,8 @@
 //!
 //! Model content, prompts, results and events are owned by `bitrouter_ai::types`.
 
+use crate::config::model::ReasoningEffortConfig;
 use crate::gateway::caller::CallerContext;
-use crate::gateway::model::capabilities::ReasoningEffortConfig;
 use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{

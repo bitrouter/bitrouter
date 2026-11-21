@@ -3,8 +3,7 @@
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
 //! `checkers`; per-plugin config lives under `plugins`. Load a file with
-//! [`load`]; build a [`RoutingTable`](crate::gateway::pipeline::routing::RoutingTable) over
-//! it with [`ConfigRoutingTable`](routing_table::ConfigRoutingTable).
+//! [`load`], then pass the configuration to [`crate::assemble::build_app_with_extensions`].
 //!
 //! The `providers` schema is **registry-style**: `api_protocol` and
 //! `rate_limits` are glob-prefix [`pattern::PatternMap`] lists, so a local
@@ -13,10 +12,8 @@
 //! ```no_run
 //! # async fn run() -> bitrouter::gateway::error::Result<()> {
 //! use bitrouter::config::load;
-//! use bitrouter::config::routing_table::ConfigRoutingTable;
 //! let config = load("./bitrouter.yaml").await?;
-//! let routing = ConfigRoutingTable::from_config(config);
-//! # let _ = routing; Ok(()) }
+//! # let _ = config; Ok(()) }
 //! ```
 
 /// Opt-in path for core workflow trace capture.
@@ -41,10 +38,11 @@ pub mod checker;
 pub mod decision;
 pub mod gateway_state;
 pub mod mcp;
+pub mod model;
 pub mod pattern;
 pub mod resolution;
 pub mod router;
-pub mod routing_table;
+pub(crate) mod routing_table;
 pub mod server_tools;
 pub(crate) mod shared_process;
 pub mod skills;
@@ -225,7 +223,7 @@ impl Config {
     }
 
     /// Resolve a raw model selector through explicit named routers.
-    pub fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
+    pub(crate) fn resolve_router(&self, raw_model: &str) -> Result<RouterResolution> {
         self.validate_router_config()?;
         if let Some((provider, _)) = raw_model.split_once(':')
             && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
@@ -648,7 +646,7 @@ pub struct TimeoutConfig {
 impl TimeoutConfig {
     /// Resolve this (partial) config over a base [`HttpTimeouts`]: every set
     /// field overrides the base, every unset field inherits it.
-    pub fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
+    pub(crate) fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
         HttpTimeouts {
             connect: self
                 .connect_secs
@@ -697,6 +695,32 @@ pub struct RateLimit {
     pub tokens_per_minute: Option<u32>,
 }
 
+/// Published processing-profile provenance; application pricing validates the
+/// effective endpoint rather than inferring premiums from this declaration.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingEndpointProfile {
+    /// OpenAI global processing.
+    OpenaiGlobal,
+    /// OpenAI US regional processing.
+    OpenaiUs,
+    /// OpenAI European regional processing.
+    OpenaiEurope,
+}
+
+impl PricingEndpointProfile {
+    /// Stable source/config vocabulary for frozen applicability evidence.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiGlobal => "openai_global",
+            Self::OpenaiUs => "openai_us",
+            Self::OpenaiEurope => "openai_europe",
+        }
+    }
+}
+
 /// Per-model pricing as written in config: micro-USD per token.
 ///
 /// The top-level rates are the **base bracket**. [`context_tiers`] optionally
@@ -710,7 +734,7 @@ pub struct PricingConfig {
     /// Published tariff's processing profile. A mismatch with the effective
     /// endpoint makes application price evidence unavailable.
     #[serde(default)]
-    pub endpoint_profile: Option<crate::gateway::catalog::types::PricingEndpointProfile>,
+    pub endpoint_profile: Option<crate::config::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]
@@ -1142,16 +1166,16 @@ pub struct ProviderModel {
     /// Concrete route token limits. Missing fields remain unknown. In
     /// particular, an input limit does not imply a combined context window.
     #[serde(default)]
-    pub token_limits: crate::managed_contract::evidence::ModelTokenLimits,
+    pub token_limits: crate::config::model::ModelTokenLimits,
     /// Explicit support for a provider input-token counting endpoint. Managed
     /// requests require a successful count when enabled; ordinary calls do not
     /// invoke it. API wire compatibility alone does not enable counting.
     #[serde(default)]
-    pub input_token_counting: Option<crate::managed_contract::evidence::InputTokenCounting>,
+    pub input_token_counting: Option<crate::config::model::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::gateway::model::capabilities::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<crate::config::model::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,

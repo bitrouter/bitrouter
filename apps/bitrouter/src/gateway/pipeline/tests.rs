@@ -948,7 +948,7 @@ async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result
     let table = Arc::new(StaticRoutingTable::new());
     let mut route = target("first");
     route.model_constraints.input_token_counting =
-        Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
+        Some(crate::config::model::InputTokenCounting::Responses);
     table.insert("test-model", vec![route]);
     let mut builder = PipelineBuilder::new();
     builder

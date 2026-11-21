@@ -3016,8 +3016,9 @@ mod beta_forward_tests {
     #[tokio::test]
     async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
     -> crate::gateway::error::Result<()> {
+        use crate::config::model::InputTokenCounting;
         use crate::gateway::pipeline::native::NativeCountedRequests;
-        use crate::managed_contract::evidence::{InputTokenCounting, NativeInputCount};
+        use crate::managed_contract::evidence::NativeInputCount;
         let mut ctx = ctx_with_headers(http::HeaderMap::new());
         let mut target = target(ApiProtocol::Responses);
         target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);

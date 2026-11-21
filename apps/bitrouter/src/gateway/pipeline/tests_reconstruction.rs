@@ -26,7 +26,7 @@ impl RoutingTable for RebuildTable {
         let mut routes = NamedRoutingTable.route_chain(model, prefs, caller).await?;
         for route in &mut routes {
             route.model_constraints.input_token_counting =
-                Some(crate::managed_contract::evidence::InputTokenCounting::Responses);
+                Some(crate::config::model::InputTokenCounting::Responses);
         }
         Ok(routes)
     }

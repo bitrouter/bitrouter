@@ -3853,7 +3853,7 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
 #[cfg(test)]
 mod policy_effort_target_tests {
     use super::filter_reasoning_effort_targets;
-    use crate::gateway::model::capabilities::ReasoningEffortConfig;
+    use crate::config::model::ReasoningEffortConfig;
     use crate::gateway::pipeline::types::RoutingTarget;
     use bitrouter_ai::types::{
         ApiProtocol, GenerationParams, Prompt, ReasoningEffort, ReasoningEffortSource,

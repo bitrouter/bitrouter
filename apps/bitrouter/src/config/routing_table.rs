@@ -84,7 +84,7 @@ pub(crate) fn retained_usage_pricing(
 }
 
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
-pub struct ConfigRoutingTable {
+pub(crate) struct ConfigRoutingTable {
     config: RwLock<Config>,
     /// Advances under the config write lock, including A -> B -> A reloads.
     generation: AtomicU64,
@@ -564,7 +564,7 @@ fn resolve_virtual_model(
 
 /// The shared Stage-0 + Strategy-1/2/3 resolution. Synchronous —
 /// `ConfigRoutingTable` calls it under a read lock.
-pub fn resolve_route_chain(
+pub(crate) fn resolve_route_chain(
     config: &Config,
     model: &str,
     caller_prefs: &RoutingPrefs,
@@ -1054,16 +1054,16 @@ pub(crate) fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 /// Whether a configured endpoint matches these published rates. This is
 /// applicability only: it never applies a regional price multiplier.
 fn matches_pricing_endpoint(
-    profile: crate::gateway::catalog::types::PricingEndpointProfile,
+    profile: crate::config::PricingEndpointProfile,
     api_base: &str,
 ) -> bool {
     let Ok(url) = reqwest::Url::parse(api_base) else {
         return false;
     };
     let host = match profile {
-        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiGlobal => "api.openai.com",
-        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiUs => "us.api.openai.com",
-        crate::gateway::catalog::types::PricingEndpointProfile::OpenaiEurope => "eu.api.openai.com",
+        crate::config::PricingEndpointProfile::OpenaiGlobal => "api.openai.com",
+        crate::config::PricingEndpointProfile::OpenaiUs => "us.api.openai.com",
+        crate::config::PricingEndpointProfile::OpenaiEurope => "eu.api.openai.com",
     };
     url.scheme() == "https"
         && url.host_str() == Some(host)

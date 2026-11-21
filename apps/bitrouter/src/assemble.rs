@@ -2,6 +2,8 @@
 //!
 //! Wires the configured gateway hooks and host-owned runtime services.
 
+mod shutdown;
+
 #[cfg(feature = "multi-instance")]
 mod shared_writers;
 #[cfg(test)]

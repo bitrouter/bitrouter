@@ -316,20 +316,7 @@ async fn serve_with_options(
     };
     let assembled =
         crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
-    let observe_for_shutdown = assembled.observe.clone();
-    let tenancy_for_shutdown = assembled.tenancy.clone();
-    let receipt_observer = assembled
-        .tenancy
-        .as_ref()
-        .map(|service| service.receipt_observer())
-        .unwrap_or_default();
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    let receipt_exporter = receipt_observer
-        .enabled()
-        .then(|| assembled.otel_exporter.clone())
-        .flatten();
-    #[cfg(feature = "eval-publication")]
-    let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
+    let shutdown = assembled.shutdown_state();
     // Every failure after assembly follows the same flush/drain path, including
     // listener conflicts and locator/PID publication failures.
     let mut pid_guard = None;
@@ -676,54 +663,9 @@ async fn serve_with_options(
     }
     .await;
 
-    let tenancy_shutdown = match tenancy_for_shutdown {
-        Some(service) => service.shutdown().await,
-        None => Ok(()),
-    };
-
-    #[cfg(feature = "eval-publication")]
-    if let Some(publisher) = trajectory_outbox_for_shutdown {
-        match publisher.drain_after_active_worker().await {
-            Ok(summary) if summary.failed > 0 => tracing::warn!(
-                attempted = summary.attempted,
-                delivered = summary.delivered,
-                failed = summary.failed,
-                "trajectory outbox drain completed with poison items still pending"
-            ),
-            Ok(_) => {}
-            Err(_) => tracing::warn!(
-                reason = "shutdown_drain_failed",
-                "trajectory outbox shutdown drain failed"
-            ),
-        }
-    }
-
-    // Drive the OTel exporter's flush before anything else drops — its
-    // `rt-tokio` background tasks need a live async runtime to drain,
-    // and `spawn_blocking` (inside the provider's `shutdown`) parks on
-    // a dedicated thread so the runtime is free to keep ticking. The
-    // impl is idempotent: a follow-up Drop is a no-op.
-    let receipt_observation_clean = receipt_observer.seal(tenancy_shutdown.is_ok());
-    observe_for_shutdown.shutdown().await;
+    let cleanup = shutdown.finish().await;
     drop(pid_guard);
-
-    let receipt_measurement = (|| -> Result<()> {
-        anyhow::ensure!(
-            receipt_observation_clean,
-            "receipt latency observation did not seal cleanly"
-        );
-        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-        if receipt_observer.enabled() {
-            anyhow::ensure!(
-                receipt_exporter
-                    .as_ref()
-                    .is_some_and(|exporter| exporter.recorded_shutdown_is_clean()),
-                "receipt latency local export did not shut down cleanly"
-            );
-        }
-        Ok(())
-    })();
-    result.and(tenancy_shutdown).and(receipt_measurement)
+    result.and(cleanup)
 }
 
 struct PidFile {
