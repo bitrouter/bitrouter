@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::native_auth::{is_continuation_scope_header, request_scope_headers};
-use super::provider_admission::output_reservation_covers_model;
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::{HttpTimeouts, ModelClient, parse_retry_after};
 use crate::gateway::model::protocol::decisions::{DecisionsCodec, DecisionsTransport};
@@ -35,7 +34,6 @@ use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 
 mod generate_content;
-pub(crate) mod input_count;
 pub(super) mod receipt;
 mod response_body;
 mod shared;
@@ -112,25 +110,6 @@ pub trait Executor: Send + Sync {
             super::types::generate_content::Input::unavailable(&target.api_protocol)
         })?;
         self.execute_stream(target, prompt, ctx).await
-    }
-
-    /// Count the exact managed input when explicitly configured. Unsupported
-    /// executors fail that candidate rather than claim a known capacity fit.
-    async fn count_input_tokens(
-        &self,
-        _target: &RoutingTarget,
-        _prompt: &Prompt,
-        _ctx: &PipelineContext,
-    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
-        Err(BitrouterError::bad_request(
-            "input token counting is unsupported",
-        ))
-    }
-
-    /// Whether this executor/target is known to preserve output-token limits.
-    /// Unknown implementations retain `None`, never an asserted guarantee.
-    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
-        None
     }
 
     /// Execute a non-streaming request against `target`.
@@ -712,7 +691,6 @@ struct RequestBuildInput<'a> {
     client: &'a ModelClient,
     url: &'a str,
     body: &'a serde_json::Value,
-    managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
     transport: &'a Arc<dyn crate::gateway::model::protocol::Transport>,
     ctx: &'a PipelineContext,
@@ -1079,58 +1057,6 @@ impl HttpExecutor {
         Ok((body, report))
     }
 
-    fn managed_expected_body(
-        &self,
-        rendered: &serde_json::Value,
-        target: &RoutingTarget,
-        ctx: &PipelineContext,
-    ) -> Result<Option<serde_json::Value>> {
-        if ctx
-            .extension::<crate::gateway::pipeline::native::NativeManagedRequest>()
-            .is_none()
-        {
-            return Ok(None);
-        }
-        self.prepare_managed_baseline(rendered, target, ctx)
-            .map(Some)
-            .map_err(|reason| {
-                BitrouterError::bad_request(format!("managed protocol validation failed: {reason}"))
-            })
-    }
-
-    fn prepare_managed_baseline(
-        &self,
-        rendered: &serde_json::Value,
-        target: &RoutingTarget,
-        ctx: &PipelineContext,
-    ) -> std::result::Result<serde_json::Value, &'static str> {
-        let mut expected = rendered.clone();
-        if !Self::shape_owned_request_body(&mut expected, target, ctx)
-            .map_err(|_| "provider_body_normalization_failed")?
-            && let Some(applier) = self.auth_applier(target)
-        {
-            applier
-                .normalize_managed_body(&mut expected, &target.model_target())
-                .map_err(|_| "provider_body_normalization_failed")?;
-        }
-        if expected
-            .get("previous_response_id")
-            .is_some_and(|value| !value.is_null())
-            && ctx.extension::<ProviderContinuation>().is_none()
-            && ctx.extension::<SuppressProviderContinuation>().is_none()
-        {
-            return Err("provider_continuation_unbound");
-        }
-        apply_provider_continuation(&mut expected, target, ctx)
-            .map_err(|_| "provider_continuation_incompatible")?;
-        let (adapter, _) = self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or("outbound_adapter_unavailable")?;
-        adapter.validate_managed_body(&expected, &expected, &target.model_target())?;
-        Ok(expected)
-    }
-
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
@@ -1187,8 +1113,6 @@ impl HttpExecutor {
         }
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
-        let credential_authority =
-            tenancy::native::bind_headers(credential_authority, &request, input.target, input.ctx);
         let credential_authority = tenancy::http_continuation::bind_headers(
             credential_authority,
             &request,
@@ -1200,92 +1124,6 @@ impl HttpExecutor {
             &request,
             &input.target.model_target(),
         )?;
-        if input
-            .ctx
-            .extension::<crate::gateway::pipeline::native::NativeManagedRequest>()
-            .is_some()
-        {
-            let expected_url = reqwest::Url::parse(input.url)
-                .map_err(|_| BitrouterError::bad_request("managed endpoint unavailable"))?;
-            if request.url() != &expected_url {
-                return Err(BitrouterError::bad_request(
-                    "managed authentication changed endpoint",
-                ));
-            }
-
-            let expected = input.managed_expected.ok_or_else(|| {
-                BitrouterError::bad_request("managed request baseline unavailable")
-            })?;
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&input.target.api_protocol)
-                .ok_or_else(|| Self::no_dispatch_error(input.target))?;
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| BitrouterError::bad_request("managed request body unavailable"))?;
-            let actual = serde_json::from_slice(bytes)
-                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
-            adapter
-                .validate_managed_body(expected, &actual, &input.target.model_target())
-                .map_err(|reason| {
-                    BitrouterError::bad_request(format!(
-                        "managed protocol validation failed: {reason}"
-                    ))
-                })?;
-        }
-        if let Some(reservation) = input
-            .ctx
-            .extension::<crate::gateway::pipeline::native::NativeOutputReservation>(
-        ) {
-            let (adapter, _) = self
-                .dispatch
-                .lookup(&input.target.api_protocol)
-                .ok_or_else(|| {
-                    BitrouterError::bad_request(
-                        "managed output reservation cannot be verified for this protocol",
-                    )
-                })?;
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    BitrouterError::bad_request(
-                        "managed output reservation requires a verifiable request body",
-                    )
-                })?;
-            let body = serde_json::from_slice(bytes)
-                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
-            let wire_limit = adapter.output_token_limit(&body)?;
-            // Subscription transports may explicitly reject request-level caps.
-            // Only absence, declared non-support and a sufficient model ceiling
-            // permit this alternative; an altered cap is still a shaping error.
-            let model_bound = wire_limit.is_none()
-                && self.output_token_limit_support(input.target) == Some(false)
-                && output_reservation_covers_model(
-                    &input.target.model_constraints.token_limits,
-                    reservation.0,
-                );
-            if wire_limit != Some(reservation.0) && !model_bound {
-                return Err(BitrouterError::bad_request(
-                    "provider shaping changed the managed output reservation",
-                ));
-            }
-        }
-        if input
-            .target
-            .model_constraints
-            .input_token_counting
-            .is_some()
-            && let Some(counted) = input
-                .ctx
-                .extension::<crate::gateway::pipeline::native::NativeCountedRequests>()
-            && !counted.matches(&input_count::request_digest(&request, input.target)?)?
-        {
-            return Err(BitrouterError::bad_request(
-                "managed request changed after provider input token counting",
-            ));
-        }
         input
             .ctx
             .record_credential_authority(credential_authority.clone());
@@ -1405,8 +1243,6 @@ impl HttpExecutor {
             let request = self
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
-
-                    managed_expected: None,
                     url: &url,
                     body: &body,
                     target,
@@ -1686,29 +1522,6 @@ impl Executor for HttpExecutor {
         }
     }
 
-    async fn count_input_tokens(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> Result<crate::managed_contract::evidence::NativeInputCount> {
-        self.count_managed_input(target, prompt, ctx).await
-    }
-
-    fn output_token_limit_support(&self, target: &RoutingTarget) -> Option<bool> {
-        if !self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .is_some_and(|(adapter, _)| adapter.supports_output_token_limit_validation())
-        {
-            return Some(false);
-        }
-        match self.auth_applier(target) {
-            Some(applier) => applier.output_token_limit_support(&target.model_target()),
-            None => Some(true),
-        }
-    }
-
     fn preflight_managed(
         &self,
         target: &RoutingTarget,
@@ -1765,10 +1578,7 @@ impl Executor for HttpExecutor {
 
         let (client, _) = self.client_for(
             target,
-            ctx.extension::<super::native::NativeManagedRequest>()
-                .is_some()
-                || shared::has_admission(ctx)
-                || tenancy::has_execution(ctx),
+            shared::has_admission(ctx) || tenancy::has_execution(ctx),
         );
 
         let started = Instant::now();
@@ -1797,7 +1607,7 @@ impl Executor for HttpExecutor {
                 ctx,
                 target.provider_name == "openai-codex",
             )?;
-            let managed_expected = self.managed_expected_body(&body, target, ctx)?;
+
             if self.needs_body_shaping(target, ctx)? {
                 self.shape_request_body(&mut body, target, ctx)
                     .await
@@ -1814,7 +1624,6 @@ impl Executor for HttpExecutor {
 
                 url: &url,
                 body: &body,
-                managed_expected: managed_expected.as_ref(),
                 target,
                 transport,
                 ctx,
@@ -2665,7 +2474,6 @@ mod beta_forward_tests {
 
                 url: "https://api.example/v1/chat/completions",
                 body: &body,
-                managed_expected: None,
                 target: &target,
                 transport,
                 ctx: &ctx,
@@ -2679,312 +2487,6 @@ mod beta_forward_tests {
         );
         assert_eq!(request.headers()["x-opencode-session"], "request-session");
         assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
-    -> crate::gateway::error::Result<()> {
-        use crate::config::model::InputTokenCounting;
-        use crate::gateway::pipeline::native::NativeCountedRequests;
-        use crate::managed_contract::evidence::NativeInputCount;
-        let mut ctx = ctx_with_headers(http::HeaderMap::new());
-        let mut target = target(ApiProtocol::Responses);
-        target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);
-        target.api_key = "first-account-secret".into();
-        let executor = HttpExecutor::with_defaults()?;
-        let (_, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
-        let (client, _) = executor.client_for(&target, false);
-        let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
-        let initial = executor
-            .build_authenticated_request(&RequestBuildInput {
-                client: &client,
-
-                url: "https://example.invalid/v1/responses",
-                body: &body,
-                managed_expected: None,
-                target: &target,
-                transport,
-                ctx: &ctx,
-                trace_headers: None,
-            })
-            .await?;
-        let count = NativeInputCount::Counted {
-            input_tokens: 10,
-            request_sha256: input_count::request_digest(&initial, &target)?,
-            source: "fixture".into(),
-        };
-        let counted = Arc::new(NativeCountedRequests::default());
-        counted.select(Some(&count))?;
-        ctx.insert_extension(counted.clone());
-        let build = |body, target, ctx| RequestBuildInput {
-            client: &client,
-
-            url: "https://example.invalid/v1/responses",
-            body,
-            managed_expected: None,
-            target,
-            transport,
-            ctx,
-            trace_headers: None,
-        };
-        executor
-            .build_authenticated_request(&build(&body, &target, &ctx))
-            .await?;
-        let changed =
-            serde_json::json!({"model":"fixture","input":"different required text","tools":[]});
-        assert!(
-            executor
-                .build_authenticated_request(&build(&changed, &target, &ctx))
-                .await
-                .is_err()
-        );
-        let mut account = target.clone();
-        account.api_key = "second-account-secret".into();
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &account, &ctx))
-                .await
-                .is_err()
-        );
-        let mut headers = target.clone();
-        headers.headers = vec![OutboundHeaderRule::new(
-            "openai-organization",
-            Some("other-org"),
-            false,
-        )?];
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &headers, &ctx))
-                .await
-                .is_err()
-        );
-        // Even an identical target cannot borrow a previous candidate's success.
-        counted.select(Some(&NativeInputCount::Unavailable {
-            reason: "fixture failure".into(),
-        }))?;
-        assert!(
-            executor
-                .build_authenticated_request(&build(&body, &target, &ctx))
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-
-    struct RewriteOutputLimit;
-
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteOutputLimit {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-            })?;
-            body["max_tokens"] = 4096.into();
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|error| {
-                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_output_limit_is_checked_after_auth_body_mutation()
-    -> crate::gateway::error::Result<()> {
-        let target = target(ApiProtocol::ChatCompletions);
-        let executor = HttpExecutor::with_dispatch_and_auth(
-            Default::default(),
-            OutboundDispatch::builtin(),
-            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteOutputLimit)),
-        )?;
-        let (_, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-        let (client, _) = executor.client_for(&target, false);
-        let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
-        for managed in [false, true] {
-            let mut ctx = ctx_with_beta(None);
-            if managed {
-                ctx.insert_extension(Arc::new(
-                    crate::gateway::pipeline::native::NativeOutputReservation(128),
-                ));
-            }
-            let result = executor
-                .build_authenticated_request(&RequestBuildInput {
-                    client: &client,
-
-                    url: "https://example.invalid/v1/chat/completions",
-                    body: &body,
-                    managed_expected: None,
-                    target: &target,
-                    transport,
-                    ctx: &ctx,
-                    trace_headers: None,
-                })
-                .await;
-            assert_eq!(result.is_err(), managed);
-            if managed {
-                assert!(result.err().is_some_and(|error| {
-                    error
-                        .to_string()
-                        .contains("changed the managed output reservation")
-                }));
-            }
-        }
-        Ok(())
-    }
-
-    struct RemoveOutputLimit(Option<bool>);
-
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RemoveOutputLimit {
-        fn output_token_limit_support(
-            &self,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> Option<bool> {
-            self.0
-        }
-
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
-                crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-            })?;
-            if let Some(object) = body.as_object_mut() {
-                object.remove("max_output_tokens");
-            }
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|error| {
-                        crate::gateway::model::error::ModelError::invalid_request(error.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn uncapped_managed_wire_requires_declared_support_and_model_bound()
-    -> crate::gateway::error::Result<()> {
-        for support in [None, Some(true), Some(false)] {
-            for (ceiling, covered) in [
-                (None, false),
-                (Some(0), false),
-                (Some(1), true),
-                (Some(127), true),
-                (Some(128), true),
-                (Some(129), false),
-                (Some(u64::MAX), false),
-            ] {
-                let mut target = target(ApiProtocol::Responses);
-                target.model_constraints.token_limits.max_output_tokens = ceiling;
-                let executor = HttpExecutor::with_dispatch_and_auth(
-                    Default::default(),
-                    OutboundDispatch::builtin(),
-                    AuthAppliers::new()
-                        .with(&target.provider_name, Arc::new(RemoveOutputLimit(support))),
-                )?;
-                let (_, transport) = executor
-                    .dispatch
-                    .lookup(&target.api_protocol)
-                    .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-                let (client, _) = executor.client_for(&target, false);
-                let mut ctx = ctx_with_beta(None);
-                ctx.insert_extension(Arc::new(
-                    crate::gateway::pipeline::native::NativeOutputReservation(128),
-                ));
-                let body = serde_json::json!({"model":"m","input":"hello","max_output_tokens":128});
-                let result = executor
-                    .build_authenticated_request(&RequestBuildInput {
-                        client: &client,
-                        url: "https://example.invalid/v1/responses",
-                        body: &body,
-                        managed_expected: None,
-                        target: &target,
-                        transport,
-                        ctx: &ctx,
-                        trace_headers: None,
-                    })
-                    .await;
-                assert_eq!(
-                    result.is_ok(),
-                    support == Some(false) && covered,
-                    "{support:?}, {ceiling:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn managed_output_limit_survives_each_builtin_wire_renderer()
-    -> crate::gateway::error::Result<()> {
-        let executor = HttpExecutor::with_defaults()?;
-        for protocol in [
-            ApiProtocol::ChatCompletions,
-            ApiProtocol::Responses,
-            ApiProtocol::Messages,
-        ] {
-            let target = target(protocol);
-            let mut ctx = ctx_with_beta(None);
-            ctx.insert_extension(Arc::new(
-                crate::gateway::pipeline::native::NativeOutputReservation(128),
-            ));
-            let mut prompt = ctx.require_generation_prompt()?.clone();
-            prompt.messages = vec![Message::text(Role::User, "hello")];
-            prompt.params.max_tokens = Some(128);
-            let (adapter, transport) = executor
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
-            let body = adapter.render_request_for_target(&prompt, &target.model_target())?;
-            let (client, _) = executor.client_for(&target, false);
-            executor
-                .build_authenticated_request(&RequestBuildInput {
-                    client: &client,
-
-                    url: "https://example.invalid/fixture",
-                    body: &body,
-                    managed_expected: None,
-                    target: &target,
-                    transport,
-                    ctx: &ctx,
-                    trace_headers: None,
-                })
-                .await?;
-        }
         Ok(())
     }
 
@@ -3055,7 +2557,6 @@ mod beta_forward_tests {
                     client: &client,
                     url: "https://example.invalid/messages",
                     body: &body,
-                    managed_expected: None,
                     target: &target,
                     transport,
                     ctx: &ctx,
@@ -3075,171 +2576,6 @@ mod beta_forward_tests {
                     applied.into_parts().1.is_none(),
                     "fixture deliberately has no continuation authority"
                 );
-            }
-        }
-        Ok(())
-    }
-
-    struct RewriteEndpoint;
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteEndpoint {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            *request.url_mut() =
-                reqwest::Url::parse("https://other.invalid/messages").map_err(|e| {
-                    crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-                })?;
-            request
-                .headers_mut()
-                .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
-            Ok(request)
-        }
-        async fn apply_with_authority(
-            &self,
-            request: reqwest::Request,
-            target: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<AppliedAuth> {
-            Ok(AppliedAuth::proven(
-                self.apply(request, target).await?,
-                CredentialAuthority::derive("fixture", "principal"),
-            ))
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_auth_cannot_change_endpoint_even_before_proving_request() -> Result<()> {
-        let target = target(ApiProtocol::Messages);
-        let executor = HttpExecutor::with_dispatch_and_auth(
-            Default::default(),
-            OutboundDispatch::builtin(),
-            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteEndpoint)),
-        )?;
-        let mut ctx = ctx_with_beta(None);
-        ctx.insert_extension(Arc::new(
-            crate::gateway::pipeline::native::NativeManagedRequest,
-        ));
-        let (adapter, transport) = executor
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| BitrouterError::internal("fixture dispatch"))?;
-        let body = adapter
-            .render_request_for_target(ctx.require_generation_prompt()?, &target.model_target())?;
-        let (client, _) = executor.client_for(&target, true);
-        let error = executor
-            .build_authenticated_request(&RequestBuildInput {
-                client: &client,
-
-                url: "https://example.invalid/messages",
-                body: &body,
-                managed_expected: Some(&body),
-                target: &target,
-                transport,
-                ctx: &ctx,
-                trace_headers: None,
-            })
-            .await
-            .err()
-            .ok_or_else(|| BitrouterError::internal("changed endpoint accepted"))?;
-        assert!(
-            error
-                .to_string()
-                .contains("managed authentication changed endpoint")
-        );
-        Ok(())
-    }
-
-    struct RewriteManagedField(&'static str, serde_json::Value);
-    #[async_trait]
-    impl crate::gateway::providers::auth::AuthApplier for RewriteManagedField {
-        async fn apply(
-            &self,
-            mut request: reqwest::Request,
-            _: &crate::gateway::model::target::ModelTarget,
-        ) -> crate::gateway::model::error::Result<reqwest::Request> {
-            let bytes = request
-                .body()
-                .and_then(reqwest::Body::as_bytes)
-                .ok_or_else(|| {
-                    crate::gateway::model::error::ModelError::invalid_request(
-                        "fixture body missing",
-                    )
-                })?;
-            let mut body: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
-                crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-            })?;
-            body[self.0] = self.1.clone();
-            *request.body_mut() = Some(
-                serde_json::to_vec(&body)
-                    .map_err(|e| {
-                        crate::gateway::model::error::ModelError::invalid_request(e.to_string())
-                    })?
-                    .into(),
-            );
-            Ok(request)
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_protocol_revalidates_every_authenticated_body_without_a_counter() -> Result<()>
-    {
-        let target = target(ApiProtocol::Responses);
-        let body = serde_json::json!({"model":target.service_id,"input":"mandatory input","tools":[],"temperature":0.2});
-        for (field, replacement) in [
-            ("input", serde_json::json!("lost input")),
-            (
-                "tools",
-                serde_json::json!([{"type":"function","name":"unapproved"}]),
-            ),
-            ("model", serde_json::json!("different-model")),
-            ("temperature", serde_json::json!(1)),
-            ("truncation", serde_json::json!("auto")),
-            ("previous_response_id", serde_json::json!("private-handle")),
-        ] {
-            let executor = HttpExecutor::with_dispatch_and_auth(
-                Default::default(),
-                OutboundDispatch::builtin(),
-                AuthAppliers::new().with(
-                    &target.provider_name,
-                    Arc::new(RewriteManagedField(field, replacement)),
-                ),
-            )?;
-            let (_, transport) = executor
-                .dispatch
-                .lookup(&target.api_protocol)
-                .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
-            let (client, _) = executor.client_for(&target, false);
-            for managed in [false, true] {
-                let mut ctx = ctx_with_beta(None);
-                if managed {
-                    ctx.insert_extension(Arc::new(
-                        crate::gateway::pipeline::native::NativeManagedRequest,
-                    ));
-                }
-                let baseline = executor.managed_expected_body(&body, &target, &ctx)?;
-                // Rebuilding after credential refresh uses this same immutable
-                // input and must repeat validation, without an input counter.
-                for _retry in 0..2 {
-                    let result = executor
-                        .build_authenticated_request(&RequestBuildInput {
-                            client: &client,
-
-                            url: "https://example.invalid/responses",
-                            body: &body,
-                            managed_expected: baseline.as_ref(),
-                            target: &target,
-                            transport,
-                            ctx: &ctx,
-                            trace_headers: None,
-                        })
-                        .await;
-                    assert_eq!(result.is_err(), managed, "field={field}");
-                    if let Err(error) = result {
-                        assert!(!error.to_string().contains("private-handle"));
-                    }
-                }
             }
         }
         Ok(())

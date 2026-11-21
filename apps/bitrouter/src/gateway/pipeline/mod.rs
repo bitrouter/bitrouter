@@ -53,7 +53,6 @@ pub mod native_context;
 pub mod native_continuation;
 pub mod operations;
 pub(crate) mod owned_tasks;
-pub(crate) mod provider_admission;
 mod provider_technical;
 pub mod request_checks;
 pub mod routing;

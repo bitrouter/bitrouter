@@ -19,7 +19,6 @@ use crate::{
 };
 
 pub(crate) mod http_continuation;
-pub(crate) mod native;
 
 #[cfg(test)]
 mod tests;
