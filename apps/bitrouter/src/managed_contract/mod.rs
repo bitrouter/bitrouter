@@ -1,4 +1,4 @@
-//! Application-owned provider-attempt and private adapter contracts.
+//! Application-owned routing, continuation and private adapter contracts.
 
 pub mod evidence;
 
