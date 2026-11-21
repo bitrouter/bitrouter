@@ -1,4 +1,4 @@
-//! Minimum builds reject unavailable execution and retired syntax before effects.
+//! Minimum builds reject unavailable execution and unsupported syntax before effects.
 
 use std::path::Path;
 use std::time::Duration;

@@ -83,7 +83,7 @@ fn exported(home: &Path) -> Result<(Document, String)> {
         .context("show did not export typed source")?;
     ensure!(
         report.get("mode").is_none(),
-        "retired mode leaked into report"
+        "unsupported mode leaked into report"
     );
     Ok((document, digest))
 }
@@ -449,7 +449,7 @@ fn unsupported_sources_and_configuration_are_rejected_without_rewriting() -> Res
     ] {
         std::fs::write(&config, raw)?;
         let output = invoke(home, &["config", "validate", "--config", "bitrouter.yaml"])?;
-        ensure!(!output.status.success(), "retired config accepted: {raw}");
+        ensure!(!output.status.success(), "unsupported config accepted: {raw}");
         ensure!(std::fs::read_to_string(&config)? == raw);
         ensure!(std::fs::read_to_string(&policy)? == source);
     }
