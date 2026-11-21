@@ -615,7 +615,7 @@ mod tests {
                     context_pressure: RequirementLevel::High,
                     ..CapabilityConstraints::default()
                 },
-                "agent_trace/v2|edit|context",
+                "agent_trace/v2|edit|normal",
             ),
             (
                 RecoverySignal::None,
