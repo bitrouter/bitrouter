@@ -656,7 +656,7 @@ async fn e2e_http_server_chat_completions_end_to_end() {
     let health = server.get("/health").await;
     health.assert_status_ok();
 
-    // `/metrics` no longer serves Prometheus exposition — metrics are pushed
+    // Metrics are pushed through the configured OTLP exporter; `/metrics`
     // via OTLP. The route remains bound (so existing scraper config does not
     // 404 on upgrade) and renders a deprecation banner steering operators
     // toward OTLP push. Live emission is exercised separately via
