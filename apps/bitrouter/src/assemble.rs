@@ -106,7 +106,6 @@ use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
-use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -1149,7 +1148,7 @@ async fn assemble_app(
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "eval-publication")]
     let mut trajectory_outbox_publisher = None;
-    let trajectory_services = if config.trajectory.enabled && !config.tenancy.enabled {
+    let trajectory_for_settlement = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
             .ok_or_else(|| anyhow::anyhow!("trajectory retention_days exceeds time range"))?;
@@ -1218,25 +1217,13 @@ async fn assemble_app(
                 crate::paths::get_or_create_correlation_key(&home)?
             }
         };
-        let runtime = Arc::new(TrajectoryRuntime::new(
-            trajectory_store.clone(),
-            Canonicalizer::new(correlation_key.clone()),
-        ));
-        // Shared guard entry still uses this runtime marker; the shared engine
-        // owns its durable start/settlement path rather than this local recorder.
-        let settlement = (!is_shared).then(|| {
+        // The shared engine owns durable settlement; local execution uses this recorder.
+        (!is_shared).then(|| {
             TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key)
-        });
-        Some((runtime, settlement))
+        })
     } else {
         None
     };
-    let trajectory_runtime = trajectory_services
-        .as_ref()
-        .map(|(runtime, _)| runtime.clone());
-    let trajectory_for_settlement = trajectory_services
-        .as_ref()
-        .and_then(|(_, settlement)| settlement.clone());
     #[cfg(feature = "multi-instance")]
     let shared_policy_runtime = shared
         .map(|inputs| {
@@ -1244,7 +1231,6 @@ async fn assemble_app(
                 config,
                 inputs.model_policy.clone(),
                 pending_eval_decisions.clone(),
-                trajectory_runtime.clone(),
             )
         })
         .transpose()?;
@@ -1257,7 +1243,6 @@ async fn assemble_app(
             config_path,
             policy_decision_recorder.clone(),
             pending_eval_decisions.clone(),
-            trajectory_runtime,
         )
         .await
         .context("loading model Policy source")?,
