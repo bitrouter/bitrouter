@@ -56,6 +56,7 @@ pub struct FusionConfig {
 
 impl FusionConfig {
     /// A degenerate one-member panel judged by the same model.
+    #[cfg(test)]
     pub fn single(model: &str) -> Self {
         FusionConfig {
             panel: vec![PanelMemberSpec {

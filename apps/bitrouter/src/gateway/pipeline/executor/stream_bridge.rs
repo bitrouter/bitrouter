@@ -410,14 +410,9 @@ impl HttpExecutor {
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
             if self.needs_body_shaping(target, ctx)? {
-                native_work::observe(
-                    ctx,
-                    NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target, ctx),
-                    |_| None,
-                )
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
+                self.shape_request_body(&mut body, target, ctx)
+                    .await
+                    .map_err(|error| error_scrubber.scrub_error(error))?;
             }
             let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
             if let Some(continuation) = continuation_substitution {
@@ -459,36 +454,31 @@ impl HttpExecutor {
                 .cloned();
             let mut native_attempt = None;
             let mut private_adapter = false;
-            let response = native_work::observe(
-                ctx,
-                NativeProviderWorkKind::HttpDispatch,
-                async {
-                    let routing_guard = if super::tenancy::legacy_routing(ctx) {
-                        Some(crate::tenancy::routing::admit(ctx, target)?)
-                    } else {
-                        None
-                    };
-                    record_native_dispatch(prompt, target, ctx)?;
-                    let admission = super::tenancy::admit_send(
-                        tenant_binding.as_ref(),
-                        &mut tenant_attempt,
-                        &mut request,
-                        target,
-                        ctx,
-                        Some(true),
-                    )?;
-                    if let Some(guard) = routing_guard {
-                        guard.sent()?;
-                    }
-                    let response = admission
-                        .send(&client, request, ctx, &mut error_scrubber)
-                        .await;
-                    private_adapter = admission.adapter.is_some();
-                    native_attempt = admission.attempt_id;
-                    response
-                },
-                |response| Some(response.status().as_u16()),
-            )
+            let response = async {
+                let routing_guard = if super::tenancy::legacy_routing(ctx) {
+                    Some(crate::tenancy::routing::admit(ctx, target)?)
+                } else {
+                    None
+                };
+                record_native_dispatch(prompt, target, ctx)?;
+                let admission = super::tenancy::admit_send(
+                    tenant_binding.as_ref(),
+                    &mut tenant_attempt,
+                    &mut request,
+                    target,
+                    ctx,
+                    Some(true),
+                )?;
+                if let Some(guard) = routing_guard {
+                    guard.sent()?;
+                }
+                let response = admission
+                    .send(&client, request, ctx, &mut error_scrubber)
+                    .await;
+                private_adapter = admission.adapter.is_some();
+                native_attempt = admission.attempt_id;
+                response
+            }
             .await?;
 
             let status = response.status();

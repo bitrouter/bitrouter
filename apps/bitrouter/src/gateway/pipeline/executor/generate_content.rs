@@ -110,13 +110,7 @@ impl HttpExecutor {
             ctx,
             Some(input.stream()),
         )?;
-        let response = native_work::observe(
-            ctx,
-            NativeProviderWorkKind::HttpDispatch,
-            admission.send(&client, request, ctx, &mut scrubber),
-            |response| Some(response.status().as_u16()),
-        )
-        .await?;
+        let response = admission.send(&client, request, ctx, &mut scrubber).await?;
         let status = response.status();
         let retry_after = parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
         receipt::status(&mut tenant, status.as_u16(), retry_after)?;

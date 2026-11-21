@@ -27,6 +27,7 @@ pub struct ToolContext {
 
 impl ToolContext {
     /// Build a context from explicit parts (consumers, tests).
+    #[cfg(test)]
     pub fn new(caller: CallerContext, metadata: HashMap<PluginId, serde_json::Value>) -> Self {
         Self { caller, metadata }
     }
