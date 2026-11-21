@@ -1903,6 +1903,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
                 .into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             })
         }

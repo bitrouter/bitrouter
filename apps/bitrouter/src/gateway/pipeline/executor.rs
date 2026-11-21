@@ -44,9 +44,7 @@ pub(crate) mod tenancy;
 
 use stream_bridge::BridgeCapture;
 
-/// Request-local terminal capture for controlled streaming. The HTTP executor
-/// retains full Responses output privately until the collected attempt settles.
-
+/// Record pricing admission and physical dispatch for a native attempt.
 fn record_native_dispatch(
     prompt: &Prompt,
     target: &RoutingTarget,
@@ -260,7 +258,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
-                #[cfg(any(test, feature = "server-tools"))]
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Stream(_) | MockResponse::Decisions(_) => Err(BitrouterError::internal(
@@ -315,7 +313,7 @@ impl Executor for MockExecutor {
                 result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
-                #[cfg(any(test, feature = "server-tools"))]
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             }),
             MockResponse::Error(error) => Err(error),
@@ -1371,6 +1369,7 @@ impl HttpExecutor {
             result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -1824,6 +1823,7 @@ impl Executor for HttpExecutor {
             result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(super::timing::elapsed_millis(started)),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }
@@ -1869,6 +1869,7 @@ impl Executor for HttpExecutor {
             result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(elapsed),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }

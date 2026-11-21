@@ -182,6 +182,7 @@ fn result() -> ExecutionResult {
         .into(),
         request_duration_ms: 999,
         upstream_duration_ms: Some(888),
+        #[cfg(feature = "server-tools")]
         server_tool_calls: vec![],
     }
 }

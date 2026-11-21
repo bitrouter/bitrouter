@@ -705,7 +705,7 @@ impl PipelineContext {
     /// `ToolContext` (when the `server-tools` feature is enabled)
     /// for a server-tool execution, which may outlive this borrow (e.g. on the
     /// streaming path).
-    #[cfg(any(test, feature = "server-tools"))]
+    #[cfg(feature = "server-tools")]
     pub fn metadata(&self) -> &HashMap<PluginId, serde_json::Value> {
         &self.metadata
     }
@@ -1553,6 +1553,7 @@ mod tests {
             .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -1583,6 +1584,7 @@ mod tests {
                 .into(),
                 request_duration_ms: 0,
                 upstream_duration_ms: None,
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             });
             ctx

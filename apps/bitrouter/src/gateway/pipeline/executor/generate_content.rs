@@ -208,7 +208,7 @@ impl HttpExecutor {
             result: PipelineOutput::GenerateContent(result),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(elapsed),
-            #[cfg(any(test, feature = "server-tools"))]
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         })
     }

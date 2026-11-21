@@ -6,7 +6,7 @@ use crate::config::model::ReasoningEffortConfig;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
-#[cfg(any(test, feature = "server-tools"))]
+#[cfg(feature = "server-tools")]
 use bitrouter_ai::types::ServerToolCall;
 use bitrouter_ai::types::{
     ApiProtocol, ChatCompletionsCompatibility, ChatTokenLimitField, GenerateResult,
@@ -157,7 +157,7 @@ pub struct ExecutionResult {
     /// Server-tool calls observed during this execution (router-executed and
     /// provider-executed). Empty for a plain single-turn upstream call.
     /// Observability only.
-    #[cfg(any(test, feature = "server-tools"))]
+    #[cfg(feature = "server-tools")]
     pub server_tool_calls: Vec<ServerToolCall>,
 }
 

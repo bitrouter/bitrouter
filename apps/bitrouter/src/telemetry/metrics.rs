@@ -300,6 +300,7 @@ mod tests {
             .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
 
@@ -457,6 +458,7 @@ mod tests {
             .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
         ctx
