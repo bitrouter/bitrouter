@@ -224,6 +224,19 @@ policies:
     let first_id = post_response(&server, None).await?;
     assert!(first_id.starts_with("brc_"));
     assert!(!first_id.contains("provider-response"));
+    let crate::continuation::ContinuationResolution::Active(active) = assembled
+        .continuation_registry
+        .resolve("local", &first_id, chrono::Utc::now())
+        .await?
+    else {
+        anyhow::bail!("successful Responses request did not publish its continuation");
+    };
+    assert_eq!(
+        active.effective_model.as_deref(),
+        Some("responses:selected-model")
+    );
+    assert!(active.effort_authoritative);
+    assert_eq!(active.effective_effort, None);
     let second_id = post_response(&server, Some(&first_id)).await?;
     assert!(second_id.starts_with("brc_"));
     assert_ne!(first_id, second_id);
@@ -344,11 +357,16 @@ routers:
             alternate,
             state,
         };
-        fixture.write_source("strong", false)?;
+        fixture.write_source("strong", false, None)?;
         Ok(fixture)
     }
 
-    fn write_source(&self, default_tier: &str, remove_original: bool) -> anyhow::Result<()> {
+    fn write_source(
+        &self,
+        default_tier: &str,
+        remove_original: bool,
+        effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    ) -> anyhow::Result<()> {
         use bitrouter_ai::policy::{Document, Policy, SpecVersion, Target};
         use std::collections::BTreeMap;
         let source = Document {
@@ -365,7 +383,7 @@ routers:
                                 } else {
                                     "original:selected-model".into()
                                 },
-                                effort: None,
+                                effort,
                             },
                         ),
                         (
@@ -404,7 +422,7 @@ routers:
         assembled: &crate::assemble::Assembled,
         remove_original: bool,
     ) -> anyhow::Result<()> {
-        self.write_source("cheap", remove_original)?;
+        self.write_source("cheap", remove_original, None)?;
         assembled
             .policy_runtime
             .reload_for_config(&self.config, Some(&self.config_path))
@@ -625,7 +643,7 @@ async fn current_source_stream_and_json_continuations_resume_after_restart_witho
         db.close().await?;
         // Change the proposal explicitly while stopped. Hidden history still
         // belongs to the original selected serving authority after reopening.
-        fixture.write_source("cheap", false)?;
+        fixture.write_source("cheap", false, None)?;
         let restarted = fixture.assemble().await?;
         let second_server = server(&restarted)?;
         let second = continuation_reply(
@@ -728,6 +746,151 @@ async fn current_source_removed_continuation_target_and_invalid_request_id_fail_
             .await;
         response.assert_status_bad_request();
         assert!(response.text().contains("unavailable in the active policy"));
+        assert_eq!(
+            fixture
+                .original
+                .received_requests()
+                .await
+                .context("original capture")?
+                .len(),
+            1
+        );
+        assert!(
+            fixture
+                .alternate
+                .received_requests()
+                .await
+                .context("alternate capture")?
+                .is_empty()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_source_continuation_preserves_effort_and_rejects_ineligible_policy_targets()
+-> anyhow::Result<()> {
+    use bitrouter_ai::types::ReasoningEffort;
+    for stream in [false, true] {
+        for effort in [None, Some(ReasoningEffort::High)] {
+            let mut fixture = SourceContinuationFixture::new().await?;
+            let model = fixture
+                .config
+                .providers
+                .get_mut("original")
+                .context("original provider missing")?
+                .models
+                .iter_mut()
+                .find(|model| model.id == "selected-model")
+                .context("selected model missing")?;
+            model.reasoning_effort = Some(config::model::ReasoningEffortConfig {
+                levels: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                default: None,
+            });
+            fixture.write_source("strong", false, effort)?;
+            let assembled = fixture.assemble().await?;
+            let server = server(&assembled)?;
+            let first = continuation_reply(
+                &server,
+                &json!({"model":"bitrouter/coding","input":"root","stream":stream}),
+            )
+            .await?;
+            fixture.reload(&assembled, false).await?;
+            let second = continuation_reply(
+                &server,
+                &json!({"model":"bitrouter/coding","input":"continue","stream":stream,
+                    "previous_response_id":first["id"],"reasoning":{"effort":"low"}}),
+            )
+            .await?;
+            let bodies = fixture
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Responses state poisoned"))?
+                .forwarded_bodies
+                .clone();
+            assert_eq!(bodies.len(), 2);
+            for body in &bodies {
+                assert_eq!(body["model"], "selected-model");
+                assert_eq!(body["reasoning"]["effort"], serde_json::to_value(effort)?);
+            }
+            assert_eq!(bodies[1]["previous_response_id"], "provider-response-0");
+
+            // The same model is no longer eligible when every remaining tier
+            // enforces an effort different from the sealed continuation.
+            fixture.write_source("cheap", false, Some(ReasoningEffort::Low))?;
+            assembled
+                .policy_runtime
+                .reload_for_config(&fixture.config, Some(&fixture.config_path))
+                .await?;
+            let rejected = server
+                .post("/v1/responses")
+                .json(
+                    &json!({"model":"bitrouter/coding","input":"continue","stream":stream,
+                    "previous_response_id":second["id"]}),
+                )
+                .await;
+            rejected.assert_status_bad_request();
+            assert!(rejected.text().contains("unavailable in the active policy"));
+            assert_eq!(
+                fixture
+                    .original
+                    .received_requests()
+                    .await
+                    .context("original capture")?
+                    .len(),
+                2
+            );
+            assert!(
+                fixture
+                    .alternate
+                    .received_requests()
+                    .await
+                    .context("alternate capture")?
+                    .is_empty()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_source_continuation_rejects_changed_credential_authority() -> anyhow::Result<()> {
+    for stream in [false, true] {
+        let mut fixture = SourceContinuationFixture::new().await?;
+        let assembled = fixture.assemble().await?;
+        let first_server = server(&assembled)?;
+        let first = continuation_reply(
+            &first_server,
+            &json!({"model":"bitrouter/coding","input":"root","stream":stream}),
+        )
+        .await?;
+        assembled
+            .app
+            .language_model()
+            .context("pipeline")?
+            .drain_required_pending_settlements()
+            .await?;
+        let db = assembled.db.clone();
+        drop(first_server);
+        drop(assembled);
+        db.close().await?;
+        fixture
+            .config
+            .providers
+            .get_mut("original")
+            .context("original provider missing")?
+            .api_key = "changed-fixture-key".into();
+        let restarted = fixture.assemble().await?;
+        let second_server = server(&restarted)?;
+        let rejected = second_server
+            .post("/v1/responses")
+            .json(
+                &json!({"model":"bitrouter/coding","input":"continue","stream":stream,
+                "previous_response_id":first["id"]}),
+            )
+            .await;
+        rejected.assert_status_bad_request();
+        assert!(rejected.text().contains("target is unavailable or changed"));
         assert_eq!(
             fixture
                 .original
