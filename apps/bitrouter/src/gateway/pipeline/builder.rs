@@ -50,7 +50,6 @@ pub struct PipelineBuilder {
     executor: Option<Arc<dyn Executor>>,
     #[cfg(feature = "server-tools")]
     server_tool_loop: Option<Arc<ServerToolLoop>>,
-    keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
     served_operations: OperationScope,
@@ -85,7 +84,6 @@ impl PipelineBuilder {
             executor: None,
             #[cfg(feature = "server-tools")]
             server_tool_loop: None,
-            keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
             served_operations: OperationScope::Generation,
@@ -143,20 +141,6 @@ impl PipelineBuilder {
         self
     }
 
-    /// Override the fallback policy (defaults to [`DefaultFallbackPolicy`]).
-    #[cfg(test)]
-    pub fn fallback_policy(&mut self, policy: Arc<dyn FallbackPolicy>) -> &mut Self {
-        self.fallback_policy = Some(policy);
-        self
-    }
-
-    /// Set the SSE keepalive interval.
-    #[cfg(test)]
-    pub fn keepalive_interval(&mut self, interval: Duration) -> &mut Self {
-        self.keepalive_interval = interval;
-        self
-    }
-
     /// Set the delay schedule used before advancing after retryable upstream
     /// failures. The last delay repeats when the fallback chain is longer than
     /// the schedule. Empty (the default) keeps fallback immediate.
@@ -165,24 +149,9 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a local pre-request hook (runs in registration order before
-    /// configured native request checks).
-    ///
-    /// For a router with request checks, these hooks see the effective
-    /// router defaults and must not change
-    /// [`PipelineContext::model`](crate::gateway::pipeline::context::PipelineContext::model).
-    /// Register checked-router selector rewrites with
-    /// [`Self::router_preparation_hook`] so they happen before defaults while
-    /// the ingress router identity and checker bindings stay frozen.
-    ///
-    /// Requests without checks retain the legacy SDK order: ordinary hooks
-    /// run before the final selector's defaults and may rewrite the selector.
-    #[cfg(test)]
-    pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
-        self.pre_request_hook_for(hook, OperationScope::Generation)
-    }
-
-    /// Register explicit operation support for this stage.
+    /// Register a local pre-request hook for explicit operations, before configured
+    /// native request checks. Checked requests see effective router defaults;
+    /// selector rewrites belong in [`Self::router_preparation_hook`].
     pub fn pre_request_hook_for<H: PreRequestHook + 'static>(
         &mut self,
         hook: H,
@@ -287,12 +256,6 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a Stage-3 execution hook.
-    #[cfg(test)]
-    pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
-        self.execution_hook_for(hook, OperationScope::Generation)
-    }
-
     /// Register explicit operation support for this stage.
     pub fn execution_hook_for<H: ExecutionHook + 'static>(
         &mut self,
@@ -304,14 +267,6 @@ impl PipelineBuilder {
             supported_operations,
             TypeId::of::<H>(),
         ));
-        self
-    }
-
-    /// Register a StreamHook-stage hook (runs in registration order; each sees
-    /// the previous hook's rewritten output).
-    #[cfg(test)]
-    pub fn stream_hook(&mut self, hook: impl StreamHook + 'static) -> &mut Self {
-        self.stream_hooks.push(Arc::new(hook));
         self
     }
 
@@ -483,7 +438,7 @@ impl PipelineBuilder {
             executor,
             #[cfg(feature = "server-tools")]
             server_tool_loop: self.server_tool_loop,
-            keepalive_interval: self.keepalive_interval,
+            keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: self.fallback_backoff,
             pending_settlements: {
                 let mut tasks = super::tasks::Settlements::default();
@@ -512,5 +467,34 @@ fn covers<T: ?Sized>(
 impl Default for PipelineBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    impl PipelineBuilder {
+        /// Override fallback classification for a pipeline fixture.
+        pub fn fallback_policy(&mut self, policy: Arc<dyn FallbackPolicy>) -> &mut Self {
+            self.fallback_policy = Some(policy);
+            self
+        }
+
+        /// Register a generation pre-request hook for a pipeline fixture.
+        pub fn pre_request_hook<H: PreRequestHook + 'static>(&mut self, hook: H) -> &mut Self {
+            self.pre_request_hook_for(hook, OperationScope::Generation)
+        }
+
+        /// Register a generation execution hook for a pipeline fixture.
+        pub fn execution_hook<H: ExecutionHook + 'static>(&mut self, hook: H) -> &mut Self {
+            self.execution_hook_for(hook, OperationScope::Generation)
+        }
+
+        /// Inject a stream transformation into a pipeline fixture.
+        pub fn stream_hook(&mut self, hook: impl StreamHook + 'static) -> &mut Self {
+            self.stream_hooks.push(Arc::new(hook));
+            self
+        }
     }
 }

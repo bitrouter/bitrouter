@@ -55,21 +55,6 @@ pub struct FusionConfig {
 }
 
 impl FusionConfig {
-    /// A degenerate one-member panel judged by the same model.
-    #[cfg(test)]
-    pub fn single(model: &str) -> Self {
-        FusionConfig {
-            panel: vec![PanelMemberSpec {
-                model: model.to_string(),
-                tools: Vec::new(),
-            }],
-            judge: JudgeSpec {
-                model: model.to_string(),
-            },
-            synthesizer: None,
-        }
-    }
-
     /// Parse a `bitrouter:fusion` declaration. Unspecified panel/judge models
     /// fall back to `parent_model`; the panel is clamped to [`MAX_PANEL`].
     /// Tolerates an OpenRouter-style `parameters` wrapper around the args.
@@ -133,6 +118,27 @@ fn parse_member(v: &serde_json::Value) -> Option<PanelMemberSpec> {
         .cloned()
         .unwrap_or_default();
     Some(PanelMemberSpec { model, tools })
+}
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    impl FusionConfig {
+        /// Build a one-member Fusion fixture judged by the same model.
+        pub fn single(model: &str) -> Self {
+            FusionConfig {
+                panel: vec![PanelMemberSpec {
+                    model: model.to_string(),
+                    tools: Vec::new(),
+                }],
+                judge: JudgeSpec {
+                    model: model.to_string(),
+                },
+                synthesizer: None,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
