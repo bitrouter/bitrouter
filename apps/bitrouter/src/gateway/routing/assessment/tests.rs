@@ -97,7 +97,7 @@ fn classification_rejects_changed_rubric_missing_answers_and_invalid_thresholds(
 #[test]
 fn public_input_is_bounded_without_exposing_private_reasoning_or_metadata() -> anyhow::Result<()> {
     let mut prompt: Prompt =
-        serde_json::from_value(json!({"model":"bitrouter/auto","messages":[]}))?;
+        serde_json::from_value(json!({"model":"bitrouter/auto","messages":[],"stream":false}))?;
     prompt.system = Some("public instruction".into());
     prompt.messages = vec![
         Message::text(Role::User, "old history".repeat(100)),

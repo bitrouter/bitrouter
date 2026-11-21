@@ -3896,26 +3896,30 @@ mod tests {
 
     #[test]
     fn offline_commands_expose_current_backup_operations() -> Result<()> {
-        for operation in ["upgrade-capacity", "eval-inventory", "eval-backfill"] {
-            anyhow::ensure!(
-                Cli::try_parse_from(["bro", "tenancy", "offline", operation]).is_err(),
-                "unsupported offline operation still parses: {operation}"
-            );
-        }
-        for format in ["v1", "v2"] {
-            Cli::try_parse_from([
-                "bro",
-                "tenancy",
-                "offline",
-                "snapshot",
-                "--database",
-                "/tmp/current.sqlite",
-                "--bundle",
-                "/tmp/current-bundle",
-                "--format",
-                format,
-            ])?;
-        }
+        Cli::try_parse_from([
+            "bitrouter",
+            "tenancy",
+            "offline",
+            "snapshot",
+            "--database",
+            "/tmp/current.sqlite",
+            "--bundle",
+            "/tmp/current-bundle",
+            "--scratch-directory",
+            "/tmp/private-scratch",
+        ])?;
+        Cli::try_parse_from([
+            "bitrouter",
+            "tenancy",
+            "offline",
+            "verify",
+            "--bundle",
+            "/tmp/current-bundle",
+            "--evidence-digest",
+            "digest",
+            "--scratch-directory",
+            "/tmp/private-scratch",
+        ])?;
         Cli::try_parse_from([
             "bro",
             "tenancy",
