@@ -224,7 +224,14 @@ async fn invalid_trace_capacity_starts_no_partial_provider() -> Result<()> {
             ensure!(error.to_string() == "process telemetry initialization failed");
             // The legacy constructor shares the preflight. It must return an
             // error rather than panic after starting an unowned metric reader.
-            ensure!(OtelExporter::new(config, None).is_err());
+            ensure!(
+                OtelExporter::new(
+                    config,
+                    #[cfg(feature = "otel-http")]
+                    None,
+                )
+                .is_err()
+            );
         }
     }
     Ok(())

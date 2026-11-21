@@ -31,13 +31,13 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::providers::auth::AuthAppliers;
 use crate::gateway::providers::hosted::PROVIDER_ID;
 use crate::gateway::providers::hosted::applier::BitrouterAuthApplier;
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 use crate::telemetry::bearer::TelemetryBearer;
 use anyhow::{Context, Result};
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 const FIRST_PARTY_TELEMETRY_ORIGIN: &str = "https://telemetry.bitrouter.ai";
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 const DEFAULT_ACCOUNT_ORIGIN: &str = "https://api.bitrouter.ai";
 
 /// Insert the `bitrouter` provider into `config.providers` when the user
@@ -112,13 +112,13 @@ pub fn register_if_configured(
 ///
 /// Best-effort: any resolution failure maps to `None`, so the export degrades to
 /// anonymous rather than being dropped.
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub struct CloudBearer {
     manager: Arc<CredentialManager>,
     expected_origin: String,
 }
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 impl std::fmt::Debug for CloudBearer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CloudBearer")
@@ -128,7 +128,7 @@ impl std::fmt::Debug for CloudBearer {
     }
 }
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 #[async_trait::async_trait]
 impl TelemetryBearer for CloudBearer {
     async fn bearer(&self) -> Option<String> {
@@ -149,7 +149,7 @@ impl TelemetryBearer for CloudBearer {
 /// daemon startup is never broken. The caller decides whether to build a source
 /// at all — `attribution: anonymous` must never call this (it would read the
 /// credential store).
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub async fn cloud_bearer_source(
     manager: Arc<CredentialManager>,
     expected_origin: impl Into<String>,
@@ -167,7 +167,7 @@ pub async fn cloud_bearer_source(
 /// Account credentials are normally confined to the exporter's origin. The
 /// sole exception is the first-party telemetry service, which accepts the
 /// account credential registered at the hosted inference origin.
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 fn credential_origin_for_exporter(exporter: &str) -> String {
     let exporter_origin = reqwest::Url::parse(exporter)
         .ok()
@@ -194,12 +194,12 @@ mod tests {
     use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
     use bitrouter_ai::types::ApiProtocol;
     use chrono::{Duration, Utc};
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use serde_json::json;
     use wiremock::MockServer;
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use wiremock::matchers::{body_string_contains, method, path as wm_path};
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     use wiremock::{Mock, ResponseTemplate};
 
     fn fresh_tmp_creds_path(
@@ -290,7 +290,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn shared_manager_single_flights_refresh_for_model_management_and_telemetry()
     -> anyhow::Result<()> {
@@ -441,7 +441,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn cloud_bearer_source_none_when_not_signed_in() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("absent")?;
@@ -454,7 +454,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn cloud_bearer_source_uses_custom_exporter_same_origin_api_key() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("api-key-bearer")?;
@@ -477,7 +477,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn default_first_party_exporter_uses_default_account_credential() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("default-telemetry-origin")?;
@@ -501,7 +501,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn custom_exporter_cannot_receive_default_account_credential() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("custom-telemetry-origin")?;
@@ -521,7 +521,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[test]
     fn cloud_bearer_debug_redacts_manager() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("dbg")?;
@@ -535,7 +535,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    #[cfg(feature = "otel-http")]
     #[tokio::test]
     async fn malformed_credentials_file_is_swallowed_as_anonymous() -> anyhow::Result<()> {
         let (_directory, path) = fresh_tmp_creds_path("malformed")?;

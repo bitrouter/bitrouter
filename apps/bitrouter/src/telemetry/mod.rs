@@ -12,7 +12,7 @@ pub const OTEL_ENABLED: bool = cfg!(any(feature = "otel-http", feature = "otel-g
 
 #[cfg(feature = "otel-http")]
 mod auth_client;
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 pub mod bearer;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod cardinality;
