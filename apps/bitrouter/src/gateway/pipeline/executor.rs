@@ -2399,61 +2399,10 @@ impl Executor for HttpExecutor {
 /// Routes outbound requests to one of several [`Executor`] implementations,
 /// keyed by [`RoutingTarget::api_protocol`].
 ///
-/// Use this when some providers use the built-in [`HttpExecutor`] +
-/// [`OutboundDispatch`] (HTTP / JSON / per-protocol auth header) and others
-/// bypass that machinery entirely — typically because they use a vendor SDK
-/// that owns the transport itself (illustrated below with a hypothetical
-/// `aws-sdk-bedrockruntime`-backed executor for AWS Bedrock's native Converse
-/// API). No built-in provider needs this today — BitRouter's `aws-bedrock`
-/// provider reaches Bedrock's OpenAI-compatible `bedrock-mantle` endpoints over
-/// the default `HttpExecutor` instead.
-///
 /// The `default` executor handles every protocol that is **not** explicitly
 /// registered. The three built-in protocols (`chat_completions` / `responses` /
 /// `messages`) should remain on the default `HttpExecutor`; only
 /// route `ApiProtocol::Custom(_)` protocols away from it.
-///
-/// ```no_run
-/// use std::sync::Arc;
-/// use bitrouter_ai::types::ApiProtocol;
-/// use bitrouter::gateway::assembly::App;
-/// use bitrouter::gateway::pipeline::executor::{DispatchExecutor, Executor, HttpExecutor};
-/// use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
-///
-/// # async fn run() -> bitrouter::gateway::error::Result<()> {
-/// # struct BedrockExecutor;
-/// # #[async_trait::async_trait]
-/// # impl Executor for BedrockExecutor {
-/// #     async fn execute(
-/// #         &self,
-/// #         _: &bitrouter::gateway::pipeline::types::RoutingTarget,
-/// #         _: &bitrouter_ai::types::Prompt,
-/// #         _: &bitrouter::gateway::pipeline::context::PipelineContext,
-/// #     ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::types::ExecutionResult> {
-/// #         unimplemented!()
-/// #     }
-/// #     async fn execute_stream(
-/// #         &self,
-/// #         _: &bitrouter::gateway::pipeline::types::RoutingTarget,
-/// #         _: &bitrouter_ai::types::Prompt,
-/// #         _: &bitrouter::gateway::pipeline::context::PipelineContext,
-/// #     ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::executor::StreamPartStream> {
-/// #         unimplemented!()
-/// #     }
-/// # }
-/// let http: Arc<dyn Executor> = Arc::new(HttpExecutor::with_defaults()?);
-/// let bedrock: Arc<dyn Executor> = Arc::new(BedrockExecutor);
-/// let executor = DispatchExecutor::new(http)
-///     .with(ApiProtocol::Custom("bedrock-claude".into()), bedrock);
-///
-/// let _app = App::builder()
-///     .language_model(|lm| {
-///         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-///           .executor(Arc::new(executor));
-///     })
-///     .build()?;
-/// # Ok(()) }
-/// ```
 pub struct DispatchExecutor {
     by_protocol: HashMap<ApiProtocol, Arc<dyn Executor>>,
     default: Arc<dyn Executor>,

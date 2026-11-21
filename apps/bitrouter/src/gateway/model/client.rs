@@ -79,33 +79,6 @@ impl Default for HttpTimeouts {
 /// discovery/login. Registered mechanisms may refresh the same selected account
 /// and retry once on 401. Provider HTTP statuses and
 /// retry hints remain domain facts for the caller's policy.
-///
-/// ```no_run
-/// use bitrouter::gateway::model::client::{HttpTimeouts, ModelClient};
-/// use bitrouter::gateway::model::target::ModelTarget;
-/// use bitrouter_ai::types::{ApiProtocol, Prompt};
-/// use bitrouter::gateway::model::target::AuthScheme;
-/// use tokio_util::sync::CancellationToken;
-///
-/// # async fn selected_call(prompt: &Prompt, credential: String) -> bitrouter::gateway::model::error::Result<()> {
-/// let target = ModelTarget {
-///     provider_name: "selected-provider".into(),
-///     service_id: "selected-native-model".into(),
-///     api_protocol: ApiProtocol::Responses,
-///     api_base: "https://api.openai.com/v1".into(),
-///     api_key: credential,
-///     credential_priority: Default::default(),
-///     account_label: None,
-///     auth_scheme: AuthScheme::Bearer,
-///     compatibility: Default::default(),
-/// };
-/// let client = ModelClient::new(HttpTimeouts::default())?;
-/// let cancellation = CancellationToken::new();
-/// let result = client.generate(&target, prompt, &cancellation).await?;
-/// # let _ = result;
-/// # Ok(())
-/// # }
-/// ```
 #[derive(Clone)]
 pub struct ModelClient {
     client: reqwest::Client,
