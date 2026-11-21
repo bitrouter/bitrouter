@@ -6,10 +6,10 @@ runs:
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
-    - name: Verify gRPC spans, metrics, metadata and shutdown flushing
+    - name: Verify gRPC authentication, spans, metrics and shutdown
       shell: bash
       run: |
         cargo nextest run --locked -p bitrouter --no-default-features \
           --features otel-grpc --lib --build-jobs 2 \
           --profile ci --test-threads 1 --retries 0 --no-tests fail \
-          -E 'test(/^tests::telemetry_grpc_transport::/)'
+          -E 'test(/^tests::telemetry_grpc_transport::/) | test(/^assemble::telemetry_opt_in_tests::/)'
