@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, linkSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync,
-  rmSync, writeFileSync } from 'node:fs';
+  renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { installEnv, tempRoot } from './environment.mjs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -22,6 +22,8 @@ const root = tempRoot('product update ');
 const windows = process.platform === 'win32';
 const ext = windows ? '.exe' : '';
 const names = { bitrouter: 'bitrouter', 'bitrouter-bro': 'bro' };
+const finalName = 'distribution-manifest.json';
+const legacyName = 'distribution-plan.json';
 const config = join(root, 'config');
 const cargo = join(root, 'cargo');
 const bin = pkg => join(cargo, 'bin', names[pkg] + ext);
@@ -79,7 +81,18 @@ async function pack(archive, source, name) {
     write(archive + '.sha256', digest(archive) + '  ' + basename(archive) + '\n');
   } finally { rmSync(temp, { recursive: true, force: true }); }
 }
-async function prepare(dir) {
+function publishInventory(dir, plan, target, legacy) {
+  const inventory = join(dir, legacy ? legacyName : finalName);
+  const products = plan.products.map(({ distributions, ...product }) => ({
+    ...product,
+    distributions: distributions.filter(d => d.target === target && (!d.profile || d.profile === 'full'))
+      .map(({ checksum, ...d }) => legacy ? { ...d, checksum } : { ...d, sha256: digest(join(dir, d.archive)) }),
+  }));
+  write(inventory, JSON.stringify({ ...plan, ...(!legacy && { schema: 'bitrouter.distribution.v1' }), products }));
+  return inventory;
+}
+
+async function prepare(dir, legacy) {
   const native = {};
   for (const [pkg, name] of Object.entries(names)) {
     const path = join(dir, name + ext);
@@ -107,31 +120,33 @@ async function prepare(dir) {
   }
   write(join(work, 'plan.json'), build(dist, ['plan', '--tag', tag, '-o', 'json']));
   const output = join(work, 'target/distrib');
-  const inventory = join(output, 'distribution-plan.json');
-  write(inventory, build(process.execPath, [join(scripts, 'release-plan.mjs'), 'plan.json']));
-  write(join(work, 'global.json'), build(dist, ['build', '--artifacts=global', '--tag', tag, '-o', 'json']));
-  build(process.execPath, [join(scripts, 'guard-installers.mjs'), 'global.json']);
-  const assets = [inventory];
-  for (const product of JSON.parse(readFileSync(inventory)).products) {
+  const nativeManifest = JSON.parse(readFileSync(join(work, 'plan.json')));
+  const plan = JSON.parse(build(process.execPath, [join(scripts, 'release-plan.mjs'), 'plan.json']));
+  const assets = [];
+  for (const product of plan.products) {
     const dist = product.distributions.find(d => d.target === target && (!d.profile || d.profile === 'full'));
     const archive = join(output, dist.archive);
     const name = names[product.package] + ext;
     await pack(archive, join(dir, name), name);
-    assets.push(archive, archive + '.sha256', join(output, product.package + '-installer.' + (windows ? 'ps1' : 'sh')));
+    nativeManifest.artifacts[dist.archive].checksums = { sha256: digest(archive) };
+    assets.push(archive, join(output, product.package + '-installer.' + (windows ? 'ps1' : 'sh')));
+    if (legacy) assets.push(archive + '.sha256');
   }
-  const entry = release(tag, assets, version.includes('-'));
+  write(join(output, 'fixture-dist-manifest.json'), JSON.stringify(nativeManifest));
+  write(join(work, 'global.json'), build(dist, ['build', '--artifacts=global', '--tag', tag, '-o', 'json']));
+  build(process.execPath, [join(scripts, 'guard-installers.mjs'), 'global.json']);
+  const inventory = publishInventory(output, plan, target, legacy);
+  const entry = release(tag, [inventory, ...assets], version.includes('-'));
   return { entry, tag, output, version, inventory, binaries: dir };
 }
 // Keep the native release archives intact. Copy only the files the test
 // mutates. The immutable originals also supply the independently expected bytes.
-function fromArchives(dir) {
-  const plan = JSON.parse(readFileSync(join(dir, 'distribution-plan.json')));
+function fromArchives(dir, legacy) {
+  const plan = JSON.parse(readFileSync(join(dir, legacyName)));
   const target = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)[1].trim();
   const output = join(root, plan.tag), binaries = join(output, 'bin');
-  const inventory = join(output, 'distribution-plan.json');
   mkdirSync(binaries, { recursive: true });
-  copyFileSync(join(dir, 'distribution-plan.json'), inventory);
-  const assets = [inventory];
+  const assets = [];
   const version = plan.products[0].version;
   assert.deepEqual(plan.products.map(p => p.package).sort(), Object.keys(names).sort());
   for (const product of plan.products) {
@@ -139,7 +154,7 @@ function fromArchives(dir) {
     assert.equal(product.version, version);
     assert.ok(dist, `missing native ${product.package} archive for ${target}`);
     const installer = product.package + '-installer.' + (windows ? 'ps1' : 'sh');
-    for (const file of [dist.archive, dist.checksum, installer]) {
+    for (const file of [dist.archive, installer, ...(legacy ? [dist.checksum] : [])]) {
       const dest = join(output, file);
       copyFileSync(join(dir, file), dest);
       assets.push(dest);
@@ -156,7 +171,9 @@ function fromArchives(dir) {
     rmSync(extracted, { recursive: true });
     console.log(`Verified ${dist.archive} contains ${dist.binary} ${version}`);
   }
-  return { tag: plan.tag, version, inventory, output, binaries, entry: release(plan.tag, assets, version.includes('-')) };
+  const inventory = publishInventory(output, plan, target, legacy);
+  return { tag: plan.tag, version, inventory, output, binaries,
+    entry: release(plan.tag, [inventory, ...assets], version.includes('-')) };
 }
 async function update(pkg, flags, refusal) {
   const env = { ...safeEnv, BITROUTER_INSTALLER_GHE_BASE_URL: base, BITROUTER_BRO_INSTALLER_GHE_BASE_URL: base };
@@ -166,15 +183,109 @@ async function update(pkg, flags, refusal) {
   } else return JSON.parse((await command).stdout);
 }
 function state(pkg) { return [digest(bin(pkg)), digest(receipt(pkg))]; }
+
+async function exerciseMissingWindowsCore({ coreBin, coreReceipt, nextReceipt, call, digest, requestCount }) {
+  const published = readFileSync(coreReceipt);
+  const prior = JSON.parse(published);
+  assert.equal(prior.install_layout, 'flat');
+  assert.notEqual(JSON.parse(nextReceipt).binary_sha256, prior.binary_sha256);
+  const prefix = dirname(coreBin);
+  const binLock = join(prefix, '.bitrouter-install-lock');
+  const receiptLock = join(dirname(coreReceipt), '.install-lock');
+  const journal = join(receiptLock, 'receipt');
+  const backup = join(receiptLock, 'previous.exe');
+  const relocated = join(prefix, 'relocated-bitrouter.exe');
+
+  for (const flags of [['--prefix', prefix], []]) {
+    // Model the interruption after self-replace relocated the installed image.
+    mkdirSync(join(binLock, 'lease-v1'), { recursive: true });
+    mkdirSync(join(receiptLock, 'lease-v1'), { recursive: true });
+    writeFileSync(journal, nextReceipt);
+    copyFileSync(coreBin, backup);
+    renameSync(coreBin, relocated);
+    const requestsBefore = requestCount();
+    const assertInterrupted = () => {
+      assert.ok(!existsSync(coreBin));
+      assert.ok(existsSync(join(binLock, 'lease-v1')));
+      assert.ok(existsSync(join(receiptLock, 'lease-v1')));
+      assert.deepEqual(readFileSync(coreReceipt), published);
+      assert.deepEqual(readFileSync(journal), nextReceipt);
+    };
+    assert.equal((await call('status', ...flags)).status, 'recovery_required');
+    assert.equal((await call('update', ...flags, '--check')).status, 'recovery_required');
+    assertInterrupted();
+    assert.equal(digest(backup), prior.binary_sha256);
+
+    if (flags.length) {
+      writeFileSync(backup, 'unverified recovery copy');
+      await assert.rejects(call('update', ...flags), error => {
+        assert.match(error.stderr, /recovery copy|conflicts with its receipt/i);
+        return true;
+      });
+      assertInterrupted();
+      assert.equal(readFileSync(backup, 'utf8'), 'unverified recovery copy');
+      copyFileSync(relocated, backup);
+    }
+
+    const release = flags.length ? ['--tag', 'v' + JSON.parse(nextReceipt).version] : ['--stable'];
+    const recovery = await call('update', ...flags, ...release);
+    assert.equal(recovery.status, 'recovered');
+    assert.equal(recovery.current_version, prior.version);
+    assert.equal(digest(coreBin), digest(relocated));
+    assert.deepEqual(readFileSync(coreReceipt), published);
+    assert.ok(!existsSync(binLock) && !existsSync(receiptLock));
+    assert.equal((await call('status', ...flags)).status, 'installed');
+    assert.equal(requestCount(), requestsBefore);
+    rmSync(relocated);
+  }
+}
+
+async function exerciseStandaloneCore(old, next) {
+  const standalone = join(root, 'standalone BRO');
+  const config = join(standalone, 'config');
+  const prefix = join(standalone, 'core bin');
+  const coreBin = join(prefix, names.bitrouter + ext);
+  const coreReceipt = join(config, 'bitrouter/bitrouter-receipt.json');
+  const bro = join(old.binaries, names['bitrouter-bro'] + ext);
+  const broHash = digest(bro);
+  const env = { ...safeEnv, XDG_CONFIG_HOME: config, LOCALAPPDATA: config,
+    BITROUTER_INSTALLER_GHE_BASE_URL: base };
+  const core = async (action, ...args) => JSON.parse((await exec(bro, [
+    '--endpoint', base + '/must-not-reach-gateway', 'core', action, ...args,
+  ], { env, cwd: root })).stdout);
+  const call = (action, ...args) => core(action, '--prefix', prefix, ...args);
+  assert.equal((await call('status')).status, 'missing');
+  assert.equal((await call('install', '--tag', old.tag)).current_version, old.version);
+  assert.equal((await call('install', '--tag', old.tag)).status, 'unchanged');
+  assert.equal((await call('status')).current_version, old.version);
+  const installed = [digest(coreBin), digest(coreReceipt)];
+  assert.equal((await call('update', '--check')).target_version, next.version);
+  assert.deepEqual([digest(coreBin), digest(coreReceipt)], installed);
+  assert.equal((await call('update', '-y')).target_version, next.version);
+  assert.equal(digest(coreBin), digest(join(next.binaries, names.bitrouter + ext)));
+  const nextReceipt = readFileSync(coreReceipt);
+  assert.equal((await call('update', '--tag', old.tag, '-y')).target_version, old.version);
+  assert.deepEqual([digest(coreBin), digest(coreReceipt)], installed);
+  if (windows && archiveMode) {
+    await exerciseMissingWindowsCore({ coreBin, coreReceipt, nextReceipt, call: core, digest,
+      requestCount: () => requests.length });
+  }
+  assert.equal(digest(bro), broHash);
+  assert.ok(!existsSync(join(config, 'bitrouter-bro')));
+  assert.ok(!requests.includes('/must-not-reach-gateway'));
+}
+
 try {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = 'http://127.0.0.1:' + server.address().port;
   write(join(safeEnv.BITROUTER_HOME, 'bitrouter.yaml'), '{}\n');
   const prepareRelease = archiveMode ? fromArchives : prepare;
-  const old = await prepareRelease(before), next = await prepareRelease(after);
+  const old = await prepareRelease(before, true), next = await prepareRelease(after, false);
+  await exerciseStandaloneCore(old, next);
   for (const pkg of Object.keys(names)) {
     const script = join(old.output, pkg + '-installer.' + (windows ? 'ps1' : 'sh'));
-    const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script] : [script];
+    const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      ...(pkg === 'bitrouter-bro' ? ['-BroOnly'] : [])] : [script];
     execFileSync(windows ? 'powershell.exe' : 'sh', args, { cwd: root,
       env: { ...safeEnv, INSTALLER_DOWNLOAD_URL: pathToFileURL(old.output).href } });
   }
@@ -240,27 +351,26 @@ try {
     // A valid inventory that points at the wrong native bytes must fail before replacement.
     const info = JSON.parse(readFileSync(next.inventory));
     const dist = info.products.find(p => p.package === pkg).distributions.find(d => d.target === JSON.parse(execFileSync(bin(pkg), ['--json','build-info'], {env:safeEnv})).target && (!d.profile || d.profile === 'full'));
-    const sidecar = join(next.output, dist.checksum);
-    const saved = readFileSync(sidecar);
-    write(sidecar, '0'.repeat(64) + '  ' + dist.archive + '\n');
+    const originalManifest = readFileSync(next.inventory);
+    dist.sha256 = '0'.repeat(64);
+    write(next.inventory, JSON.stringify(info));
     await update(pkg, ['--tag', next.tag, '-y'], /checksum mismatch/i);
-    write(sidecar, saved);
     // Exercise the actual executable identity check with a valid archive and checksum.
     const alternate = join(root, 'wrong ' + pkg, dist.archive);
     mkdirSync(dirname(alternate));
     await pack(alternate, join(next.binaries, names[peer] + ext), dist.binary);
     const archiveURL = '/' + next.tag + '/' + dist.archive;
-    const goodArchive = files.get(archiveURL), goodChecksum = files.get(archiveURL + '.sha256');
+    const goodArchive = files.get(archiveURL);
     files.set(archiveURL, alternate);
-    files.set(archiveURL + '.sha256', alternate + '.sha256');
+    dist.sha256 = digest(alternate);
+    write(next.inventory, JSON.stringify(info));
     await update(pkg, ['--tag', next.tag, '-y'], /staged build-info/i);
     files.set(archiveURL, goodArchive);
-    files.set(archiveURL + '.sha256', goodChecksum);
-    const originalPlan = readFileSync(next.inventory);
+    dist.sha256 = digest(goodArchive);
     info.source_revision += '-mismatch';
     write(next.inventory, JSON.stringify(info));
     await update(pkg, ['-y'], /staged build-info/i);
-    write(next.inventory, originalPlan);
+    write(next.inventory, originalManifest);
     assert.deepEqual(state(pkg), owned);
     assert.deepEqual(state(peer), peerBefore);
   }
@@ -270,17 +380,30 @@ try {
     const plan = JSON.parse(readFileSync(next.inventory));
     plan.tag = tag;
     plan.products = plan.products.filter(p => p.package === pkg);
-    const inventory = join(root, tag, 'distribution-plan.json');
+    const inventory = join(root, tag, finalName);
     write(inventory, JSON.stringify(plan));
     const namesForProduct = new Set(plan.products[0].installers.concat(
-      plan.products[0].distributions.flatMap(d => [d.archive, d.checksum])));
+      plan.products[0].distributions.map(d => d.archive)));
     release(tag, [inventory, ...next.entry.assets.filter(a => namesForProduct.has(a.name))
       .map(a => join(next.output, a.name))], true);
     assert.equal((await update(pkg, ['--tag', tag, '--check'])).target_version, next.version);
     await update(peer, ['--tag', tag, '-y'], /not a release for this product/);
   }
+  const validManifest = readFileSync(next.inventory);
+  const { schema, ...unversioned } = JSON.parse(validManifest);
+  assert.equal(schema, 'bitrouter.distribution.v1');
+  write(next.inventory, JSON.stringify(unversioned));
+  const fallbackPath = '/' + next.tag + '/' + legacyName;
+  next.entry.assets.push({ name: legacyName, browser_download_url: base + fallbackPath });
+  try {
+    await update('bitrouter', ['--tag', next.tag, '--check'], /manifest schema mismatch/i);
+    assert.ok(!requests.includes(fallbackPath));
+  } finally {
+    next.entry.assets.pop();
+    write(next.inventory, validManifest);
+  }
   const incomplete = release('v1.0.0', next.entry.assets
-    .filter(asset => asset.name !== 'distribution-plan.json')
+    .filter(asset => asset.name !== finalName)
     .map(asset => join(next.output, asset.name)), false);
   for (const pkg of Object.keys(names)) {
     const unchanged = state(pkg);
@@ -293,6 +416,8 @@ try {
   await update('bitrouter', ['--stable', '-y'], /distribution-plan.json/);
   assert.deepEqual(state('bitrouter'), serviceBefore);
   assert.ok(!requests.some(path => path.startsWith('/' + incomplete.tag_name + '/')));
+  assert.ok(requests.some(path => path.startsWith('/' + old.tag + '/') && path.endsWith('.sha256')));
+  assert.ok(!requests.some(path => path.startsWith('/' + next.tag + '/') && path.endsWith('.sha256')));
   assert.ok(!existsSync(safeEnv.BRO_HOME));
   console.log('Passed both CLI upgrades, pinned rollbacks, peer isolation and release/receipt refusal checks.');
 } finally {

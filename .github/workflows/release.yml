@@ -16,7 +16,7 @@
 
 name: Release
 permissions:
-  "contents": "write"
+  contents: read
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -45,6 +45,10 @@ on:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
@@ -54,13 +58,42 @@ jobs:
       tag: ${{ !github.event.pull_request && github.ref_name || '' }}
       tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
       publishing: ${{ !github.event.pull_request }}
+      packaging: ${{ steps.exposure.outputs.packaging }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 2
           persist-credentials: false
           submodules: recursive
+      - id: exposure
+        name: Detect packaging and shared changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ -z "$BASE_SHA" ]]; then
+            echo "packaging=true" >> "$GITHUB_OUTPUT"
+            exit
+          fi
+          git diff --name-only --no-renames -z "$BASE_SHA" HEAD -- > "$RUNNER_TEMP/release-paths"
+          packaging=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .github/workflows/release.yml|.github/workflows/gateway-artifacts.yml|.github/workflows/distribution-acceptance.yml|.github/workflows/release-plz.yml|.github/workflows/package.yml|.github/actions/*|\
+              .cargo/*|.gitattributes|.gitmodules|Cargo.toml|Cargo.lock|rust-toolchain*|dist-workspace.toml|release-plz.toml|\
+              README.md|LICENSE*|CHANGELOG.md|docs/specs/*|docs/DISTRIBUTION.md|docs/SHARED_GATEWAY_DISTRIBUTION.md|skills/bitrouter/references/updating.md|\
+              apps/bitrouter/*|apps/bro/Cargo.toml|apps/bro/build.rs|apps/bro/registry-dist/*|\
+              apps/bro/src/main.rs|apps/bro/src/update.rs|apps/bro/src/core.rs|apps/bro/src/core/*|apps/bro/src/gateway.rs|apps/bro/src/runner.rs|apps/bro/src/tree.rs|\
+              apps/bro/src/acp.rs|apps/bro/src/acp/serve.rs|apps/bro/src/acp/serve/*|\
+              crates/*|helpers/*|extensions/*|dist/*|registry/*|templates/*)
+                packaging=true
+                break
+                ;;
+            esac
+          done < "$RUNNER_TEMP/release-paths"
+          echo "packaging=$packaging" >> "$GITHUB_OUTPUT"
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -96,6 +129,7 @@ jobs:
     permissions:
       contents: read
     needs: plan
+    if: needs.plan.outputs.packaging == 'true'
     name: installer-ownership (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -103,7 +137,6 @@ jobs:
         include:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-22.04 }
           - { target: aarch64-apple-darwin, os: macos-15 }
           - { target: x86_64-pc-windows-msvc, os: windows-2022 }
     runs-on: ${{ matrix.os }}
@@ -115,41 +148,24 @@ jobs:
           ref: ${{ env.BITROUTER_BUILD_REVISION }}
           persist-credentials: false
       - name: Install dist on Unix
-        if: runner.os != 'Windows' && matrix.target != 'x86_64-unknown-linux-musl'
+        if: runner.os != 'Windows'
         shell: bash
         run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh
       - name: Install dist on Windows
         if: runner.os == 'Windows'
         run: irm https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.ps1 | iex
       - name: Exercise both package installers across two releases
-        if: matrix.target != 'x86_64-unknown-linux-musl'
         run: node helpers/dist-helper/packaging/tests/install.mjs
       - name: Build native BitRouter and BRO archives and run both update commands
-        if: matrix.target != 'x86_64-unknown-linux-musl'
         run: node helpers/dist-helper/packaging/tests/native-updates.mjs ${{ matrix.target }}
-      - name: Build and exercise both products on native musl
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        shell: bash
-        run: |
-          docker run --rm -i --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/src,readonly" \
-            --workdir /src --env BITROUTER_BUILD_REVISION rust:1-alpine3.23 sh -eu <<'SH'
-          apk add --no-cache bash build-base cmake coreutils curl git jq linux-headers nodejs perl pkgconf tar xz
-          git config --global --add safe.directory /src
-          git config --global --add safe.directory /src/.git
-          curl --proto '=https' --tlsv1.2 -LsSf -o /tmp/install-dist.sh https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh
-          sh /tmp/install-dist.sh
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          node helpers/dist-helper/packaging/tests/install.mjs
-          node helpers/dist-helper/packaging/tests/native-updates.mjs x86_64-unknown-linux-musl
-          SH
 
   # Build and packages all the platform-specific things
   build-local-artifacts:
     name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
-    # Let the initial task tell us to not run (currently very blunt)
+    # The plan supplies both the native matrix and the packaging gate.
     needs:
       - plan
-    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
+    if: ${{ needs.plan.outputs.packaging == 'true' && fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null }}
     strategy:
       fail-fast: false
       # Target platforms/runners are computed by dist in create-release.
@@ -227,7 +243,7 @@ jobs:
   custom-gateway-artifacts:
     needs:
       - plan
-    if: ${{ needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload' }}
+    if: ${{ needs.plan.outputs.packaging == 'true' && contains(fromJson(needs.plan.outputs.val).releases.*.app_name, 'bitrouter') }}
     uses: ./.github/workflows/gateway-artifacts.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
@@ -241,7 +257,7 @@ jobs:
       - custom-gateway-artifacts
       - installer-ownership
     if: >-
-      ${{ always() && needs.plan.result == 'success' && needs.installer-ownership.result == 'success' &&
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.installer-ownership.result == 'success' &&
           needs.build-local-artifacts.result == 'success' &&
           (needs.custom-gateway-artifacts.result == 'success' ||
            (!contains(fromJson(needs.plan.outputs.val).releases.*.app_name, 'bitrouter') && needs.custom-gateway-artifacts.result == 'skipped')) }}
@@ -249,6 +265,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -273,7 +290,10 @@ jobs:
           dist build ${{ needs.plan.outputs.tag-flag }} --output-format=json "--artifacts=global" > dist-manifest.json
           echo "dist ran successfully"
 
-          node helpers/dist-helper/packaging/guard-installers.mjs dist-manifest.json
+          node helpers/dist-helper/packaging/guard-installers.mjs dist-manifest.json target/distrib
+          node helpers/dist-helper/packaging/release-plan.mjs --finalize \
+            target/distrib/plan-dist-manifest.json target/distrib > target/distribution-manifest.json
+          mv target/distribution-manifest.json target/distrib/
 
           # Parse out what we just built and upload it to scratch storage
           echo "paths<<EOF" >> "$GITHUB_OUTPUT"
@@ -288,8 +308,11 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+            target/distrib/distribution-manifest.json
   # Determines if we should publish/announce
   host:
+    permissions:
+      contents: write
     needs:
       - plan
       - build-local-artifacts
@@ -300,8 +323,6 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"
-    outputs:
-      val: ${{ steps.host.outputs.manifest }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -320,17 +341,34 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
-      - name: Require every planned installer, archive and checksum
-        working-directory: target/distrib
+      - name: Stage the verified public release assets
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          jq -r '.products[] | .installers[], (.distributions[] | .archive, .checksum)' distribution-plan.json > "$RUNNER_TEMP/expected-assets"
-          while IFS= read -r asset; do test -s "$asset" || { echo "Missing $asset"; exit 1; }; done < "$RUNNER_TEMP/expected-assets"
+          mkdir public-assets
+          inventory=target/distrib/distribution-manifest.json
+          jq -e --arg tag "$RELEASE_TAG" --arg revision "$GITHUB_SHA" \
+            '.schema == "bitrouter.distribution.v1" and .tag == $tag and .source_revision == $revision' "$inventory"
+          expected="$RUNNER_TEMP/release-public-asset-names"
+          jq -r '.products[] | .installers[], .distributions[].archive' "$inventory" > "$expected"
+          if jq -e '.artifacts | has("source.tar.gz")' target/distrib/global-dist-manifest.json >/dev/null; then
+            echo source.tar.gz >> "$expected"
+          fi
+          echo distribution-manifest.json >> "$expected"
+          while IFS= read -r asset; do
+            if [[ "$asset" == */* || "$asset" == *.sha256 || ! -s "target/distrib/$asset" ]]; then
+              echo "::error::Missing or invalid public release asset $asset"
+              exit 1
+            fi
+            ln "target/distrib/$asset" public-assets/
+          done < "$expected"
+          find target/distrib -maxdepth 1 -type f -name '*.sha256' -delete
       - id: host
         shell: bash
         run: |
-          dist host ${{ needs.plan.outputs.tag-flag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
-          echo "artifacts uploaded and released successfully"
-          cat dist-manifest.json
+          # GitHub asset upload is handled by CI with the staged public list.
+          dist host ${{ needs.plan.outputs.tag-flag }} --steps=release --output-format=json > dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
         uses: actions/upload-artifact@v6
@@ -338,26 +376,32 @@ jobs:
           # Overwrite the previous copy
           name: artifacts-dist-manifest
           path: dist-manifest.json
-      # Create a GitHub Release while uploading all files to it
-      - name: "Download GitHub Artifacts"
-        uses: actions/download-artifact@v7
-        with:
-          pattern: artifacts-*
-          path: artifacts
-          merge-multiple: true
-      - name: Cleanup
-        run: |
-          # Remove the granular manifests
-          rm -f artifacts/*-dist-manifest.json
       - name: Create GitHub Release
+        shell: bash
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
           RELEASE_COMMIT: "${{ github.sha }}"
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
         run: |
-          # If we're editing a release in place, we need to upload things ahead of time
-          gh release upload "${{ needs.plan.outputs.tag }}" artifacts/*
+          assets=(public-assets/*)
+          expected=$(printf '%s\n' "${assets[@]##*/}" | jq -Rsc 'split("\n")[:-1] | sort')
+          # A retry can replace assets from a partial upload while the release is a draft.
+          release=$(gh release view "$RELEASE_TAG" --json isDraft,assets)
+          if ! jq -e --argjson expected "$expected" \
+            '.isDraft and (((.assets | map(.name)) - $expected) | length == 0)' <<< "$release" >/dev/null; then
+            echo "::error::Expected a draft release containing only planned public assets"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
-          gh release edit "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --draft=false
+          release=$(gh release view "$RELEASE_TAG" --json isDraft,assets)
+          if ! jq -e --argjson expected "$expected" \
+            '.isDraft and ((.assets | map(.name) | sort) == $expected)' <<< "$release" >/dev/null; then
+            echo "::error::The draft release asset set differs from the verified public assets"
+            exit 1
+          fi
+
+          gh release edit "$RELEASE_TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --draft=false
 
   publish-homebrew-formula:
     needs:
@@ -369,7 +413,9 @@ jobs:
       PLAN: ${{ needs.plan.outputs.val }}
       GITHUB_USER: "axo bot"
       GITHUB_EMAIL: "admin+bot@axo.dev"
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    if: >-
+      ${{ contains(fromJson(needs.plan.outputs.val).releases.*.app_name, 'bitrouter') &&
+          (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -412,8 +458,10 @@ jobs:
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PLAN: ${{ needs.plan.outputs.val }}
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    if: >-
+      ${{ contains(fromJson(needs.plan.outputs.val).releases.*.app_name, 'bitrouter') &&
+          contains(fromJson(needs.plan.outputs.val).releases.*.app_name, 'bitrouter-bro') &&
+          (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     steps:
       - name: Fetch npm packages
         uses: actions/download-artifact@v7
@@ -425,11 +473,7 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
-      - run: |
-          while IFS= read -r release; do
-            pkg=$(echo "$release" | jq '.artifacts[] | select(endswith("-npm-package.tar.gz"))' --raw-output)
-            npm publish --access public "./npm/${pkg}"
-          done < <(jq -c '.releases[] | select(any(.artifacts[]; endswith("-npm-package.tar.gz")))' <<< "$PLAN")
+      - run: npm publish --access public ./npm/bitrouter-bro-npm-package.tar.gz
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

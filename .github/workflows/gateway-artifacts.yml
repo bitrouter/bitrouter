@@ -28,7 +28,6 @@ jobs:
           - aarch64-apple-darwin
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
           - x86_64-pc-windows-msvc
         include:
           - target: aarch64-apple-darwin
@@ -40,8 +39,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             container: ubuntu:22.04
-          - target: x86_64-unknown-linux-musl
-            runner: ubuntu-22.04
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
     runs-on: ${{ matrix.runner }}
@@ -73,9 +70,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
-      - name: Install musl linker
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build and package selected gateway distribution
         shell: bash
         run: |
@@ -146,15 +140,21 @@ jobs:
           export BITROUTER_TEST_SDK_CONSUMER_BINARY="$consumer_binary"
           cargo test --locked -p bitrouter --no-default-features --test packaged_gateway \
             packaged_gateway_independent_sdk_consumer -- --ignored --exact --nocapture
+      - name: Stage the verified gateway archive
+        shell: bash
+        run: |
+          archive="bitrouter-$PACKAGE_DISTRIBUTION-$PACKAGE_TARGET"
+          if [[ "$PACKAGE_TARGET" == *windows* ]]; then archive+=.zip; else archive+=.tar.gz; fi
+          # Use a single workspace-relative upload root. On container runners
+          # the host and container can spell the temporary directory differently.
+          mkdir -p target/gateway-release
+          cp -- "$PACKAGE_OUTPUT/$archive" "$PACKAGE_OUTPUT/$archive.sha256" target/gateway-release/
       - name: Upload verified gateway archives
         uses: actions/upload-artifact@v6
         with:
           name: artifacts-${{ matrix.profile }}-${{ matrix.target }}
           if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/gateway-artifacts/*.tar.gz
-            ${{ runner.temp }}/gateway-artifacts/*.zip
-            ${{ runner.temp }}/gateway-artifacts/*.sha256
+          path: target/gateway-release/
 
   shared-postgres-processes:
     name: packaged shared gateway (PostgreSQL processes)

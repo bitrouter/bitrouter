@@ -2,6 +2,7 @@
 mod acp;
 mod catalog;
 mod checkpoint;
+mod core;
 mod durable;
 mod gateway;
 mod harness;
@@ -62,6 +63,11 @@ enum Command {
     BuildInfo,
     /// Update the standalone BRO installation.
     Update(update::Options),
+    /// Manage the local BitRouter gateway binary.
+    Core {
+        #[command(subcommand)]
+        action: core::Action,
+    },
     /// Submit a headless coding task.
     Task {
         #[command(subcommand)]
@@ -286,6 +292,10 @@ async fn dispatch(cli: Cli) -> Result<i32> {
     }
     if let Command::Update(options) = cli.command {
         update::run(options).await?;
+        return Ok(0);
+    }
+    if let Command::Core { action } = cli.command {
+        core::run(action).await?;
         return Ok(0);
     }
     if let Command::Skills { action } = cli.command {

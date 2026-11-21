@@ -56,16 +56,21 @@ pub(crate) async fn run(opts: Options) -> Result<()> {
         install.finish_interrupted()?;
         return crate::emit(&json!({"status":"unchanged","current_version":current}));
     }
-    if !opts.yes {
-        eprint!("Update BRO from {current} to {version}? [y/N] ");
-        io::stderr().flush()?;
-        let mut line = String::new();
-        io::stdin().read_line(&mut line)?;
-        if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            return crate::emit(&json!({"status":"aborted","current_version":current}));
-        }
+    if !opts.yes && !confirm("BRO", current, &version)? {
+        return crate::emit(&json!({"status":"aborted","current_version":current}));
     }
     let candidate = release.stage().await?;
     install.apply(candidate)?;
     crate::emit(&json!({"status":"updated","current_version":current,"target_version":version}))
+}
+
+pub(crate) fn confirm(product: &str, current: &str, version: &str) -> Result<bool> {
+    eprint!("Update {product} from {current} to {version}? [y/N] ");
+    io::stderr().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }

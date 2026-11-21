@@ -4,7 +4,11 @@
 pub mod channel;
 pub mod install;
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 /// The two packages distributed by the release plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +34,8 @@ impl Product {
         }
     }
 
-    fn binary(self) -> String {
+    /// Native executable filename for the current platform.
+    pub fn binary(self) -> String {
         format!("{}{}", self.command(), std::env::consts::EXE_SUFFIX)
     }
 }
@@ -71,6 +76,62 @@ pub fn cargo_home() -> Option<PathBuf> {
         .or_else(|| std::env::home_dir().map(|h| h.join(".cargo")))
 }
 
+/// Find the combined npm package containing a canonical native executable.
+///
+/// Requires the packaged layout and the enclosing `bitrouter-bro` manifest.
+pub fn paired_npm_root(product: Product, exe: &Path) -> Option<&Path> {
+    let native_root = exe.parent()?.parent()?.parent()?;
+    let package = match product {
+        Product::Bro => native_root,
+        Product::Service if native_root.file_name()? == "core" => native_root.parent()?,
+        Product::Service => return None,
+    };
+    if exe
+        != native_root
+            .join("node_modules")
+            .join(".bin_real")
+            .join(product.binary())
+    {
+        return None;
+    }
+    combined_manifest(package).map(|_| package)
+}
+
+/// Find the combined npm package owning a canonical BitRouter launcher.
+///
+/// Requires the installed package directory and its exact service bin entry.
+pub fn paired_npm_launcher(launcher: &Path) -> Option<&Path> {
+    const ENTRY: &str = "core/run-bitrouter.js";
+    let package = launcher.parent()?.parent()?;
+    if launcher != package.join(ENTRY)
+        || package.file_name()? != Product::Bro.package()
+        || package.parent()?.file_name()? != "node_modules"
+    {
+        return None;
+    }
+    let manifest = combined_manifest(package)?;
+    (manifest["bin"][Product::Service.command()] == ENTRY).then_some(package)
+}
+
+fn combined_manifest(package: &Path) -> Option<serde_json::Value> {
+    const MAX_MANIFEST: u64 = 128 * 1024;
+    let path = package.join("package.json");
+    if !path.symlink_metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_MANIFEST + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_MANIFEST {
+        return None;
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    (manifest["name"] == Product::Bro.package()).then_some(manifest)
+}
+
 /// Product-specific package-manager instructions for an unmanaged executable.
 pub fn manual_command(product: Product, method: &str) -> String {
     let pkg = product.package();
@@ -79,5 +140,36 @@ pub fn manual_command(product: Product, method: &str) -> String {
         "npm" => format!("npm i -g {pkg}@latest"),
         "homebrew" => format!("brew upgrade {pkg}"),
         _ => format!("Use the {pkg} installer from a split release matching this platform."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_only_the_combined_npm_layout() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let package = root.path().canonicalize()?.join("bitrouter-bro");
+        let bro_dir = package.join("node_modules/.bin_real");
+        let core_dir = package.join("core/node_modules/.bin_real");
+        std::fs::create_dir_all(&bro_dir)?;
+        std::fs::create_dir_all(&core_dir)?;
+        std::fs::write(package.join("package.json"), r#"{"name":"bitrouter-bro"}"#)?;
+        assert_eq!(
+            paired_npm_root(Product::Bro, &bro_dir.join(Product::Bro.binary())),
+            Some(package.as_path())
+        );
+        let core = core_dir.join(Product::Service.binary());
+        assert_eq!(
+            paired_npm_root(Product::Service, &core),
+            Some(package.as_path())
+        );
+        assert!(
+            paired_npm_root(Product::Service, &bro_dir.join(Product::Service.binary())).is_none()
+        );
+        std::fs::write(package.join("package.json"), r#"{"name":"bitrouter"}"#)?;
+        assert!(paired_npm_root(Product::Service, &core).is_none());
+        Ok(())
     }
 }
