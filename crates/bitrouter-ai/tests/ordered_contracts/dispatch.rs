@@ -1,4 +1,5 @@
 use super::*;
+use serde::Deserialize;
 
 fn documents_with_dispatch(
     receipt: &ExecutionReceipt,
@@ -109,6 +110,14 @@ fn dispatch_keeps_exact_numeric_tokens_in_all_three_contracts() -> TestResult {
         assert_eq!(decoded.dispatch, original.dispatch);
         serde_json::from_str::<ExecutionUsageEvidence>(&evidence_json)?
             .validate_against(&decoded)?;
+        let direct =
+            ExecutionReceipt::deserialize(&mut serde_json::Deserializer::from_str(&receipt_json))?;
+        direct.validate()?;
+        assert_eq!(direct.dispatch, original.dispatch);
+        ExecutionUsageEvidence::deserialize(&mut serde_json::Deserializer::from_str(
+            &evidence_json,
+        ))?
+        .validate_against(&direct)?;
     }
     for invalid in [
         raw.replace(
@@ -138,7 +147,14 @@ fn receipt_rejects_positional_root() -> TestResult {
     let ordered = receipt(1)?;
     for receipt in [strict_receipt(&ordered)?, ordered] {
         strict_object(&receipt)?;
-        serde_json::from_str::<ExecutionReceipt>(&serde_json::to_string(&receipt)?)?.validate()?;
+        let raw = serde_json::to_string(&receipt)?;
+        serde_json::from_str::<ExecutionReceipt>(&raw)?.validate()?;
+        let direct = ExecutionReceipt::deserialize(&mut serde_json::Deserializer::from_str(&raw))?;
+        direct.validate()?;
+        assert_eq!(
+            serde_json::to_value(&direct)?,
+            serde_json::to_value(&receipt)?
+        );
         let object = serde_json::to_value(&receipt)?;
         let positional = json!([
             object["dispatch"],
@@ -155,6 +171,13 @@ fn receipt_rejects_positional_root() -> TestResult {
             object["recorded_at"]
         ]);
         assert!(serde_json::from_str::<ExecutionReceipt>(&positional.to_string()).is_err());
+        assert!(
+            ExecutionReceipt::deserialize(&mut serde_json::Deserializer::from_str(
+                &positional.to_string()
+            ))
+            .is_err(),
+            "direct receipt deserialize accepted a positional root"
+        );
         assert!(serde_json::from_value::<ExecutionReceipt>(positional).is_err());
     }
     Ok(())
@@ -166,8 +189,15 @@ fn evidence_rejects_positional_root() -> TestResult {
     for receipt in [strict_receipt(&ordered)?, ordered] {
         let document = evidence(&receipt);
         strict_object(&document)?;
-        serde_json::from_str::<ExecutionUsageEvidence>(&serde_json::to_string(&document)?)?
-            .validate_against(&receipt)?;
+        let raw = serde_json::to_string(&document)?;
+        serde_json::from_str::<ExecutionUsageEvidence>(&raw)?.validate_against(&receipt)?;
+        let direct =
+            ExecutionUsageEvidence::deserialize(&mut serde_json::Deserializer::from_str(&raw))?;
+        direct.validate_against(&receipt)?;
+        assert_eq!(
+            serde_json::to_value(&direct)?,
+            serde_json::to_value(&document)?
+        );
         let object = serde_json::to_value(&document)?;
         let positional = json!([
             object["dispatch"],
@@ -186,6 +216,13 @@ fn evidence_rejects_positional_root() -> TestResult {
             object["dropped_frames"]
         ]);
         assert!(serde_json::from_str::<ExecutionUsageEvidence>(&positional.to_string()).is_err());
+        assert!(
+            ExecutionUsageEvidence::deserialize(&mut serde_json::Deserializer::from_str(
+                &positional.to_string()
+            ))
+            .is_err(),
+            "direct evidence deserialize accepted a positional root"
+        );
         assert!(serde_json::from_value::<ExecutionUsageEvidence>(positional).is_err());
     }
     Ok(())

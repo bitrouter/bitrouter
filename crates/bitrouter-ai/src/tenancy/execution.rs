@@ -229,8 +229,7 @@ pub enum ReceiptState {
 }
 
 /// Owner-bound facts of one actual invocation. Correlation never deduplicates it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(remote = "Self", deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ExecutionReceipt {
     /// Strict or ordered dispatch, including the accepted ordered selection.
     pub dispatch: Dispatch,
@@ -258,10 +257,21 @@ pub struct ExecutionReceipt {
     pub recorded_at: Timestamp,
 }
 
-impl Serialize for ExecutionReceipt {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        Self::serialize(self, serializer)
-    }
+#[derive(Deserialize)]
+#[serde(remote = "ExecutionReceipt", deny_unknown_fields)]
+struct ReceiptFields {
+    dispatch: Dispatch,
+    installation_id: InstallationId,
+    tenant_id: TenantId,
+    principal_id: PrincipalId,
+    execution_id: ExecutionId,
+    correlation_id: CorrelationId,
+    execution_revision: RevisionId,
+    state: ReceiptState,
+    outcome: Outcome,
+    attempts: Vec<Attempt>,
+    usage: Usage,
+    recorded_at: Timestamp,
 }
 
 impl<'de> Deserialize<'de> for ExecutionReceipt {
@@ -279,7 +289,7 @@ impl<'de> Deserialize<'de> for ExecutionReceipt {
                 map: M,
             ) -> Result<Self::Value, M::Error> {
                 // Forward original field tokens to the closed derived decoder.
-                ExecutionReceipt::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                ReceiptFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
             }
         }
         deserializer.deserialize_map(Object)
