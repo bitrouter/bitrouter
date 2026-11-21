@@ -3426,14 +3426,10 @@ pub(crate) mod hop_tests {
 
     #[tokio::test]
     async fn bridge_ingress_span_still_parents_chat() {
-        // The `tracing` ↔ OTel bridge is no longer how *BitRouter's* ingress
-        // span reaches the exporter, but it is still how a host that builds
-        // its own `tracing` SERVER span reaches it — `bitrouter-cloud` is
-        // exactly that host, and it would export orphaned `chat` roots if
-        // this arm of `start_request_span` were dropped as dead code.
-        //
-        // Nothing else in the tree covers this path now that
-        // `observe_hierarchy.rs` tests the native one, so it is covered here.
+        // A custom host can provide its own `tracing` SERVER span through the
+        // OTel bridge. The resulting `chat` span must retain that parent.
+        // Native BitRouter ingress is covered separately by
+        // `observe_hierarchy.rs`.
         use tracing_opentelemetry::OpenTelemetrySpanExt as _;
         use tracing_subscriber::layer::SubscriberExt as _;
 

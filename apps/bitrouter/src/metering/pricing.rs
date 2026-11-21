@@ -19,24 +19,13 @@ use sha2::{Digest, Sha256};
 
 /// Per-model pricing, in **micro-USD per token**.
 ///
-/// Each rate is `Option<f64>` so a *partially-configured* entry — e.g. input
-/// rate set, output rate omitted — can be distinguished from one that has
-/// been deliberately set to zero. Previously both were `0.0` and the charge
-/// math silently undercharged every output token for the partially-priced
-/// case (v0 bitrouter#463 / cloud#251 audit B4).
+/// Each rate is `Option<f64>` so an omitted price differs from an explicit zero.
+/// An all-`None` entry is unconfigured. If any token bucket with nonzero usage
+/// lacks a rate, `calculate_charge_micro_usd` returns `None`; settlement records
+/// an unknown charge instead of treating those tokens as free.
 ///
-/// Defences:
-/// - **#180** — a default (all-`None`) `ModelPricing` is treated as
-///   *unconfigured*: settlement records an explicit unknown charge rather
-///   than silently treating the request as zero cost.
-/// - **bitrouter#463-A** — if any token bucket with nonzero usage lacks a
-///   rate, `calculate_charge_micro_usd` returns `None` and the charge is
-///   skipped. A model with input rate set but `output_micro_usd_per_token`
-///   missing no longer bills every output token at $0.
-/// - **#440 → #441** — pricing lookup covers every level; a `(provider,
-///   model)` miss is reported, not papered over.
-/// - **#443 → #445** — the lookup is keyed by `(provider, service_id)` so a
-///   service id that differs from the public model name still resolves.
+/// Pricing lookup reports missing rates and uses `(provider, service_id)` so
+/// provider-native service identifiers resolve independently of public model names.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
     /// Published processing-profile provenance, retained across tier selection.

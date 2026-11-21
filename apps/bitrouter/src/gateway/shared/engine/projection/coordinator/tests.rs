@@ -507,7 +507,7 @@ async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Resu
     let mut old_capture = original.clone();
     old_capture["projection"]["policy"]["guarded"] = true.into();
     let mut old_binding = original.clone();
-    let binding = serde_json::json!({"owner_user_id": original["tenant_id"], "episode_id":"retired", "request_id":"retired", "correlation_epoch":"retired"});
+    let binding = serde_json::json!({"owner_user_id": original["tenant_id"], "episode_id":"unsupported", "request_id":"unsupported", "correlation_epoch":"unsupported"});
     old_binding["trajectory"] = binding.clone();
     let mut missing_capture = original.clone();
     missing_capture["projection"] = serde_json::Value::Null;
@@ -531,7 +531,7 @@ async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Resu
         let rejected = join_engine(store.clone(), key).await;
         ensure!(
             rejected.is_err(),
-            "retired execution registered a new incarnation"
+            "unsupported execution registered a new incarnation"
         );
         ensure!(record_snapshot(store).await? == before);
         ensure!(evidence_snapshot(engine).await? == evidence);
@@ -556,7 +556,7 @@ async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Resu
         let before = record_snapshot(store).await?;
         ensure!(
             join_engine(store.clone(), key).await.is_err(),
-            "retired projection registered an incarnation"
+            "unsupported projection registered an incarnation"
         );
         ensure!(record_snapshot(store).await? == before);
         replace_body(store, "projection_receipt", receipt_key, &original_receipt).await?;
@@ -567,7 +567,7 @@ async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Resu
         uuid::Uuid::new_v4().simple()
     );
     store.database().execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-        "INSERT INTO gateway_shared_records (id,namespace,kind,key,revision,status,due_at_ms,updated_at_ms,body) VALUES ($1,$2,'episode_fence','retired-fence',0,'pending',NULL,0,'{}')",
+        "INSERT INTO gateway_shared_records (id,namespace,kind,key,revision,status,due_at_ms,updated_at_ms,body) VALUES ($1,$2,'episode_fence','unsupported-fence',0,'pending',NULL,0,'{}')",
         [guard_id.clone().into(), store.namespace().into()]
     )).await?;
     let before = record_snapshot(store).await?;
@@ -585,7 +585,7 @@ async fn prejoin_rejects_guarded_history(engine: &Engine, key: [u8; 32]) -> Resu
         ("guard_activated", "request_started"),
         ("request_started", "guard_activated"),
     ] {
-        let event = format!("retired-{}", uuid::Uuid::new_v4());
+        let event = format!("unsupported-{}", uuid::Uuid::new_v4());
         store.database().execute(Statement::from_sql_and_values(DatabaseBackend::Postgres,
             "INSERT INTO gateway_shared_trajectory_events (namespace,owner_user_id,event_id,episode_id,request_id,sequence,kind,captured_at,content_digest,event_json) VALUES ($1,'tenant',$2,$2,NULL,1,$3,'2026-11-18T00:00:00Z',$4,$5)",
             [store.namespace().into(), event.clone().into(), kind.into(), format!("sha256:{}", "a".repeat(64)).into(), serde_json::json!({"kind":json_kind}).to_string().into()]

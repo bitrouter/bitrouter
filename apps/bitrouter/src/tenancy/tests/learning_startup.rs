@@ -1,6 +1,6 @@
-//! An interrupted predecessor judge sent one request before it was killed.
-//! The three serialized rows are from that stopped SQLite database. Mount them
-//! under their original installation and tenant; no producer or judge is needed.
+//! Interrupted paid-work fixtures retain their installation and tenant identity.
+//! Startup must preserve accepted rows and recovered receipts across repeated
+//! opens without dispatching additional provider work.
 
 #![cfg(unix)]
 
@@ -101,9 +101,9 @@ async fn interrupted_paid_work_fences_restart_and_preserves_original_rows() -> R
     Ok(())
 }
 
-/// A predecessor crash left one paid request without a terminal observation.
-/// Its original M0 repair produced an Unknown receipt and its obligation. Read
-/// those exact bytes through the current receipt integrity checks on two boots.
+/// A paid request without a terminal observation retains its Unknown receipt
+/// and usage obligation. Reopening twice must preserve their exact identity and
+/// bytes through the current receipt integrity checks.
 #[tokio::test]
 async fn recovered_paid_receipts_and_usage_keep_original_identity_on_restart() -> Result<()> {
     use crate::tenancy::receipts::store::lookup_candidate;

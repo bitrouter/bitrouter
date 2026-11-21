@@ -1,4 +1,4 @@
-//! Literal remaining M0 scenarios through the existing authority actor.
+//! Authority and configuration invariants exercised through the service actor.
 use super::*;
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},

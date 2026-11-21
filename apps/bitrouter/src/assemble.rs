@@ -2335,9 +2335,8 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 /// account.
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
-/// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a `TelemetryBearer`
-/// source the async call site builds (refresh-aware), so account attribution
+/// The signed-in account bearer is resolved live per export by a refresh-aware
+/// `TelemetryBearer` source built at the async call site, so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
 ///
@@ -2351,9 +2350,8 @@ fn build_telemetry_otel_config(opt_in: TelemetryOptIn, install_id: Option<String
     // Resolve the EXPLICIT static token (config `bearer_token`, else the
     // `BITROUTER_TELEMETRY_TOKEN` env var). `attribution: anonymous` forces no
     // bearer regardless — even an explicit token is dropped (the opt-out
-    // guarantee). The account bearer is NO LONGER snapshotted here: when wanted
-    // (auto/account, no explicit token) it is the live source the call site
-    // attaches, refreshed per export.
+    // guarantee). For auto/account attribution without an explicit token,
+    // the call site attaches a live account bearer source, refreshed per export.
     let explicit = opt_in
         .bearer_token
         .or_else(|| std::env::var("BITROUTER_TELEMETRY_TOKEN").ok());
@@ -2783,7 +2781,7 @@ mod otel_config_tests {
             build_otel_config(&config, || None)
                 .expect("an unknown sub-key is not an error")
                 .is_none(),
-            "otlp_endpoint must no longer wire an exporter"
+            "unknown otlp_endpoint must not wire an exporter"
         );
     }
 

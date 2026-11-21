@@ -1,5 +1,5 @@
-//! One stock-process A07 candidate. Observe real socket backpressure, resume
-//! the reader to demonstrate progress, then leave it open for the write stall.
+//! Socket backpressure against a stock gateway: resume the reader to verify
+//! progress, then leave it open to exercise the downstream write deadline.
 
 use std::future::Future;
 use std::io::{self, IoSlice};

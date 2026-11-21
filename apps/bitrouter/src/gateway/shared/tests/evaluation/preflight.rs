@@ -203,7 +203,7 @@ fn legacy_body(subject: &EvalSubject) -> Result<String> {
     old.as_object_mut()
         .context("subject object")?
         .remove("identity");
-    old["policy_digest"] = canonical_digest(&"pre-M0-policy")?.into();
+    old["policy_digest"] = canonical_digest(&"unbound-policy-source")?.into();
     old["preset"] = Value::Null;
     Ok(serde_json::to_string(&old)?)
 }
