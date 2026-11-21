@@ -114,7 +114,6 @@ pub(crate) struct Service {
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
-    native_continuation: Option<continuation::PinnedCrypto>,
     http_continuation: Arc<continuation::http::Port>,
     http_registry: crate::continuation::ContinuationRegistry,
     caches: Arc<execution::cached::Caches>,
@@ -463,7 +462,7 @@ impl Service {
         let completion = async move { worker.await.map_err(Arc::new) }
             .boxed()
             .shared();
-        let mut service = Self {
+        let service = Self {
             #[cfg(test)]
             technical_io,
             #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
@@ -484,7 +483,6 @@ impl Service {
             cleanup,
             reads,
             resources,
-            native_continuation: None,
             http_continuation,
             http_registry,
             caches,
@@ -506,14 +504,16 @@ impl Service {
             completion,
         };
         match initialization.await {
-            Ok(Ok(initialized)) => {
-                service.native_continuation = initialized.crypto;
+            Ok(Ok(actor::Initialized {
+                #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+                capacity,
+            })) => {
                 // Bind the Worker's post-bootstrap copy; maintenance may already
                 // hold Admission here. SDK callbacks still use pure try_lock.
                 let bind = || {
                     service.bind_receipt_capacity(
                         #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-                        initialized.capacity,
+                        capacity,
                     )
                 };
                 #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]

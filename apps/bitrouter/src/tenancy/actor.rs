@@ -141,7 +141,6 @@ impl Drop for Liveness {
 
 /// Acknowledged bootstrap result, captured before actor maintenance starts.
 pub(super) struct Initialized {
-    pub crypto: Option<super::continuation::PinnedCrypto>,
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub capacity: Option<crate::telemetry::receipt_latency::capacity::Snapshot>,
 }
