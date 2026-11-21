@@ -10,7 +10,7 @@ use bitrouter_ai::control::administration::{
     AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
 };
 use bitrouter_ai::control::models::ModelsReport;
-use bitrouter_ai::control::reload::{OperationReport, ReloadState};
+use bitrouter_ai::control::reload::OperationReport;
 use bitrouter_ai::control::requests::{RequestFilters, RequestsReport};
 use bitrouter_ai::control::route::{RouteInput, RouteReport};
 use bitrouter_ai::control::status::StatusReport;
@@ -48,13 +48,6 @@ impl HttpControlClient {
         let client = ControlClient::with_options(&endpoint, &token, options)
             .map_err(|error| map_error(error, &endpoint))?;
         Ok(Self { endpoint, client })
-    }
-
-    pub async fn state(&self) -> Result<ReloadState> {
-        self.client
-            .state()
-            .await
-            .map_err(|error| map_error(error, &self.endpoint))
     }
 
     pub async fn operation(&self, request_id: &str, instance: &str) -> Result<OperationReport> {

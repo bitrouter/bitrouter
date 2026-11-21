@@ -235,16 +235,15 @@ async fn actual_upsert_shrink_estimate_covers_sampled_file_growth() -> Result<()
                 .one(&db)
                 .await?
                 .context("seed row")?;
-            let mut active: requests::ActiveModel = old.clone().into();
-            let previous_bytes = store.stored_bytes(&active)?;
+            let active: requests::ActiveModel = old.clone().into();
+            let previous_bytes = model_bytes(&active)?;
             let mut replacement = metric(id);
             replacement.raw_usage = Some(serde_json::json!({"small": true}));
             let expected_json = serde_json::to_string(&replacement.raw_usage)?;
-            active.raw_usage_json = Set(Some(expected_json.clone()));
             ensure!(previous_bytes > 128 * 1024 && measurement::reservation(&budget)? == 0);
             let before = measurement::wal_baseline(&db, &path).await?;
             // Occupy only the pool, not a new wrapper transaction around the
-            // production autocommit. Both real paths reserve before their SQL await.
+            // production autocommit, which reserves before its SQL await.
             let held = db.begin().await?;
             let mut writing = Box::pin(store.record_request(replacement));
             ensure!(writing.as_mut().now_or_never().is_none());

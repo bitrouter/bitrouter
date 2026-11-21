@@ -23,7 +23,6 @@ use crate::daemon::{
 };
 use crate::paths::ConfigSource;
 use bitrouter_ai::control::reload::OperationReport;
-use bitrouter_ai::control::reload::ReloadState;
 use bitrouter_ai::control::requests::RequestsReport;
 use {crate::actions::requests::RequestsAction, bitrouter_ai::control::requests::RequestFilters};
 use {
@@ -213,21 +212,6 @@ impl InspectionTarget {
                 other => unexpected_inspection("policy", other),
             },
             Self::Remote { client, .. } => client.policy(&input).await,
-        }
-    }
-
-    pub async fn reload_state(&self) -> Result<ReloadState> {
-        match self {
-            Self::Local { socket, .. } => {
-                match daemon::send_command(socket, &DaemonCommand::ReloadState).await? {
-                    DaemonResponse::ReloadState { state } => Ok(state),
-                    DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
-                    other => Err(anyhow::anyhow!(
-                        "unexpected daemon reload-state response: {other:?}"
-                    )),
-                }
-            }
-            Self::Remote { client, .. } => client.state().await,
         }
     }
 

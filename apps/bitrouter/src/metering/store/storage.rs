@@ -20,14 +20,6 @@ impl MeteringStore {
             .transpose()
     }
 
-    pub(super) fn stored_bytes(&self, row: &requests::ActiveModel) -> Result<usize> {
-        if self.write_budget()?.is_some() {
-            model_bytes(row)
-        } else {
-            Ok(0)
-        }
-    }
-
     pub(super) fn reserve_write(
         &self,
         row: &requests::ActiveModel,
@@ -39,8 +31,8 @@ impl MeteringStore {
         let bytes = model_bytes(row)?
             .checked_add(previous_bytes)
             .ok_or_else(|| storage_error(ErrorCode::CapacityExceeded))?;
-        // Metering and reconciliation do not own a transferred completion or
-        // deny/revoke reservation, so they use ordinary storage admission.
+        // Metering writes use ordinary storage admission; completion and
+        // deny/revoke reservations are owned by their respective operations.
         budget
             .reserve(bytes, false)
             .map(Some)
