@@ -48,7 +48,7 @@ async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> an
         )
     };
     assert!(assembled.db.query_one(capture_table()).await?.is_none());
-    let before = crate::storage::evolution::records::Entity::find()
+    let before = crate::storage::gateway_records::records::Entity::find()
         .count(&assembled.db)
         .await?;
     let socket = dir.join("bitrouter.sock");
@@ -77,7 +77,7 @@ async fn serving_gateway_rejects_legacy_recording_and_evolution_over_ipc() -> an
     }
     assert_eq!(
         before,
-        crate::storage::evolution::records::Entity::find()
+        crate::storage::gateway_records::records::Entity::find()
             .count(&assembled.db)
             .await?
     );
