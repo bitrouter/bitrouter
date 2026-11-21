@@ -17,9 +17,11 @@ use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::extensions::request_check::{Decision, Input};
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::executor::{Executor, StreamPartStream};
+#[cfg(test)]
+use crate::gateway::pipeline::hooks::StreamHook;
 use crate::gateway::pipeline::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
-    RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
+    RequestOutcome, RouteHook, StreamHopOutcome,
 };
 use crate::gateway::pipeline::operations::{HookRegistration, applicable};
 use crate::gateway::pipeline::request_checks::{
@@ -607,6 +609,7 @@ pub struct Pipeline {
         Vec<HookRegistration<dyn crate::gateway::pipeline::routing::ModelSelector>>,
     pub(crate) execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
     pub(crate) decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
+    #[cfg(test)]
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
     pub(crate) settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
     pub(crate) required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
@@ -1450,6 +1453,7 @@ impl Pipeline {
         let pricing = self.stream_pricing(&ctx, &upstream.target);
         stream_context.accumulated_usage.set_pricing(pricing);
         let processor = StreamProcessor::new(
+            #[cfg(test)]
             self.stream_hooks.clone(),
             applicable(&self.observe_hooks, ModelOperation::Generation),
             stream_context,
