@@ -745,7 +745,10 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
     for id in ["first", "second"] {
         native_config(&mut config, id, "rules-v1");
     }
-    ensure!(RequestCheckRuntime::activate(&config).is_err());
+    ensure!(
+        RequestCheckRuntime::activate_with_registrations(&config, std::collections::HashMap::new())
+            .is_err()
+    );
     let malformed: Arc<CheckCallback> = Arc::new(|_| CheckDecision::Deny {
         reason_code: "invalid reason".to_owned(),
     });

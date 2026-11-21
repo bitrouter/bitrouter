@@ -237,11 +237,6 @@ impl ControlServer {
         self
     }
 
-    /// Address the control listener will bind.
-    pub fn listen(&self) -> SocketAddr {
-        self.listen
-    }
-
     /// Bind before the daemon publishes its pid/readiness.
     pub async fn bind(self) -> Result<BoundControlServer> {
         let listener = tokio::net::TcpListener::bind(self.listen)
@@ -1109,7 +1104,13 @@ providers:
         let router = test_router(source, PathBuf::from("missing.sock"))?;
         let routes = inventory::ACTIONS
             .iter()
-            .map(|row| (row.method, row.path))
+            .map(|row| {
+                let method = match row.action {
+                    Action::Route | Action::Reload => "POST",
+                    _ => "GET",
+                };
+                (method, row.path)
+            })
             .chain(inventory::RESOURCES.iter().map(|row| ("GET", row.path)));
         for (method, path) in routes {
             let path = path.replace("{request_id}", "00000000-0000-0000-0000-000000000000");

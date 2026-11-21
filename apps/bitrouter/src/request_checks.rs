@@ -32,11 +32,6 @@ pub struct RequestCheckRuntime {
 }
 
 impl RequestCheckRuntime {
-    /// Activate an ordinary host without custom capability registrations.
-    pub fn activate(config: &Config) -> anyhow::Result<Self> {
-        Self::activate_with_registrations(config, HashMap::new())
-    }
-
     /// Activate configured callbacks. Missing or mismatched registrations fail
     /// startup. Undeclared registrations remain inactive and allocate no runtime
     /// entries; registration alone never enables a global check.
@@ -419,7 +414,13 @@ mod tests {
     {
         use crate::gateway::extensions::request_check::Decision as CheckDecision;
         let config = native_config();
-        assert!(RequestCheckRuntime::activate(&config).is_err());
+        assert!(
+            RequestCheckRuntime::activate_with_registrations(
+                &config,
+                std::collections::HashMap::new()
+            )
+            .is_err()
+        );
         let register =
             |revision: &str| Registration::new(revision, Arc::new(|_| CheckDecision::Allow));
         let invalid_revision = RequestCheckRuntime::activate_with_registrations(
