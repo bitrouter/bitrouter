@@ -16,5 +16,5 @@ pub mod store;
 mod tests;
 
 pub use hook::PolicyHook;
-pub use policy::{EffectivePolicy, Policy, PolicyViolation};
+pub use policy::{EffectivePolicy, Policy};
 pub use store::PolicyStore;

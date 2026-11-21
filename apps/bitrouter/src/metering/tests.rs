@@ -355,15 +355,15 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
         bitrouter_ai::types::UsageOrigin::Unknown
     );
     assert_eq!(record.raw_usage, None);
-    assert_eq!(record.charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(record.final_charge_micro_usd, None);
     let evidence = record
         .charge_evidence
         .as_ref()
         .expect("unknown charge evidence");
-    assert_eq!(evidence.status, super::ChargeStatus::Unknown);
+    assert_eq!(evidence.status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(evidence.charge_micro_usd, None);
-    assert_eq!(evidence.pricing_source, super::PricingSource::Unknown);
+    assert_eq!(evidence.pricing_source, super::pricing::PricingSource::Unknown);
     assert_eq!(
         evidence.unknown_reason.as_deref(),
         Some("usage_unavailable")
@@ -434,7 +434,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
     assert_eq!(record.output_tokens, 20);
     assert_eq!(record.reasoning_tokens, 10);
     assert_eq!(record.final_charge_micro_usd, Some(438));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     assert_eq!(record.raw_usage.as_ref(), Some(&raw));
     let evidence = record.charge_evidence.as_ref().expect("charge evidence");
     assert_eq!(evidence.charge_micro_usd, Some(438));
@@ -458,7 +458,7 @@ async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     assert_eq!(count, 1);
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(
         records[0]
             .charge_evidence
@@ -525,7 +525,7 @@ async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Res
     assert_eq!(record.prompt_tokens, 10);
     assert_eq!(record.completion_tokens, 18);
     assert_eq!(record.final_charge_micro_usd, Some(164));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     assert_eq!(
         record.usage_origin,
         bitrouter_ai::types::UsageOrigin::AuthoritativeReceipt
@@ -571,7 +571,7 @@ async fn product_reconciliation_accepts_authenticated_final_charge_without_price
     assert_eq!(records[0].final_charge_micro_usd, Some(164));
     assert_eq!(
         evidence.pricing_source,
-        super::PricingSource::AuthoritativeReceipt
+        super::pricing::PricingSource::AuthoritativeReceipt
     );
     assert!(
         evidence
@@ -703,7 +703,7 @@ async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<(
 
     assert_eq!(status, super::ReconciliationStatus::Computed);
     assert_eq!(records[0].final_charge_micro_usd, Some(1_985));
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
     Ok(())
 }
 
@@ -740,7 +740,7 @@ async fn authoritative_equal_rate_buckets_share_one_multiplication() -> Result<(
     assert_eq!(status, super::ReconciliationStatus::Computed);
     assert_eq!(records[0].provider_id, "ambient");
     assert_eq!(records[0].final_charge_micro_usd, Some(31_175));
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
     Ok(())
 }
 
@@ -776,7 +776,7 @@ async fn authoritative_charge_mismatch_fails_closed() -> Result<()> {
 
     assert_eq!(status, super::ReconciliationStatus::Unknown);
     assert_eq!(records[0].reconciliation_status, status);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(records[0].final_charge_micro_usd, None);
     Ok(())
 }
@@ -809,7 +809,7 @@ async fn not_charged_receipt_is_terminal_but_never_a_computed_zero() -> Result<(
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
 
     assert_eq!(status, super::ReconciliationStatus::NotCharged);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::NotCharged);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::NotCharged);
     assert_eq!(records[0].final_charge_micro_usd, None);
     Ok(())
 }
@@ -852,7 +852,7 @@ async fn bounded_reconciler_fetches_only_selected_request_ids() -> Result<()> {
         "provider-a:model-a=2,0,0,10",
     )?];
 
-    let summary = super::reconcile_requests(
+    let summary = super::reconciliation::reconcile_requests(
         &store,
         &client,
         &[settlement.request_id],
@@ -889,7 +889,7 @@ async fn bounded_reconciler_exhausts_absent_receipt_without_looping() -> Result<
     let client = SettlementClient::new(format!("{}/v1", server.uri()), "brk_test")
         .expect("settlement client");
 
-    let summary = super::reconcile_requests(
+    let summary = super::reconciliation::reconcile_requests(
         &store,
         &client,
         &[settlement.request_id],
@@ -940,7 +940,7 @@ async fn a_later_reconciliation_invocation_retries_authoritative_unknown() -> Re
         .await;
     let unknown_client = SettlementClient::new(format!("{}/v1", unknown_server.uri()), "brk_test")
         .expect("settlement client");
-    let first = super::reconcile_requests(
+    let first = super::reconciliation::reconcile_requests(
         &store,
         &unknown_client,
         &[settlement.request_id.clone()],
@@ -981,7 +981,7 @@ async fn a_later_reconciliation_invocation_retries_authoritative_unknown() -> Re
     let prices = [super::UsagePriceOverride::parse(
         "provider-a:model-a=2,0,0,10",
     )?];
-    let second = super::reconcile_requests(
+    let second = super::reconciliation::reconcile_requests(
         &store,
         &computed_client,
         &[settlement.request_id],
@@ -1009,7 +1009,7 @@ async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> 
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
 
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Unknown);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(
         records[0]
             .charge_evidence
@@ -1050,7 +1050,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
         }))
     );
     assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     assert_eq!(
         record.error_code.as_deref(),
         Some("upstream_policy_violation")
@@ -1100,7 +1100,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
         }))
     );
     assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
     Ok(())
 }
@@ -1133,7 +1133,7 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
 
     let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
     let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
     let Some(record) = records.first() else {
         return Err(crate::gateway::error::BitrouterError::internal(
             "missing legacy rate-limit usage record",
@@ -1146,7 +1146,7 @@ async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<
     );
     assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
     assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     Ok(())
 }
 
@@ -1175,7 +1175,7 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
 
     let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
     let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
     let record = records.first().expect("one usage record");
 
     assert_eq!(
@@ -1188,7 +1188,7 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
     );
     assert!(record.raw_usage.is_some());
     assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::ChargeStatus::Computed);
+    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
     Ok(())
 }
 
@@ -1385,9 +1385,9 @@ async fn usage_export_writes_cloud_usage_compatible_jsonl() -> anyhow::Result<()
         uuid::Uuid::new_v4()
     ));
     let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    super::MeteringUsageRecord::write_jsonl(&path, &records)?;
+    super::store::MeteringUsageRecord::write_jsonl(&path, &records)?;
 
-    let parsed: Vec<super::MeteringUsageRecord> = std::fs::read_to_string(&path)?
+    let parsed: Vec<super::store::MeteringUsageRecord> = std::fs::read_to_string(&path)?
         .lines()
         .map(serde_json::from_str)
         .collect::<std::result::Result<_, _>>()?;
@@ -1401,7 +1401,7 @@ async fn usage_export_writes_cloud_usage_compatible_jsonl() -> anyhow::Result<()
 
 #[test]
 fn usage_price_override_imputes_missing_charges() {
-    let mut records = vec![super::MeteringUsageRecord {
+    let mut records = vec![super::store::MeteringUsageRecord {
         id: Some("r1".to_string()),
         request_id: Some("r1".to_string()),
         provider_id: "openai-codex".to_string(),
@@ -1419,22 +1419,22 @@ fn usage_price_override_imputes_missing_charges() {
     }];
     let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
 
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, Some(530));
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
     assert_eq!(
         records[0]
             .charge_evidence
             .as_ref()
             .map(|evidence| evidence.pricing_source),
-        Some(super::PricingSource::Override)
+        Some(super::pricing::PricingSource::Override)
     );
 }
 
 #[test]
 fn usage_price_override_refuses_unknown_usage() {
-    let mut records = vec![super::MeteringUsageRecord {
+    let mut records = vec![super::store::MeteringUsageRecord {
         id: Some("failed".to_string()),
         request_id: Some("failed".to_string()),
         provider_id: "openai-codex".to_string(),
@@ -1447,7 +1447,7 @@ fn usage_price_override_refuses_unknown_usage() {
     let original = records.clone();
     let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
 
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records, original);
 }
@@ -1460,15 +1460,15 @@ fn price_override_preserves_authoritative_reconciliation_records() -> Result<()>
         super::ReconciliationStatus::Unknown,
     ]
     .into_iter()
-    .map(|reconciliation_status| super::MeteringUsageRecord {
+    .map(|reconciliation_status| super::store::MeteringUsageRecord {
         provider_id: "mock-provider".to_string(),
         model_id: "mock-weak".to_string(),
         prompt_tokens: 12,
         completion_tokens: 5,
         charge_status: if reconciliation_status == super::ReconciliationStatus::NotCharged {
-            super::ChargeStatus::NotCharged
+            super::pricing::ChargeStatus::NotCharged
         } else {
-            super::ChargeStatus::Unknown
+            super::pricing::ChargeStatus::Unknown
         },
         reconciliation_status,
         ..Default::default()
@@ -1477,7 +1477,7 @@ fn price_override_preserves_authoritative_reconciliation_records() -> Result<()>
     let original = records.clone();
     let price = super::UsagePriceOverride::parse("mock-provider:mock-weak=1,1")?;
 
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records, original);
     Ok(())
@@ -1485,7 +1485,7 @@ fn price_override_preserves_authoritative_reconciliation_records() -> Result<()>
 
 #[test]
 fn four_rate_override_prices_cache_buckets() {
-    let mut records = vec![super::MeteringUsageRecord {
+    let mut records = vec![super::store::MeteringUsageRecord {
         provider_id: "anthropic".to_string(),
         model_id: "claude-test".to_string(),
         prompt_tokens: 100,
@@ -1505,17 +1505,17 @@ fn four_rate_override_prices_cache_buckets() {
     let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,0.2,2.5,10")
         .expect("four-rate override");
 
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, Some(438));
     assert_eq!(records[0].uncached_input_tokens, 40);
     assert_eq!(records[0].output_tokens, 20);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::Computed);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::Computed);
 }
 
 #[test]
 fn legacy_two_rate_override_refuses_cached_usage() {
-    let mut records = vec![super::MeteringUsageRecord {
+    let mut records = vec![super::store::MeteringUsageRecord {
         provider_id: "anthropic".to_string(),
         model_id: "claude-test".to_string(),
         prompt_tokens: 100,
@@ -1532,10 +1532,10 @@ fn legacy_two_rate_override_refuses_cached_usage() {
     let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,10")
         .expect("legacy override remains parseable");
 
-    super::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
+    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
 
     assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(records[0].charge_status, super::ChargeStatus::LegacyUnknown);
+    assert_eq!(records[0].charge_status, super::pricing::ChargeStatus::LegacyUnknown);
 }
 
 #[test]
