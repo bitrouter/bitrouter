@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
-#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[cfg(feature = "otel-http")]
 use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
