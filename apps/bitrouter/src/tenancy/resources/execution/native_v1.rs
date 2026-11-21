@@ -88,7 +88,7 @@ impl<'a> Budget<'a> {
         }
     }
 
-    pub(super) fn block_config(&mut self, source: &Value) -> anyhow::Result<Config> {
+    pub(super) fn routing_config(&mut self, source: &Value) -> anyhow::Result<Config> {
         compiler::routing_config_observed(source, Some(&mut self.work), self.operation)
             .map(|(config, _)| config)
     }
@@ -96,11 +96,6 @@ impl<'a> Budget<'a> {
     pub(super) fn native_route_config(&mut self, source: &Value) -> anyhow::Result<Config> {
         compiler::native_routing_config_observed(source, Some(&mut self.work), self.operation)
             .map(|(config, _)| config)
-    }
-
-    pub(super) fn block_pricing_bytes(&mut self, bytes: usize) -> anyhow::Result<()> {
-        self.bytes(bytes)
-            .map_err(|_| anyhow::Error::new(ExecutionCapacityExceeded))
     }
 
     fn shared(&mut self, bytes: usize) -> Result<()> {

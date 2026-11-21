@@ -136,7 +136,6 @@ async fn public_resource_name_equal_to_a_policy_tier_stays_distinct_through_pipe
         &checked(policy.configuration())?,
         Some(policy.document().clone()),
         PendingEvalDecisionStore::default(),
-        None,
     )?;
     let captured = Arc::new(Mutex::new(Vec::new()));
     let mut builder = PipelineBuilder::new();

@@ -369,10 +369,10 @@ async fn stalled_callback_deadlines_retain_work_until_the_same_callback_finishes
 
 #[derive(Clone, Copy)]
 enum Oversize {
-    OneView,
-    AllViews,
-    Previous,
-    Count,
+    Receipt,
+    AggregateEvidence,
+    PromptBound,
+    InvalidPolicy,
 }
 
 struct Preparing {
@@ -386,50 +386,32 @@ impl NativeExecutionControl for Preparing {
         &self,
         prompt: &Prompt,
     ) -> GatewayResult<Option<crate::gateway::routing::preparation::Prepared>> {
-        use crate::gateway::routing::{plan::View, preparation::Prepared};
+        use crate::gateway::routing::preparation::{Prepared, Receipt};
         let mut value = Prepared::from_prompt(prompt, None, "fixture").await;
         value.hard_limit_bytes = usize::MAX;
+        let mut receipt = Receipt {
+            id: "fixture".into(),
+            assessment: None,
+            error: None,
+            usage: None,
+        };
         match self.size {
-            Oversize::OneView => {
-                value.views[0].prompt.messages =
-                    vec![Message::text(Role::User, "x".repeat(17 * 1024 * 1024))]
+            Oversize::Receipt => receipt.id = "x".repeat(17 * 1024 * 1024),
+            Oversize::AggregateEvidence => {
+                receipt.id = "x".repeat(9 * 1024 * 1024);
+                receipt.error = Some(
+                    crate::gateway::model::decision::types::DecisionError::invalid_request(
+                        "x".repeat(9 * 1024 * 1024),
+                    ),
+                );
             }
-            Oversize::AllViews => {
-                value.views[0].prompt.messages =
-                    vec![Message::text(Role::User, "x".repeat(9 * 1024 * 1024))];
-                let mut other = value.views[0].clone();
-                other.id = "second".into();
-                value.views.push(other);
-            }
-            Oversize::Previous => {
-                let mut previous = prompt.clone();
-                previous.messages = vec![Message::text(Role::User, "x".repeat(17 * 1024 * 1024))];
-                value.previous = Some(NativePlan {
-                    request_id: "prior".into(),
-                    original_model: MODEL.into(),
-                    effective_model: MODEL.into(),
-                    effort_source: Default::default(),
-                    prompt: previous,
-                    routes: Vec::new(),
-                    router: None,
-                });
-            }
-            Oversize::Count => {
-                value.views = (0..33)
-                    .map(|i| View {
-                        id: i.to_string(),
-                        prompt: prompt.clone(),
-                        requires: Default::default(),
-                    })
-                    .collect()
-            }
+            Oversize::PromptBound => value.hard_limit_bytes = 1,
+            Oversize::InvalidPolicy => value.policy.confidence_threshold = 2.0,
         }
+        value.receipt = Some(receipt);
         Ok(Some(value))
     }
-    async fn commit_routing(
-        &self,
-        plan: &crate::gateway::routing::plan::Plan,
-    ) -> GatewayResult<()> {
+    async fn commit_routing(&self, plan: &Prompt) -> GatewayResult<()> {
         self.inner.commit_routing(plan).await
     }
     async fn plan(&self, plan: NativePlan) -> GatewayResult<NativePlanAdmission> {
@@ -444,7 +426,7 @@ impl NativeExecutionControl for Preparing {
 }
 
 #[tokio::test]
-async fn prepared_views_and_prior_plans_cannot_expand_the_admitted_prompt_budget() -> Result<()> {
+async fn prepared_evidence_and_prompt_bounds_refuse_before_dispatch() -> Result<()> {
     let provider = Provider::start(false).await?;
     let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
     let checked: Result<()> = async {
@@ -452,10 +434,10 @@ async fn prepared_views_and_prior_plans_cannot_expand_the_admitted_prompt_budget
         let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
             .with_tenancy(fixture.service.clone());
         for size in [
-            Oversize::OneView,
-            Oversize::AllViews,
-            Oversize::Previous,
-            Oversize::Count,
+            Oversize::Receipt,
+            Oversize::AggregateEvidence,
+            Oversize::PromptBound,
+            Oversize::InvalidPolicy,
         ] {
             let control = Arc::new(Preparing {
                 size,

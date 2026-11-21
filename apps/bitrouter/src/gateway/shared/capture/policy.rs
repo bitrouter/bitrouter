@@ -46,7 +46,7 @@ impl Capture {
                 {
                     identifier(value)?;
                 }
-                check_size(&(&pending.experiment, &pending.route_measurement))?;
+                check_size(&pending.route_measurement)?;
                 let captured = Treatment {
                     decision: EvalDecisionRef {
                         decision_id: pending.decision_id.clone(),
@@ -59,10 +59,7 @@ impl Capture {
                         baseline_tier: pending.baseline_tier.clone(),
                         baseline_effort: pending.baseline_effort,
 
-                        route_measurement: pending
-                            .route_measurement
-                            .clone()
-                            .filter(|_| pending.experiment.is_none()),
+                        route_measurement: pending.route_measurement.clone(),
                     },
                     preset: pending.preset.clone(),
                     holdout: pending.holdout,

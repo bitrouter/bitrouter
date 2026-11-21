@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::policy::{Document, RouteClass, Target};
 use sha2::{Digest, Sha256};
 
-use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
+use crate::gateway::routing::assessment::contract_digest;
 
 const MAX_BYTES: usize = 1024 * 1024;
 
@@ -82,7 +82,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
         !source.policies.is_empty() && source.policies.len() <= 256,
         "policy count must be 1..=256"
     );
-    let predictor = compiled_predictor_contract();
+    let classifier_digest = contract_digest();
     let mut selections = BTreeMap::new();
     for (name, policy) in &source.policies {
         validate_name(name)?;
@@ -106,7 +106,7 @@ pub(crate) fn compile(source: &Document) -> Result<CompiledPolicy> {
             );
         } else {
             ensure!(
-                policy.classifier_digest.as_deref() == Some(predictor.config_digest.as_str()),
+                policy.classifier_digest.as_deref() == Some(classifier_digest.as_str()),
                 "unsupported policy classifier digest"
             );
         }

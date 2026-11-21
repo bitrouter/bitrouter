@@ -18,7 +18,7 @@ use crate::gateway::{
         native_work::{NativeProviderWork, NativeProviderWorkReport},
         owned_tasks::OwnedTasks,
     },
-    routing::{plan::Plan, preparation::Prepared},
+    routing::preparation::Prepared,
 };
 use crate::managed_contract::evidence::{NativeAttemptReport, NativeRoute};
 use async_trait::async_trait;
@@ -81,24 +81,9 @@ impl Bounded {
     }
 
     fn prepared(&self, prepared: &mut Prepared) -> Result<()> {
-        if prepared.views.is_empty() || prepared.views.len() > 32 {
-            return Err(self.execution.reject(ErrorCode::PayloadTooLarge));
-        }
-        // Charge all returned data before the shared planner validates/clones
-        // views. A callback cannot give every alternative its own 16 MiB quota.
+        // Charge all classifier evidence before it enters shared selection.
         let mut budget = ByteLimit::new();
-        let measured = (|| {
-            budget.value(&(
-                &prepared.receipt,
-                &prepared.capabilities,
-                &prepared.policy,
-                &prepared.previous,
-            ))?;
-            for view in &prepared.views {
-                budget.value(&(&view.id, &view.prompt, &view.requires))?;
-            }
-            Ok::<_, crate::tenancy::error::Failure>(())
-        })();
+        let measured = budget.value(&(&prepared.receipt, &prepared.policy));
         measured.map_err(|failure| self.execution.reject(failure.0.code))?;
         prepared.hard_limit_bytes = prepared.hard_limit_bytes.min(PROMPT_BYTES);
         Ok(())
@@ -119,10 +104,10 @@ impl NativeExecutionControl for Bounded {
         Ok(prepared)
     }
 
-    async fn commit_routing(&self, plan: &Plan) -> Result<()> {
-        self.prompt(&plan.prompt)?;
-        let plan = plan.clone();
-        self.admit(move |inner| async move { inner.commit_routing(&plan).await })
+    async fn commit_routing(&self, prompt: &Prompt) -> Result<()> {
+        self.prompt(prompt)?;
+        let prompt = prompt.clone();
+        self.admit(move |inner| async move { inner.commit_routing(&prompt).await })
             .await
     }
 

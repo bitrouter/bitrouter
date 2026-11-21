@@ -44,7 +44,8 @@ use sea_orm::{ActiveValue::Set, DatabaseConnection, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::gateway::routing::workflow::predictive::authenticated_visible_causal_prefix;
+mod causal_history;
+use causal_history::authenticated_visible_causal_prefix;
 
 const OWNER_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.owner.v1";
 const CONTINUATION_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.identity.v1";

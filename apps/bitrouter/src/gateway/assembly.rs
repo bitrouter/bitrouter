@@ -449,8 +449,8 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for TransformCheck
         self.inner.prepare_routing(prompt).await
     }
 
-    async fn commit_routing(&self, plan: &crate::gateway::routing::plan::Plan) -> Result<()> {
-        self.inner.commit_routing(plan).await
+    async fn commit_routing(&self, prompt: &Prompt) -> Result<()> {
+        self.inner.commit_routing(prompt).await
     }
 
     fn observe_stream(&self) -> bool {

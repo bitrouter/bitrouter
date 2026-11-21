@@ -198,8 +198,8 @@ fn observations_reject_wrong_identity_preparing_bypass_and_terminal_order() -> R
 fn escaped_route_at_admitted_limit_fits_every_observation_and_terminal() -> Result<()> {
     let mut input = ready()?;
     input.routing.push(EvidenceItem {
-        evidence_id: "route-plan:bounded".into(),
-        kind: "routing.plan".into(),
+        evidence_id: "routing-assessment:bounded".into(),
+        kind: "routing.assessment".into(),
         digest: format!("sha256:{}", "b".repeat(64)),
         redacted: true,
         attributes: BTreeMap::from([("judgments".into(), String::new())]),
@@ -256,15 +256,6 @@ fn request_projection_preserves_optional_response_facts() -> Result<()> {
     )?;
     let mut input = untracked(&record)?;
     input.phase = Phase::Ready;
-    if let Policy::Evaluated {
-        treatment: Some(treatment),
-        ..
-    } = &mut input.policy
-    {
-        treatment
-            .attributes
-            .insert("predicted_action".into(), "mutate".into());
-    }
     let capture = capture(input.clone())?;
     observe(&capture, ObservedActionClass::Mutate)?;
     let terminal = capture.terminal()?.context("missing terminal")?;
@@ -273,7 +264,7 @@ fn request_projection_preserves_optional_response_facts() -> Result<()> {
     };
     let attributes = &subject.evidence[0].attributes;
     ensure!(attributes.get("observed_action").map(String::as_str) == Some("mutate"));
-    ensure!(attributes.get("action_match").map(String::as_str) == Some("true"));
+    ensure!(!attributes.contains_key("action_match"));
     for key in [
         "success",
         "request_duration_ms",
@@ -300,33 +291,19 @@ fn request_projection_preserves_optional_response_facts() -> Result<()> {
 }
 
 #[test]
-fn action_match_requires_known_original_prediction_and_actual_observation() -> Result<()> {
-    for (predicted, observed, expected) in [
-        ("mutate", ObservedActionClass::Mutate, Some("true")),
-        ("mutate", ObservedActionClass::InspectOrRead, Some("false")),
-        ("unknown", ObservedActionClass::Mutate, None),
-        ("mutate", ObservedActionClass::Unknown, None),
+fn response_observations_never_invent_an_action_prediction() -> Result<()> {
+    for observed in [
+        ObservedActionClass::Mutate,
+        ObservedActionClass::InspectOrRead,
+        ObservedActionClass::Unknown,
     ] {
-        let mut input = ready()?;
-        if let Policy::Evaluated {
-            treatment: Some(treatment),
-            ..
-        } = &mut input.policy
-        {
-            treatment
-                .attributes
-                .insert("predicted_action".into(), predicted.into());
-        }
-        let capture = capture(input)?;
+        let capture = capture(ready()?)?;
         observe(&capture, observed)?;
         let terminal = capture.terminal()?.context("missing terminal")?;
-        ensure!(
-            terminal
-                .prediction_attributes()
-                .get("action_match")
-                .map(String::as_str)
-                == expected
-        );
+        let attributes = terminal.prediction_attributes();
+        ensure!(!attributes.contains_key("action_match"));
+        ensure!(!attributes.contains_key("predicted_action"));
+        ensure!(attributes.contains_key("observed_action"));
     }
     Ok(())
 }
@@ -336,15 +313,6 @@ fn response_projection_stays_within_reserved_request_subject() -> Result<()> {
     let record = fixture()?;
     let mut input = untracked(&record)?;
     input.phase = Phase::Ready;
-    if let Policy::Evaluated {
-        treatment: Some(treatment),
-        ..
-    } = &mut input.policy
-    {
-        treatment
-            .attributes
-            .insert("predicted_action".into(), "mutate".into());
-    }
     input.routing.push(EvidenceItem {
         evidence_id: "\\".repeat(512),
         kind: "routing.assessment".into(),

@@ -89,14 +89,10 @@ fn input(
     Ok(Import {
         reference: reference(ResourceKind::Route, name)?,
         definition: Definition::Route {
-            assessment: None,
-            block: None,
             routing: source,
             selector: selector.into(),
             policy: None,
             credentials,
-            exploration: Vec::new(),
-            core_choice: None,
         },
     })
 }

@@ -7,7 +7,6 @@ use super::*;
 
 mod bounds;
 mod checkpoint;
-mod core_choice;
 mod execution;
 mod format;
 mod native_generate_content;

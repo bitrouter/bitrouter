@@ -22,25 +22,6 @@ fn weight(value: &RetainedExecutionRevision) -> TestResult<usize> {
     retained_heap_bytes(value).map_err(|code| anyhow::anyhow!("weight failed: {code:?}"))
 }
 
-#[test]
-fn optional_assessment_reference_is_charged_without_selecting_the_route() -> TestResult<()> {
-    let mut value = revision()?;
-    insert(&mut value, "subject", route("subject", "private")?);
-    let before = weight(&value)?;
-    let assessment = reference(
-        ResourceKind::Route,
-        "judge-with-distinct-immutable-revision",
-    )?;
-    let expected = assessment.owner_id.as_str().len()
-        + assessment.resource_id.as_str().len()
-        + assessment.revision_id.as_str().len();
-    Arc::get_mut(value.routes.get_mut("subject").context("subject")?)
-        .context("unique route")?
-        .assessment = Some(assessment);
-    ensure!(weight(&value)? >= before + expected);
-    Ok(())
-}
-
 fn reference(kind: ResourceKind, name: &str) -> TestResult<ResourceRef> {
     Ok(ResourceRef {
         owner_kind: OwnerKind::Tenant,
@@ -79,15 +60,11 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
     let reference = reference(ResourceKind::Route, name)?;
     Ok(RouteData {
         admission: None,
-        assessment: None,
-        block: None,
-        block_pricing: Vec::new(),
         dependencies: vec![reference.clone()],
         reference,
         selector: "fixture:model".into(),
         overrides: PromptOverrides::default(),
         policy: None,
-        choice: None,
         chains: vec![Chain {
             sort: bitrouter_ai::routing::SortOrder::default(),
             selector: "fixture:model".into(),
@@ -394,7 +371,6 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     document.routes = vec![over_reserved_reference(ResourceKind::Route, "route")?];
     document.policy = Some(over_reserved_reference(ResourceKind::Policy, "policy")?);
     let mut data = route("route", "short")?;
-    data.assessment = Some(over_reserved_reference(ResourceKind::Route, "judge")?);
     data.reference = over_reserved_reference(ResourceKind::Route, "route")?;
     data.dependencies = vec![
         over_reserved_reference(ResourceKind::Route, "route")?,
@@ -448,9 +424,6 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         .map_err(|_| anyhow::anyhow!("unexpected shared route"))?;
     let RouteData {
         admission: _,
-        assessment,
-        block_pricing: _,
-        block: _,
         reference,
         dependencies,
         selector: _,
@@ -459,14 +432,8 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         chains: _,
         native: _,
         candidates,
-        choice: _,
     } = data;
     assert_compact_reference(reference, ResourceKind::Route, "route")?;
-    assert_compact_reference(
-        assessment.context("assessment ref")?,
-        ResourceKind::Route,
-        "judge",
-    )?;
     ensure!(dependencies.len() == 3);
     for (dependency, (kind, name)) in dependencies.into_iter().zip([
         (ResourceKind::Route, "route"),

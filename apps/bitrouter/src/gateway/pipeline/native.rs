@@ -148,6 +148,10 @@ pub(crate) struct NativeOutputReservation(pub u32);
 /// Every controlled call carries this marker, even before output admission.
 pub(crate) struct NativeManagedRequest;
 
+/// A model-only policy requires the complete admitted input, including when
+/// the native caller pins a model and bypasses policy selection.
+pub(crate) struct PreserveInput;
+
 /// Maximum decoded HTTP entity bytes consumed for one managed provider reply.
 pub(crate) struct NativeResponseByteLimit(pub u64);
 
@@ -176,8 +180,8 @@ pub struct NativePlan {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
-    /// Supply acknowledged semantic evidence and authorized context candidates
-    /// after entry authentication and checks, before the shared policy planner.
+    /// Supply acknowledged semantic evidence after entry admission and before
+    /// model selection. The generation input remains unchanged.
     async fn prepare_routing(
         &self,
         _prompt: &Prompt,
@@ -185,8 +189,8 @@ pub trait NativeExecutionControl: Send + Sync {
         Ok(None)
     }
 
-    /// Acknowledge the exact shared model/context plan before dispatch proceeds.
-    async fn commit_routing(&self, _plan: &crate::gateway::routing::plan::Plan) -> Result<()> {
+    /// Acknowledge the exact model input before dispatch proceeds.
+    async fn commit_routing(&self, _prompt: &Prompt) -> Result<()> {
         Ok(())
     }
 

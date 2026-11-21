@@ -23,14 +23,13 @@
 pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
 
 use bitrouter_ai::control::ControlScope;
-use bitrouter_ai::policy::Target;
 #[cfg(doc)]
 use bitrouter_ai::routing::SortOrder;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::model::client::HttpTimeouts;
@@ -161,7 +160,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Validate named router ids, selection boundaries, and legacy conflicts.
+    /// Validate named router IDs and selection boundaries.
     ///
     /// Callers that construct or mutate [`Config`] directly must run this
     /// before activation. Config-backed routing also runs it at first
@@ -433,218 +432,6 @@ impl RegistryConfig {
     /// Exact source identity, including query, revision and trailing slash.
     pub fn source(&self) -> &str {
         self.url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL)
-    }
-}
-
-/// Frozen named-policy inputs consumed by the shared semantic action selector.
-/// This is an internal routing projection, not a top-level
-/// configuration entry or an ingress transform.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct PolicyTableConfig {
-    /// The predictor strategy used for `fingerprints`. Active policy routing
-    /// uses only canonical model route classes.
-    pub key_strategy: PolicyKeyStrategy,
-    /// Tier name → the model id every request on that tier is routed to. The
-    /// value is fed straight into the routing table, so it may be a bare
-    /// canonical id (resolved via the cascade/registry) or an explicit
-    /// `provider:model` id (a Strategy-1 direct route). The section is inert
-    /// while this map is empty.
-    pub tiers: HashMap<String, Target>,
-    /// Canonical `<task-family>|<role>|<risk>` key → tier name.
-    /// Lookup first tries the exact key, then the same role/risk under the
-    /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
-    pub fingerprints: HashMap<String, String>,
-    /// Tier applied to any fingerprint not listed in
-    /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
-    /// is left on the model the caller requested (the transform no-ops).
-    pub default_tier: Option<String>,
-    /// Tool-use guardrail target: the tier a request carrying tools is clamped
-    /// up to when the tier it would otherwise get is not in
-    /// [`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is
-    /// disabled and tool requests route by fingerprint like any other.
-    pub tool_use_tier: Option<String>,
-    /// Tiers known to handle tool calls reliably. A tool-carrying request whose
-    /// chosen tier is in this list is left as-is; one whose tier is absent is
-    /// clamped to [`tool_use_tier`](Self::tool_use_tier).
-    pub tool_safe_tiers: Vec<String>,
-    /// Offline compiler thresholds. Serving always disables request-time
-    /// adequacy mutation; publication replaces the complete signed policy.
-    pub adequacy: AdequacyConfig,
-}
-
-/// Request-key family used by `policy_table.fingerprints`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PolicyKeyStrategy {
-    /// The canonical source-independent predictive route strategy.
-    #[default]
-    AgentTrace,
-}
-
-impl Serialize for PolicyKeyStrategy {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str("agent_trace")
-    }
-}
-
-impl<'de> Deserialize<'de> for PolicyKeyStrategy {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "agent_trace" => Ok(Self::AgentTrace),
-            "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
-                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with model route classes"
-            ))),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
-        }
-    }
-}
-
-impl schemars::JsonSchema for PolicyKeyStrategy {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("PolicyKeyStrategy")
-    }
-
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "description": "Active policy routing uses canonical model route classes.",
-            "enum": ["agent_trace"],
-        })
-    }
-}
-
-/// Online adequacy-learning settings — the `policy_table.adequacy` block.
-///
-/// In adaptive process mode, the daemon watches every request a downgrade
-/// produced and counts the ones that hard-fail (an upstream error or a stream
-/// error). Once a fingerprint accumulates
-/// [`escalation_threshold`](Self::escalation_threshold) such failures it is
-/// *pinned*: subsequent requests with that fingerprint route to
-/// [`escalation_tier`](Self::escalation_tier) instead of the cheap tier the
-/// static table would pick. A pin decays after
-/// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
-/// later. This is a safety net layered on the static table — it never downgrades
-/// on its own, only escalates a downgrade that is failing.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct AdequacyConfig {
-    /// Explicit in-memory BRO adequacy switch. Mature model Policy compilation
-    /// leaves it disabled; it is not part of the public Policy source.
-    #[serde(skip_serializing)]
-    #[schemars(skip)]
-    pub enabled: bool,
-    /// Tier a pinned fingerprint escalates to. When unset, falls back to
-    /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
-    /// [`enabled`](Self::enabled).
-    pub escalation_tier: Option<String>,
-    /// Number of *consecutive* hard failures on a downgraded fingerprint before
-    /// it is pinned to the escalation tier (a clean outcome resets the tally).
-    /// Default `1` — escalate on the first failure (conservative / sticky).
-    pub escalation_threshold: u32,
-    /// How long, in seconds, a pin lasts before the downgrade is re-attempted.
-    /// `0` means the pin never decays (until the process restarts or the row is
-    /// cleared). Default `1800` (30 minutes).
-    pub pin_cooldown_secs: u64,
-    /// Number of recent endpoint outcomes retained for provider reliability.
-    /// Default `23`, a prime-sized window that avoids aligning with short
-    /// benchmark batch cadences.
-    pub reliability_window_size: u32,
-    /// Consecutive transient provider failures that immediately open the
-    /// endpoint circuit. Default `2`.
-    pub reliability_consecutive_failures: u32,
-    /// Rolling transient-failure percentage that opens the circuit once the
-    /// reliability window is full. Default `35`.
-    pub reliability_error_rate_percent: u32,
-    /// Seconds an open provider circuit waits before admitting exactly one
-    /// half-open probe. Default `300`.
-    pub reliability_cooldown_secs: u64,
-    /// Aggressive downgrade *discovery*: in adaptive process mode, the daemon
-    /// periodically trials [`explore_tier`](Self::explore_tier)
-    /// on fingerprints the static table routes to the escalation tier (i.e. ones
-    /// the operator did *not* downgrade), and locks a fingerprint to the cheap
-    /// tier once it survives [`explore_threshold`](Self::explore_threshold)
-    /// trials — so safe downgrades are found automatically rather than only
-    /// hand-configured. A trial that fails escalates and stops (the same pin as
-    /// the safety path). This is the *aggressive* half — it routes traffic the
-    /// operator left at the capable tier to a cheaper one on a fraction of
-    /// requests. Legacy input is accepted, but process mode is authoritative
-    /// and this field is omitted from new output.
-    #[serde(skip_serializing)]
-    #[schemars(skip)]
-    pub explore_enabled: bool,
-    /// The cheap tier exploration trials toward. Must resolve to a defined tier
-    /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
-    pub explore_tier: Option<String>,
-    /// Trial cadence: roughly one in `explore_interval` eligible requests is a
-    /// trial (the rest stay on the escalation tier). Default `5`.
-    pub explore_interval: u32,
-    /// Consecutive adequate trials before a fingerprint is locked to the cheap
-    /// tier (the learned downgrade). Default `3`.
-    pub explore_threshold: u32,
-    /// Deprecated compatibility field. Session identity is diagnostic-only and
-    /// cannot participate in policy routing; explicit YAML configuration is
-    /// rejected rather than accepted as a no-op.
-    #[serde(
-        skip_serializing_if = "session_downgrade_budget_is_zero",
-        deserialize_with = "reject_session_downgrade_budget"
-    )]
-    #[schemars(skip)]
-    pub max_downgraded_requests_per_session: u32,
-    /// Distinct benchmark tasks that must finish successfully after using a
-    /// cheap replacement before a request-level lock becomes active. `0` keeps
-    /// the legacy request-only behavior. Default `0`.
-    pub min_semantic_successes_for_lock: u32,
-    /// Whether the opening turn is eligible for aggressive exploration. Default
-    /// `false`, because opening/planning errors tend to propagate through the
-    /// whole task and make this state high leverage.
-    pub explore_opening: bool,
-    /// Minimum distinct benchmark-task successes required before an opening
-    /// request-level lock becomes active. This is combined with
-    /// [`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)
-    /// by taking the stricter threshold. Default `1`.
-    pub min_semantic_successes_for_opening: u32,
-}
-
-fn reject_session_downgrade_budget<'de, D>(_: D) -> std::result::Result<u32, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Err(serde::de::Error::custom(
-        "policy_table.adequacy.max_downgraded_requests_per_session is no longer supported: session identity is diagnostic-only; remove this setting",
-    ))
-}
-
-fn session_downgrade_budget_is_zero(value: &u32) -> bool {
-    *value == 0
-}
-
-impl Default for AdequacyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            escalation_tier: None,
-            escalation_threshold: 1,
-            pin_cooldown_secs: 1800,
-            reliability_window_size: 23,
-            reliability_consecutive_failures: 2,
-            reliability_error_rate_percent: 35,
-            reliability_cooldown_secs: 300,
-            explore_enabled: false,
-            explore_tier: None,
-            explore_interval: 5,
-            explore_threshold: 3,
-            max_downgraded_requests_per_session: 0,
-            min_semantic_successes_for_lock: 0,
-            explore_opening: false,
-            min_semantic_successes_for_opening: 1,
-        }
     }
 }
 
@@ -1732,102 +1519,6 @@ fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
         return Err(BitrouterError::bad_request(format!(
             "continuation.prune_batch_size must be between 1 and {MAX_CONTINUATION_PRUNE_BATCH_SIZE}"
         )));
-    }
-    Ok(())
-}
-
-/// Validate one policy-table definition independently of the top-level config.
-/// This private experiment projection is not a public model-policy document.
-/// Model-only source compilation has its own strict validator.
-pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
-    for fingerprint in policy.fingerprints.keys() {
-        if bitrouter_ai::policy::RouteClass::parse_key(fingerprint).is_none() {
-            return Err(BitrouterError::bad_request(format!(
-                "policy_table fingerprint '{fingerprint}' is not a canonical <task-family>|<role>|<risk> key"
-            )));
-        }
-    }
-    if policy.tiers.is_empty() {
-        return Ok(());
-    }
-    let check = |role: &str, tier: &str| -> Result<()> {
-        if policy.tiers.contains_key(tier) {
-            Ok(())
-        } else {
-            Err(BitrouterError::bad_request(format!(
-                "policy_table {role} references unknown tier '{tier}'"
-            )))
-        }
-    };
-    for (fingerprint, tier) in &policy.fingerprints {
-        check(&format!("fingerprint '{fingerprint}'"), tier)?;
-    }
-    if let Some(tier) = &policy.default_tier {
-        check("default_tier", tier)?;
-    }
-    if let Some(tier) = &policy.tool_use_tier {
-        check("tool_use_tier", tier)?;
-    }
-    for tier in &policy.tool_safe_tiers {
-        check("tool_safe_tiers entry", tier)?;
-    }
-    // The guardrail clamps a non-tool-safe tier *up* to `tool_use_tier`, so that
-    // target must itself be declared tool-safe — otherwise the floor it clamps
-    // to is not actually safe for tool-carrying requests.
-    if let Some(tier) = &policy.tool_use_tier
-        && !policy.tool_safe_tiers.iter().any(|t| t == tier)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "policy_table tool_use_tier '{tier}' must also be listed in tool_safe_tiers"
-        )));
-    }
-    // Adequacy learning escalates a pinned fingerprint to its escalation tier
-    // (or the default tier), so that target must exist and resolve to a defined
-    // tier when learning is enabled.
-    let adequacy = &policy.adequacy;
-    if adequacy.reliability_window_size == 0 {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_window_size must be positive".to_string(),
-        ));
-    }
-    if adequacy.reliability_consecutive_failures == 0 {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_consecutive_failures must be positive".to_string(),
-        ));
-    }
-    if !(1..=100).contains(&adequacy.reliability_error_rate_percent) {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.reliability_error_rate_percent must be between 1 and 100"
-                .to_string(),
-        ));
-    }
-    if let Some(tier) = &adequacy.escalation_tier {
-        check("adequacy.escalation_tier", tier)?;
-    }
-    if adequacy.enabled && adequacy.escalation_tier.is_none() && policy.default_tier.is_none() {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy is enabled but no escalation target is set: \
-             set adequacy.escalation_tier or default_tier"
-                .to_string(),
-        ));
-    }
-    // Exploration trials toward `explore_tier`, which must exist and be a defined
-    // tier when exploration is enabled.
-    if let Some(tier) = &adequacy.explore_tier {
-        check("adequacy.explore_tier", tier)?;
-    }
-    if adequacy.explore_enabled && adequacy.explore_tier.is_none() {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.explore_enabled is set but adequacy.explore_tier is not"
-                .to_string(),
-        ));
-    }
-    // Exploration rides on the adequacy ledger, which is only wired when learning
-    // is enabled — so `explore_enabled` without `enabled` would be silently inert.
-    if adequacy.explore_enabled && !adequacy.enabled {
-        return Err(BitrouterError::bad_request(
-            "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
-        ));
     }
     Ok(())
 }

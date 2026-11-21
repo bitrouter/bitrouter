@@ -21,7 +21,6 @@ use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
 #[cfg(feature = "multi-instance")]
 use crate::model_policy::CompiledPolicy;
 use crate::policy_table_router::{PolicyTable, PolicyTableRouter};
-use crate::trajectory::correlation::TrajectoryRuntime;
 
 pub const DEFAULT_POLICY_FILENAME: &str = "policy.yaml";
 const BUNDLED_POLICY: &str = include_str!("../policy/default.yaml");
@@ -1408,7 +1407,6 @@ impl PolicyRuntime {
         config_path: Option<&Path>,
         decision_recorder: Option<Arc<PolicyDecisionJsonlRecorder>>,
         eval_decisions: PendingEvalDecisionStore,
-        _trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
@@ -1426,7 +1424,6 @@ impl PolicyRuntime {
         config: &Config,
         document: Option<Document>,
         eval_decisions: PendingEvalDecisionStore,
-        _trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
         ensure!(
             config.policy.path.is_none() && !config.inherit_defaults,
@@ -1470,7 +1467,7 @@ impl PolicyRuntime {
             document.policies.contains_key(selected),
             "selected retained policy missing"
         );
-        Self::from_document(config, Some(document), eval_decisions, None)
+        Self::from_document(config, Some(document), eval_decisions)
     }
 
     pub async fn reload_for_config(
@@ -1513,7 +1510,6 @@ impl PolicyRuntime {
             for (name, selection) in compiled.selections() {
                 let mut router =
                     PolicyTableRouter::new(PolicyTable::from_model_selection(selection))
-                        .with_state_namespace(name.clone())
                         .with_eval_observer(
                             self.eval_decisions.clone(),
                             name.clone(),
@@ -1600,9 +1596,6 @@ impl ModelSelector for PolicyRuntime {
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
         let snapshot = self.routing_snapshot();
-        ctx.insert_extension(Arc::new(
-            crate::gateway::routing::ContextTreatment::Preserve,
-        ));
         if !snapshot.0.routers.contains_key(policy) {
             return Err(crate::gateway::error::BitrouterError::bad_request(format!(
                 "router references unavailable policy '{policy}'"
@@ -1629,9 +1622,6 @@ impl ModelSelector for PolicyRuntime {
             Some(snapshot) => snapshot.0.clone(),
             None => self.routing_snapshot().0,
         };
-        ctx.insert_extension(Arc::new(
-            crate::gateway::routing::ContextTreatment::Preserve,
-        ));
         let router = snapshot.routers.get(policy).ok_or_else(|| {
             crate::gateway::error::BitrouterError::bad_request(format!(
                 "router references unavailable policy '{policy}'"
@@ -1712,11 +1702,7 @@ fn pinned_continuation_effort(
 }
 
 fn mark_predictive_single_target(route_projection: &str, ctx: &mut PipelineContext) {
-    if crate::gateway::routing::workflow::predictive::PredictiveRouteProjection::parse_key(
-        route_projection,
-    )
-    .is_some()
-    {
+    if bitrouter_ai::policy::RouteClass::parse_key(route_projection).is_some() {
         ctx.insert_extension(Arc::new(PredictiveSingleTargetDispatch));
     }
 }

@@ -140,12 +140,8 @@ async fn prepared_request_keeps_the_exact_source_generation_across_reload() -> R
         inherit_defaults: false,
         ..Default::default()
     };
-    let runtime = PolicyRuntime::from_document(
-        &config,
-        Some(document("fixture:first")),
-        Default::default(),
-        None,
-    )?;
+    let runtime =
+        PolicyRuntime::from_document(&config, Some(document("fixture:first")), Default::default())?;
     let input = crate::gateway::http::parse_input(
         &bitrouter_ai::types::ApiProtocol::ChatCompletions,
         serde_json::json!({"model":"bitrouter/auto","messages":[{"role":"user","content":"keep all context"}]}),

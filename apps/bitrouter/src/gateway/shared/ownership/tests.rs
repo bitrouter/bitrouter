@@ -356,8 +356,7 @@ async fn partial_projection_variant(first: &Store, second: &Store, variant: &str
             .clone(),
     );
     let pending = PendingEvalDecisionStore::default();
-    let runtime =
-        PolicyRuntime::from_document(&config, Some(document.clone()), pending.clone(), None)?;
+    let runtime = PolicyRuntime::from_document(&config, Some(document.clone()), pending.clone())?;
     let request = Admission {
         requirements: Requirements::from_config(&config, Some(&document))?,
         idempotency_key: Some("original-contract"),

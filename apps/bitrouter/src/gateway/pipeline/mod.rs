@@ -78,7 +78,6 @@ pub mod native_context;
 pub mod native_continuation;
 mod native_output;
 pub mod native_preparation;
-pub mod native_projection;
 pub mod native_report;
 mod native_stream;
 pub mod native_work;

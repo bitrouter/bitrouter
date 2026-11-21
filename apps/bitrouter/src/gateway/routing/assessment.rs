@@ -1,4 +1,4 @@
-//! System One classification with a fixed, source-independent semantic rubric.
+//! Semantic model classification with a fixed, source-independent rubric.
 
 use std::collections::BTreeMap;
 
@@ -12,9 +12,7 @@ use crate::gateway::model::decision::types::DecisionError;
 use crate::gateway::model::decision::types::DecisionRequest;
 use crate::gateway::model::decision::types::DecisionResponse;
 use crate::gateway::model::decision::types::Question;
-use crate::managed_contract::harness::inspection::ProgressState;
-use bitrouter_ai::policy::NextStep;
-use bitrouter_ai::policy::TaskFamily;
+use bitrouter_ai::policy::{NextStep, Risk, RouteClass, TaskFamily};
 
 /// Task-family classification question identifier.
 pub const TASK: &str = "routing_task_family";
@@ -57,18 +55,13 @@ pub struct Assessment {
     pub history_complete: bool,
     /// Whether bounded input projection omitted public text.
     pub history_truncated: bool,
-    /// Accepted task label, otherwise unknown.
-    pub task_family: TaskFamily,
-    /// Accepted next-step role, otherwise unknown.
-    pub next_step_role: NextStep,
-    /// Accepted progress label, otherwise unknown.
-    pub progress_state: ProgressState,
+    /// Accepted model-routing classification; no execution or context authority.
+    pub route_class: RouteClass,
     /// Original class distributions and acceptance decisions.
     pub judgments: BTreeMap<String, Judgment>,
 }
 
-/// Independent semantic questions suitable for a bounded batch with context
-/// representation questions. No answer in the batch depends on another answer.
+/// Independent semantic questions in one bounded classification batch.
 pub fn questions() -> BTreeMap<String, Question> {
     [
         (TASK, "Classify the requested outcome, not the tools currently in use. Prefer the specific task intent over generic coding or generic agent work. Fixing a reported defect remains debugging while reading, editing, or testing; generation means adding behavior without a reported defect. Use unknown when intent is ambiguous or missing.", vec![
@@ -201,16 +194,15 @@ pub fn decode(
         contract_digest: contract_digest(),
         history_complete: normalized.complete,
         history_truncated: normalized.truncated,
-        task_family: TaskFamily::parse_key(accepted(TASK)).unwrap_or_default(),
-        next_step_role: NextStep::parse_key(accepted(ROLE)).unwrap_or(NextStep::Unknown),
-        progress_state: match accepted(PROGRESS) {
-            "opening" => ProgressState::Opening,
-            "progressing" => ProgressState::Progressing,
-            "stalled" => ProgressState::Stalled,
-            "recovering" => ProgressState::Recovering,
-            "near_done" => ProgressState::NearDone,
-            _ => ProgressState::Unknown,
-        },
+        route_class: RouteClass::new(
+            TaskFamily::parse_key(accepted(TASK)).unwrap_or_default(),
+            NextStep::parse_key(accepted(ROLE)).unwrap_or(NextStep::Unknown),
+            if normalized.truncated || matches!(accepted(PROGRESS), "stalled" | "recovering") {
+                Risk::Guarded
+            } else {
+                Risk::Normal
+            },
+        ),
         judgments,
     })
 }
@@ -229,7 +221,7 @@ pub(crate) fn digest(value: &impl Serialize) -> Result<String, DecisionError> {
         .map_err(|_| DecisionError::invalid_request("routing input cannot be serialized"))
 }
 
-/// Stable canonical question contract shared by lock validation and receipts.
+/// Stable canonical question contract shared by policy validation and receipts.
 /// Backend identity and per-attempt input commitments are recorded separately.
 pub fn contract_digest() -> String {
     let canonical = json!({"version": 1, "questions": questions()}).to_string();
@@ -241,3 +233,6 @@ pub fn contract_digest() -> String {
             .collect::<String>()
     )
 }
+
+#[cfg(test)]
+mod tests;

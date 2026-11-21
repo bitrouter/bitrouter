@@ -1414,10 +1414,7 @@ impl Pipeline {
                 Err(error) => {
                     if rebuild_round == 0
                         && can_rebuild
-                        && ctx
-                            .extension::<crate::gateway::routing::ContextTreatment>()
-                            .as_deref()
-                            != Some(&crate::gateway::routing::ContextTreatment::Preserve)
+                        && ctx.extension::<super::native::PreserveInput>().is_none()
                         && let Some(messages) = control.rebuild_context(&plan).await?
                     {
                         ctx.replace_managed_messages(messages)?;
@@ -2491,9 +2488,7 @@ impl Pipeline {
                 .iter()
                 .any(|selector| selector.supports(operation) && selector.preserves_context())
         {
-            ctx.insert_extension(Arc::new(
-                crate::gateway::routing::ContextTreatment::Preserve,
-            ));
+            ctx.insert_extension(Arc::new(super::native::PreserveInput));
         }
         if selection != Some(NativeModelSelection::Fixed)
             && let Some(policy) = resolution.policy.as_deref()
@@ -2599,7 +2594,6 @@ impl Pipeline {
                 .route_resolved(ctx.model(), &prefs, ctx.caller()),
         )
         .await?;
-        let mut context_changed = false;
         let mut routing_prompt = None;
         if operation == ModelOperation::Generation
             && !matches!(ctx.input(), PipelineInput::GenerateContent(_))
@@ -2631,64 +2625,14 @@ impl Pipeline {
             let prepared = ctx
                 .extension::<crate::gateway::routing::preparation::Prepared>()
                 .ok_or_else(|| BitrouterError::internal("routing preparation vanished"))?;
-            let mut views = prepared.views.clone();
-            for view in &mut views {
-                view.prompt.params.max_tokens = output_reservation;
-                view.prompt.params.reasoning_effort =
-                    ctx.require_generation_prompt()?.params.reasoning_effort;
-                view.prompt.params.reasoning_effort_source = ctx
-                    .require_generation_prompt()?
-                    .params
-                    .reasoning_effort_source;
-            }
-            let model = crate::gateway::routing::plan::AdmittedModel {
-                model: crate::gateway::routing::plan::Model {
-                    model: ctx.model().into(),
-                    max_prompt_bytes: prepared.hard_limit_bytes,
-                    input_microusd_per_million: None,
-                    output_microusd_per_million: None,
-                },
-                admitted: true,
-            };
-            let plan = crate::gateway::routing::plan::select(
-                &[model],
-                ctx.model(),
-                &views,
-                crate::gateway::routing::plan::Options {
-                    strategy: ctx
-                        .extension::<crate::gateway::routing::ContextTreatment>()
-                        .as_deref()
-                        .copied()
-                        .unwrap_or_default(),
-                    policy: crate::gateway::routing::plan::CostPolicy {
-                        minimum_savings_fraction: prepared.policy.minimum_savings_fraction,
-                        model_switch_penalty_microusd: prepared
-                            .policy
-                            .model_switch_penalty_microusd,
-                        prefix_loss_penalty_microusd_per_kib: prepared
-                            .policy
-                            .prefix_loss_penalty_microusd_per_kib,
-                    },
-                    previous: prepared.previous.as_ref(),
-                    hard_limit_bytes: prepared.hard_limit_bytes,
-                    capabilities: &prepared.capabilities,
-                },
-            )?;
-            context_changed = plan.prompt.messages != ctx.require_generation_prompt()?.messages
-                || plan.prompt.system != ctx.require_generation_prompt()?.system;
+            let mut prompt = ctx.require_generation_prompt()?.clone();
+            prompt.params.max_tokens = output_reservation;
+            prepared.validate_for(&prompt)?;
             if let Some(native) = &native {
-                native.control.commit_routing(&plan).await?;
+                native.control.commit_routing(&prompt).await?;
             }
-            ctx.apply_routing_prompt(plan.prompt.clone())?;
-            ctx.emit(plan.selection.clone());
-            #[cfg(feature = "multi-instance")]
-            if let Some(admission) =
-                ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
-            {
-                admission.retain_routing(ctx)?;
-            }
-            ctx.insert_extension(Arc::new(plan.selection));
-            routing_prompt = Some(plan.prompt);
+            ctx.apply_routing_prompt(prompt.clone())?;
+            routing_prompt = Some(prompt);
         }
         let fixed_routes = (selection == Some(NativeModelSelection::Fixed)).then(|| {
             chain
@@ -2770,42 +2714,6 @@ impl Pipeline {
             hook.after_resolve(&chain, ctx).await?;
         }
         ctx.route_chain = Some(chain.clone());
-        if context_changed {
-            for hook in self
-                .pre_resolution_hooks
-                .iter()
-                .chain(&self.router_preparation_hooks)
-                .chain(&self.pre_request_hooks)
-                .filter(|hook| hook.supports(operation))
-            {
-                match observe_pipeline(
-                    preparation_runtime(ctx),
-                    ctx.request_id().into(),
-                    NativePreparationWorkKind::PreRequestHook,
-                    hook.revalidate_context(ctx),
-                )
-                .await?
-                {
-                    HookDecision::Allow => {}
-                    HookDecision::Deny(reason) => return Err(reason.into()),
-                }
-            }
-            self.run_request_checks(ctx, &resolution.request_checks, None)
-                .await?;
-            for hook in self
-                .route_hooks
-                .iter()
-                .filter(|hook| hook.supports(operation))
-            {
-                observe_pipeline(
-                    preparation_runtime(ctx),
-                    ctx.request_id().into(),
-                    NativePreparationWorkKind::RouteHook,
-                    hook.revalidate_context(&chain, ctx),
-                )
-                .await?;
-            }
-        }
         if let Some(prompt) = routing_prompt.as_ref()
             && (ctx.model() != prompt.model || ctx.generation_prompt() != Some(prompt))
         {
