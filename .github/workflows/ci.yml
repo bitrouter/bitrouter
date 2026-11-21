@@ -507,8 +507,8 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: always() && runner.os == 'Linux'
       with:
-        name: gateway-profiles-${{ github.run_attempt }}-evidence
-        path: target/nextest/ci-service-*/junit.xml
+        name: gateway-profile-test-results-${{ github.run_attempt }}
+        path: ci-test-results/service-*.xml
 
   test-libraries:
     name: test (contracts, SDK, registry and helpers)

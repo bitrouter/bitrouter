@@ -36,6 +36,7 @@ function verifyBrewArchives(brew, pkg, hosting) {
   const entries = [...brew.matchAll(/^      url "([^"]+)"(?:\r?\n      sha256 "([^"]+)")?\r?$/gm)]
     .map(([, url, sha256]) => [url, sha256]);
   assert.deepEqual(entries, expected, `Homebrew archive URLs or digests differ for ${pkg}`);
+  assert.equal([...brew.matchAll(/^\s*(?:url|mirror)\b/gm)].length, expected.length);
   assert.equal([...brew.matchAll(/^\s*sha256 /gm)].length, expected.filter(([, digest]) => digest).length);
 }
 

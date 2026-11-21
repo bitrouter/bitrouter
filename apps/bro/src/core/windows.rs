@@ -1,6 +1,13 @@
-//! Verify the Windows install directory belongs to the running account.
+//! Windows directory ownership and npm launcher discovery.
 
-use std::{ffi::c_void, io, os::windows::ffi::OsStrExt, path::Path, ptr};
+use std::{
+    ffi::c_void,
+    fs,
+    io::{self, Read},
+    os::windows::ffi::OsStrExt,
+    path::{Path, PathBuf},
+    ptr,
+};
 
 use windows_sys::Win32::{
     Foundation::{ERROR_INSUFFICIENT_BUFFER, HANDLE},
@@ -71,5 +78,84 @@ pub(super) fn owned_by_user(path: &Path) -> io::Result<bool> {
         }
         let user = &*token_info.as_ptr().cast::<TOKEN_USER>();
         Ok(EqualSid(owner, user.User.Sid) != 0)
+    }
+}
+
+pub(super) fn npm_launcher(shim: &Path) -> Option<PathBuf> {
+    const MAX_SHIM: u64 = 8 * 1024;
+    if shim.file_name()? != "bitrouter.cmd" || !shim.symlink_metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut contents = String::new();
+    fs::File::open(shim)
+        .ok()?
+        .take(MAX_SHIM + 1)
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() as u64 > MAX_SHIM {
+        return None;
+    }
+    let directory = shim.parent()?;
+    let modules =
+        if directory.file_name()? == ".bin" && directory.parent()?.file_name()? == "node_modules" {
+            if !shim_points_to(&contents, r"..\bitrouter-bro\core\run-bitrouter.js") {
+                return None;
+            }
+            directory.parent()?.to_owned()
+        } else {
+            if !shim_points_to(
+                &contents,
+                r"node_modules\bitrouter-bro\core\run-bitrouter.js",
+            ) {
+                return None;
+            }
+            directory.join("node_modules")
+        };
+    let launcher = modules
+        .canonicalize()
+        .ok()?
+        .join("bitrouter-bro/core/run-bitrouter.js");
+    if launcher.canonicalize().ok()? != launcher || !launcher.is_file() {
+        return None;
+    }
+    Some(launcher)
+}
+
+fn shim_points_to(contents: &str, relative: &str) -> bool {
+    contents.lines().any(|line| {
+        let Some((command, target)) = line
+            .trim()
+            .strip_suffix(" %*")
+            .and_then(|invocation| invocation.rsplit_once(" \""))
+        else {
+            return false;
+        };
+        let target = target
+            .strip_prefix("%dp0%\\")
+            .or_else(|| target.strip_prefix("%~dp0\\"));
+        matches!(
+            command.trim_end(),
+            "\"%_prog%\"" | "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\""
+        ) && target.and_then(|target| target.strip_suffix('"')) == Some(relative)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmd_shim_references_only_the_expected_launcher() {
+        let global = r"node_modules\bitrouter-bro\core\run-bitrouter.js";
+        let local = r"..\bitrouter-bro\core\run-bitrouter.js";
+        let shim = format!(
+            "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\{global}\" %*\r\n"
+        );
+        assert!(shim_points_to(&shim, global));
+        assert!(!shim_points_to(&shim, local));
+        assert!(!shim_points_to(
+            &format!("REM \"%dp0%\\{global}\" %*"),
+            global
+        ));
     }
 }
