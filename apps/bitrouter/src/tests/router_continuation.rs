@@ -815,7 +815,7 @@ async fn current_source_continuation_preserves_effort_and_rejects_ineligible_pol
             }
             assert_eq!(bodies[1]["previous_response_id"], "provider-response-0");
 
-            // The same model is no longer eligible when every remaining tier
+            // The same model is ineligible when every remaining tier
             // enforces an effort different from the sealed continuation.
             fixture.write_source("cheap", false, Some(ReasoningEffort::Low))?;
             assembled

@@ -2114,7 +2114,10 @@ impl Pipeline {
             let prepared = ctx
                 .extension::<crate::gateway::routing::preparation::Prepared>()
                 .ok_or_else(|| BitrouterError::internal("routing preparation vanished"))?;
-            let prompt = ctx.require_generation_prompt()?.clone();
+            let mut prompt = ctx.require_generation_prompt()?.clone();
+            // Freeze the effective route, retaining the ingress selector in
+            // original_model rather than restoring it from the input prompt.
+            prompt.model = ctx.model().to_owned();
             prepared.validate_for(&prompt)?;
             ctx.apply_routing_prompt(prompt.clone())?;
             routing_prompt = Some(prompt);

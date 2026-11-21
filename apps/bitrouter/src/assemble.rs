@@ -3189,18 +3189,28 @@ policies:
             .store()
             .list_subjects_for_owner("local")
             .await?;
-        assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].scope, EvalScope::Request);
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(
+            subjects
+                .iter()
+                .filter(|subject| subject.scope == EvalScope::Episode)
+                .count(),
+            1
+        );
+        let subject = subjects
+            .iter()
+            .find(|subject| subject.scope == EvalScope::Request)
+            .ok_or_else(|| anyhow::anyhow!("missing model-policy request subject"))?;
         assert!(matches!(
-            subjects[0].identity,
+            subject.identity,
             bitrouter_ai::eval::EvalSubjectIdentity::GatewayGeneric {}
         ));
-        assert_eq!(subjects[0].decisions.len(), 1);
-        assert_eq!(subjects[0].decisions[0].policy_digest, digest);
-        assert_eq!(subjects[0].decisions[0].policy, "coding");
-        assert_eq!(subjects[0].decisions[0].selected_tier, "economy");
+        assert_eq!(subject.decisions.len(), 1);
+        assert_eq!(subject.decisions[0].policy_digest, digest);
+        assert_eq!(subject.decisions[0].policy, "coding");
+        assert_eq!(subject.decisions[0].selected_tier, "economy");
         assert_eq!(
-            subjects[0].decisions[0].baseline_tier.as_deref(),
+            subject.decisions[0].baseline_tier.as_deref(),
             Some("economy")
         );
         assert!(assembled.pending_eval_decisions.is_empty());
@@ -3298,10 +3308,9 @@ policies:
                 categorical: BTreeMap::from([
                     (
                         "route.projection".into(),
-                        "agent_trace/v2|opening|normal".into(),
+                        "code:generation|implement|normal".into(),
                     ),
                     ("route.selected_tier".into(), "economy".into()),
-                    ("route.workflow_state".into(), "opening".into()),
                 ]),
                 digests: BTreeMap::new(),
                 route_measurement: None,
