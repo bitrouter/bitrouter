@@ -55,6 +55,3 @@ fi
 mkdir -p ci-artifacts
 cargo nextest archive -p "$package" "${feature_flags[@]}" "${archive_flags[@]}" \
   --archive-file "ci-artifacts/$suite.tar.zst"
-if [[ "$CARGO_TARGET_DIR" != target ]]; then
-  rm -rf "$CARGO_TARGET_DIR"
-fi
