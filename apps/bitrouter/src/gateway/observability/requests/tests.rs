@@ -166,7 +166,7 @@ models:
         |_| None,
     )?;
     let routing = Arc::new(ConfigRoutingTable::from_config(config.clone()));
-    let policies = PolicyRuntime::new(&config, None, None, Default::default(), None).await?;
+    let policies = PolicyRuntime::new(&config, None, None, Default::default()).await?;
     let binding = CanonicalRequestBinding::new(db.clone(), routing.clone(), policies.clone());
     let (tracker, binding) = match storage {
         Some(storage) => (

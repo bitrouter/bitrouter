@@ -3,14 +3,13 @@
 use crate::gateway::observability::event::PipelineEvent;
 use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
 use crate::gateway::pipeline::settlement::SettlementContext;
-use crate::gateway::routing::workflow::predictive::is_task_family_reason_code;
 use crate::storage::evaluation::canonical_digest;
 use bitrouter_ai::eval::{EvidenceItem, RouteDecisionMeasurement};
 use bitrouter_ai::policy::TaskFamily;
 use bitrouter_ai::types::ReasoningEffort;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
@@ -128,10 +127,8 @@ pub struct PendingEvalDecision {
     pub continuation_adjustment: Option<String>,
     pub predicted_role: Option<String>,
     pub predicted_task_family: Option<String>,
-    pub predicted_action: Option<String>,
     pub prediction_confidence_ppm: Option<u32>,
     pub task_family_confidence_ppm: Option<u32>,
-    pub task_family_reason_codes: Vec<String>,
     pub predictor_contract_digest: Option<String>,
     pub prediction_confidence_kind: Option<String>,
     pub observation: Option<PredictionObservation>,
@@ -146,10 +143,8 @@ pub(crate) struct PredictionObservationSnapshot {
     continuation_adjustment: Option<String>,
     predicted_role: Option<String>,
     predicted_task_family: Option<String>,
-    predicted_action: Option<String>,
     prediction_confidence_ppm: Option<u32>,
     task_family_confidence_ppm: Option<u32>,
-    task_family_reason_codes: Vec<String>,
     predictor_contract_digest: Option<String>,
     prediction_confidence_kind: Option<String>,
     observed_action: Option<ObservedActionClass>,
@@ -178,19 +173,12 @@ impl PendingEvalDecision {
                 .predicted_task_family
                 .as_deref()
                 .map(normalize_predicted_task_family),
-            predicted_action: self
-                .predicted_action
-                .as_deref()
-                .map(normalize_predicted_action),
             prediction_confidence_ppm: self
                 .prediction_confidence_ppm
                 .map(|confidence| confidence.min(1_000_000)),
             task_family_confidence_ppm: self
                 .task_family_confidence_ppm
                 .map(|confidence| confidence.min(1_000_000)),
-            task_family_reason_codes: normalized_task_family_reason_codes(
-                &self.task_family_reason_codes,
-            ),
             predictor_contract_digest: bounded_continuation_label(
                 self.predictor_contract_digest.as_deref(),
                 71,
@@ -233,20 +221,11 @@ impl PredictionObservationSnapshot {
         if let Some(task_family) = &self.predicted_task_family {
             attributes.insert("predicted_task_family".into(), task_family.clone());
         }
-        if let Some(action) = &self.predicted_action {
-            attributes.insert("predicted_action".into(), action.clone());
-        }
         if let Some(confidence) = self.prediction_confidence_ppm {
             attributes.insert("prediction_confidence_ppm".into(), confidence.to_string());
         }
         if let Some(confidence) = self.task_family_confidence_ppm {
             attributes.insert("task_family_confidence_ppm".into(), confidence.to_string());
-        }
-        if !self.task_family_reason_codes.is_empty() {
-            attributes.insert(
-                "task_family_reason_codes".into(),
-                self.task_family_reason_codes.join(","),
-            );
         }
         if let Some(digest) = &self.predictor_contract_digest {
             attributes.insert("predictor_contract_digest".into(), digest.clone());
@@ -262,15 +241,6 @@ impl PredictionObservationSnapshot {
         }
         if let Some(reason) = &self.observation_reason_code {
             attributes.insert("observation_reason_code".into(), reason.clone());
-        }
-        if let (Some(predicted), Some(observed)) = (
-            self.predicted_action
-                .as_deref()
-                .and_then(ObservedActionClass::parse)
-                .filter(|action| action.is_known()),
-            self.observed_action.filter(|action| action.is_known()),
-        ) {
-            attributes.insert("action_match".into(), (predicted == observed).to_string());
         }
         attributes
     }
@@ -301,9 +271,6 @@ impl PredictionObservationSnapshot {
         if let Some(task_family) = &self.predicted_task_family {
             categorical.insert("routing.predicted_task_family".into(), task_family.clone());
         }
-        if let Some(action) = &self.predicted_action {
-            categorical.insert("routing.predicted_action".into(), action.clone());
-        }
         if let Some(confidence) = self.prediction_confidence_ppm {
             structural.insert(
                 "routing.prediction_confidence_ppm".into(),
@@ -314,12 +281,6 @@ impl PredictionObservationSnapshot {
             structural.insert(
                 "routing.task_family_confidence_ppm".into(),
                 u64::from(confidence),
-            );
-        }
-        if !self.task_family_reason_codes.is_empty() {
-            categorical.insert(
-                "routing.task_family_reason_codes".into(),
-                self.task_family_reason_codes.join(","),
             );
         }
         if let Some(digest) = &self.predictor_contract_digest {
@@ -339,9 +300,6 @@ impl PredictionObservationSnapshot {
         }
         if let Some(reason) = &self.observation_reason_code {
             categorical.insert("routing.observation_reason_code".into(), reason.clone());
-        }
-        if let Some(action_match) = self.attributes().get("action_match") {
-            categorical.insert("routing.action_match".into(), action_match.clone());
         }
     }
 }
@@ -368,37 +326,6 @@ fn normalize_predicted_task_family(value: &str) -> String {
         .unwrap_or(TaskFamily::Unknown)
         .key()
         .to_owned()
-}
-
-fn normalize_predicted_action(value: &str) -> String {
-    ObservedActionClass::parse(value)
-        .unwrap_or(ObservedActionClass::Unknown)
-        .as_str()
-        .to_owned()
-}
-
-fn normalized_task_family_reason_codes(values: &[String]) -> Vec<String> {
-    const MAX_REASON_CODES: usize = 8;
-    const MAX_CATEGORICAL_BYTES: usize = 128;
-    let mut normalized = Vec::new();
-    let mut categorical_bytes = 0_usize;
-    for code in values
-        .iter()
-        .map(String::as_str)
-        .filter(|value| is_task_family_reason_code(value))
-        .collect::<BTreeSet<_>>()
-    {
-        if normalized.len() == MAX_REASON_CODES {
-            break;
-        }
-        let appended_bytes = code.len() + usize::from(!normalized.is_empty());
-        if categorical_bytes.saturating_add(appended_bytes) > MAX_CATEGORICAL_BYTES {
-            continue;
-        }
-        categorical_bytes += appended_bytes;
-        normalized.push(code.to_owned());
-    }
-    normalized
 }
 
 /// Bounded-lifetime request correlation used between model selection and
@@ -556,14 +483,12 @@ pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Ve
     routing_evidence_from(
         &context.request_id,
         context.get_event::<crate::gateway::routing::preparation::Receipt>(),
-        context.get_event::<crate::gateway::routing::plan::Selection>(),
     )
 }
 
 pub(crate) fn routing_evidence_from(
-    request_id: &str,
+    _request_id: &str,
     receipt: Option<&crate::gateway::routing::preparation::Receipt>,
-    selection: Option<&crate::gateway::routing::plan::Selection>,
 ) -> anyhow::Result<Vec<EvidenceItem>> {
     let mut evidence = Vec::new();
     if let Some(receipt) = receipt {
@@ -585,6 +510,7 @@ pub(crate) fn routing_evidence_from(
                 "judgments".into(),
                 serde_json::to_string(&assessment.judgments)?,
             );
+            attributes.insert("route_class".into(), assessment.route_class.to_string());
             attributes.insert("confidence_kind".into(), "provider_probability".into());
         }
         if let Some(usage) = receipt.usage {
@@ -599,24 +525,6 @@ pub(crate) fn routing_evidence_from(
             attributes,
         });
     }
-    if let Some(selection) = selection {
-        evidence.push(EvidenceItem {
-            evidence_id: format!("route-plan:{}", canonical_digest(&request_id)?),
-            kind: "routing.plan".into(),
-            digest: canonical_digest(selection)?,
-            redacted: true,
-            attributes: BTreeMap::from([
-                ("model".into(), selection.selected_model.clone()),
-                ("context_view".into(), selection.selected_context.clone()),
-                ("prompt_digest".into(), selection.prompt_digest.clone()),
-                (
-                    "context_strategy".into(),
-                    serde_json::to_string(&selection.strategy)?,
-                ),
-                ("reason".into(), selection.reason.clone()),
-            ]),
-        });
-    }
     Ok(evidence)
 }
 
@@ -624,6 +532,55 @@ pub(crate) fn routing_evidence_from(
 pub(crate) mod tests {
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     use super::*;
+
+    #[test]
+    fn routing_evidence_retains_classification_and_deduplicates_receipt_reuse() -> anyhow::Result<()>
+    {
+        use crate::gateway::model::decision::types::DecisionUsage;
+        use crate::gateway::routing::{assessment::Assessment, preparation::Receipt};
+
+        let receipt = Receipt {
+            id: "semantic-receipt".into(),
+            assessment: Some(Assessment {
+                model: "classifier-model".into(),
+                requested_model: "classifier-model".into(),
+                confidence_threshold: 0.8,
+                classifier_digest: DIGEST.into(),
+                input_digest: DIGEST.into(),
+                contract_digest: DIGEST.into(),
+                history_complete: false,
+                history_truncated: true,
+                route_class: "code:review|verify|normal".parse()?,
+                judgments: BTreeMap::new(),
+            }),
+            error: None,
+            usage: Some(DecisionUsage {
+                input_tokens: 13,
+                output_tokens: 5,
+            }),
+        };
+        let first = routing_evidence_from("request-a", Some(&receipt))?;
+        let reused = routing_evidence_from("request-b", Some(&receipt))?;
+        assert_eq!(first, reused);
+        assert_eq!(first.len(), 1);
+        let item = first
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing evidence"))?;
+        assert_eq!(item.kind, "routing.assessment");
+        assert_eq!(item.digest, canonical_digest(&receipt)?);
+        assert!(item.redacted);
+        for (key, expected) in [
+            ("decision_receipt_id", "semantic-receipt"),
+            ("route_class", "code:review|verify|normal"),
+            ("confidence_kind", "provider_probability"),
+            ("input_tokens", "13"),
+            ("output_tokens", "5"),
+        ] {
+            assert_eq!(item.attributes.get(key).map(String::as_str), Some(expected));
+        }
+        assert!(routing_evidence_from("request-c", None)?.is_empty());
+        Ok(())
+    }
 
     #[cfg(feature = "eval-publication")]
     #[test]
@@ -648,36 +605,6 @@ pub(crate) mod tests {
                 .is_none()
         );
         Ok(())
-    }
-
-    #[test]
-    fn task_family_reason_codes_fit_the_categorical_bound() {
-        let values = [
-            "task_code_generation",
-            "task_code_debugging",
-            "task_code_review",
-            "task_code_sql_database",
-            "task_code_frontend_ui",
-            "task_code_devops_config",
-            "task_code_repository_analysis",
-            "task_agent_multi_step_planning",
-            "task_agent_workflow_execution",
-            "task_agent_web_research",
-            "task_agent_memory_operations",
-            "task_agent_general",
-            "task_unknown",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-        let normalized = normalized_task_family_reason_codes(&values);
-
-        assert!(normalized.len() <= 8);
-        assert!(normalized.join(",").len() <= 128);
-        assert!(normalized.iter().all(|code| {
-            crate::gateway::routing::workflow::predictive::is_task_family_reason_code(code)
-        }));
     }
 
     #[test]
@@ -727,14 +654,12 @@ pub(crate) mod tests {
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_task_family: Some("code:review".into()),
-            predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
             task_family_confidence_ppm: Some(800_000),
-            task_family_reason_codes: Vec::new(),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
-            prediction_confidence_kind: Some("heuristic_margin".into()),
+            prediction_confidence_kind: Some("provider_probability".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         }

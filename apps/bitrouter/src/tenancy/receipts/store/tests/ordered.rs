@@ -1,4 +1,4 @@
-//! Current receipt restart guarantees and explicit retired-ledger refusal.
+//! Receipt restart guarantees and unsupported-ledger refusal.
 use super::*;
 use sea_orm_migration::MigratorTrait;
 
@@ -52,7 +52,7 @@ async fn current_baseline_preserves_receipt_usage_and_identity_across_two_restar
 }
 
 #[tokio::test]
-async fn retired_writer_ledgers_are_refused_without_rewriting_evidence() -> Result<()> {
+async fn unsupported_writer_ledgers_are_refused_without_rewriting_evidence() -> Result<()> {
     for marker in [
         "m20240101_000045_ordered_receipts",
         "m20240101_000047_shared_admission_health",

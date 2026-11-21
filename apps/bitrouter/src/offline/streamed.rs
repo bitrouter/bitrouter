@@ -371,7 +371,6 @@ async fn snapshot(
         format: FORMAT_V2.into(),
         scope: "sqlite_database_only".into(),
         complete: false,
-        cutover_ready: false,
         exclusions: EXCLUSIONS.iter().map(|value| (*value).into()).collect(),
         inspector: crate::artifact::current(),
         source_commit: None,

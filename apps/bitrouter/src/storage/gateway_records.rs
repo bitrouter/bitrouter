@@ -358,7 +358,7 @@ impl GatewayRecords {
     }
 }
 
-use sea_orm::sea_query::{Alias, Condition, Expr};
+use sea_orm::sea_query::{Alias, Condition};
 
 fn service_scope() -> Condition {
     let mut condition = Condition::all();

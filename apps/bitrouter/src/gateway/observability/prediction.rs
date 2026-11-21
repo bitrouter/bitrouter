@@ -65,10 +65,6 @@ impl ObservedActionClass {
         }
     }
 
-    pub fn is_known(self) -> bool {
-        self != Self::Unknown
-    }
-
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "reason_or_plan" => Some(Self::ReasonOrPlan),
@@ -2205,14 +2201,12 @@ mod tests {
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_task_family: Some("code:review".into()),
-            predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(800_000),
             task_family_confidence_ppm: Some(800_000),
-            task_family_reason_codes: Vec::new(),
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),
-            prediction_confidence_kind: Some("heuristic_margin".into()),
+            prediction_confidence_kind: Some("provider_probability".into()),
             observation: None,
             observed_at: "2026-08-08T00:00:00Z".into(),
         }

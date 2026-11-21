@@ -24,7 +24,6 @@ mod directory;
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
-mod learning_startup;
 mod resources;
 
 #[tokio::test]

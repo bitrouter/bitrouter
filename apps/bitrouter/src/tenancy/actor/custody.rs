@@ -468,12 +468,6 @@ impl Worker {
                     .initialize_receipts(inventory, free)
                     .map_err(|code| self.unavailable(code))?;
                 tracing::info!(
-                    phase = "learning",
-                    outcome = "started",
-                    "tenant startup validation"
-                );
-                self.learning_startup(&control).await?;
-                tracing::info!(
                     phase = "obligations",
                     outcome = "started",
                     "tenant startup validation"

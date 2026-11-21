@@ -1,14 +1,13 @@
 use super::*;
 
 #[tokio::test]
-async fn row_pages_and_byte_inventory_cross_former_catalog_limit_without_collecting_rows()
--> Result<()> {
+async fn row_pages_and_byte_inventory_span_many_pages_without_collecting_rows() -> Result<()> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let installation: InstallationId = "installation".try_into()?;
     let tenant = "tenant".try_into()?;
     let execution = "execution".try_into()?;
-    // A regression checkpoint beyond the retired catalog quota, not a new maximum.
+    // Exercise multiple pages without imposing a total row limit.
     let count = 273_u64;
     let tx = db.begin().await?;
     let mut expected = Vec::new();
