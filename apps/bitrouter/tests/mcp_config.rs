@@ -109,7 +109,7 @@ async fn explicit_blocking_input_keeps_sigint_cancellation_and_source_bytes() ->
 async fn full_entries_crud_redaction_defaults_and_source_preservation() -> Result<()> {
     let home = tempfile::tempdir()?;
     let path = home.path().join("config.yaml");
-    let initial = "# first\ninherit_defaults: false\nproviders: {} # do not rewrite\nchat:\n  model: 'unchanged' # keep ordering\n# end\n";
+    let initial = "# first\ninherit_defaults: false\nproviders: {} # do not rewrite\nserver:\n  listen: '127.0.0.1:4356' # keep ordering\n# end\n";
     std::fs::write(&path, initial)?;
     let http = json!({"name":"http","transport":{"type":"http","url":"https://user:password@example.com/mcp?token=query-secret#fragment","headers":{"Authorization":"Bearer ${MCP_SECRET}","X-Private":"header-secret"}},"aggregate":false,"tool_prefix":"custom__"});
     let input = serde_json::to_string(&http)?;
