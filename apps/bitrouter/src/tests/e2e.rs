@@ -903,8 +903,7 @@ tool_safe_tiers: [high, low]
     Ok(())
 }
 
-// Retire adequacy/exploration activation here; retain the ordinary streaming
-// settlement invariant under model-only source.
+// Streaming settlement persists metering for the selected model route.
 #[tokio::test]
 async fn streaming_model_policy_settlement_also_persists_metering() -> anyhow::Result<()> {
     use std::time::Duration;
@@ -1002,7 +1001,7 @@ tool_safe_tiers: [capable, cheap]
     anyhow::bail!("metering row did not persist after policy settlement")
 }
 
-// Cancellation must still settle without an adequacy runtime or guard state.
+// Cancellation must settle the metering evidence collected before disconnection.
 #[tokio::test]
 async fn disconnected_model_policy_stream_also_persists_metering() -> anyhow::Result<()> {
     use std::convert::Infallible;

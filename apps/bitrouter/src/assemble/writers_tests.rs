@@ -174,7 +174,6 @@ mod shared {
     use crate::gateway::shared::telemetry::Telemetry;
     use futures::FutureExt as _;
     use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-    use sea_orm_migration::SchemaManager;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
     use tokio::time::Instant;
@@ -280,17 +279,7 @@ routers:
     }
 
     async fn local_writer_counts(db: &DatabaseConnection) -> Result<Vec<i64>> {
-        let schema = SchemaManager::new(db);
-        for table in [
-            "acp_capture_connections",
-            "acp_canonical_sessions",
-            "acp_capture_events",
-        ] {
-            ensure!(
-                !schema.has_table(table).await?,
-                "historical ACP table {table} exists in the current gateway schema"
-            );
-        }
+        crate::db::current_schema::validate(db).await?;
 
         let mut counts = Vec::new();
         for table in [
@@ -304,7 +293,7 @@ routers:
             "eval_results",
             "eval_admission_events",
             "eval_snapshots",
-            "checkpoint_evolution",
+            "gateway_request_records",
         ] {
             let row = db
                 .query_one(Statement::from_string(

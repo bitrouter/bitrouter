@@ -132,12 +132,12 @@ pub(super) fn source(default_tier: &str) -> Result<Document> {
 }
 
 pub(super) fn assert_gateway_schema(fixture: &Fixture) -> Result<()> {
-    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     fixture.runtime.block_on(async {
         let db = crate::db::connect(&database_url(fixture)).await?;
-        ensure!(db.query_all(Statement::from_string(DbBackend::Sqlite,
-            "SELECT name FROM sqlite_schema WHERE type='table' AND (name GLOB 'bro_*' OR name GLOB 'acp_*' OR name GLOB 'adequacy_*')"
-        )).await?.is_empty(), "gateway contains a harness-owned table");
+        ensure!(
+            crate::db::store_format::inspect(&db).await? == crate::db::store_format::State::Current,
+            "gateway fixture must contain the current schema"
+        );
         db.close().await?;
         Ok(())
     })
