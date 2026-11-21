@@ -135,6 +135,7 @@ impl RequiredDeliveryHandshake {
 
     /// Construct a drop-aware rendezvous whose delivery side waits for durable
     /// activation and commits to return the terminal in the same final poll.
+    #[cfg(any(test, not(feature = "multi-instance")))]
     pub fn new_with_completion(
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,

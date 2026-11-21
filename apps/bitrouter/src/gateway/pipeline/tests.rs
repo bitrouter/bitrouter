@@ -5338,7 +5338,7 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
             .1
             .clone();
         dispatch.register(Arc::new(NoStructuredAdapter), transport);
-        let direct = ModelClient::with_dispatch(
+        let direct = ModelClient::with_http_client(
             HttpTimeouts::default(),
             Arc::new({
                 let mut direct_dispatch = OutboundDispatch::builtin();
@@ -5350,7 +5350,10 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
                 direct_dispatch.register(Arc::new(NoStructuredAdapter), transport);
                 direct_dispatch
             }),
-        )?;
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let executor = HttpExecutor::with_dispatch(HttpTimeouts::default(), dispatch)?;
         let mut rejected = target("a-unsupported");
         rejected.api_base = server.uri();
@@ -5382,7 +5385,11 @@ async fn conversion_admission_skips_http_candidate_for_json_and_stream_without_f
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let report = match direct.render_request(&rejected.model_target(), &original, streamed) {
+        let report = match direct.render_request_with_report(
+            &rejected.model_target(),
+            &original,
+            streamed,
+        ) {
             Err(ModelError::Incompatible { report }) => report,
             _ => return Err(BitrouterError::internal("direct admission disagrees")),
         };
@@ -5545,9 +5552,15 @@ async fn projection_admission_routes_file_results_without_asset_loss_or_failure_
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let direct = ModelClient::with_http_client(
+            HttpTimeouts::default(),
+            Arc::new(crate::gateway::model::protocol::OutboundDispatch::builtin()),
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let error = direct
-            .render_request(&rejected.model_target(), &original, streamed)
+            .render_request_with_report(&rejected.model_target(), &original, streamed)
             .err()
             .ok_or_else(|| BitrouterError::internal("direct lossy projection admitted"))?;
         let ModelError::Incompatible { report } = error else {
@@ -5784,9 +5797,15 @@ async fn projection_admission_preserves_tool_constraints_during_http_fallback() 
                 crate::gateway::error::BitrouterError::internal("expected generation fixture")
             })?
             .clone();
-        let direct = ModelClient::new(HttpTimeouts::default())?;
+        let direct = ModelClient::with_http_client(
+            HttpTimeouts::default(),
+            Arc::new(crate::gateway::model::protocol::OutboundDispatch::builtin()),
+            reqwest::Client::builder()
+                .build()
+                .map_err(BitrouterError::internal)?,
+        );
         let error = direct
-            .render_request(&rejected.model_target(), &original, streamed)
+            .render_request_with_report(&rejected.model_target(), &original, streamed)
             .err()
             .ok_or_else(|| BitrouterError::internal("lossy schema admitted"))?;
         let ModelError::Incompatible { report } = error else {
