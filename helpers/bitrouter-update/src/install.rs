@@ -178,6 +178,19 @@ impl Installation {
             );
         }
         if !regular_file(&owned)? {
+            #[cfg(windows)]
+            if let Some(backup) = verified_previous(&lock, stored.as_ref(), pending.as_ref())? {
+                let record =
+                    stored.context("missing previous receipt for Windows recovery copy")?;
+                verify_independent(product, &owned, &backup)?;
+                verify_missing_peer(product, &owned)?;
+                return Ok(Some(Self {
+                    product,
+                    exe: owned,
+                    receipt,
+                    record,
+                }));
+            }
             ensure!(
                 stored.is_none(),
                 "receipted executable is missing at {}; preserve the receipts for manual recovery",
@@ -185,7 +198,7 @@ impl Installation {
             );
             return Ok(None);
         }
-        verify_independent(product, &owned)?;
+        verify_independent(product, &owned, &owned)?;
         let digest = sha256(&owned)?;
         let mut matching: Option<Value> = None;
         for record in [stored, pending].into_iter().flatten() {
@@ -223,11 +236,12 @@ impl Installation {
     }
 
     fn reconcile(&self, lock: &Lock) -> Result<()> {
-        let version = self.record["version"]
-            .as_str()
-            .context("missing receipt version")?;
-        let now = Self::load_at(self.product, &self.exe, version, self.receipt.clone())?
-            .context("receipt disappeared")?;
+        let now = Self::inspect_at(
+            self.product,
+            Selection::Executable(&self.exe),
+            self.receipt.clone(),
+        )?
+        .context("receipt disappeared")?;
         ensure!(
             self.record == now.record,
             "installation changed during update"
@@ -235,23 +249,18 @@ impl Installation {
         let pending = lock.path.join("receipt");
         let journal = read_record(&pending)?;
         #[cfg(windows)]
-        {
-            let backup = lock.path.join("previous.exe");
-            if regular_file(&backup)? {
-                ensure!(
-                    journal.is_some(),
-                    "missing pending Windows receipt; preserve {}",
-                    backup.display()
-                );
-                let prior = read_record(&self.receipt)?
-                    .context("missing previous receipt for Windows recovery copy")?;
-                ensure!(
-                    prior["binary_sha256"] == sha256(&backup)?,
-                    "previous Windows executable conflicts with its receipt; preserve {}",
-                    backup.display()
-                );
-                fs::remove_file(backup)?;
+        if let Some(backup) = verified_previous(
+            &lock.path,
+            read_record(&self.receipt)?.as_ref(),
+            journal.as_ref(),
+        )? {
+            if !regular_file(&self.exe)? {
+                let digest = self.record["binary_sha256"]
+                    .as_str()
+                    .context("missing recovery digest")?;
+                restore_previous(&backup, &self.exe, digest)?;
             }
+            fs::remove_file(backup)?;
         }
         if let Some(record) = journal {
             if record == now.record {
@@ -311,18 +320,7 @@ impl Installation {
             !regular_file(&lock.path.join("previous.exe"))?,
             "found Windows recovery evidence; preserve the receipts and previous executable for manual recovery"
         );
-        let peer = exe.with_file_name(peer_product(product).binary());
-        match peer.symlink_metadata() {
-            Ok(meta) if meta.is_symlink() => {
-                ensure!(
-                    peer.canonicalize().is_ok_and(|target| target != exe),
-                    "linked product executables cannot be installed independently"
-                );
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+        verify_missing_peer(product, &exe)?;
         let record = json!({
             "source": {"owner":"bitrouter","name":"bitrouter","app_name":product.package(),"release_type":"github"},
             "provider": {"source":"cargo-dist"},
@@ -341,7 +339,8 @@ impl Installation {
         Ok(true)
     }
 
-    /// Complete a previously verified receipt transaction when already current.
+    /// Complete a previously verified receipt transaction, restoring a missing
+    /// Windows image from a digest-verified recovery copy when available.
     ///
     /// # Errors
     /// An active, unrecognized or conflicting transaction retains its evidence.
@@ -368,11 +367,15 @@ impl Installation {
         );
         let (_bin_lock, lock) = self.locks()?;
         self.reconcile(&lock)?;
+        let previous_digest = self.record["binary_sha256"]
+            .as_str()
+            .context("missing installed executable digest")?
+            .to_owned();
         let mut next = self.record;
         next["version"] = json!(candidate.version);
         next["binary_sha256"] = json!(sha256(&candidate.path())?);
         let pending = stage_receipt(&lock, &next)?;
-        replace_executable(&candidate.path(), &self.exe, &lock.path)?;
+        replace_executable(&candidate.path(), &self.exe, &lock.path, &previous_digest)?;
         fs::rename(pending, self.receipt)?;
         Ok(())
     }
@@ -414,7 +417,7 @@ fn peer_product(product: Product) -> Product {
     }
 }
 
-fn verify_independent(product: Product, exe: &Path) -> Result<()> {
+fn verify_independent(product: Product, exe: &Path, image: &Path) -> Result<()> {
     let method = crate::install_method(exe, None);
     ensure!(
         !matches!(method, "homebrew" | "npm"),
@@ -423,9 +426,23 @@ fn verify_independent(product: Product, exe: &Path) -> Result<()> {
     let peer = exe.with_file_name(peer_product(product).binary());
     if peer.try_exists()? {
         ensure!(
-            !same_file::is_same_file(exe, peer)?,
+            !same_file::is_same_file(image, peer)?,
             "linked product executables cannot be updated independently; preserve both executables and receipts for manual recovery"
         );
+    }
+    Ok(())
+}
+
+fn verify_missing_peer(product: Product, exe: &Path) -> Result<()> {
+    let peer = exe.with_file_name(peer_product(product).binary());
+    match peer.symlink_metadata() {
+        Ok(meta) if meta.is_symlink() => ensure!(
+            peer.canonicalize().is_ok_and(|target| target != exe),
+            "linked product executables cannot be installed independently"
+        ),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     Ok(())
 }
@@ -473,12 +490,61 @@ fn replace_on_disk(candidate: &Path, exe: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn replace_executable(candidate: &Path, exe: &Path, _lock: &Path) -> Result<()> {
+fn replace_executable(
+    candidate: &Path,
+    exe: &Path,
+    _lock: &Path,
+    _previous_digest: &str,
+) -> Result<()> {
     replace_on_disk(candidate, exe)
 }
 
 #[cfg(windows)]
-fn replace_executable(candidate: &Path, exe: &Path, lock: &Path) -> Result<()> {
+fn verified_previous(
+    lock: &Path,
+    prior: Option<&Value>,
+    pending: Option<&Value>,
+) -> Result<Option<PathBuf>> {
+    let backup = lock.join("previous.exe");
+    if !regular_file(&backup)? {
+        return Ok(None);
+    }
+    let pending = pending.context("missing pending Windows receipt; preserve previous.exe")?;
+    let prior = prior.context("missing previous receipt for Windows recovery copy")?;
+    ensure!(
+        prior["binary_sha256"] == sha256(&backup)?,
+        "previous Windows executable conflicts with its receipt; preserve {}",
+        backup.display()
+    );
+    ensure!(
+        prior["binary_sha256"] != pending["binary_sha256"]
+            || prior["version"] == pending["version"],
+        "conflicting receipt versions for the same executable; preserve the receipts for manual recovery"
+    );
+    Ok(Some(backup))
+}
+
+#[cfg(windows)]
+fn restore_previous(backup: &Path, exe: &Path, digest: &str) -> Result<()> {
+    let staged = stage_executable(backup, exe)?;
+    ensure!(
+        sha256(staged.path())? == digest,
+        "Windows recovery copy changed while staging"
+    );
+    staged.as_file().sync_all()?;
+    staged
+        .persist_noclobber(exe)
+        .context("restore Windows executable from previous.exe")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_executable(
+    candidate: &Path,
+    exe: &Path,
+    lock: &Path,
+    previous_digest: &str,
+) -> Result<()> {
     if env::current_exe()?.canonicalize()? != exe {
         return replace_on_disk(candidate, exe).with_context(|| {
             format!(
@@ -493,17 +559,16 @@ fn replace_executable(candidate: &Path, exe: &Path, lock: &Path) -> Result<()> {
     let mut copy =
         tempfile::NamedTempFile::new_in(lock.parent().context("missing receipt directory")?)?;
     io::copy(&mut fs::File::open(exe)?, copy.as_file_mut())?;
+    ensure!(
+        sha256(copy.path())? == previous_digest,
+        "Windows executable changed while creating the recovery copy"
+    );
     copy.as_file().sync_all()?;
-    copy.persist(&backup)?;
+    copy.persist_noclobber(&backup)?;
     if let Err(error) = self_replace::self_replace(candidate) {
-        if !exe.try_exists()? {
-            let staged = tempfile::NamedTempFile::new_in(
-                exe.parent().context("missing executable directory")?,
-            )?;
-            fs::copy(&backup, staged.path())?;
-            staged
-                .persist_noclobber(exe)
-                .context("restore Windows executable from previous.exe")?;
+        if !regular_file(exe)? {
+            ensure!(regular_file(&backup)?, "missing Windows recovery copy");
+            restore_previous(&backup, exe, previous_digest)?;
         }
         return Err(error.into());
     }
@@ -523,11 +588,23 @@ fn read_record(path: &Path) -> Result<Option<Value>> {
 
 fn regular_file(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
-        Ok(meta) => ensure!(
-            meta.is_file(),
-            "expected a regular file at {}",
-            path.display()
-        ),
+        Ok(meta) => {
+            ensure!(
+                meta.is_file(),
+                "expected a regular file at {}",
+                path.display()
+            );
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+                ensure!(
+                    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0,
+                    "expected a regular file at {}",
+                    path.display()
+                );
+            }
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e.into()),
     }

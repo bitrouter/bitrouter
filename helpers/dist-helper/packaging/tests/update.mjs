@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, linkSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync,
-  rmSync, writeFileSync } from 'node:fs';
+  renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { installEnv, tempRoot } from './environment.mjs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -184,6 +184,62 @@ async function update(pkg, flags, refusal) {
 }
 function state(pkg) { return [digest(bin(pkg)), digest(receipt(pkg))]; }
 
+async function exerciseMissingWindowsCore({ coreBin, coreReceipt, nextReceipt, call, digest, requestCount }) {
+  const published = readFileSync(coreReceipt);
+  const prior = JSON.parse(published);
+  assert.equal(prior.install_layout, 'flat');
+  assert.notEqual(JSON.parse(nextReceipt).binary_sha256, prior.binary_sha256);
+  const prefix = dirname(coreBin);
+  const binLock = join(prefix, '.bitrouter-install-lock');
+  const receiptLock = join(dirname(coreReceipt), '.install-lock');
+  const journal = join(receiptLock, 'receipt');
+  const backup = join(receiptLock, 'previous.exe');
+  const relocated = join(prefix, 'relocated-bitrouter.exe');
+
+  for (const flags of [['--prefix', prefix], []]) {
+    // Model the interruption after self-replace relocated the installed image.
+    mkdirSync(join(binLock, 'lease-v1'), { recursive: true });
+    mkdirSync(join(receiptLock, 'lease-v1'), { recursive: true });
+    writeFileSync(journal, nextReceipt);
+    copyFileSync(coreBin, backup);
+    renameSync(coreBin, relocated);
+    const requestsBefore = requestCount();
+    const assertInterrupted = () => {
+      assert.ok(!existsSync(coreBin));
+      assert.ok(existsSync(join(binLock, 'lease-v1')));
+      assert.ok(existsSync(join(receiptLock, 'lease-v1')));
+      assert.deepEqual(readFileSync(coreReceipt), published);
+      assert.deepEqual(readFileSync(journal), nextReceipt);
+    };
+    assert.equal((await call('status', ...flags)).status, 'recovery_required');
+    assert.equal((await call('update', ...flags, '--check')).status, 'recovery_required');
+    assertInterrupted();
+    assert.equal(digest(backup), prior.binary_sha256);
+
+    if (flags.length) {
+      writeFileSync(backup, 'unverified recovery copy');
+      await assert.rejects(call('update', ...flags), error => {
+        assert.match(error.stderr, /recovery copy|conflicts with its receipt/i);
+        return true;
+      });
+      assertInterrupted();
+      assert.equal(readFileSync(backup, 'utf8'), 'unverified recovery copy');
+      copyFileSync(relocated, backup);
+    }
+
+    const release = flags.length ? ['--tag', 'v' + JSON.parse(nextReceipt).version] : ['--stable'];
+    const recovery = await call('update', ...flags, ...release);
+    assert.equal(recovery.status, 'recovered');
+    assert.equal(recovery.current_version, prior.version);
+    assert.equal(digest(coreBin), digest(relocated));
+    assert.deepEqual(readFileSync(coreReceipt), published);
+    assert.ok(!existsSync(binLock) && !existsSync(receiptLock));
+    assert.equal((await call('status', ...flags)).status, 'installed');
+    assert.equal(requestCount(), requestsBefore);
+    rmSync(relocated);
+  }
+}
+
 async function exerciseStandaloneCore(old, next) {
   const standalone = join(root, 'standalone BRO');
   const config = join(standalone, 'config');
@@ -194,9 +250,10 @@ async function exerciseStandaloneCore(old, next) {
   const broHash = digest(bro);
   const env = { ...safeEnv, XDG_CONFIG_HOME: config, LOCALAPPDATA: config,
     BITROUTER_INSTALLER_GHE_BASE_URL: base };
-  const call = async (action, ...args) => JSON.parse((await exec(bro, [
-    '--endpoint', base + '/must-not-reach-gateway', 'core', action, '--prefix', prefix, ...args,
+  const core = async (action, ...args) => JSON.parse((await exec(bro, [
+    '--endpoint', base + '/must-not-reach-gateway', 'core', action, ...args,
   ], { env, cwd: root })).stdout);
+  const call = (action, ...args) => core(action, '--prefix', prefix, ...args);
   assert.equal((await call('status')).status, 'missing');
   assert.equal((await call('install', '--tag', old.tag)).current_version, old.version);
   assert.equal((await call('install', '--tag', old.tag)).status, 'unchanged');
@@ -206,8 +263,13 @@ async function exerciseStandaloneCore(old, next) {
   assert.deepEqual([digest(coreBin), digest(coreReceipt)], installed);
   assert.equal((await call('update', '-y')).target_version, next.version);
   assert.equal(digest(coreBin), digest(join(next.binaries, names.bitrouter + ext)));
+  const nextReceipt = readFileSync(coreReceipt);
   assert.equal((await call('update', '--tag', old.tag, '-y')).target_version, old.version);
   assert.deepEqual([digest(coreBin), digest(coreReceipt)], installed);
+  if (windows && archiveMode) {
+    await exerciseMissingWindowsCore({ coreBin, coreReceipt, nextReceipt, call: core, digest,
+      requestCount: () => requests.length });
+  }
   assert.equal(digest(bro), broHash);
   assert.ok(!existsSync(join(config, 'bitrouter-bro')));
   assert.ok(!requests.includes('/must-not-reach-gateway'));

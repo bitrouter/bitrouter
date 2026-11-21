@@ -135,7 +135,10 @@ fn shim_points_to(contents: &str, relative: &str) -> bool {
             .or_else(|| target.strip_prefix("%~dp0\\"));
         matches!(
             command.trim_end(),
-            "\"%_prog%\"" | "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\""
+            "\"%_prog%\""
+                | "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\""
+                // cmd-shim 9.0.2 sets PATHEXT after ending the local scope.
+                | "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & \"%_prog%\""
         ) && target.and_then(|target| target.strip_suffix('"')) == Some(relative)
     })
 }
@@ -155,6 +158,29 @@ mod tests {
         assert!(!shim_points_to(&shim, local));
         assert!(!shim_points_to(
             &format!("REM \"%dp0%\\{global}\" %*"),
+            global
+        ));
+    }
+
+    #[test]
+    fn cmd_shim_9_0_2_accepts_the_pathext_invocation_with_the_exact_launcher() {
+        let global = r"node_modules\bitrouter-bro\core\run-bitrouter.js";
+        let shim = concat!(
+            "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n",
+            ":start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\n",
+            "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n",
+            ") ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\n",
+            "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ",
+            "set PATHEXT=%PATHEXT:;.JS;=;% & \"%_prog%\"  ",
+            "\"%dp0%\\node_modules\\bitrouter-bro\\core\\run-bitrouter.js\" %*\r\n",
+        );
+        assert!(shim_points_to(shim, global));
+        assert!(!shim_points_to(
+            &shim.replace("run-bitrouter.js", "other.js"),
+            global
+        ));
+        assert!(!shim_points_to(
+            &shim.replace("set PATHEXT=%PATHEXT:;.JS;=;%", "arbitrary-command"),
             global
         ));
     }

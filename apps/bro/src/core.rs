@@ -143,10 +143,14 @@ impl LocalCore {
 
     async fn report(self) -> Result<()> {
         match self {
-            Self::Owned(install) => crate::emit(&json!({
-                "status": "installed", "install_method": "cargo-dist",
-                "executable": display(install.executable()), "current_version": install.version()
-            })),
+            Self::Owned(install) => {
+                let status = if cfg!(windows) && !install.executable().try_exists()? {
+                    "recovery_required"
+                } else {
+                    "installed"
+                };
+                report_installation(&install, status)
+            }
             Self::Package(owner) => owner.status().await,
             Self::External { executable, method } => crate::emit(&json!({
                 "status": if method == "unknown" { "unmanaged" } else { "delegated" },
@@ -227,6 +231,18 @@ async fn update(
     check: bool,
     yes: bool,
 ) -> Result<()> {
+    if cfg!(windows) && !install.executable().try_exists()? {
+        if check {
+            return report_installation(&install, "recovery_required");
+        }
+        verify_install_directory(&install)?;
+        install.finish_interrupted()?;
+        ensure!(
+            install.executable().try_exists()?,
+            "Windows recovery did not restore the executable"
+        );
+        return report_installation(&install, "recovered");
+    }
     let current = install.version().to_owned();
     let release = options.resolve().await?;
     let version = release.version.to_string();
@@ -255,6 +271,13 @@ async fn update(
         report["target_version"] = json!(version);
     }
     crate::emit(&report)
+}
+
+fn report_installation(install: &Installation, status: &str) -> Result<()> {
+    crate::emit(&json!({
+        "status": status, "install_method": "cargo-dist",
+        "executable": display(install.executable()), "current_version": install.version()
+    }))
 }
 
 fn verify_install_directory(install: &Installation) -> Result<()> {
