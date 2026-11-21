@@ -43,7 +43,7 @@ pub struct SharedGatewayConfig {
     /// Nonqueueing admission bound, including slow response consumers (1..65536).
     #[serde(default = "default_local_max_in_flight")]
     pub local_max_in_flight: usize,
-    /// Maximum retired routing generations still retaining resources (1..64).
+    /// Maximum superseded routing generations retaining resources (1..64).
     /// The current generation and one candidate are additional slots.
     #[serde(default = "default_max_retired")]
     pub max_retired: usize,

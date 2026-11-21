@@ -27,7 +27,7 @@ pub struct DecisionModelConfig {
     /// Maximum response bytes; independent of context and checkpoint limits.
     #[serde(default = "default_response_bytes")]
     pub max_response_bytes: usize,
-    /// Native context planning limits, frozen into each decision intent.
+    /// Semantic classification bounds, frozen into each request.
     #[serde(default)]
     pub policy: DecisionPolicy,
     /// Optional operator-supplied token prices; estimates, never settled bills.

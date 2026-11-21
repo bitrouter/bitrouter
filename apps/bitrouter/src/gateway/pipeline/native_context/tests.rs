@@ -7,63 +7,41 @@ use bitrouter_ai::types::{ApiProtocol, FinishReason, Message, Role, Usage};
 struct FailAfterWrite;
 
 #[tokio::test]
-async fn portable_rebuild_requires_capability_source_validation_and_nonpreserve_policy()
--> Result<()> {
-    use crate::gateway::routing::preparation::Prepared;
-    use {crate::gateway::routing::ContextCapability, crate::gateway::routing::ContextTreatment};
-    for (grant, preserve, valid_policy, rewrite_public, allowed) in [
-        (true, false, true, false, true),
-        (false, false, true, false, false),
-        (true, true, true, false, false),
-        (true, false, false, false, false),
-        (true, false, true, true, false),
-    ] {
-        let mut ctx = context();
-        let mut prompt = ctx.require_generation_prompt()?.clone();
-        prompt.messages = vec![Message {
-            role: Role::Assistant,
-            content: vec![
-                Content::Reasoning {
-                    text: "private summary".into(),
-                    native: Some(bitrouter_ai::types::NativeReasoning::Responses(
-                        serde_json::json!({"type":"reasoning","summary":[],"encrypted_content":"sealed"}),
-                    )),
-                    provider_metadata: Default::default(),
+async fn model_routing_cannot_project_private_history_or_rewrite_public_content() -> Result<()> {
+    for valid_policy in [false, true] {
+        for rewrite_public in [false, true] {
+            let mut ctx = context();
+            let mut prompt = ctx.require_generation_prompt()?.clone();
+            prompt.messages = vec![Message {
+                role: Role::Assistant,
+                content: vec![
+                    Content::Reasoning {
+                        text: "private summary".into(),
+                        native: Some(bitrouter_ai::types::NativeReasoning::Responses(
+                            serde_json::json!({"type":"reasoning","summary":[],"encrypted_content":"sealed"}),
+                        )),
+                        provider_metadata: Default::default(),
+                    },
+                    Content::Text {
+                        text: "public answer".into(),
+                        provider_metadata: Default::default(),
+                    },
+                ],
+            }];
+            ctx.apply_routing_prompt(prompt.clone())?;
+            ctx.insert_extension(Arc::new(NativePrivateContextRuntime::new(
+                valid_policy
+                    .then(|| Arc::new(FailAfterWrite) as Arc<dyn NativePrivateContextPolicy>),
+            )));
+            let projected = vec![Message::text(
+                Role::Assistant,
+                if rewrite_public {
+                    "forged public answer"
+                } else {
+                    "public answer"
                 },
-                Content::Text {
-                    text: "public answer".into(),
-                    provider_metadata: Default::default(),
-                },
-            ],
-        }];
-        let mut projected = super::super::native_projection::responses_reasoning(&prompt.messages)?
-            .ok_or_else(|| BitrouterError::internal("missing test projection"))?
-            .messages;
-        if rewrite_public {
-            projected[0] = Message::text(Role::Assistant, "forged public answer");
-        }
-        let mut prepared = Prepared::from_prompt(&prompt, None, "portable-test").await;
-        if grant {
-            prepared
-                .capabilities
-                .insert(ContextCapability::OmitPrivateReasoning);
-        }
-        ctx.apply_routing_prompt(prompt.clone())?;
-        ctx.insert_extension(Arc::new(prepared));
-        ctx.insert_extension(Arc::new(if preserve {
-            ContextTreatment::Preserve
-        } else {
-            ContextTreatment::Evidence
-        }));
-        ctx.insert_extension(Arc::new(NativePrivateContextRuntime::new(
-            if valid_policy {
-                Some(Arc::new(FailAfterWrite))
-            } else {
-                None
-            },
-        )));
-        assert_eq!(ctx.replace_managed_messages(projected).is_ok(), allowed);
-        if !allowed {
+            )];
+            assert!(ctx.replace_managed_messages(projected).is_err());
             assert_eq!(ctx.require_generation_prompt()?, &prompt);
         }
     }

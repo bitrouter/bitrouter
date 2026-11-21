@@ -72,7 +72,7 @@ impl ModelSelector for SemanticPolicy {
             .as_ref()
             .and_then(|receipt| receipt.assessment.as_ref())
             .ok_or_else(|| BitrouterError::internal("missing semantic assessment"))?;
-        assert_eq!(assessment.next_step_role, NextStep::Verify);
+        assert_eq!(assessment.route_class.next_step_role, NextStep::Verify);
         self.0.lock().await.push(assessment.clone());
         ctx.set_model("verification-model");
         Ok(())
@@ -91,7 +91,7 @@ impl native::NativeExecutionControl for SemanticControl {
             Prepared::from_prompt(prompt, Some(&self.runtime), "committed-decision").await,
         ))
     }
-    async fn commit_routing(&self, _: &crate::gateway::routing::plan::Plan) -> Result<()> {
+    async fn commit_routing(&self, _: &Prompt) -> Result<()> {
         self.acknowledgements.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -116,10 +116,6 @@ impl SettlementRecorder for SemanticSettlement {
         let receipt = ctx
             .get_event::<Receipt>()
             .ok_or_else(|| BitrouterError::internal("missing settled receipt"))?;
-        assert!(
-            ctx.get_event::<crate::gateway::routing::plan::Selection>()
-                .is_some()
-        );
         self.0.lock().await.push(receipt.clone());
         Ok(())
     }

@@ -22,14 +22,6 @@ enum SourceDefinition {
         selector: String,
         policy: Option<ResourceRef>,
         credentials: Vec<CredentialBinding>,
-        #[serde(default)]
-        exploration: Vec<String>,
-        #[serde(default)]
-        core_choice: Option<Box<super::super::core_choice::Profile>>,
-        #[serde(default)]
-        assessment: Option<AssessmentProfile>,
-        #[serde(default)]
-        block: Option<Box<super::super::block::Profile>>,
     },
     Policy {
         document: Document,

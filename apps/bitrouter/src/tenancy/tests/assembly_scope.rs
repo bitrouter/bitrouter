@@ -75,7 +75,7 @@ fn manifest(
 // rows and paid receipts/jobs without depending on a historical schema layout.
 async fn logical_rows(db: &DatabaseConnection) -> Result<BTreeMap<String, Vec<Vec<String>>>> {
     let tables = db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
-        "SELECT name FROM sqlite_schema WHERE type='table' AND (name GLOB 'tenancy_*' OR name = 'checkpoint_evolution') ORDER BY name COLLATE BINARY"
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name GLOB 'tenancy_*' ORDER BY name COLLATE BINARY"
     )).await?;
     let mut snapshot = BTreeMap::new();
     for table in tables {
@@ -210,25 +210,13 @@ async fn owned_scope_assembly_child() -> Result<()> {
     let current = manifest(&installation, &format!("{}/v1", upstream.uri()))?;
     config.tenancy.resource_import = Some(import.clone());
 
-    let auxiliary = reference(ResourceKind::Route, "scope-auxiliary")?;
+    let fields: Vec<(String, serde_json::Value)> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/resource_import/unknown-route-fields.json"
+    ))?;
     let mut experimental = Vec::new();
-    for (field, value) in [
-        (
-            "assessment",
-            json!({"profile":"assessment_v1","route":auxiliary}),
-        ),
-        (
-            "core_choice",
-            json!({
-                "profile":"choice_v1",
-                "route":auxiliary,
-                "policy":crate::gateway::model::decision::policy::DecisionPolicy::default()
-            }),
-        ),
-        ("exploration", json!(["scope-experiment"])),
-    ] {
+    for (field, value) in fields {
         let mut invalid = current.clone();
-        invalid["resources"][1]["definition"][field] = value;
+        invalid["resources"][1]["definition"][&field] = value;
         let bytes = serde_json::to_vec(&invalid)?;
         let error = service
             .resources
@@ -237,7 +225,7 @@ async fn owned_scope_assembly_child() -> Result<()> {
             .err()
             .with_context(|| format!("resource compiler accepted {field}"))?;
         ensure!(
-            format!("{error:#}").contains("experimental routes require"),
+            format!("{error:#}").contains(&format!("unknown field `{field}`")),
             "{error:#}"
         );
         experimental.push((field, bytes));

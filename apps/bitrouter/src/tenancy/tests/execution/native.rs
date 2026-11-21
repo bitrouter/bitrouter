@@ -402,10 +402,7 @@ impl NativeExecutionControl for Control {
         Ok(None)
     }
 
-    async fn commit_routing(
-        &self,
-        _plan: &crate::gateway::routing::plan::Plan,
-    ) -> GatewayResult<()> {
+    async fn commit_routing(&self, _plan: &Prompt) -> GatewayResult<()> {
         self.called();
         self.routing_commits.fetch_add(1, Ordering::SeqCst);
         Ok(())

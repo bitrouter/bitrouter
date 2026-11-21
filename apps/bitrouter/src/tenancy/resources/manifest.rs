@@ -50,16 +50,6 @@ pub(super) enum Definition {
         selector: String,
         policy: Option<ResourceRef>,
         credentials: Vec<CredentialBinding>,
-        #[serde(default)]
-        exploration: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        core_choice: Option<Box<super::core_choice::Profile>>,
-        /// Explicit paid assessment; absent preserves every compiler-v1 byte.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        assessment: Option<AssessmentProfile>,
-        /// Explicit ACP Block experiment; absent retains the old import bytes.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        block: Option<Box<super::block::Profile>>,
     },
     Policy {
         document: Document,
@@ -77,19 +67,6 @@ pub(super) enum Definition {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         oauth: Option<crate::tenancy::oauth::profile::Profile>,
     },
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct AssessmentProfile {
-    pub profile: AssessmentVersion,
-    pub route: ResourceRef,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub(super) enum AssessmentVersion {
-    #[serde(rename = "assessment_v1")]
-    V1,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -150,31 +127,13 @@ impl Import {
             Definition::Route {
                 selector,
                 credentials,
-                exploration,
-                core_choice,
-                assessment,
-                block,
-                policy,
                 ..
             } => {
-                if let Some(profile) = block {
-                    profile.validate(selector)?;
-                    ensure!(
-                        policy.is_none() && core_choice.is_none() && exploration.is_empty(),
-                        "Block route requires two static arms without policy or CoreChoice"
-                    );
-                }
-                if let Some(profile) = core_choice {
-                    profile.validate(&self.reference)?;
-                }
                 ensure!(
                     !selector.is_empty() && selector.len() <= 512,
                     "invalid route selector"
                 );
-                ensure!(
-                    credentials.len() <= 256 && exploration.len() <= 256,
-                    "route capacity exceeded"
-                );
+                ensure!(credentials.len() <= 256, "route capacity exceeded");
                 let mut slots = HashSet::new();
                 for binding in credentials {
                     ensure!(
@@ -185,20 +144,6 @@ impl Import {
                             && slots.insert((&binding.provider, &binding.account))
                             && binding.credential.resource_kind == ResourceKind::Credential,
                         "invalid route credential binding"
-                    );
-                }
-                ensure!(
-                    exploration.iter().all(|s| !s.is_empty() && s.len() <= 512),
-                    "invalid exploration selector"
-                );
-                if let Some(profile) = assessment {
-                    ensure!(
-                        profile.route.resource_kind == ResourceKind::Route
-                            && profile.route != self.reference
-                            && (profile.route.owner_kind != OwnerKind::Tenant
-                                || (self.reference.owner_kind == OwnerKind::Tenant
-                                    && profile.route.owner_id == self.reference.owner_id)),
-                        "invalid assessment route binding"
                     );
                 }
                 ResourceKind::Route
@@ -277,38 +222,8 @@ impl Import {
 }
 
 impl Definition {
-    pub(super) fn validate_current_profile(&self) -> Result<()> {
-        if let Self::Route { exploration, .. } = self {
-            ensure!(
-                exploration.is_empty(),
-                "retired route exploration in retained resource"
-            );
-        }
-        Ok(())
-    }
     pub(super) fn uses_model_policy(&self) -> bool {
         matches!(self, Self::Policy { .. }) || self.policy_reference().is_some()
-    }
-
-    /// Mature resource entrypoints never turn experimental members into authority.
-    pub(super) fn require_service(&self) -> Result<()> {
-        if let Self::Route {
-            exploration,
-            core_choice,
-            assessment,
-            block,
-            ..
-        } = self
-        {
-            ensure!(
-                exploration.is_empty()
-                    && core_choice.is_none()
-                    && assessment.is_none()
-                    && block.is_none(),
-                "experimental routes require the explicit BRO harness"
-            );
-        }
-        Ok(())
     }
 
     pub(super) fn is_admission_profile(&self) -> bool {
@@ -341,18 +256,6 @@ impl Definition {
         matches!(self, Self::Route { .. } | Self::ProfiledRoute { .. })
     }
 
-    pub(super) fn requires_envelope_v2(&self) -> bool {
-        match self {
-            Self::Route {
-                core_choice,
-                assessment,
-                block,
-                ..
-            } => core_choice.is_some() || assessment.is_some() || block.is_some(),
-            _ => false,
-        }
-    }
-
     pub fn policy_reference(&self) -> Option<&ResourceRef> {
         match self {
             Self::Route { policy, .. } | Self::ProfiledRoute { policy, .. } => policy.as_ref(),
@@ -381,13 +284,11 @@ impl Definition {
             Self::Route {
                 policy,
                 credentials,
-                core_choice,
                 ..
             } => policy
                 .iter()
                 .cloned()
                 .chain(credentials.iter().map(|binding| binding.credential.clone()))
-                .chain(core_choice.iter().map(|profile| profile.route.clone()))
                 .collect(),
             Self::Policy { dependencies, .. } => dependencies.clone(),
             Self::Credential { .. } => Vec::new(),

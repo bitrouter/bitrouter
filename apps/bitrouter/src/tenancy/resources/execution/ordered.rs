@@ -175,12 +175,7 @@ impl RetainedRoute {
     }
 
     fn ordered_root(&self) -> std::result::Result<&Chain, ErrorCode> {
-        if self.ordered.is_some()
-            || self.data.policy.is_some()
-            || self.data.assessment.is_some()
-            || self.data.block.is_some()
-            || self.data.choice.is_some()
-        {
+        if self.ordered.is_some() || self.data.policy.is_some() {
             return Err(ErrorCode::CapabilityMismatch);
         }
         if [

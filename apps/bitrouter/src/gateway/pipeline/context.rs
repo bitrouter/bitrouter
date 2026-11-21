@@ -635,21 +635,6 @@ impl PipelineContext {
     /// A managed runtime may explicitly rebuild visible context before any
     /// attempt. Every other prepared request field and hook binding stays fixed.
     pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
-        let portable = self
-            .extension::<crate::gateway::routing::preparation::Prepared>()
-            .is_some_and(|prepared| {
-                prepared
-                    .capabilities
-                    .contains(&crate::gateway::routing::ContextCapability::OmitPrivateReasoning)
-            })
-            && self
-                .extension::<crate::gateway::routing::ContextTreatment>()
-                .is_none_or(|strategy| {
-                    *strategy != crate::gateway::routing::ContextTreatment::Preserve
-                });
-        let authenticated = self
-            .extension::<super::native_context::NativePrivateContextRuntime>()
-            .is_some();
         // Validate the complete original source before any private part can be
         // omitted, including parts after a target-mismatch diagnostic.
         super::native_context::validate_managed_history(self)?;
@@ -657,18 +642,6 @@ impl PipelineContext {
             .input
             .generation_prompt_mut()
             .ok_or_else(|| BitrouterError::bad_request("managed context requires generation"))?;
-        if portable
-            && super::native_projection::responses_reasoning(&prompt.messages)?
-                .is_some_and(|projection| projection.messages == messages)
-        {
-            if !authenticated {
-                return Err(BitrouterError::bad_request(
-                    "private_context_policy_unavailable",
-                ));
-            }
-            prompt.messages = messages;
-            return Ok(());
-        }
         if messages.len() >= prompt.messages.len() {
             return Err(BitrouterError::bad_request(
                 "managed context rebuild must reduce history",

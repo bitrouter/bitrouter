@@ -278,7 +278,7 @@ impl TenancyConfig {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn retired_route_learner_registration_is_rejected_before_startup() {
+    fn unsupported_route_learner_registration_is_rejected_before_startup() {
         assert!(
             crate::config::parse("tenancy:\n  learning_registrations: registrations.json\n")
                 .is_err()

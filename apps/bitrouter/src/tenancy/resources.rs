@@ -15,9 +15,7 @@
 //! do not claim runtime execution or OAuth qualification.
 
 pub(in crate::tenancy) mod admission;
-pub(crate) mod block;
 mod compiler;
-mod core_choice;
 pub(crate) mod execution;
 pub(in crate::tenancy) mod lifecycle;
 pub(in crate::tenancy) mod management;
@@ -61,7 +59,6 @@ fn qualify_model_policies(artifacts: &[Artifact]) -> std::result::Result<(), Err
 
 pub(crate) const COMPILER_VERSION: &str = "tenancy-resources-v1";
 const MODEL_POLICY_COMPILER_VERSION: &str = "tenancy-model-policy-v1";
-const BRO_OBLIGATION_COMPILER_VERSION: &str = "tenancy-bro-obligation-v1";
 const PROFILED_COMPILER_VERSION: &str = "tenancy-admission-v1";
 const SHARED_HEALTH_COMPILER_VERSION: &str = "tenancy-admission-v2";
 const NATIVE_COMPILER_VERSION: &str = "tenancy-native-generate-content-v1";
@@ -107,12 +104,6 @@ impl Envelope {
     fn format(artifacts: &[Artifact]) -> u32 {
         if artifacts
             .iter()
-            .any(|artifact| artifact.definition.requires_envelope_v2())
-        {
-            return 8;
-        }
-        if artifacts
-            .iter()
             .any(|artifact| artifact.definition.uses_model_policy())
         {
             return 7;
@@ -144,7 +135,7 @@ impl Envelope {
         }
         // The complete artifact retains the sole profiled projection. Visible
         // profiled routes are reconstructed from it once during authenticated
-        // readback; ordinary and hidden routes retain their existing form.
+        // readback; ordinary routes retain their complete projection.
         #[derive(Serialize)]
         struct Compact<'a> {
             format: u32,
@@ -174,16 +165,11 @@ impl Envelope {
     }
 
     fn validate_format(&self) -> Result<()> {
-        // Format 1 is deliberately omitted: historical plaintext, AAD and
-        // compiler identifiers stay exact. Old deny-unknown-fields readers
-        // reject format 2, whose independent profiles may coexist.
+        // The authenticated marker must match the selected typed profile.
         ensure!(
             self.format == Self::format(&self.artifacts),
             "unsupported retained profile format"
         );
-        for artifact in &self.artifacts {
-            artifact.definition.validate_current_profile()?;
-        }
         Ok(())
     }
 }
@@ -469,7 +455,6 @@ impl Resources {
         );
         let mut unique = HashSet::new();
         for resource in &manifest.resources {
-            resource.definition.require_service()?;
             ensure!(
                 manifest.format == 4 || !resource.definition.uses_model_policy(),
                 "model policy requires import format four"
@@ -536,7 +521,6 @@ impl Resources {
                 .closure(db, std::slice::from_ref(&resource.reference))
                 .await
                 .map_err(|_| anyhow::anyhow!("imported resource dependency unavailable"))?;
-            core_choice::validate_graph(&closure, &[], true)?;
             admission::validate_graph(&closure)?;
         }
         admission::initialize_import_heads(self, db, &manifest.resources).await?;
@@ -584,15 +568,8 @@ impl Resources {
             return Err(ErrorCode::Forbidden);
         }
         qualify_model_policies(&artifacts)?;
-        for artifact in &artifacts {
-            artifact
-                .definition
-                .require_service()
-                .map_err(|_| ErrorCode::CapabilityMismatch)?;
-        }
         let routes = compiler::configuration_routes(document, &artifacts)?;
         let compiler_version = match Envelope::format(&artifacts) {
-            8 => BRO_OBLIGATION_COMPILER_VERSION,
             7 => MODEL_POLICY_COMPILER_VERSION,
             6 => NATIVE_COMPILER_VERSION,
             5 => SHARED_HEALTH_COMPILER_VERSION,
@@ -629,7 +606,7 @@ impl Resources {
                 .map_err(|_| ErrorCode::CapacityExceeded)?;
             // The same typed projection used by activation/GET must accept the
             // output before the caller can persist it. Consume the envelope
-            // after serialization: validation does not change compiler-v1 bytes
+            // after serialization: validation does not change retained bytes
             // or the authenticated binding, and needs no extra envelope clone.
             let validated = execution::validate(envelope).map_err(|error| {
                 if error.is::<ExecutionCapacityExceeded>() {

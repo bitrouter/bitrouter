@@ -1,6 +1,6 @@
 use super::*;
 
-// Retired wire input stays raw: there is no current typed checkpoint capability.
+// Unsupported resource definitions are tested as raw wire input.
 fn checkpoint(owner: &str) -> Result<Value> {
     let digest = format!("sha256:{}", "a".repeat(64));
     Ok(json!({
@@ -19,7 +19,7 @@ fn checkpoint(owner: &str) -> Result<Value> {
 }
 
 #[test]
-fn retired_learned_checkpoint_rejects_old_valid_evidence_and_mutations() -> Result<()> {
+fn checkpoint_definition_and_evidence_mutations_are_rejected() -> Result<()> {
     let base = checkpoint("tenant")?;
     assert!(serde_json::from_value::<manifest::Import>(base.clone()).is_err());
     for (field, value) in [
@@ -43,7 +43,7 @@ fn retired_learned_checkpoint_rejects_old_valid_evidence_and_mutations() -> Resu
 }
 
 #[tokio::test]
-async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closure() -> Result<()> {
+async fn checkpoint_import_refusal_is_atomic_and_preserves_policy_closure() -> Result<()> {
     let (db, resources) = fixture().await?;
     let key = rand::random();
     let resources = Resources::with_key(resources.installation, key)?;
@@ -95,24 +95,23 @@ async fn retired_checkpoint_import_is_atomic_and_preserves_current_policy_closur
 }
 
 #[test]
-fn authenticated_retired_checkpoint_is_rejected_even_with_current_bro_markers() -> Result<()> {
+fn authenticated_checkpoint_is_rejected_with_current_compiler_markers() -> Result<()> {
     let key = rand::random();
     let resources = Resources::with_key("installation".to_owned().try_into()?, key)?;
     let parent = reference("tenant", ResourceKind::Policy, "parent")?;
     let document = document(Vec::new(), Some(parent.clone()))?;
     let current = policy("tenant", "parent")?;
-    let retired = checkpoint("tenant")?;
+    let unsupported = checkpoint("tenant")?;
     let mut envelope = json!({
         "format":3, "document":document, "routes":[],
         "artifacts":[
             {"reference":current["reference"], "definition":current["definition"], "envelope":null},
-            {"reference":retired["reference"], "definition":retired["definition"], "envelope":null}
+            {"reference":unsupported["reference"], "definition":unsupported["definition"], "envelope":null}
         ]
     });
-    for (format, compiler_version) in [(3, COMPILER_VERSION), (8, BRO_OBLIGATION_COMPILER_VERSION)]
-    {
+    for (format, compiler_version) in [(3, COMPILER_VERSION), (7, MODEL_POLICY_COMPILER_VERSION)] {
         envelope["format"] = json!(format);
-        // Neither old nor current numeric markers can restore the retired decoder.
+        // Numeric markers cannot admit an unsupported artifact definition.
         assert!(serde_json::from_value::<Envelope>(envelope.clone()).is_err());
         let mut stored = validation::stored(
             document.clone(),

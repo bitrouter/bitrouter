@@ -110,10 +110,6 @@ impl Put<'_> {
                         credential: binding.credential.clone(),
                     })
                     .collect(),
-                exploration: Vec::new(),
-                core_choice: None,
-                assessment: None,
-                block: None,
             },
             PublicDefinition::Policy {
                 document,

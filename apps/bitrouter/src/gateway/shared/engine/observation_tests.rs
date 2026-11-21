@@ -62,7 +62,7 @@ impl Fixture {
             serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
         let pending = PendingEvalDecisionStore::default();
         let requirements = Requirements::from_config(&config, Some(&document))?;
-        let runtime = PolicyRuntime::from_document(&config, Some(document), pending.clone(), None)?;
+        let runtime = PolicyRuntime::from_document(&config, Some(document), pending.clone())?;
         let mut execution = crate::metering::shared::tests::fixture()?.event.execution;
         execution.state = bitrouter_ai::gateway::execution::ExecutionState::Accepted;
         execution.attempts.clear();

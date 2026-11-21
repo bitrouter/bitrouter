@@ -1,5 +1,4 @@
 use super::*;
-use crate::gateway::routing::ContextTreatment;
 use serde_json::{Value, json};
 
 fn source() -> Value {
@@ -65,8 +64,7 @@ fn classification_requires_supported_classifier_valid_class_and_existing_target(
     let mut value = source();
     value["policies"]["auto"]["routes"] = json!({"code:debugging|verify|normal":"strong"});
     assert!(parse(&value).is_err());
-    value["policies"]["auto"]["classifier_digest"] =
-        json!(compiled_predictor_contract().config_digest);
+    value["policies"]["auto"]["classifier_digest"] = json!(contract_digest());
     let compiled = compile(&parse(&value)?)?;
     assert_eq!(
         compiled.selections()["auto"]
@@ -83,7 +81,7 @@ fn classification_requires_supported_classifier_valid_class_and_existing_target(
 }
 
 #[test]
-fn unsupported_contracts_and_experimental_fields_fail_closed() {
+fn unsupported_contracts_and_experimental_fields_fail_closed() -> Result<()> {
     for version in [
         "1.0.0-beta.1",
         "registry/1.0.0-beta.1",
@@ -100,9 +98,11 @@ fn unsupported_contracts_and_experimental_fields_fail_closed() {
         value[field] = json!(4);
         assert!(parse(&value).is_err());
     }
-    for field in ["progress_guard", "optimization", "adequacy", "predictor"] {
+    for field in serde_json::from_str::<Vec<String>>(include_str!(
+        "../../tests/fixtures/model-policy-unknown-fields.json"
+    ))? {
         let mut value = source();
-        value["policies"]["auto"][field] = json!({});
+        value["policies"]["auto"][&field] = json!({});
         assert!(parse(&value).is_err());
     }
     for context in ["preserve", "evidence", "summary"] {
@@ -110,6 +110,7 @@ fn unsupported_contracts_and_experimental_fields_fail_closed() {
         value["policies"]["auto"]["tiers"]["economy"]["context"] = json!(context);
         assert!(parse(&value).is_err());
     }
+    Ok(())
 }
 
 #[test]
@@ -307,8 +308,7 @@ fn typed_route_domain_and_tier_references_are_enforced() -> Result<()> {
     }
     assert_eq!(routes.len(), 156);
     value["policies"]["auto"]["routes"] = routes.into();
-    value["policies"]["auto"]["classifier_digest"] =
-        json!(compiled_predictor_contract().config_digest);
+    value["policies"]["auto"]["classifier_digest"] = json!(contract_digest());
     for raw in [
         serde_json::to_string(&value)?,
         serde_saphyr::to_string(&value)?,
@@ -360,7 +360,6 @@ async fn selection_uses_literal_names_and_missing_suffix_never_falls_back() -> R
         &config,
         Some(parse(&value)?),
         Default::default(),
-        None,
     )?;
     for (selected, expected) in [("auto", "fixture:small"), ("auto:cost", "fixture:large")] {
         let input = crate::gateway::http::parse_input(
@@ -400,7 +399,6 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         &config,
         Some(parse(&source())?),
         Default::default(),
-        None,
     )?;
     for (tool, expected_model) in [
         (None, "fixture:small"),
@@ -439,10 +437,6 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
         runtime.prepare_selection("auto", &mut ctx).await?;
         runtime.select_policy("auto", &mut ctx).await?;
         assert_eq!(ctx.model(), expected_model);
-        assert_eq!(
-            ctx.extension::<ContextTreatment>().as_deref(),
-            Some(&ContextTreatment::Preserve)
-        );
         let actual = ctx.require_generation_prompt()?;
         assert_eq!(actual.messages, original.messages);
         assert_eq!(actual.system, original.system);
@@ -451,14 +445,14 @@ async fn default_tool_and_server_tool_bypass_preserve_admitted_content() -> Resu
     Ok(())
 }
 
-struct FixedWithReducedView {
+struct FixedInputControl {
     plans: tokio::sync::Mutex<Vec<crate::gateway::pipeline::native::NativePlan>>,
     reject: bool,
     rebuild_calls: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
-impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReducedView {
+impl crate::gateway::pipeline::native::NativeExecutionControl for FixedInputControl {
     fn model_selection(&self) -> crate::gateway::pipeline::native::NativeModelSelection {
         crate::gateway::pipeline::native::NativeModelSelection::Fixed
     }
@@ -467,27 +461,20 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReduc
         &self,
         prompt: &bitrouter_ai::types::Prompt,
     ) -> crate::gateway::error::Result<Option<crate::gateway::routing::preparation::Prepared>> {
-        use crate::gateway::routing::{ContextCapability, plan::View, preparation::Prepared};
-        let mut prepared = Prepared::from_prompt(prompt, None, "fixed-model-context").await;
-        let mut reduced = prompt.clone();
-        reduced.messages.clear();
-        prepared
-            .capabilities
-            .insert(ContextCapability::OmitEvidence);
-        prepared.views.push(View {
-            id: "reduced".into(),
-            prompt: reduced,
-            requires: [ContextCapability::OmitEvidence].into(),
-        });
+        let prepared = crate::gateway::routing::preparation::Prepared::from_prompt(
+            prompt,
+            None,
+            "fixed-model-input",
+        )
+        .await;
         Ok(Some(prepared))
     }
 
     async fn commit_routing(
         &self,
-        plan: &crate::gateway::routing::plan::Plan,
+        prompt: &bitrouter_ai::types::Prompt,
     ) -> crate::gateway::error::Result<()> {
-        assert_eq!(plan.selection.strategy, ContextTreatment::Preserve);
-        assert_eq!(plan.selection.selected_context, "full");
+        assert_eq!(prompt.messages.len(), 1);
         Ok(())
     }
 
@@ -522,8 +509,7 @@ impl crate::gateway::pipeline::native::NativeExecutionControl for FixedWithReduc
 }
 
 #[tokio::test]
-async fn fixed_native_execution_preserves_context_even_when_reduced_views_are_authorized()
--> Result<()> {
+async fn fixed_native_execution_preserves_policy_input_and_refuses_rebuild() -> Result<()> {
     fixed_native_case(false).await?;
     fixed_native_case(true).await
 }
@@ -542,7 +528,6 @@ async fn fixed_native_case(reject: bool) -> Result<()> {
         &config,
         Some(parse(&source())?),
         Default::default(),
-        None,
     )?;
     let mut builder = PipelineBuilder::new();
     builder
@@ -557,7 +542,7 @@ async fn fixed_native_case(reject: bool) -> Result<()> {
     )?;
     let prompt = input.generation_prompt().context("prompt")?.clone();
     let messages = prompt.messages.clone();
-    let control = Arc::new(FixedWithReducedView {
+    let control = Arc::new(FixedInputControl {
         plans: Default::default(),
         reject,
         rebuild_calls: Default::default(),

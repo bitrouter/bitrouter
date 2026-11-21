@@ -3471,7 +3471,7 @@ async fn early_stream_drop_runs_every_settlement_recorder() {
         |builder| {
             builder
                 .settlement_recorder(LabelledRecorder {
-                    label: "adequacy",
+                    label: "policy",
                     recorded: recorded.clone(),
                 })
                 .settlement_recorder(LabelledRecorder {
@@ -3491,10 +3491,7 @@ async fn early_stream_drop_runs_every_settlement_recorder() {
     drop(stream);
 
     pipeline.drain_pending_settlements().await;
-    assert_eq!(
-        recorded.lock().unwrap().as_slice(),
-        &["adequacy", "metering"]
-    );
+    assert_eq!(recorded.lock().unwrap().as_slice(), &["policy", "metering"]);
 }
 
 #[tokio::test]

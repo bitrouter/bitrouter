@@ -330,9 +330,6 @@ pub(crate) struct RetainedRoute {
 struct RouteData {
     reference: ResourceRef,
     admission: Option<Vec<bitrouter_ai::tenancy::admission::AdmissionAttachment>>,
-    assessment: Option<ResourceRef>,
-    block: Option<Box<super::block::Profile>>,
-    block_pricing: Vec<Option<crate::gateway::pipeline::stream::UsagePricing>>,
     dependencies: Vec<ResourceRef>,
     selector: String,
     overrides: PromptOverrides,
@@ -340,43 +337,10 @@ struct RouteData {
     chains: Vec<Chain>,
     native: NativeChains,
     candidates: Vec<Candidate>,
-    choice: Option<RetainedChoice>,
-}
-
-struct RetainedChoice {
-    route: Arc<RouteData>,
-    digest: String,
 }
 
 impl RouteData {
-    fn static_assessment(&self) -> std::result::Result<(), ErrorCode> {
-        if self.policy.is_some()
-            || self.admission.is_some()
-            || self.block.is_some()
-            || self.choice.is_some()
-            || self.assessment.is_some()
-            || self.candidates.len() != 1
-        {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        let NativeChains::Ready(chains) = &self.native else {
-            return Err(ErrorCode::CapabilityMismatch);
-        };
-        let mut selected = chains.iter().filter(|chain| {
-            chain.operation == ModelOperation::Generation && chain.selector == self.selector
-        });
-        let chain = selected.next().ok_or(ErrorCode::CapabilityMismatch)?;
-        if chains.len() != 1 || selected.next().is_some() || chain.candidates.as_slice() != [0] {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
-        Ok(())
-    }
     fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
-        // These current, independent native profiles belong to the local BRO
-        // owner. Compiling their types never grants the gateway their effects.
-        if self.block.is_some() || self.choice.is_some() || self.assessment.is_some() {
-            return Err(ErrorCode::CapabilityMismatch);
-        }
         // A retained routing artifact owns routing, never provider-global state.
         // Keep old encrypted bytes readable, but reject execution qualification
         // even when another inbound wire would hide these supplemental extras.

@@ -1,0 +1,6 @@
+[
+  ["assessment", {"profile":"assessment_v1","route":{"owner_kind":"tenant","owner_id":"scope-tenant","resource_kind":"route","resource_id":"scope-auxiliary","revision_id":"v1"}}],
+  ["core_choice", {"profile":"choice_v1","route":{"owner_kind":"tenant","owner_id":"scope-tenant","resource_kind":"route","resource_id":"scope-auxiliary","revision_id":"v1"},"policy":{}}],
+  ["exploration", ["scope-experiment"]],
+  ["block", {"profile":"unsupported"}]
+]
