@@ -57,7 +57,7 @@ impl PreRequestHook for ChangeAfterAdmission {
 }
 
 #[tokio::test]
-async fn dispatch_rejects_changed_routing_and_policy_without_a_capture_binding() -> Result<()> {
+async fn dispatch_rejects_changed_routing_and_policy_before_upstream_send() -> Result<()> {
     for change in [Change::Routing, Change::Policy] {
         let fixture = fixture(Failure::Change(change)).await?;
         ensure!(
@@ -72,7 +72,6 @@ async fn dispatch_rejects_changed_routing_and_policy_without_a_capture_binding()
             .drain_required_pending_settlements()
             .await?;
         let row = saved(&fixture, "changed").await?;
-        ensure!(row.binding.is_none());
         let terminal = row.settlement.context("missing settlement")?;
         assert_eq!(terminal.outcome, Some(ExecutionOutcome::Failed));
         assert_eq!(terminal.total_cost_micro_usd, Some(0));

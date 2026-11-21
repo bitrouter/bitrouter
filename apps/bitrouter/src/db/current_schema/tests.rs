@@ -4,10 +4,14 @@ use super::*;
 fn reviewed_model_has_complete_receipt_and_dispatch_shapes() -> Result<()> {
     let tables = expected(DatabaseBackend::Postgres)?;
     ensure!(!tables.is_empty());
-    ensure!(tables.iter().all(|table| {
-        !["adequacy_", "acp_", "bro_"]
-            .iter()
-            .any(|prefix| table.name.starts_with(prefix))
+    let records = tables
+        .iter()
+        .find(|table| table.name == "gateway_request_records")
+        .context("gateway request records table")?;
+    ensure!(records.primary == ["record_id"]);
+    ensure!(records.indexes.iter().any(|index| {
+        index.name == "idx_gateway_request_records_scope_kind"
+            && index.columns == ["scope_id", "kind"]
     }));
     for name in ["tenancy_execution_receipts", "tenancy_dispatch_intents"] {
         let table = tables

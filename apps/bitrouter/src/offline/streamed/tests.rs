@@ -47,7 +47,7 @@ async fn complete_evidence_verifies_database_and_independent_digest() -> Result<
     let report = take(&source, &bundle, options(home.path())).await?;
     assert_eq!(report.evidence.format, FORMAT_V2);
     assert_eq!(report.evidence.inventory.rows, 7);
-    assert!(!report.evidence.complete && !report.evidence.cutover_ready);
+    assert!(!report.evidence.complete);
     assert!(!serde_json::to_string(&report)?.contains("secret-payload"));
     assert_eq!(std::fs::read(&source)?, original);
     assert_eq!(std::fs::read(bundle.join("snapshot.sqlite"))?, original);

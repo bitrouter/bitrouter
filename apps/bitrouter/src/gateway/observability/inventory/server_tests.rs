@@ -54,7 +54,7 @@ async fn parallel_admission(scheme: &str) -> Result<()> {
             .request(&winner.route_scope_id, &id)
             .await?
             .context("no stored admission")?;
-        ensure!(saved.attempt_id == winner.attempt_id && saved.binding.is_none());
+        ensure!(serde_json::to_vec(&saved)? == serde_json::to_vec(&winner)?);
         ensure!(matches!(
             second.begin(&id, "restart", &id).await?,
             BeginResult::Duplicate

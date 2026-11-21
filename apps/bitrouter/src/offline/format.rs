@@ -1,4 +1,4 @@
-//! Private, versioned SQLite snapshot evidence.
+//! Bounded database snapshot evidence; it grants no serving authority.
 use serde::{Deserialize, Serialize};
 
 pub(super) const FORMAT_V2: &str = "bitrouter.offline.sqlite-evidence.v2";
@@ -57,7 +57,6 @@ pub(super) struct Evidence {
     pub format: String,
     pub scope: String,
     pub complete: bool,
-    pub cutover_ready: bool,
     pub exclusions: Vec<String>,
     pub inspector: bitrouter_ai::artifact::ArtifactIdentity,
     pub source_commit: Option<String>,
@@ -80,7 +79,6 @@ impl Evidence {
         anyhow::ensure!(
             self.scope == "sqlite_database_only"
                 && !self.complete
-                && !self.cutover_ready
                 && self.source_commit.is_none()
                 && self.source_build.is_none()
                 && self.exclusions == EXCLUSIONS

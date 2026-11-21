@@ -57,7 +57,6 @@ mod telemetry_disabled;
 mod telemetry_grpc_transport;
 #[cfg(feature = "otel-http")]
 mod telemetry_ingress_log_target;
-mod tenancy_audit_cli;
 mod tenancy_cli;
 
 /// Process cases consume the candidate binary built by the test runner.

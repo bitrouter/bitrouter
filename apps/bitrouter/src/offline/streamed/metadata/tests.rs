@@ -11,7 +11,6 @@ fn evidence() -> Evidence {
         format: FORMAT_V2.into(),
         scope: "sqlite_database_only".into(),
         complete: false,
-        cutover_ready: false,
         exclusions: EXCLUSIONS.iter().map(|value| (*value).into()).collect(),
         inspector: crate::artifact::current(),
         source_commit: None,
@@ -53,6 +52,18 @@ fn workspace(path: &Path, bytes: usize) -> Result<Workspace> {
         },
         CancellationToken::new(),
     )
+}
+
+#[test]
+fn database_snapshot_cannot_claim_complete_external_state() -> Result<()> {
+    let mut value = evidence();
+    value.validate_large_profile()?;
+    value.complete = true;
+    assert!(value.validate_large_profile().is_err());
+    value.complete = false;
+    value.scope = "whole_installation".into();
+    assert!(value.validate_large_profile().is_err());
+    Ok(())
 }
 
 #[test]
