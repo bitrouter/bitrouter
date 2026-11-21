@@ -6,26 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::model::{InputTokenCounting, ModelTokenLimits};
 
-/// Provider-reported input size bound to the finalized generation request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum NativeInputCount {
-    /// A count is evidence for one request, not an estimate for other routes.
-    Counted {
-        /// Provider-reported full input, including protocol framing and tools.
-        input_tokens: u64,
-        /// SHA-256 commitment to serving identity, endpoint and final JSON.
-        request_sha256: String,
-        /// Counter provenance, independent of generated usage or cache claims.
-        source: String,
-    },
-    /// A configured count failed; this cannot silently become a verified fit.
-    Unavailable {
-        /// Credential-free failure detail supplied by the executor.
-        reason: String,
-    },
-}
-
 /// Credential-free facts about one concrete provider/model candidate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRouteConstraints {
@@ -153,28 +133,4 @@ pub enum FullHistoryReason {
     EffortChanged,
     /// The artifact does not match the exact ordered history prefix.
     PrefixChanged,
-}
-
-/// Credential-free planned or observed provider context use.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum NativeContinuationInput {
-    /// No observation, including an attempt stopped before dispatch.
-    #[default]
-    Unknown,
-    /// Complete history is sent through the serving adapter.
-    FullHistory {
-        /// Local reason for sending complete history.
-        reason: FullHistoryReason,
-    },
-    /// The provider receives only the suffix after this many canonical messages.
-    Resumed {
-        /// Number of messages represented by the provider's stored state.
-        prefix_messages: u64,
-    },
-    /// Local candidate preparation failed before dispatch.
-    Rejected {
-        /// Stable local rejection, without private values.
-        reason: ContinuationFailure,
-    },
 }
