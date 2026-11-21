@@ -24,10 +24,8 @@
 //!    failure (5xx, timeout, 408/429) the [`FallbackPolicy`](routing::FallbackPolicy) advances to the
 //!    next target. Every [`ExecutionHook`](hooks::ExecutionHook) runs on success and failure.
 //! 4. **Stream stage** (interleaved when the response is streaming) —
-//!    each [`StreamHook`](hooks::StreamHook) sees every canonical
-//!    [`StreamPart`](bitrouter_ai::types::StreamPart) and can
-//!    [`Pass`](stream::StreamAction::Pass), [`Replace`](stream::StreamAction::Replace), or
-//!    [`Abort`](stream::StreamAction::Abort) it.
+//!    records upstream usage and timing, then delivers canonical
+//!    [`StreamPart`](bitrouter_ai::types::StreamPart)s to observers and the caller.
 //! 5. **Settle** — every registered [`SettlementRecorder`](settlement::SettlementRecorder) runs in
 //!    registration order against the immutable [`SettlementContext`](settlement::SettlementContext).
 //!    Deployments use recorders for metering, charging, signed receipts,
