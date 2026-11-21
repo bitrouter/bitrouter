@@ -434,14 +434,17 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
         for command in commands {
             let response = daemon::send_command(&socket, &command).await?;
             let DaemonResponse::Error { message } = response else {
-                anyhow::bail!("unavailable harness command was accepted");
+                anyhow::bail!("gateway accepted a BRO-owned control command");
             };
-            ensure!(message.contains("harness feature"), "{message}");
+            ensure!(
+                message == "Manage ACP route leases and supervised sessions with BRO.",
+                "{message}"
+            );
         }
 
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-        // The no-harness control limit includes the newline. Test the real
+        // The gateway control limit includes the newline. Test the real
         // listener at the boundary and without EOF/newline on an oversized
         // session payload; the latter must not wait for the peer to close.
         const LIMIT: usize = 4 * 1024 * 1024;

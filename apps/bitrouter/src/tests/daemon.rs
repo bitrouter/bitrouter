@@ -356,11 +356,17 @@ async fn probe_status_reports_none_when_nothing_listens() {
 }
 
 #[tokio::test]
-async fn reload_re_reads_the_config_file() {
+async fn reload_re_reads_the_config_file() -> anyhow::Result<()> {
     let dir = tempdir("reload");
-    let cfg_path = write_config(&dir, "sqlite::memory:").await;
-    let cfg = config::load(&cfg_path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    tokio::fs::create_dir_all(&dir).await?;
+    let cfg_path = dir.join("bitrouter.yaml");
+    let initial_yaml = format!(
+        "inherit_defaults: false\nregistry:\n  enabled: false\n{}",
+        tiny_config_yaml("sqlite::memory:")
+    );
+    tokio::fs::write(&cfg_path, initial_yaml).await?;
+    let cfg = config::load(&cfg_path).await?;
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
     let reloader = Arc::new(
         crate::reload::AppReloader::new(
             assembled.policy_store.clone(),
@@ -383,8 +389,12 @@ async fn reload_re_reads_the_config_file() {
     ));
     wait_until_ready(&socket).await;
 
-    // Rewrite the config to drop the anthropic provider.
+    // Model inventory is reloadable; removing an installed provider adapter
+    // requires a restart. Keep both providers and change only their models.
     let new_yaml = r#"
+inherit_defaults: false
+registry:
+  enabled: false
 server:
   listen: "127.0.0.1:0"
   skip_auth: true
@@ -395,13 +405,18 @@ providers:
     api_base: https://api.openai.com/v1
     api_key: k1
     models: [{ id: gpt-5 }, { id: shared }]
+  anthropic:
+    api_base: https://api.anthropic.com/v1
+    api_key: k2
+    models: [{ id: other }]
 "#;
-    tokio::fs::write(&cfg_path, new_yaml).await.unwrap();
+    tokio::fs::write(&cfg_path, new_yaml).await?;
 
-    let resp = daemon::send_command(&socket, &DaemonCommand::Reload { env: Vec::new() })
-        .await
-        .unwrap();
-    assert!(matches!(resp, DaemonResponse::Ok));
+    let resp = daemon::send_command(&socket, &DaemonCommand::Reload { env: Vec::new() }).await?;
+    assert!(
+        matches!(resp, DaemonResponse::Ok),
+        "reload failed: {resp:?}"
+    );
 
     // After reload, `shared` resolves to one hop (openai), not two.
     let route = daemon::send_command(
@@ -410,20 +425,23 @@ providers:
             model: "shared".to_string(),
         },
     )
-    .await
-    .unwrap();
+    .await?;
     match route {
         DaemonResponse::Route { chain, .. } => {
-            assert_eq!(chain.len(), 1, "anthropic should be gone after reload");
+            assert_eq!(
+                chain.len(),
+                1,
+                "anthropic no longer declares shared after reload"
+            );
             assert_eq!(chain[0].provider, "openai");
         }
-        other => panic!("expected Route, got {other:?}"),
+        other => anyhow::bail!("expected Route, got {other:?}"),
     }
 
-    // Cleanup
-    let _ = daemon::send_command(&socket, &DaemonCommand::Stop).await;
-    let _ = server.await;
-    let _ = tokio::fs::remove_dir_all(&dir).await;
+    daemon::send_command(&socket, &DaemonCommand::Stop).await?;
+    server.await??;
+    tokio::fs::remove_dir_all(&dir).await?;
+    Ok(())
 }
 
 /// Regression: the production `AppReloader` must re-apply the built-in
