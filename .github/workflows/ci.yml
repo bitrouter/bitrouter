@@ -394,9 +394,9 @@ jobs:
       if: runner.os == 'Linux'
       run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run the BRO suite
-      env:
-        BRO_TEST_REQUIRE_WORKSPACE_SANDBOX: ${{ runner.os == 'Linux' && '1' || '' }}
-      run: bash .github/scripts/ci-test.sh bro --test-threads 2
+      run: |
+        if [[ "$RUNNER_OS" == Linux ]]; then export BRO_TEST_REQUIRE_WORKSPACE_SANDBOX=1; fi
+        bash .github/scripts/ci-test.sh bro --test-threads 2
 
   test-gateway:
     name: test gateway (${{ matrix.os }})
