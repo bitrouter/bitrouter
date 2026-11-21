@@ -163,9 +163,10 @@ fn output_preservation_does_not_replay_opaque_reasoning_or_turn_it_into_anthropi
 }
 
 #[tokio::test]
-async fn model_client_json_and_codex_sse_keep_reasoning_without_dispatching_unadmitted_history()
+async fn gateway_json_and_codex_sse_keep_reasoning_without_dispatching_unadmitted_history()
 -> TestResult {
-    use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+    use super::model_http::{HttpGateway, render_request};
+    use crate::gateway::model::client::HttpTimeouts;
     use crate::gateway::model::target::ModelTarget;
     use bitrouter_ai::types::ApiProtocol;
     use tokio_util::sync::CancellationToken;
@@ -202,7 +203,7 @@ async fn model_client_json_and_codex_sse_keep_reasoning_without_dispatching_unad
         };
         let source = prompt()?;
         let original = source.clone();
-        let client = ModelClient::new(HttpTimeouts::default())?;
+        let client = HttpGateway::new(HttpTimeouts::default())?;
         let result = client
             .generate(&selected, &source, &CancellationToken::new())
             .await?;
@@ -214,18 +215,12 @@ async fn model_client_json_and_codex_sse_keep_reasoning_without_dispatching_unad
         assert_eq!(source, original);
         let mut history = source.clone();
         history.messages[0].content = result.content;
-        assert!(matches!(
-            client
-                .generate(&selected, &history, &CancellationToken::new())
-                .await,
-            Err(ModelError::Incompatible { .. })
-        ));
-        assert!(matches!(
-            client
-                .stream(&selected, &history, &CancellationToken::new())
-                .await,
-            Err(ModelError::Incompatible { .. })
-        ));
+        for stream in [false, true] {
+            assert!(matches!(
+                render_request(&selected, &history, stream),
+                Err(ModelError::Incompatible { .. })
+            ));
+        }
     }
     Ok(())
 }

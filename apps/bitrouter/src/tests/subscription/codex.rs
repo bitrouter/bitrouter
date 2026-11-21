@@ -607,12 +607,13 @@ async fn dropped_applier_call_commits_rotation_for_another_instance() -> AuthTes
 }
 
 #[tokio::test]
-async fn ai_client_uses_injected_codex_account_and_shapes_stream_request() -> AuthTestResult {
-    use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+async fn gateway_http_uses_injected_codex_account_and_shapes_stream_request() -> AuthTestResult {
+    use crate::gateway::model::client::HttpTimeouts;
     use crate::gateway::model::protocol::InboundAdapter;
     use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use crate::gateway::providers::auth::AuthAppliers;
     use crate::gateway::providers::auth::store::memory_fixture::MemoryCredentialStore;
+    use crate::tests::model_http::HttpGateway;
     use futures::StreamExt;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, ResponseTemplate};
@@ -650,7 +651,7 @@ async fn ai_client_uses_injected_codex_account_and_shapes_stream_request() -> Au
             "fixture-client",
         )),
     );
-    let client = ModelClient::new(HttpTimeouts::default())?
+    let client = HttpGateway::new(HttpTimeouts::default())?
         .with_auth_appliers(AuthAppliers::new().with(PROVIDER_ID, Arc::new(applier)));
     let prompt =
         ResponsesAdapter.parse_request(serde_json::json!({"model":"source","input":"hello"}))?;

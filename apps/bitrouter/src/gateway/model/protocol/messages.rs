@@ -1057,10 +1057,6 @@ fn ingress_admission(
 }
 
 impl InboundAdapter for MessagesAdapter {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::Messages
-    }
-
     fn parse_request(&self, body: serde_json::Value) -> Result<Prompt> {
         let req: MessagesRequest = serde_json::from_value(body.clone())
             .map_err(|e| describe_deser_error("MessagesRequest", &e, &body))?;

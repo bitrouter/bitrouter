@@ -1,10 +1,11 @@
-//! Native provider calls with only AI, injected memory storage and local HTTP.
+//! Provider authentication and protocol regressions through gateway HTTP.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::HttpGateway;
+use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use crate::gateway::model::target::ModelTarget;
@@ -42,7 +43,7 @@ fn target(provider: &str, base: String, protocol: ApiProtocol) -> ModelTarget {
 }
 
 #[tokio::test]
-async fn native_subscription_streams_refresh_and_commit_using_only_ai() -> TestResult {
+async fn subscription_http_streams_refresh_and_commit_selected_account() -> TestResult {
     for provider in ["openai-codex", "supergrok"] {
         let server = MockServer::start().await;
         let token = format!("header.{}.signature",URL_SAFE_NO_PAD.encode(r#"{"sub":"subject","https://api.openai.com/auth":{"chatgpt_account_id":"account"}}"#));
@@ -90,7 +91,7 @@ async fn native_subscription_streams_refresh_and_commit_using_only_ai() -> TestR
         } else {
             auth.register(provider, Arc::new(SuperGrokAuthApplier::new(session)));
         }
-        let client = ModelClient::new(HttpTimeouts::default())?.with_auth_appliers(auth);
+        let client = HttpGateway::new(HttpTimeouts::default())?.with_auth_appliers(auth);
         let prompt = ChatCompletionsAdapter.parse_request(
             json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),
         )?;
@@ -115,7 +116,14 @@ async fn native_subscription_streams_refresh_and_commit_using_only_ai() -> TestR
                     &CancellationToken::new(),
                 )
                 .await?;
-            assert_eq!(result.response_id.as_deref(), Some("native-response"));
+            let response_id = result.response_id.as_deref().ok_or("missing response id")?;
+            assert!(
+                crate::gateway::model::protocol::responses::decode_gateway_continuation_id(
+                    response_id
+                )?
+                .is_some()
+            );
+            assert_ne!(response_id, "native-response");
             assert_eq!(result.usage.ok_or("missing native usage")?.prompt_tokens, 2);
         }
         let stored = store.begin(&key).await?;
@@ -185,7 +193,7 @@ async fn copilot_recovers_once_without_overwriting_the_selected_github_credentia
         format!("{}/exchange", server.uri()),
         store.clone(),
     );
-    let client = ModelClient::new(HttpTimeouts::default())?
+    let client = HttpGateway::new(HttpTimeouts::default())?
         .with_auth_appliers(AuthAppliers::new().with("github-copilot", Arc::new(applier)));
     let prompt = ChatCompletionsAdapter.parse_request(
         json!({"model":"fixture-model","messages":[{"role":"user","content":"hello"}]}),

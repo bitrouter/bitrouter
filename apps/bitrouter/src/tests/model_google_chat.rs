@@ -1,6 +1,8 @@
 //! Google Chat continuity must survive gateway encoding and stream collection.
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::{HttpGateway, render_request};
+use crate::gateway::model::client::HttpTimeouts;
+use crate::gateway::model::client::ModelClient;
 use crate::gateway::model::error::ModelError;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
 use crate::gateway::model::protocol::{InboundAdapter, OutboundAdapter, SseEvent};
@@ -84,7 +86,7 @@ async fn actual_selected_call_binds_history_and_refuses_changed_target_before_io
         .mount(&server)
         .await;
     let target = target(&server.uri());
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let result = client
         .generate(&target, &prompt()?, &CancellationToken::new())
         .await?;
@@ -94,7 +96,7 @@ async fn actual_selected_call_binds_history_and_refuses_changed_target_before_io
     let source=ChatCompletionsAdapter.parse_request(json!({"model":"gemini-fixture","messages":[
         {"role":"assistant","tool_calls":calls}, {"role":"tool","tool_call_id":"one","content":"sunny"}
     ]}))?;
-    let body = client.render_request(&target, &source, false)?;
+    let body = render_request(&target, &source, false)?;
     assert_eq!(
         signature(&body["messages"][0]["tool_calls"][0]),
         "first-opaque-signature"
@@ -126,7 +128,10 @@ async fn actual_selected_call_binds_history_and_refuses_changed_target_before_io
             .await
             .err()
             .ok_or("changed replay target was admitted")?;
-        assert!(matches!(error, ModelError::Incompatible { .. }));
+        assert!(matches!(
+            error,
+            ModelError::HttpResponse { status: 400, .. }
+        ));
         assert!(!format!("{error:?}").contains("opaque-signature"));
     }
     let requests = server
@@ -135,16 +140,12 @@ async fn actual_selected_call_binds_history_and_refuses_changed_target_before_io
         .ok_or("request inventory unavailable")?;
     assert_eq!(requests.len(), 1);
     let raw = ChatCompletionsAdapter.parse_response(signed_response())?;
-    assert!(
-        client
-            .render_request(&target, &followup(raw)?, false)
-            .is_err()
-    );
+    assert!(render_request(&target, &followup(raw)?, false).is_err());
     let mut altered = source.clone();
     if let Content::ToolCall { arguments, .. } = &mut altered.messages[0].content[0] {
         *arguments = "changed arguments".into();
     }
-    assert!(client.render_request(&target, &altered, false).is_err());
+    assert!(render_request(&target, &altered, false).is_err());
     Ok(())
 }
 
@@ -181,11 +182,7 @@ async fn streamed_proof_uses_complete_arguments_and_round_trips_into_next_reques
         &target,
     )?;
     assert_eq!(result.content, direct.content);
-    ModelClient::new(HttpTimeouts::default())?.render_request(
-        &target,
-        &followup(result)?,
-        false,
-    )?;
+    render_request(&target, &followup(result)?, false)?;
     Ok(())
 }
 
@@ -193,25 +190,24 @@ async fn streamed_proof_uses_complete_arguments_and_round_trips_into_next_reques
 fn google_controls_cannot_leak_to_an_unrelated_target_or_silently_drop_cache_references()
 -> TestResult {
     let target = target("https://google-fixture.test");
-    let client = ModelClient::new(HttpTimeouts::default())?;
     let mut source = prompt()?;
     source.params.extra.insert(
         "extra_body".into(),
         json!({"google":{"thinking_config":{"include_thoughts":true}}}),
     );
-    let body = client.render_request(&target, &source, false)?;
+    let body = render_request(&target, &source, false)?;
     assert_eq!(
         body["extra_body"]["google"]["thinking_config"]["include_thoughts"],
         true
     );
     let mut unrelated = target.clone();
     unrelated.compatibility.chat_completions.google_extensions = false;
-    assert!(client.render_request(&unrelated, &source, false).is_err());
+    assert!(render_request(&unrelated, &source, false).is_err());
     source.params.extra.insert(
         "extra_body".into(),
         json!({"google":{"cached_content":"cachedContents/private"}}),
     );
-    assert!(client.render_request(&target, &source, false).is_err());
+    assert!(render_request(&target, &source, false).is_err());
     for config in [
         json!({"thinking_level":"low"}),
         json!({"thinking_budget":1024}),
@@ -220,7 +216,7 @@ fn google_controls_cannot_leak_to_an_unrelated_target_or_silently_drop_cache_ref
             "extra_body".into(),
             json!({"google":{"thinking_config":config}}),
         );
-        assert!(client.render_request(&target, &source, false).is_err());
+        assert!(render_request(&target, &source, false).is_err());
     }
     let request = reqwest::Client::new()
         .post("https://google-fixture.test/chat/completions")
@@ -397,7 +393,6 @@ async fn late_invalid_continuity_retains_available_provider_usage() -> TestResul
 #[test]
 fn google_target_refuses_unproven_constraints_without_rewriting_source() -> TestResult {
     let selected = target("https://google-fixture.test");
-    let client = ModelClient::new(HttpTimeouts::default())?;
     for parameters in [
         json!({"type":"object","properties":{"x":{"type":"integer","exclusiveMinimum":0}}}),
         json!({"type":"object","additionalProperties":false}),
@@ -406,14 +401,14 @@ fn google_target_refuses_unproven_constraints_without_rewriting_source() -> Test
         let source = ChatCompletionsAdapter.parse_request(json!({"model":"fixture","messages":[{"role":"user","content":"keep"}],"tools":[{"type":"function","function":{"name":"f","parameters":parameters}}]}))?;
         let original = source.clone();
         assert!(matches!(
-            client.render_request(&selected, &source, false),
+            render_request(&selected, &source, false),
             Err(ModelError::Incompatible { .. })
         ));
         assert_eq!(source, original);
         let mut unrelated = selected.clone();
         unrelated.compatibility.chat_completions.google_extensions = false;
         assert_eq!(
-            client.render_request(&unrelated, &source, false)?["tools"][0]["function"]["parameters"],
+            render_request(&unrelated, &source, false)?["tools"][0]["function"]["parameters"],
             parameters
         );
     }

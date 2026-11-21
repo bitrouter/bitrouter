@@ -34,6 +34,7 @@ mod model_file_store;
 mod model_google_chat;
 mod model_hosted;
 mod model_hosted_login;
+mod model_http;
 mod model_ingress_admission;
 mod model_invocation;
 mod model_projection_admission;

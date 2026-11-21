@@ -1,21 +1,22 @@
-//! AI-only HTTP fixtures: no router, SDK, server framework or ambient credentials.
+//! Model invocation through the gateway HTTP endpoints and real upstream sockets.
 
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient, ModelStream, parse_retry_after};
+use super::model_http::{HttpGateway, Parts};
+use crate::gateway::model::client::{HttpTimeouts, parse_retry_after};
 use crate::gateway::model::error::ModelError;
+use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
-use crate::gateway::model::protocol::{InboundAdapter, OutboundDispatch, Transport};
 use crate::gateway::model::target::{AuthScheme, ModelTarget};
 use bitrouter_ai::types::{ApiProtocol, Content, FinishReason, Prompt, StreamPart};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -31,34 +32,6 @@ enum Pause {
 struct CapturedRequest {
     headers: String,
     body: Value,
-}
-
-struct HeldAuthentication {
-    started: Arc<Notify>,
-    release: Arc<Notify>,
-    completed: Arc<AtomicBool>,
-}
-
-#[async_trait::async_trait]
-impl Transport for HeldAuthentication {
-    fn protocol(&self) -> ApiProtocol {
-        ApiProtocol::ChatCompletions
-    }
-
-    fn endpoint_url(&self, target: &ModelTarget, _stream: bool) -> String {
-        format!("{}/chat/completions", target.api_base)
-    }
-
-    async fn authorise(
-        &self,
-        request: reqwest::Request,
-        _target: &ModelTarget,
-    ) -> crate::gateway::model::error::Result<reqwest::Request> {
-        self.started.notify_one();
-        self.release.notified().await;
-        self.completed.store(true, Ordering::SeqCst);
-        Ok(request)
-    }
 }
 
 struct Fixture {
@@ -291,7 +264,7 @@ fn response_stream(protocol: &ApiProtocol) -> String {
     }
 }
 
-async fn collect(stream: ModelStream) -> TestResult<Vec<StreamPart>> {
+async fn collect(stream: Parts) -> TestResult<Vec<StreamPart>> {
     tokio::time::timeout(DEADLINE, stream.collect::<Vec<_>>())
         .await?
         .into_iter()
@@ -301,7 +274,7 @@ async fn collect(stream: ModelStream) -> TestResult<Vec<StreamPart>> {
 
 #[tokio::test]
 async fn codex_generate_uses_sse_without_changing_the_source_prompt() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let mut server = fixture(200, response_stream(&ApiProtocol::Responses), true, None).await?;
     let mut selected = target(&server.base, ApiProtocol::Responses);
     selected.provider_name = "openai-codex".into();
@@ -313,7 +286,12 @@ async fn codex_generate_uses_sse_without_changing_the_source_prompt() -> TestRes
     let request = tokio::time::timeout(DEADLINE, &mut server.received).await??;
     assert_eq!(request.body["stream"], true);
     assert_eq!(source, original);
-    assert_eq!(result.response_id.as_deref(), Some("resp_fixture"));
+    let response_id = result.response_id.as_deref().ok_or("missing response id")?;
+    assert!(
+        crate::gateway::model::protocol::responses::decode_gateway_continuation_id(response_id)?
+            .is_some()
+    );
+    assert_ne!(response_id, "resp_fixture");
     assert_eq!(result.finish_reason, Some(FinishReason::Stop));
     assert!(matches!(result.content.as_slice(), [Content::Text { text, .. }] if text == "hello"));
     let usage = result.usage.ok_or("missing provider usage")?;
@@ -325,7 +303,7 @@ async fn codex_generate_uses_sse_without_changing_the_source_prompt() -> TestRes
 
 #[tokio::test]
 async fn codex_generate_rejects_truncated_failed_and_post_terminal_streams() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let delta = event(json!({"type":"response.output_text.delta","delta":"partial"}));
     let terminal = event(
         json!({"type":"response.completed","response":{"id":"response","status":"completed","output":[]}}),
@@ -356,10 +334,13 @@ async fn codex_generate_rejects_truncated_failed_and_post_terminal_streams() -> 
             .await;
         if provider_error {
             assert!(
-                matches!(result, Err(ModelError::Provider { status: 429, ref message }) if !message.contains("selected-secret"))
+                matches!(result, Err(ModelError::HttpResponse { status: 502, ref body, .. }) if !body.contains("selected-secret"))
             );
         } else {
-            assert!(matches!(result, Err(ModelError::InvalidResponse { .. })));
+            assert!(matches!(
+                result,
+                Err(ModelError::HttpResponse { status: 502, .. })
+            ));
         }
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
     }
@@ -410,7 +391,7 @@ async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestR
     let mut server = fixture(200, body, true, None).await?;
     let mut selected = target(&server.base, ApiProtocol::Responses);
     selected.provider_name = "openai-codex".into();
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let result = client
         .generate(&selected, &prompt()?, &CancellationToken::new())
         .await?;
@@ -433,7 +414,7 @@ async fn codex_generate_preserves_native_blocks_and_custom_tool_input() -> TestR
 
 #[tokio::test]
 async fn codex_generate_rejects_sparse_and_omitted_custom_tool_snapshots() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     for complete_item in [false, true] {
         let mut events = codex_native_sparse_events();
         if complete_item {
@@ -446,13 +427,8 @@ async fn codex_generate_rejects_sparse_and_omitted_custom_tool_snapshots() -> Te
         let result = client
             .generate(&selected, &prompt()?, &CancellationToken::new())
             .await;
-        let expected = if complete_item {
-            "Responses terminal omitted a streamed tool item"
-        } else {
-            "Responses tool snapshot changed identity"
-        };
         assert!(
-            matches!(result, Err(ModelError::InvalidResponse { ref message, .. }) if message == expected),
+            matches!(result, Err(ModelError::HttpResponse { status: 502, .. })),
             "{result:?}"
         );
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
@@ -461,12 +437,12 @@ async fn codex_generate_rejects_sparse_and_omitted_custom_tool_snapshots() -> Te
 }
 
 #[tokio::test]
-async fn codex_generate_cancellation_and_drop_release_the_upstream_connection() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+async fn cancelled_or_dropped_http_call_keeps_accepted_codex_work() -> TestResult {
     for cancel in [true, false] {
+        let client = HttpGateway::new(HttpTimeouts::default())?;
         let mut server = fixture(
             200,
-            event(json!({"type":"response.output_text.delta","delta":"partial"})),
+            response_stream(&ApiProtocol::Responses),
             true,
             Some(Pause::Body),
         )
@@ -488,15 +464,25 @@ async fn codex_generate_cancellation_and_drop_release_the_upstream_connection() 
             ));
         }
         drop(call);
-        tokio::time::timeout(DEADLINE, &mut server.disconnected).await??;
+        assert!(matches!(
+            server.disconnected.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        server
+            .release
+            .take()
+            .ok_or("fixture release missing")?
+            .send(())
+            .map_err(|_| "fixture release receiver lost")?;
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
+        assert_eq!(client.wait_for_settlements(1).await?, vec![(3, 2)]);
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn http_failures_keep_status_and_retry_hint_and_scrub_credentials() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+async fn http_failures_use_public_status_and_hide_provider_credentials() -> TestResult {
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     for (status, streaming) in [(401, false), (429, true)] {
         let body = json!({"error":{"message":"rejected Bearer selected-secret","selected-secret":"selected-secret"}});
         let mut server = fixture(status, body.to_string(), false, None).await?;
@@ -513,9 +499,18 @@ async fn http_failures_keep_status_and_retry_hint_and_scrub_credentials() -> Tes
         }
         .ok_or_else(|| io::Error::other("provider failure was accepted"))?;
         assert!(
-            matches!(&error, ModelError::HttpResponse { status: actual, retry_after: Some(7), body } if *actual == status && !body.contains("selected-secret") && body.contains("[redacted credential]")),
+            matches!(&error, ModelError::HttpResponse { status: actual, body, .. } if *actual == (if status == 429 { 429 } else { 502 }) && !body.contains("selected-secret")),
             "{error}"
         );
+        if status == 429 {
+            assert!(matches!(
+                error,
+                ModelError::HttpResponse {
+                    retry_after: Some(7),
+                    ..
+                }
+            ));
+        }
         // The server handles one request. Any implicit refresh/retry changes
         // this HTTP error into a transport failure and fails the assertion.
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
@@ -525,19 +520,17 @@ async fn http_failures_keep_status_and_retry_hint_and_scrub_credentials() -> Tes
 
 #[tokio::test]
 async fn invalid_success_and_responses_terminal_contract_are_typed() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
-    for (protocol, body, decode) in [
-        (ApiProtocol::ChatCompletions, "not json".into(), true),
-        (ApiProtocol::Messages, "{}".into(), false),
+    let client = HttpGateway::new(HttpTimeouts::default())?;
+    for (protocol, body) in [
+        (ApiProtocol::ChatCompletions, "not json".into()),
+        (ApiProtocol::Messages, "{}".into()),
         (
             ApiProtocol::Responses,
             json!({"id":"resp_fixture","status":"failed","output":[]}).to_string(),
-            false,
         ),
         (
             ApiProtocol::Responses,
             json!({"status":"completed","output":[]}).to_string(),
-            false,
         ),
     ] {
         let server = fixture(200, body, false, None).await?;
@@ -551,11 +544,7 @@ async fn invalid_success_and_responses_terminal_contract_are_typed() -> TestResu
             .err()
             .ok_or_else(|| io::Error::other("invalid success was accepted"))?;
         assert!(
-            if decode {
-                matches!(error, ModelError::Decode { .. })
-            } else {
-                matches!(error, ModelError::InvalidResponse { .. })
-            },
+            matches!(error, ModelError::HttpResponse { status: 502, .. }),
             "{error}"
         );
     }
@@ -563,8 +552,7 @@ async fn invalid_success_and_responses_terminal_contract_are_typed() -> TestResu
 }
 
 #[tokio::test]
-async fn truncated_and_late_error_streams_preserve_text_and_usage() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+async fn truncated_and_late_error_streams_preserve_text_and_settle_usage() -> TestResult {
     let prefix =
         event(json!({"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}))
             + &event(json!({"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}));
@@ -572,6 +560,7 @@ async fn truncated_and_late_error_streams_preserve_text_and_usage() -> TestResul
         String::new(),
         event(json!({"error":{"status":401,"message":"selected-secret rejected"}})),
     ] {
+        let client = HttpGateway::new(HttpTimeouts::default())?;
         let server = fixture(200, prefix.clone() + &tail, true, None).await?;
         let stream = client
             .stream(
@@ -586,7 +575,7 @@ async fn truncated_and_late_error_streams_preserve_text_and_usage() -> TestResul
                 |part| matches!(part, Ok(StreamPart::TextDelta { text }) if text == "partial")
             )
         );
-        assert!(parts.iter().any(|part| matches!(part, Ok(StreamPart::Usage { usage }) if usage.prompt_tokens == 3 && usage.completion_tokens == 2)));
+        assert_eq!(client.wait_for_settlements(1).await?, vec![(3, 2)]);
         assert!(
             !parts
                 .iter()
@@ -596,10 +585,13 @@ async fn truncated_and_late_error_streams_preserve_text_and_usage() -> TestResul
             .last()
             .ok_or_else(|| io::Error::other("missing terminal error"))?;
         if tail.is_empty() {
-            assert!(matches!(error, Err(ModelError::InvalidResponse { .. })));
+            assert!(matches!(
+                error,
+                Err(ModelError::Provider { status: 502, .. })
+            ));
         } else {
             assert!(
-                matches!(error, Err(ModelError::Provider { status: 401, message }) if !message.contains("selected-secret")),
+                matches!(error, Err(ModelError::Provider { status: 502, message }) if !message.contains("selected-secret")),
                 "{error:?}"
             );
         }
@@ -609,7 +601,7 @@ async fn truncated_and_late_error_streams_preserve_text_and_usage() -> TestResul
 
 #[tokio::test]
 async fn responses_stream_rejects_mismatched_id_and_post_terminal_data() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let created = event(json!({"type":"response.created","response":{"id":"resp_fixture"}}));
     let terminal =
         event(json!({"type":"response.completed","response":response(&ApiProtocol::Responses)}));
@@ -631,7 +623,7 @@ async fn responses_stream_rejects_mismatched_id_and_post_terminal_data() -> Test
         let parts = tokio::time::timeout(DEADLINE, stream.collect::<Vec<_>>()).await?;
         assert!(matches!(
             parts.last(),
-            Some(Err(ModelError::InvalidResponse { .. }))
+            Some(Err(ModelError::Provider { status: 502, .. }))
         ));
         assert!(
             !parts
@@ -644,7 +636,7 @@ async fn responses_stream_rejects_mismatched_id_and_post_terminal_data() -> Test
 
 #[tokio::test]
 async fn cancellation_and_missing_credentials_prevent_dispatch() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let mut server = fixture(200, "{}".into(), false, None).await?;
     let mut selected = target(&server.base, ApiProtocol::ChatCompletions);
     let cancelled = CancellationToken::new();
@@ -658,7 +650,7 @@ async fn cancellation_and_missing_credentials_prevent_dispatch() -> TestResult {
         client
             .generate(&selected, &prompt()?, &CancellationToken::new())
             .await,
-        Err(ModelError::InvalidCredential { .. })
+        Err(ModelError::HttpResponse { status: 500, .. })
     ));
     assert!(matches!(
         server.received.try_recv(),
@@ -668,53 +660,8 @@ async fn cancellation_and_missing_credentials_prevent_dispatch() -> TestResult {
 }
 
 #[tokio::test]
-async fn token_cancellation_waits_for_custom_auth_then_prevents_dispatch() -> TestResult {
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let completed = Arc::new(AtomicBool::new(false));
-    let mut dispatch = OutboundDispatch::builtin();
-    dispatch.register(
-        Arc::new(ChatCompletionsAdapter),
-        Arc::new(HeldAuthentication {
-            started: Arc::clone(&started),
-            release: Arc::clone(&release),
-            completed: Arc::clone(&completed),
-        }),
-    );
-    let client = ModelClient::with_dispatch(HttpTimeouts::default(), Arc::new(dispatch))?;
-    let mut server = fixture(200, "{}".into(), false, None).await?;
-    let selected = target(&server.base, ApiProtocol::ChatCompletions);
-    let source = prompt()?;
-    let cancellation = CancellationToken::new();
-    let call = client.generate(&selected, &source, &cancellation);
-    tokio::pin!(call);
-    tokio::select! {
-        result = &mut call => return Err(io::Error::other(format!("auth ended before release: {result:?}")).into()),
-        result = tokio::time::timeout(DEADLINE, started.notified()) => { result?; },
-    }
-    cancellation.cancel();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(25), &mut call)
-            .await
-            .is_err()
-    );
-    assert!(!completed.load(Ordering::SeqCst));
-    release.notify_one();
-    assert!(matches!(
-        tokio::time::timeout(DEADLINE, &mut call).await?,
-        Err(ModelError::Cancelled)
-    ));
-    assert!(completed.load(Ordering::SeqCst));
-    assert!(matches!(
-        server.received.try_recv(),
-        Err(oneshot::error::TryRecvError::Empty)
-    ));
-    Ok(())
-}
-
-#[tokio::test]
-async fn cancellation_stops_pending_body_and_releases_connection() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+async fn cancelled_http_waiter_keeps_accepted_body_read() -> TestResult {
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let mut server = fixture(200, "{".into(), false, Some(Pause::Body)).await?;
     let selected = target(&server.base, ApiProtocol::ChatCompletions);
     let source = prompt()?;
@@ -730,15 +677,25 @@ async fn cancellation_stops_pending_body_and_releases_connection() -> TestResult
         tokio::time::timeout(DEADLINE, &mut call).await?,
         Err(ModelError::Cancelled)
     ));
-    tokio::time::timeout(DEADLINE, &mut server.disconnected).await??;
+    assert!(matches!(
+        server.disconnected.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    server
+        .release
+        .take()
+        .ok_or("fixture release missing")?
+        .send(())
+        .map_err(|_| "fixture release receiver lost")?;
     tokio::time::timeout(DEADLINE, &mut server.server).await???;
+    assert_eq!(client.wait_for_settlements(1).await?.len(), 1);
     Ok(())
 }
 
 #[tokio::test]
 async fn cancellation_and_idle_timeout_work_before_response_headers() -> TestResult {
     for cancel in [true, false] {
-        let client = ModelClient::new(HttpTimeouts {
+        let client = HttpGateway::new(HttpTimeouts {
             read: Duration::from_millis(250),
             ..Default::default()
         })?;
@@ -760,7 +717,7 @@ async fn cancellation_and_idle_timeout_work_before_response_headers() -> TestRes
             if cancel {
                 matches!(result, Err(ModelError::Cancelled))
             } else {
-                matches!(result, Err(ModelError::Timeout))
+                matches!(result, Err(ModelError::HttpResponse { status: 504, .. }))
             },
             "{result:?}"
         );
@@ -772,7 +729,7 @@ async fn cancellation_and_idle_timeout_work_before_response_headers() -> TestRes
 
 #[tokio::test]
 async fn stream_cancellation_and_drop_release_connection() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let prefix = event(json!({"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}));
     for cancel in [true, false] {
         let mut server = fixture(200, prefix.clone(), true, Some(Pause::Body)).await?;
@@ -784,9 +741,16 @@ async fn stream_cancellation_and_drop_release_connection() -> TestResult {
                 &cancellation,
             )
             .await?;
-        assert!(
-            matches!(tokio::time::timeout(DEADLINE, stream.next()).await?, Some(Ok(StreamPart::TextDelta { text })) if text == "partial")
-        );
+        let first_text = tokio::time::timeout(DEADLINE, async {
+            while let Some(part) = stream.next().await {
+                if let StreamPart::TextDelta { text } = part? {
+                    return Ok::<_, ModelError>(text);
+                }
+            }
+            Err(ModelError::invalid_request("missing first text delta"))
+        })
+        .await??;
+        assert_eq!(first_text, "partial");
         if cancel {
             cancellation.cancel();
             assert!(matches!(
@@ -803,7 +767,7 @@ async fn stream_cancellation_and_drop_release_connection() -> TestResult {
 }
 
 #[tokio::test]
-async fn read_timeout_and_total_deadline_are_typed_for_body_and_stream() -> TestResult {
+async fn read_timeout_and_total_deadline_fail_body_and_stream() -> TestResult {
     for total in [false, true] {
         let timeouts = HttpTimeouts {
             read: if total {
@@ -814,7 +778,7 @@ async fn read_timeout_and_total_deadline_are_typed_for_body_and_stream() -> Test
             total: total.then_some(Duration::from_millis(250)),
             ..Default::default()
         };
-        let client = ModelClient::new(timeouts)?;
+        let client = HttpGateway::new(timeouts)?;
         for streaming in [false, true] {
             let body = if streaming {
                 event(json!({"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}))
@@ -829,11 +793,16 @@ async fn read_timeout_and_total_deadline_are_typed_for_body_and_stream() -> Test
                 let stream = client.stream(&selected, &source, &cancellation).await?;
                 let parts = tokio::time::timeout(DEADLINE, stream.collect::<Vec<_>>()).await?;
                 assert!(matches!(
-                    parts.first(),
+                    parts
+                        .iter()
+                        .find(|part| matches!(part, Ok(StreamPart::TextDelta { .. }))),
                     Some(Ok(StreamPart::TextDelta { .. }))
                 ));
                 assert!(
-                    matches!(parts.last(), Some(Err(ModelError::Timeout))),
+                    matches!(
+                        parts.last(),
+                        Some(Err(ModelError::Provider { status: 502, .. }))
+                    ),
                     "{parts:?}"
                 );
             } else {
@@ -843,7 +812,7 @@ async fn read_timeout_and_total_deadline_are_typed_for_body_and_stream() -> Test
                         client.generate(&selected, &source, &cancellation)
                     )
                     .await?,
-                    Err(ModelError::Timeout)
+                    Err(ModelError::HttpResponse { status: 504, .. })
                 ));
             }
             tokio::time::timeout(DEADLINE, &mut server.disconnected).await??;
@@ -857,7 +826,7 @@ async fn read_timeout_and_total_deadline_are_typed_for_body_and_stream() -> Test
 async fn caller_can_complete_held_stream_without_total_cap() -> TestResult {
     // Explicitly releasing a held body verifies the no-total-cap path. The
     // preceding test proves the independently configured overall cap.
-    let client = ModelClient::new(HttpTimeouts {
+    let client = HttpGateway::new(HttpTimeouts {
         total: None,
         ..Default::default()
     })?;
@@ -952,7 +921,7 @@ async fn registered_auth_shapes_and_rebuilds_once_after_401_in_both_modes() -> T
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>(requests)
         });
         let auth = Arc::new(RetryAuth::default());
-        let client = ModelClient::new(HttpTimeouts::default())?.with_auth_appliers(
+        let client = HttpGateway::new(HttpTimeouts::default())?.with_auth_appliers(
             crate::gateway::providers::auth::AuthAppliers::new().with("fixture", auth.clone()),
         );
         let mut selected = target(&base, ApiProtocol::ChatCompletions);
@@ -974,7 +943,7 @@ async fn registered_auth_shapes_and_rebuilds_once_after_401_in_both_modes() -> T
         .ok_or_else(|| io::Error::other("second 401 was reported as success"))?;
         assert!(matches!(
             error,
-            ModelError::HttpResponse { status: 401, .. }
+            ModelError::HttpResponse { status: 502, .. }
         ));
         assert!(!format!("{error:?}\n{error}").contains("dynamic-secret"));
         assert_eq!(auth.refreshes.load(Ordering::SeqCst), 1);
@@ -994,8 +963,8 @@ async fn registered_auth_shapes_and_rebuilds_once_after_401_in_both_modes() -> T
 }
 
 #[tokio::test]
-async fn three_protocols_invoke_without_sdk_and_keep_source_prompt() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
+async fn three_http_protocols_keep_source_prompt() -> TestResult {
+    let client = HttpGateway::new(HttpTimeouts::default())?;
     let source = prompt()?;
     let original = source.clone();
     for protocol in protocols() {

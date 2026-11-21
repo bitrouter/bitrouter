@@ -88,12 +88,7 @@ pub(crate) struct ConfigRoutingTable {
     config: RwLock<Config>,
     /// Advances under the config write lock, including A -> B -> A reloads.
     generation: AtomicU64,
-    /// The path the config was loaded from, for `reload()`.
-    path: Option<std::path::PathBuf>,
-    /// Serialises `reload()` against itself. SIGHUP + `bitrouter reload`
-    /// arriving close together used to race: each call did its own
-    /// `load + discover_models` then wrote the result, last writer wins.
-    /// Now we hold this mutex for the full reload sequence.
+    /// Serialises prepared configuration replacement.
     reload_lock: tokio::sync::Mutex<()>,
 }
 
@@ -103,34 +98,8 @@ impl ConfigRoutingTable {
         Self {
             config: RwLock::new(config),
             generation: AtomicU64::new(0),
-            path: None,
             reload_lock: tokio::sync::Mutex::new(()),
         }
-    }
-
-    /// Build a routing table from an already-parsed config, **remembering the
-    /// path it came from** so `reload()` can re-read it. Use this when the
-    /// config was parsed (or post-processed, e.g. `auto_discover`) before the
-    /// table was built but hot-reload is still wanted.
-    pub fn from_config_with_path(config: Config, path: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            config: RwLock::new(config),
-            generation: AtomicU64::new(0),
-            path: Some(path.into()),
-            reload_lock: tokio::sync::Mutex::new(()),
-        }
-    }
-
-    /// Load a routing table from a `bitrouter.yaml` path (enables `reload()`).
-    pub async fn load(path: impl Into<std::path::PathBuf>) -> Result<Self> {
-        let path = path.into();
-        let config = crate::config::load(&path).await?;
-        Ok(Self {
-            config: RwLock::new(config),
-            generation: AtomicU64::new(0),
-            path: Some(path),
-            reload_lock: tokio::sync::Mutex::new(()),
-        })
     }
 
     /// Snapshot the current `Config` — used by the daemon reload integration
@@ -142,17 +111,6 @@ impl ConfigRoutingTable {
             .clone()
     }
 
-    /// Capture configuration and its process-local generation together. App
-    /// controllers can validate dependencies before selection, then fence a
-    /// reload before dispatch without serializing credentials into a digest.
-    pub fn versioned_snapshot(&self) -> (u64, Config) {
-        let config = match self.config.read() {
-            Ok(config) => config,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        (self.generation.load(Ordering::Relaxed), config.clone())
-    }
-
     /// Read the generation at the same synchronization boundary as routing.
     /// A matching value only fences work through this check; the caller must
     /// dispatch an already resolved chain after checking it.
@@ -162,21 +120,6 @@ impl ConfigRoutingTable {
             Err(poisoned) => poisoned.into_inner(),
         };
         self.generation.load(Ordering::Relaxed)
-    }
-
-    /// Swap the table's `Config` for `fresh`, running model discovery
-    /// against the new config first. Used by the daemon's reload path
-    /// when there's no source file to re-read from (zero-config mode):
-    /// the caller produces a fresh `Config` from
-    /// the application's `providers::apply::zero_config` and hands it here. Holds the
-    /// same `reload_lock` as the `RoutingTable::reload` impl so the two
-    /// paths serialise against each other.
-    pub async fn replace_config(&self, fresh: Config) -> Result<()> {
-        let _guard = self.reload_lock.lock().await;
-        let mut fresh = fresh;
-        crate::config::discover_models(&mut fresh).await;
-        self.replace_prepared_config_locked(fresh)?;
-        Ok(())
     }
 
     /// Swap a configuration whose model discovery has already completed.
@@ -939,37 +882,6 @@ impl RoutingTable for ConfigRoutingTable {
 
     fn model_info(&self, model: &str) -> Option<ModelInfo> {
         self.list_models().into_iter().find(|m| m.id == model)
-    }
-
-    async fn reload(&self) -> Result<()> {
-        let Some(path) = &self.path else {
-            return Ok(());
-        };
-        // Hold the reload mutex for the whole load+discover+swap sequence so
-        // a SIGHUP racing the control-socket `reload` command can't end up
-        // with last-writer-wins between two concurrent fetches.
-        let _guard = self.reload_lock.lock().await;
-        let mut fresh = crate::config::load(path).await?;
-        // Re-run model discovery so `auto_discover: true` providers pick up
-        // upstream additions / removals. Best-effort: discovery failures
-        // WARN; they do not abort the reload — same policy as the initial
-        // assembly path.
-        crate::config::discover_models(&mut fresh).await;
-        self.replace_prepared_config_locked(fresh)?;
-        Ok(())
-    }
-
-    async fn preset_overrides(
-        &self,
-        model: &str,
-    ) -> Result<crate::gateway::pipeline::routing::PromptOverrides> {
-        // Same resolution as `route_chain` (Stage 0): resolve a named router or
-        // legacy `@preset:variant` and return its prompt defaults. The
-        // synchronous part is wrapped in a brief read-lock; no `.await` is
-        // held across it.
-        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
-        let resolution = config.resolve_router(model)?;
-        Ok(resolution.overrides)
     }
 }
 

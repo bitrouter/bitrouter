@@ -1,9 +1,10 @@
-//! Anthropic/Claude calls using only AI, injected memory stores and local HTTP.
+//! Provider authentication and protocol regressions through gateway HTTP.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
+use super::model_http::HttpGateway;
+use crate::gateway::model::client::HttpTimeouts;
 use crate::gateway::model::error::ModelError;
 use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::messages::MessagesAdapter;
@@ -89,7 +90,7 @@ async fn platform_key_invokes_json_and_sse_without_subscription_shaping() -> Tes
         key("anthropic", "selected"),
         Credential::api_key("selected-key"),
     )]));
-    let client = ModelClient::new(HttpTimeouts::default())?.with_auth_appliers(
+    let client = HttpGateway::new(HttpTimeouts::default())?.with_auth_appliers(
         AuthAppliers::new().with("anthropic", Arc::new(AnthropicApiKeyApplier::new(store))),
     );
     let selected = target("anthropic", &server.uri());
@@ -165,7 +166,7 @@ async fn subscription_refreshes_selected_account_recovers_once_and_keeps_source(
         )),
         REFRESH_WINDOW,
     );
-    let client = ModelClient::new(HttpTimeouts::default())?.with_auth_appliers(
+    let client = HttpGateway::new(HttpTimeouts::default())?.with_auth_appliers(
         AuthAppliers::new().with("claude-code", Arc::new(ClaudeCodeAuthApplier::new(session))),
     );
     let selected = target("claude-code", &server.uri());

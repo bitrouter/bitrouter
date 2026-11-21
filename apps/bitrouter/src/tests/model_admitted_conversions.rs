@@ -1,8 +1,8 @@
 //! Equivalent-effect reports cannot waive refusals or expose source payloads.
+use super::model_http::renderer;
 use crate::gateway::conversion_report::{
     ConversionDisposition, ConversionEffect, ConversionLocation, ConversionReason, ConversionReport,
 };
-use crate::gateway::model::client::{HttpTimeouts, ModelClient};
 use crate::gateway::model::conversion::{ReportAdmission, request_admission};
 use crate::gateway::model::protocol::InboundAdapter;
 use crate::gateway::model::protocol::chat_completions::ChatCompletionsAdapter;
@@ -108,7 +108,7 @@ fn direct_selected_target_preparation_retains_the_same_assessment() -> TestResul
         account_label: Some("account-secret".into()),
         compatibility: Default::default(),
     };
-    let client = ModelClient::new(HttpTimeouts::default())?;
+    let client = renderer();
     let (body, report) = client.render_request_with_report(&target, &prompt, false)?;
     assert_eq!(report, request_admission(&prompt, &ApiProtocol::Responses));
     assert_eq!(report.admitted.len(), 1);

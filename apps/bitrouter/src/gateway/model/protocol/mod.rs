@@ -352,9 +352,6 @@ pub struct SseEvent {
 ///
 /// Stateless. The three built-in adapters are zero-sized.
 pub trait InboundAdapter: Send + Sync {
-    /// The wire protocol this adapter speaks.
-    fn protocol(&self) -> ApiProtocol;
-
     /// Parse a client request body into a canonical [`Prompt`]. Built-in adapters
     /// refuse their classified ingress omissions before returning a partial Prompt;
     /// incompatibility carries a content-free request-ingress conversion report.
@@ -505,12 +502,6 @@ pub trait OutboundAdapter: Send + Sync {
 /// async key fetches can run them here.
 #[async_trait]
 pub trait Transport: Send + Sync {
-    /// A counting URL is opt-in to the transport, not inferred from wire
-    /// compatibility. Ordinary model calls never use this endpoint.
-    fn input_token_count_endpoint(&self, _target: &ModelTarget) -> Option<String> {
-        None
-    }
-
     /// The wire protocol this transport speaks. Must match the paired
     /// [`OutboundAdapter`]'s [`protocol()`](OutboundAdapter::protocol).
     fn protocol(&self) -> ApiProtocol;
