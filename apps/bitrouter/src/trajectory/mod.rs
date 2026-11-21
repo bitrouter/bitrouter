@@ -2,6 +2,7 @@ pub mod canonical;
 pub mod correlation;
 pub mod evaluation;
 pub mod health;
+pub(crate) mod ingress;
 #[cfg(feature = "eval-publication")]
 pub mod replay;
 mod route;

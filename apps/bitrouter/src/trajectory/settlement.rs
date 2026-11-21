@@ -65,9 +65,21 @@ impl TrajectorySettlementRecorder {
         let request_id = self
             .identity_key
             .request_identity(owner_user_id, &context.request_id)?;
+        let binding = context.get_event::<super::ingress::CapturedRequest>();
+        if binding.is_some_and(|binding| {
+            !binding.matches_settlement(context) || binding.request_id != request_id
+        }) {
+            anyhow::bail!("trajectory settlement does not match captured ingress");
+        }
         let Some(request) = self.store.request(owner_user_id, &request_id).await? else {
+            if binding.is_some() {
+                anyhow::bail!("captured trajectory request is missing");
+            }
             return Ok(TrajectorySettlementDisposition::Untracked);
         };
+        if binding.is_some_and(|binding| binding.episode_id != request.episode_id) {
+            anyhow::bail!("trajectory settlement episode does not match captured ingress");
+        }
         if request.status != RequestStatus::Started {
             self.store
                 .validate_reusable_terminal_settlement(owner_user_id, &request_id)
