@@ -6,16 +6,11 @@ use serde::Serialize;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
-/// A single stored event: a typed handle plus its pre-serialized JSON.
-///
-/// `typed` backs the compile-time-safe `has::<E>()` / `get::<E>()` queries;
-/// `json` backs `dump_json()` and is always available without re-deriving.
+/// A typed event retained for request-local lifecycle coordination.
 #[derive(Clone)]
 struct EventEntry {
     type_id: TypeId,
-    name: &'static str,
     typed: Arc<dyn Any + Send + Sync>,
-    json: serde_json::Value,
 }
 
 /// Per-request, pull-based event bus. Stores every event emitted during the
@@ -32,16 +27,13 @@ impl EventBus {
         Self { events: Vec::new() }
     }
 
-    /// Emit a typed event. Serialized once, at emit time.
+    /// Emit a typed event without serializing its payload.
     pub fn emit<E: PipelineEvent>(&mut self, event: E) {
-        let json = serde_json::to_value(&event).unwrap_or(serde_json::Value::Null);
         let name = event.event_name();
         tracing::debug!(event = name, "pipeline event emitted");
         self.events.push(EventEntry {
             type_id: TypeId::of::<E>(),
-            name,
             typed: Arc::new(event),
-            json,
         });
     }
 
@@ -70,31 +62,10 @@ impl EventBus {
             .collect()
     }
 
-    /// Number of events emitted so far.
-    pub fn len(&self) -> usize {
-        self.events.len()
-    }
-
-    /// Whether no events have been emitted.
-    pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
-    }
-
     /// Move every event from `other` into this bus. Used to fold a stage-local
     /// bus (e.g. `StreamContext`'s) back into the request-level bus.
     pub fn merge_from(&mut self, mut other: EventBus) {
         self.events.append(&mut other.events);
-    }
-
-    /// Dump all events as a JSON array (logging / debugging / receipt storage).
-    /// Type-independent, always available.
-    pub fn dump_json(&self) -> serde_json::Value {
-        serde_json::Value::Array(
-            self.events
-                .iter()
-                .map(|e| serde_json::json!({ "event": e.name, "data": e.json }))
-                .collect(),
-        )
     }
 }
 
@@ -144,18 +115,5 @@ mod tests {
         assert_eq!(bus.get::<DemoEvent>().unwrap().n, 7);
         assert_eq!(bus.get_all::<DemoEvent>().len(), 2);
         assert!(bus.get::<OtherEvent>().is_none());
-    }
-
-    #[test]
-    fn dump_json_exports_all_events() {
-        let mut bus = EventBus::new();
-        bus.emit(DemoEvent { n: 1 });
-        bus.emit(OtherEvent);
-        let dump = bus.dump_json();
-        let arr = dump.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0]["event"], "test.demo");
-        assert_eq!(arr[0]["data"]["n"], 1);
-        assert_eq!(arr[1]["event"], "test.other");
     }
 }

@@ -878,7 +878,6 @@ async fn assemble_app(
     };
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
-    let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
     let pricing_for_native = pricing.clone();
     #[cfg(feature = "multi-instance")]
@@ -1108,10 +1107,7 @@ async fn assemble_app(
                 pricing.clone(),
                 config.server.require_known_pricing,
             ))
-            .settlement_recorder(
-                MeteringRecorder::new(metering_store.clone(), pricing.clone())
-                    .with_reconciliation_provider("bitrouter"),
-            );
+            .settlement_recorder(MeteringRecorder::new(metering_store.clone()));
         let sub_pipeline = Arc::new(
             sub.build()
                 .context("building the server-tool sub-completion pipeline")?,
@@ -1297,7 +1293,6 @@ async fn assemble_app(
             lm.routing_table(routing_table).executor(executor);
             if !is_shared {
                 lm.native_cost_estimator(pricing_for_native);
-                lm.native_cost_source(Arc::new(metering_for_native_costs));
             }
             if let Some(policy) = &private_context {
                 lm.native_private_context(Arc::new(policy.clone()));
@@ -1357,10 +1352,8 @@ async fn assemble_app(
                 ),
                 OperationScope::Both,
             );
-            let metering_recorder = (!is_shared).then(|| {
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter")
-            });
+            let metering_recorder =
+                (!is_shared).then(|| MeteringRecorder::new(metering_store_for_recorder));
             if let Some(runtime) = continuation_for_finalization {
                 lm.required_finalizer(runtime);
             }

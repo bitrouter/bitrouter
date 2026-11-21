@@ -3089,12 +3089,11 @@ policies:
                 } else {
                     "beta:m"
                 };
-            let access_model = fixture.policy_store.with_policy("operator", |policy| {
-                policy
-                    .and_then(|policy| policy.allowed_models.as_ref())
-                    .and_then(|models| models.first())
-                    .cloned()
-            });
+            let access_model = fixture
+                .policy_store
+                .effective_for(&["operator"])
+                .allowed_models
+                .and_then(|models| models.into_iter().next());
             assert_eq!(access_model.as_deref(), Some(expected_access_model));
 
             let expected_policy_digest =
@@ -3199,12 +3198,11 @@ policies:
                 .api_base,
             "https://beta.example.com/v1"
         );
-        let access_model = fixture.policy_store.with_policy("operator", |policy| {
-            policy
-                .and_then(|policy| policy.allowed_models.as_ref())
-                .and_then(|models| models.first())
-                .cloned()
-        });
+        let access_model = fixture
+            .policy_store
+            .effective_for(&["operator"])
+            .allowed_models
+            .and_then(|models| models.into_iter().next());
         assert_eq!(access_model.as_deref(), Some("beta:m"));
         assert_eq!(
             fixture

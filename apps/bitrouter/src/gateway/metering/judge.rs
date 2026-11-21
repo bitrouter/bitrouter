@@ -319,9 +319,8 @@ mod native_admission_tests {
     use crate::gateway::pipeline::operations::HookStage;
     use crate::gateway::pipeline::routing::StaticRoutingTable;
     use crate::gateway::pipeline::types::PipelineRequest;
-    use crate::metering::pricing::PricingTable;
     use crate::metering::recorder::MeteringRecorder;
-    use crate::metering::store::{MeteringStore, TimeWindow};
+    use crate::metering::store::MeteringStore;
     use anyhow::Context;
     use bitrouter_ai::types::OperationScope;
 
@@ -350,7 +349,7 @@ mod native_admission_tests {
             .require_hook::<JudgeCosts>(HookStage::PreResolution, OperationScope::Both)
             .pre_resolution_hook_for(costs.clone(), OperationScope::Both)
             .settlement_recorder_for(
-                MeteringRecorder::new(metering.clone(), Arc::new(PricingTable::new())),
+                MeteringRecorder::new(metering.clone()),
                 OperationScope::Both,
             );
         let pipeline = builder.build()?;
@@ -370,12 +369,7 @@ mod native_admission_tests {
                 .to_string()
                 .contains("reserved judge request metadata is missing")
         );
-        assert_eq!(
-            metering
-                .get_request_count("local", TimeWindow::ThisMonth)
-                .await?,
-            0
-        );
+        assert_eq!(metering.get_rate("local").await?.requests_per_minute, 0.0);
         let (_, saved) = costs
             .lookup()?
             .get::<RequestOwner>(LOOKUP_KIND, request_id)

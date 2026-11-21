@@ -525,7 +525,7 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
             "strong-model",
             ModelPricing::new(2.0, 3.0),
         );
-        let recorder = MeteringRecorder::new(MeteringStore::new(db.clone()), Arc::new(prices));
+        let recorder = MeteringRecorder::new(MeteringStore::new(db.clone()));
         let tracker = GatewayRequestTracker::new(db.clone());
         let app = crate::gateway::assembly::App::builder()
             .prompt_transform(Arc::new(FrozenTransform {
@@ -539,7 +539,10 @@ async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -
                     .executor(executor.clone())
                     .pre_resolution_hook(RequestIdOrigin)
                     .router_preparation_hook(tracker)
-                    .route_hook(recorder.tariff_capture(false))
+                    .route_hook(crate::metering::tariff::CaptureTariffs::new(
+                        Arc::new(prices),
+                        false,
+                    ))
                     .settlement_recorder(recorder)
                     .request_checker_runner(Arc::new(HistoryChecker {
                         calls: Arc::new(AtomicUsize::new(0)),

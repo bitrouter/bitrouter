@@ -72,17 +72,6 @@ impl ReconciliationStatus {
             Self::Unknown => "unknown",
         }
     }
-
-    /// Parse a persisted value, failing closed for unrecognized values.
-    pub fn from_persisted(value: &str) -> Self {
-        match value {
-            "not_applicable" => Self::NotApplicable,
-            "pending" => Self::Pending,
-            "computed" => Self::Computed,
-            "not_charged" => Self::NotCharged,
-            _ => Self::Unknown,
-        }
-    }
 }
 
 /// One settled request, as recorded by [`super::MeteringRecorder`].

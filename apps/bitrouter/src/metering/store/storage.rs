@@ -46,24 +46,6 @@ impl MeteringStore {
             .map(Some)
             .map_err(storage_error)
     }
-
-    pub(super) async fn update_row(
-        &self,
-        row: requests::ActiveModel,
-        previous_bytes: usize,
-        context: &'static str,
-    ) -> Result<()> {
-        let mut charge = self.reserve_write(&row, previous_bytes)?;
-        if let Some(charge) = &mut charge {
-            charge.start();
-        }
-        // Keep the existing ORM update/affected-row semantics. Cancellation or
-        // error drops the started charge, retaining accounting and fencing.
-        row.update(&self.db)
-            .await
-            .map_err(|_| BitrouterError::internal(context))?;
-        complete(charge)
-    }
 }
 
 pub(super) fn complete(charge: Option<Charge>) -> Result<()> {

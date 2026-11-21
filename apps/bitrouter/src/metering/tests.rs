@@ -1,7 +1,6 @@
 //! Metering integration tests against an in-memory SQLite database.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
@@ -9,15 +8,10 @@ use crate::gateway::caller::CallerContext;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::settlement::SettlementContext;
 use crate::gateway::pipeline::settlement::SettlementRecorder;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     MeteringRecorder, MeteringSettlementEvent, MeteringStore, ModelPricing, PricingTable,
     TimeWindow,
-};
-use crate::cloud::settlement::{
-    SettlementClient, SettlementReceipt, SettlementState, SettlementUsage,
 };
 use crate::db;
 use crate::session_identity::{
@@ -102,11 +96,13 @@ fn pricing() -> Arc<PricingTable> {
 async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     // 10 prompt × 2 + 5 completion × 10 = 70 µ$
     recorder.record(&mut ctx("k1", 10, 5)).await?;
-    let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
-    assert_eq!(spend, 70);
+    let spend = store
+        .get_enforceable_spend("k1", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(spend, Some(70));
     Ok(())
 }
 
@@ -115,7 +111,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
 {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store, pricing());
+    let recorder = MeteringRecorder::new(store);
     let mut attributed = ctx("acp", 10, 5);
     attributed.request_id = "router-acp-request".to_string();
     attributed.emit(SessionIdentityObserved {
@@ -243,7 +239,7 @@ async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() 
 {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store, pricing());
+    let recorder = MeteringRecorder::new(store);
     let mut routed = ctx("router", 3, 2);
     routed.request_id = "routed-request".to_string();
     routed.emit(bitrouter_ai::routing::RouterRequestIdentity {
@@ -295,7 +291,7 @@ async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() 
 async fn recorder_emits_authoritative_content_free_settlement_after_persisting() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool);
-    let recorder = MeteringRecorder::new(store, pricing());
+    let recorder = MeteringRecorder::new(store);
     let mut settlement = ctx("event", 10, 5);
 
     recorder.record(&mut settlement).await?;
@@ -318,7 +314,7 @@ async fn recorder_emits_authoritative_content_free_settlement_after_persisting()
 async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool);
-    let recorder = MeteringRecorder::new(store.clone(), Arc::new(PricingTable::new()));
+    let recorder = MeteringRecorder::new(store.clone());
     let mut settlement = ctx("unknown", 0, 0);
     settlement.target = None;
     settlement.provider_id.clear();
@@ -348,19 +344,19 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
     assert_eq!(event.cost_micro_usd, None);
     assert_eq!(event.error_code.as_deref(), Some("not_found"));
 
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let records = stored_rows(&store).await?;
     let record = records.first().expect("one routing failure row");
     assert_eq!(
         record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::Unknown
+        bitrouter_ai::types::UsageOrigin::Unknown.as_str()
     );
-    assert_eq!(record.raw_usage, None);
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Unknown);
-    assert_eq!(record.final_charge_micro_usd, None);
-    let evidence = record
-        .charge_evidence
-        .as_ref()
-        .expect("unknown charge evidence");
+    assert_eq!(record.raw_usage_json, None);
+    assert_eq!(
+        record.charge_status,
+        super::pricing::ChargeStatus::Unknown.as_str()
+    );
+    assert_eq!(evidence(record)?.charge_micro_usd, None);
+    let evidence = evidence(record)?;
     assert_eq!(evidence.status, super::pricing::ChargeStatus::Unknown);
     assert_eq!(evidence.charge_micro_usd, None);
     assert_eq!(
@@ -377,12 +373,6 @@ async fn routing_failure_keeps_unknown_target_usage_and_charge_absent() -> Resul
             .await?,
         None
     );
-    assert_eq!(
-        store
-            .get_enforceable_total_spend(TimeWindow::ThisMonth)
-            .await?,
-        None
-    );
     Ok(())
 }
 
@@ -395,7 +385,7 @@ async fn recorder_failure_does_not_emit_settlement_authority() -> anyhow::Result
     ))
     .await?;
     let store = MeteringStore::new(pool);
-    let recorder = MeteringRecorder::new(store, pricing());
+    let recorder = MeteringRecorder::new(store);
     let mut settlement = ctx("failed-write", 10, 5);
 
     assert!(recorder.record(&mut settlement).await.is_err());
@@ -413,7 +403,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
         "gpt-5",
         ModelPricing::cache_aware(Some(2.0), Some(0.2), Some(2.5), Some(10.0)),
     );
-    let recorder = MeteringRecorder::new(store.clone(), Arc::new(table.clone()));
+    let recorder = MeteringRecorder::new(store.clone());
     let raw = serde_json::json!({
         "prompt_tokens": 100,
         "completion_tokens": 30,
@@ -428,7 +418,7 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
     settlement.raw_usage = Some(raw.clone());
 
     recorder.record(&mut settlement).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let records = stored_rows(&store).await?;
     let record = records.first().expect("one usage record");
 
     assert_eq!(record.uncached_input_tokens, 40);
@@ -436,10 +426,16 @@ async fn recorder_persists_cache_aware_charge_evidence() -> Result<()> {
     assert_eq!(record.cache_write_tokens, 20);
     assert_eq!(record.output_tokens, 20);
     assert_eq!(record.reasoning_tokens, 10);
-    assert_eq!(record.final_charge_micro_usd, Some(438));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
-    assert_eq!(record.raw_usage.as_ref(), Some(&raw));
-    let evidence = record.charge_evidence.as_ref().expect("charge evidence");
+    assert_eq!(evidence(record)?.charge_micro_usd, Some(438));
+    assert_eq!(
+        record.charge_status,
+        super::pricing::ChargeStatus::Computed.as_str()
+    );
+    assert_eq!(
+        record.raw_usage_json.as_deref(),
+        Some(raw.to_string().as_str())
+    );
+    let evidence = evidence(record)?;
     assert_eq!(evidence.charge_micro_usd, Some(438));
     assert!(evidence.pricing_version.starts_with("sha256:"));
     Ok(())
@@ -450,568 +446,27 @@ async fn recorder_marks_charge_unknown_when_pricing_is_missing() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
     let empty = Arc::new(PricingTable::new());
-    let recorder = MeteringRecorder::new(store.clone(), empty.clone());
+    let recorder = MeteringRecorder::new(store.clone());
     let mut settlement = ctx("k1", 10, 5);
     freeze_tariff(&mut settlement, &empty);
     recorder.record(&mut settlement).await?;
-    let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
-    assert_eq!(spend, 0);
+    let spend = store
+        .get_enforceable_spend("k1", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(spend, None);
     // The row was still written — count is 1.
-    let count = store.get_request_count("k1", TimeWindow::ThisMonth).await?;
+    let count = stored_rows(&store).await?.len();
     assert_eq!(count, 1);
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    assert_eq!(records[0].final_charge_micro_usd, None);
+    let records = stored_rows(&store).await?;
+    assert_eq!(evidence(&records[0])?.charge_micro_usd, None);
     assert_eq!(
         records[0].charge_status,
-        super::pricing::ChargeStatus::Unknown
+        super::pricing::ChargeStatus::Unknown.as_str()
     );
     assert_eq!(
-        records[0]
-            .charge_evidence
-            .as_ref()
-            .and_then(|evidence| evidence.unknown_reason.as_deref()),
+        evidence(&records[0])?.unknown_reason.as_deref(),
         Some("pricing_not_found")
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn hosted_provider_rows_start_pending_authoritative_reconciliation() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("hosted", 10, 5);
-    settlement.provider_id = "bitrouter".to_string();
-
-    recorder.record(&mut settlement).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(
-        records[0].reconciliation_status,
-        super::ReconciliationStatus::Pending
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn computed_receipt_replaces_local_usage_only_when_charge_matches() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("reconcile", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("provider-a".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 2,
-            cache_read_tokens: 3,
-            cache_write_tokens: 5,
-            output_tokens: 7,
-            reasoning_tokens: 11,
-        },
-        final_charge_micro_usd: Some(164),
-    };
-    let prices = [super::UsagePriceOverride::parse(
-        "provider-a:model-a=2,3,5,7",
-    )?];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let record = &records[0];
-
-    assert_eq!(status, super::ReconciliationStatus::Computed);
-    assert_eq!(record.provider_id, "provider-a");
-    assert_eq!(record.model_id, "model-a");
-    assert_eq!(record.prompt_tokens, 10);
-    assert_eq!(record.completion_tokens, 18);
-    assert_eq!(record.final_charge_micro_usd, Some(164));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
-    assert_eq!(
-        record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::AuthoritativeReceipt
-    );
-    assert!(record.authoritative_receipt.is_some());
-    Ok(())
-}
-
-#[tokio::test]
-async fn product_reconciliation_accepts_authenticated_final_charge_without_price_injection()
--> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("product-receipt", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("provider-a".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 2,
-            cache_read_tokens: 3,
-            cache_write_tokens: 5,
-            output_tokens: 7,
-            reasoning_tokens: 11,
-        },
-        final_charge_micro_usd: Some(164),
-    };
-
-    let status = store.apply_authoritative_receipt_charge(&receipt).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let Some(evidence) = records[0].charge_evidence.as_ref() else {
-        return Err(crate::gateway::error::BitrouterError::internal(
-            "missing authoritative charge evidence",
-        ));
-    };
-
-    assert_eq!(status, super::ReconciliationStatus::Computed);
-    assert_eq!(records[0].final_charge_micro_usd, Some(164));
-    assert_eq!(
-        evidence.pricing_source,
-        super::pricing::PricingSource::AuthoritativeReceipt
-    );
-    assert!(
-        evidence
-            .effective_rates
-            .output_micro_usd_per_token
-            .is_none()
-    );
-    assert!(records[0].authoritative_receipt.is_some());
-    Ok(())
-}
-
-#[tokio::test]
-async fn computed_receipt_selects_the_unique_exact_price_candidate() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("candidate-price", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("provider-a".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 10,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            output_tokens: 5,
-            reasoning_tokens: 0,
-        },
-        final_charge_micro_usd: Some(25),
-    };
-    let prices = [
-        super::UsagePriceOverride::parse("provider-a:model-a=2,0,0,10")?,
-        super::UsagePriceOverride::parse("provider-a:model-a=1,0,0,3")?,
-    ];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let record = &records[0];
-
-    assert_eq!(status, super::ReconciliationStatus::Computed);
-    assert_eq!(record.final_charge_micro_usd, Some(25));
-    let rates = &record
-        .charge_evidence
-        .as_ref()
-        .expect("selected price evidence")
-        .effective_rates;
-    assert_eq!(rates.uncached_input_micro_usd_per_token, Some(1.0));
-    assert_eq!(rates.output_micro_usd_per_token, Some(3.0));
-    Ok(())
-}
-
-#[tokio::test]
-async fn computed_receipt_rejects_ambiguous_exact_price_candidates() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("ambiguous-price", 1, 0);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("provider-a".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 1,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            output_tokens: 0,
-            reasoning_tokens: 0,
-        },
-        final_charge_micro_usd: Some(1),
-    };
-    let prices = [
-        super::UsagePriceOverride::parse("provider-a:model-a=1.1,0,0,3")?,
-        super::UsagePriceOverride::parse("provider-a:model-a=1.4,0,0,5")?,
-    ];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let record = &records[0];
-
-    assert_eq!(status, super::ReconciliationStatus::Unknown);
-    assert_eq!(record.final_charge_micro_usd, None);
-    assert_eq!(
-        record
-            .charge_evidence
-            .as_ref()
-            .and_then(|evidence| evidence.unknown_reason.as_deref()),
-        Some("authoritative_pricing_ambiguous")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn authoritative_half_micro_charge_matches_provider_rounding() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("half-micro", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("ambient".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 1_137,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            output_tokens: 213,
-            reasoning_tokens: 45,
-        },
-        final_charge_micro_usd: Some(1_985),
-    };
-    let prices = [super::UsagePriceOverride::parse(
-        "ambient:model-a=0.84,0.84,0.84,3.99",
-    )?];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(status, super::ReconciliationStatus::Computed);
-    assert_eq!(records[0].final_charge_micro_usd, Some(1_985));
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::Computed
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn authoritative_equal_rate_buckets_share_one_multiplication() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("equal-rate-buckets", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("moonshotai/kimi-k2.7-code".to_string()),
-        provider_id: Some("ambient".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 1_972,
-            cache_read_tokens: 32_832,
-            cache_write_tokens: 0,
-            output_tokens: 485,
-            reasoning_tokens: 1,
-        },
-        final_charge_micro_usd: Some(31_175),
-    };
-    let prices = [super::UsagePriceOverride::parse(
-        "ambient:moonshotai/kimi-k2.7-code=0.84,0.84,0.84,3.99",
-    )?];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(status, super::ReconciliationStatus::Computed);
-    assert_eq!(records[0].provider_id, "ambient");
-    assert_eq!(records[0].final_charge_micro_usd, Some(31_175));
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::Computed
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn authoritative_charge_mismatch_fails_closed() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("mismatch", 1, 1);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::Computed,
-        model_id: Some("model-a".to_string()),
-        provider_id: Some("provider-a".to_string()),
-        usage: SettlementUsage {
-            uncached_input_tokens: 1,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            output_tokens: 1,
-            reasoning_tokens: 0,
-        },
-        final_charge_micro_usd: Some(999),
-    };
-    let prices = [super::UsagePriceOverride::parse(
-        "provider-a:model-a=2,0,0,10",
-    )?];
-
-    let status = store.apply_authoritative_receipt(&receipt, &prices).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(status, super::ReconciliationStatus::Unknown);
-    assert_eq!(records[0].reconciliation_status, status);
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::Unknown
-    );
-    assert_eq!(records[0].final_charge_micro_usd, None);
-    Ok(())
-}
-
-#[tokio::test]
-async fn not_charged_receipt_is_terminal_but_never_a_computed_zero() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("not-charged", 0, 0);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let receipt = SettlementReceipt {
-        request_id: settlement.request_id.clone(),
-        state: SettlementState::NotCharged,
-        model_id: None,
-        provider_id: None,
-        usage: SettlementUsage {
-            uncached_input_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            output_tokens: 0,
-            reasoning_tokens: 0,
-        },
-        final_charge_micro_usd: None,
-    };
-
-    let status = store.apply_authoritative_receipt(&receipt, &[]).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(status, super::ReconciliationStatus::NotCharged);
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::NotCharged
-    );
-    assert_eq!(records[0].final_charge_micro_usd, None);
-    Ok(())
-}
-
-#[tokio::test]
-async fn bounded_reconciler_fetches_only_selected_request_ids() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("poll", 0, 0);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/v1/requests/{}/settlement",
-            settlement.request_id
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "request_id": settlement.request_id,
-            "state": "computed",
-            "model_id": "model-a",
-            "provider_id": "provider-a",
-            "usage": {
-                "uncached_input_tokens": 1,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "output_tokens": 1,
-                "reasoning_tokens": 0
-            },
-            "final_charge_micro_usd": 12
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let client = SettlementClient::new(format!("{}/v1", server.uri()), "brk_test")
-        .expect("settlement client");
-    let prices = [super::UsagePriceOverride::parse(
-        "provider-a:model-a=2,0,0,10",
-    )?];
-
-    let summary = super::reconciliation::reconcile_requests(
-        &store,
-        &client,
-        &[settlement.request_id],
-        &prices,
-        3,
-        Duration::ZERO,
-    )
-    .await?;
-
-    assert!(summary.accepted());
-    assert_eq!(summary.computed, 1);
-    assert_eq!(summary.attempts, 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn bounded_reconciler_exhausts_absent_receipt_without_looping() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("absent", 0, 0);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
-            "error": "not_found",
-            "error_description": "request not found"
-        })))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let client = SettlementClient::new(format!("{}/v1", server.uri()), "brk_test")
-        .expect("settlement client");
-
-    let summary = super::reconciliation::reconcile_requests(
-        &store,
-        &client,
-        &[settlement.request_id],
-        &[],
-        2,
-        Duration::ZERO,
-    )
-    .await?;
-
-    assert!(!summary.accepted());
-    assert_eq!(summary.unknown, 1);
-    assert_eq!(summary.attempts, 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_later_reconciliation_invocation_retries_authoritative_unknown() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder =
-        MeteringRecorder::new(store.clone(), pricing()).with_reconciliation_provider("bitrouter");
-    let mut settlement = ctx("eventually-computed", 0, 0);
-    settlement.provider_id = "bitrouter".to_string();
-    recorder.record(&mut settlement).await?;
-
-    let unknown_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/v1/requests/{}/settlement",
-            settlement.request_id
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "request_id": settlement.request_id,
-            "state": "unknown",
-            "model_id": null,
-            "provider_id": null,
-            "usage": {
-                "uncached_input_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "output_tokens": 0,
-                "reasoning_tokens": 0
-            },
-            "final_charge_micro_usd": null
-        })))
-        .expect(1)
-        .mount(&unknown_server)
-        .await;
-    let unknown_client = SettlementClient::new(format!("{}/v1", unknown_server.uri()), "brk_test")
-        .expect("settlement client");
-    let first = super::reconciliation::reconcile_requests(
-        &store,
-        &unknown_client,
-        &[settlement.request_id.clone()],
-        &[],
-        3,
-        Duration::ZERO,
-    )
-    .await?;
-    assert_eq!(first.unknown, 1);
-    assert_eq!(first.attempts, 1);
-
-    let computed_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/v1/requests/{}/settlement",
-            settlement.request_id
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "request_id": settlement.request_id,
-            "state": "computed",
-            "model_id": "model-a",
-            "provider_id": "provider-a",
-            "usage": {
-                "uncached_input_tokens": 1,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "output_tokens": 1,
-                "reasoning_tokens": 0
-            },
-            "final_charge_micro_usd": 12
-        })))
-        .expect(1)
-        .mount(&computed_server)
-        .await;
-    let computed_client =
-        SettlementClient::new(format!("{}/v1", computed_server.uri()), "brk_test")
-            .expect("settlement client");
-    let prices = [super::UsagePriceOverride::parse(
-        "provider-a:model-a=2,0,0,10",
-    )?];
-    let second = super::reconciliation::reconcile_requests(
-        &store,
-        &computed_client,
-        &[settlement.request_id],
-        &prices,
-        3,
-        Duration::ZERO,
-    )
-    .await?;
-
-    assert!(second.accepted());
-    assert_eq!(second.computed, 1);
-    assert_eq!(second.attempts, 2);
     Ok(())
 }
 
@@ -1019,23 +474,20 @@ async fn a_later_reconciliation_invocation_retries_authoritative_unknown() -> Re
 async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     let mut settlement = ctx("unknown", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
 
     recorder.record(&mut settlement).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let records = stored_rows(&store).await?;
 
-    assert_eq!(records[0].final_charge_micro_usd, None);
+    assert_eq!(evidence(&records[0])?.charge_micro_usd, None);
     assert_eq!(
         records[0].charge_status,
-        super::pricing::ChargeStatus::Unknown
+        super::pricing::ChargeStatus::Unknown.as_str()
     );
     assert_eq!(
-        records[0]
-            .charge_evidence
-            .as_ref()
-            .and_then(|evidence| evidence.unknown_reason.as_deref()),
+        evidence(&records[0])?.unknown_reason.as_deref(),
         Some("usage_unavailable")
     );
     Ok(())
@@ -1045,7 +497,7 @@ async fn recorder_never_computes_zero_charge_from_unknown_usage() -> Result<()> 
 async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     let mut settlement = ctx("policy", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
@@ -1056,26 +508,31 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
     );
 
     recorder.record(&mut settlement).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let records = stored_rows(&store).await?;
     let record = records.first().expect("one usage record");
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported.as_str()
     );
     assert_eq!(
-        record.raw_usage.as_ref(),
-        Some(&serde_json::json!({
+        record
+            .raw_usage_json
+            .as_deref()
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw))
+            .transpose()
+            .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?,
+        Some(serde_json::json!({
             "error": { "code": "upstream_policy_violation" },
             "usage": null
         }))
     );
-    assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(evidence(record)?.charge_micro_usd, Some(0));
     assert_eq!(
-        record.error_code.as_deref(),
-        Some("upstream_policy_violation")
+        record.charge_status,
+        super::pricing::ChargeStatus::Computed.as_str()
     );
+    assert_eq!(record.error.as_deref(), Some("upstream_policy_violation"));
     let event = settlement
         .get_event::<MeteringSettlementEvent>()
         .expect("metering settlement event");
@@ -1092,7 +549,7 @@ async fn policy_rejection_records_sanitized_zero_usage_evidence() -> Result<()> 
 async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     let mut settlement = ctx("rate-limited", 0, 0);
     settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
     settlement.raw_usage = None;
@@ -1102,7 +559,7 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
     });
 
     recorder.record(&mut settlement).await?;
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    let records = stored_rows(&store).await?;
     let Some(record) = records.first() else {
         return Err(crate::gateway::error::BitrouterError::internal(
             "missing rate-limit usage record",
@@ -1111,105 +568,26 @@ async fn upstream_rate_limit_records_sanitized_zero_usage_evidence() -> Result<(
 
     assert_eq!(
         record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::ProviderReported
+        bitrouter_ai::types::UsageOrigin::ProviderReported.as_str()
     );
     assert_eq!(
-        record.raw_usage.as_ref(),
-        Some(&serde_json::json!({
+        record
+            .raw_usage_json
+            .as_deref()
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw))
+            .transpose()
+            .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))?,
+        Some(serde_json::json!({
             "error": { "code": "upstream_rate_limited" },
             "usage": null
         }))
     );
-    assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
-    assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_rate_limit_export_recovers_sanitized_usage_evidence() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
-    let mut settlement = ctx("legacy-rate-limit", 0, 0);
-    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
-    settlement.error = Some(crate::gateway::error::BitrouterError::UpstreamRateLimited {
-        retry_after: None,
-        detail: None,
-    });
-    recorder.record(&mut settlement).await?;
-    pool.execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        "UPDATE requests SET usage_origin='unknown', raw_usage_json=NULL, \
-         charge_status='unknown', charge_evidence_json=NULL, \
-         error='upstream_rate_limited' \
-         WHERE request_id='r-legacy-rate-limit-0-0'",
-    ))
-    .await
-    .map_err(|error| {
-        crate::gateway::error::BitrouterError::internal(format!(
-            "rewrite legacy rate-limit usage: {error}"
-        ))
-    })?;
-
-    let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-    let Some(record) = records.first() else {
-        return Err(crate::gateway::error::BitrouterError::internal(
-            "missing legacy rate-limit usage record",
-        ));
-    };
-
+    assert_eq!(evidence(record)?.charge_micro_usd, Some(0));
     assert_eq!(
-        record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::ProviderReported
+        record.charge_status,
+        super::pricing::ChargeStatus::Computed.as_str()
     );
-    assert_eq!(record.error_code.as_deref(), Some("upstream_rate_limited"));
-    assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
-    let mut settlement = ctx("legacy-policy", 0, 0);
-    settlement.usage_origin = bitrouter_ai::types::UsageOrigin::Unknown;
-    settlement.error = Some(
-        crate::gateway::error::BitrouterError::UpstreamPolicyViolation {
-            message: "legacy provider detail".to_string(),
-        },
-    );
-    recorder.record(&mut settlement).await?;
-    pool.execute(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        "UPDATE requests SET usage_origin='unknown', raw_usage_json=NULL, \
-         charge_status='unknown', charge_evidence_json=NULL, \
-         error='upstream content policy violation' \
-         WHERE request_id='r-legacy-policy-0-0'",
-    ))
-    .await
-    .unwrap();
-
-    let mut records = store.export_usage(TimeWindow::ThisMonth).await?;
-    let price = super::UsagePriceOverride::parse("openai:gpt-5=2,10")?;
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-    let record = records.first().expect("one usage record");
-
-    assert_eq!(
-        record.usage_origin,
-        bitrouter_ai::types::UsageOrigin::ProviderReported
-    );
-    assert_eq!(
-        record.error_code.as_deref(),
-        Some("upstream_policy_violation")
-    );
-    assert!(record.raw_usage.is_some());
-    assert_eq!(record.final_charge_micro_usd, Some(0));
-    assert_eq!(record.charge_status, super::pricing::ChargeStatus::Computed);
+    assert_eq!(record.error.as_deref(), Some("upstream_rate_limited"));
     Ok(())
 }
 
@@ -1217,18 +595,14 @@ async fn legacy_policy_rejection_export_recovers_sanitized_usage_evidence() -> R
 async fn spend_aggregates_across_requests() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     recorder.record(&mut ctx("k1", 10, 5)).await?; // 70
     recorder.record(&mut ctx("k1", 100, 0)).await?; // 200
     recorder.record(&mut ctx("k1", 0, 50)).await?; // 500
-    let spend = store.get_spend("k1", TimeWindow::ThisMonth).await?;
-    assert_eq!(spend, 70 + 200 + 500);
-    assert_eq!(
-        store
-            .get_enforceable_total_spend(TimeWindow::ThisMonth)
-            .await?,
-        Some(70 + 200 + 500)
-    );
+    let spend = store
+        .get_enforceable_spend("k1", TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(spend, Some(70 + 200 + 500));
     Ok(())
 }
 
@@ -1236,11 +610,21 @@ async fn spend_aggregates_across_requests() -> Result<()> {
 async fn spend_isolates_by_api_key() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     recorder.record(&mut ctx("k1", 10, 5)).await?;
     recorder.record(&mut ctx("k2", 100, 0)).await?;
-    assert_eq!(store.get_spend("k1", TimeWindow::ThisMonth).await?, 70);
-    assert_eq!(store.get_spend("k2", TimeWindow::ThisMonth).await?, 200);
+    assert_eq!(
+        store
+            .get_enforceable_spend("k1", TimeWindow::ThisMonth)
+            .await?,
+        Some(70)
+    );
+    assert_eq!(
+        store
+            .get_enforceable_spend("k2", TimeWindow::ThisMonth)
+            .await?,
+        Some(200)
+    );
     Ok(())
 }
 
@@ -1328,14 +712,24 @@ async fn old_metering_store_is_refused_without_mutation_and_current_baseline_rec
     let current = db::connect("sqlite::memory:").await?;
     db::run_migrations(&current).await?;
     let store = MeteringStore::new(current.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     recorder.record(&mut ctx("current", 10, 5)).await?;
-    assert_eq!(store.get_spend("current", TimeWindow::ThisMonth).await?, 70);
+    assert_eq!(
+        store
+            .get_enforceable_spend("current", TimeWindow::ThisMonth)
+            .await?,
+        Some(70)
+    );
     db::run_migrations(&current).await?;
-    assert_eq!(store.get_spend("current", TimeWindow::ThisMonth).await?, 70);
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
+    assert_eq!(
+        store
+            .get_enforceable_spend("current", TimeWindow::ThisMonth)
+            .await?,
+        Some(70)
+    );
+    let records = stored_rows(&store).await?;
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].final_charge_micro_usd, Some(70));
+    assert_eq!(evidence(&records[0])?.charge_micro_usd, Some(70));
     current.close().await?;
     Ok(())
 }
@@ -1344,249 +738,20 @@ async fn old_metering_store_is_refused_without_mutation_and_current_baseline_rec
 async fn failed_request_still_records_with_error() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     let mut c = ctx("k1", 5, 0);
     c.error = Some(crate::gateway::error::BitrouterError::internal("boom"));
     recorder.record(&mut c).await?;
-    let count = store.get_request_count("k1", TimeWindow::ThisMonth).await?;
+    let count = stored_rows(&store).await?.len();
     assert_eq!(count, 1, "failed requests still get a metering row");
     Ok(())
-}
-
-#[tokio::test]
-async fn usage_export_records_are_cloud_usage_compatible() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
-
-    recorder.record(&mut ctx("k1", 10, 5)).await?;
-    let mut failed = ctx("k1", 20, 1);
-    failed.request_id = "r-k1-failed".to_string();
-    failed.error = Some(crate::gateway::error::BitrouterError::internal(
-        "upstream timeout",
-    ));
-    recorder.record(&mut failed).await?;
-
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-
-    assert_eq!(records.len(), 2);
-    let first = records
-        .iter()
-        .find(|record| record.request_id.as_deref() == Some("r-k1-10-5"))
-        .expect("successful request exported");
-    assert_eq!(first.id.as_deref(), Some("r-k1-10-5"));
-    assert_eq!(first.provider_id, "openai");
-    assert_eq!(first.model_id, "gpt-5");
-    assert_eq!(first.prompt_tokens, 10);
-    assert_eq!(first.completion_tokens, 5);
-    assert_eq!(first.final_charge_micro_usd, Some(70));
-    assert_eq!(first.status.as_deref(), Some("completed"));
-
-    let failed = records
-        .iter()
-        .find(|record| record.request_id.as_deref() == Some("r-k1-failed"))
-        .expect("failed request exported");
-    assert_eq!(failed.prompt_tokens, 20);
-    assert_eq!(failed.completion_tokens, 1);
-    assert_eq!(failed.final_charge_micro_usd, Some(50));
-    assert_eq!(failed.status.as_deref(), Some("failed"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn usage_export_writes_cloud_usage_compatible_jsonl() -> anyhow::Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
-    recorder.record(&mut ctx("k1", 12, 3)).await?;
-
-    let path = std::env::temp_dir().join(format!(
-        "bitrouter-metering-usage-{}.jsonl",
-        uuid::Uuid::new_v4()
-    ));
-    let records = store.export_usage(TimeWindow::ThisMonth).await?;
-    super::store::MeteringUsageRecord::write_jsonl(&path, &records)?;
-
-    let parsed: Vec<super::store::MeteringUsageRecord> = std::fs::read_to_string(&path)?
-        .lines()
-        .map(serde_json::from_str)
-        .collect::<std::result::Result<_, _>>()?;
-    assert_eq!(parsed.len(), 1);
-    assert_eq!(parsed[0].request_id.as_deref(), Some("r-k1-12-3"));
-    assert_eq!(parsed[0].final_charge_micro_usd, Some(54));
-
-    let _ = std::fs::remove_file(path);
-    Ok(())
-}
-
-#[test]
-fn usage_price_override_imputes_missing_charges() {
-    let mut records = vec![super::store::MeteringUsageRecord {
-        id: Some("r1".to_string()),
-        request_id: Some("r1".to_string()),
-        provider_id: "openai-codex".to_string(),
-        model_id: "gpt-5.5".to_string(),
-        prompt_tokens: 21,
-        completion_tokens: 17,
-        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
-        raw_usage: Some(serde_json::json!({
-            "input_tokens": 21,
-            "output_tokens": 17
-        })),
-        final_charge_micro_usd: Some(0),
-        status: Some("completed".to_string()),
-        ..Default::default()
-    }];
-    let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
-
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-
-    assert_eq!(records[0].final_charge_micro_usd, Some(530));
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::Computed
-    );
-    assert_eq!(
-        records[0]
-            .charge_evidence
-            .as_ref()
-            .map(|evidence| evidence.pricing_source),
-        Some(super::pricing::PricingSource::Override)
-    );
-}
-
-#[test]
-fn usage_price_override_refuses_unknown_usage() {
-    let mut records = vec![super::store::MeteringUsageRecord {
-        id: Some("failed".to_string()),
-        request_id: Some("failed".to_string()),
-        provider_id: "openai-codex".to_string(),
-        model_id: "gpt-5.5".to_string(),
-        status: Some("failed".to_string()),
-        usage_origin: bitrouter_ai::types::UsageOrigin::Unknown,
-        raw_usage: None,
-        ..Default::default()
-    }];
-    let original = records.clone();
-    let price = super::UsagePriceOverride::parse("openai-codex:gpt-5.5=5,25").unwrap();
-
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-
-    assert_eq!(records, original);
-}
-
-#[test]
-fn price_override_preserves_authoritative_reconciliation_records() -> Result<()> {
-    let mut records = [
-        super::ReconciliationStatus::Pending,
-        super::ReconciliationStatus::NotCharged,
-        super::ReconciliationStatus::Unknown,
-    ]
-    .into_iter()
-    .map(|reconciliation_status| super::store::MeteringUsageRecord {
-        provider_id: "mock-provider".to_string(),
-        model_id: "mock-weak".to_string(),
-        prompt_tokens: 12,
-        completion_tokens: 5,
-        charge_status: if reconciliation_status == super::ReconciliationStatus::NotCharged {
-            super::pricing::ChargeStatus::NotCharged
-        } else {
-            super::pricing::ChargeStatus::Unknown
-        },
-        reconciliation_status,
-        ..Default::default()
-    })
-    .collect::<Vec<_>>();
-    let original = records.clone();
-    let price = super::UsagePriceOverride::parse("mock-provider:mock-weak=1,1")?;
-
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-
-    assert_eq!(records, original);
-    Ok(())
-}
-
-#[test]
-fn four_rate_override_prices_cache_buckets() {
-    let mut records = vec![super::store::MeteringUsageRecord {
-        provider_id: "anthropic".to_string(),
-        model_id: "claude-test".to_string(),
-        prompt_tokens: 100,
-        completion_tokens: 30,
-        reasoning_tokens: 10,
-        cache_read_tokens: 40,
-        cache_write_tokens: 20,
-        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
-        raw_usage: Some(serde_json::json!({
-            "input_tokens": 100,
-            "output_tokens": 30,
-            "cache_read_tokens": 40,
-            "cache_write_tokens": 20
-        })),
-        ..Default::default()
-    }];
-    let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,0.2,2.5,10")
-        .expect("four-rate override");
-
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-
-    assert_eq!(records[0].final_charge_micro_usd, Some(438));
-    assert_eq!(records[0].uncached_input_tokens, 40);
-    assert_eq!(records[0].output_tokens, 20);
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::Computed
-    );
-}
-
-#[test]
-fn legacy_two_rate_override_refuses_cached_usage() {
-    let mut records = vec![super::store::MeteringUsageRecord {
-        provider_id: "anthropic".to_string(),
-        model_id: "claude-test".to_string(),
-        prompt_tokens: 100,
-        completion_tokens: 30,
-        cache_read_tokens: 40,
-        usage_origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
-        raw_usage: Some(serde_json::json!({
-            "input_tokens": 100,
-            "output_tokens": 30,
-            "cache_read_tokens": 40
-        })),
-        ..Default::default()
-    }];
-    let price = super::UsagePriceOverride::parse("anthropic:claude-test=2,10")
-        .expect("legacy override remains parseable");
-
-    super::store::MeteringUsageRecord::apply_price_overrides(&mut records, &[price]);
-
-    assert_eq!(records[0].final_charge_micro_usd, None);
-    assert_eq!(
-        records[0].charge_status,
-        super::pricing::ChargeStatus::LegacyUnknown
-    );
-}
-
-#[test]
-fn price_override_rejects_negative_or_non_finite_rates() {
-    for value in [
-        "anthropic:claude-test=-1,0.2,2.5,10",
-        "anthropic:claude-test=2,NaN,2.5,10",
-        "anthropic:claude-test=2,0.2,inf,10",
-    ] {
-        assert!(
-            super::UsagePriceOverride::parse(value).is_err(),
-            "override should reject {value}"
-        );
-    }
 }
 
 #[tokio::test]
 async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     // Distinct request ids (ctx keys them off the token counts) settled in
     // ascending order, so "newest first" is observable.
     for n in 1..=5u64 {
@@ -1594,12 +759,12 @@ async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<(
     }
 
     let rows = store
-        .recent_requests(TimeWindow::ThisMonth, 3, None)
-        .await?;
+        .recent_requests_filtered(TimeWindow::ThisMonth, None, None, 3)
+        .await?
+        .rows;
     assert_eq!(rows.len(), 3, "the limit bounds what the view ever loads");
 
-    // Rows carry exactly the three fields `export_usage` drops — the reason
-    // this query exists at all.
+    // Operator rows include timestamps, latency, and the estimated charge.
     let first = &rows[0];
     assert!(
         !first.created_at.is_empty(),
@@ -1617,8 +782,9 @@ async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<(
     // `created_at` that a fast test run produces, which the request_id tiebreak
     // provides.
     let all = store
-        .recent_requests(TimeWindow::ThisMonth, 100, None)
-        .await?;
+        .recent_requests_filtered(TimeWindow::ThisMonth, None, None, 100)
+        .await?
+        .rows;
     assert_eq!(all.len(), 5);
     let mut sorted = all.clone();
     sorted.sort_by(|a, b| (&b.created_at, &b.request_id).cmp(&(&a.created_at, &a.request_id)));
@@ -1631,7 +797,7 @@ async fn filtered_request_page_and_summary_apply_the_same_bounds_before_limit() 
 {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
 
     for (request_id, model, provider) in [
         ("matched-old", "gpt-5", "openai"),
@@ -1695,7 +861,7 @@ async fn filtered_request_page_and_summary_apply_the_same_bounds_before_limit() 
 async fn get_total_rate_counts_every_caller_not_one_key() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     // Two distinct callers — the shape of a default `skip_auth` install that
     // also serves a real key.
     recorder.record(&mut ctx("local", 10, 5)).await?;
@@ -1710,73 +876,25 @@ async fn get_total_rate_counts_every_caller_not_one_key() -> Result<()> {
     Ok(())
 }
 
-/// The acceptance criterion of #795: two concurrent launches on a default
-/// (`skip_auth: true`) install report **separate** spend.
-#[tokio::test]
-async fn concurrent_launches_report_separate_spend() -> Result<()> {
-    let pool = pool().await;
-    let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
-
-    // Both agents are the same synthetic `local` caller — that is the whole
-    // difficulty. Only the launch tag distinguishes them.
-    let mut a = ctx("local", 10, 5);
-    a.caller = CallerContext::local_launch("brl_aaa");
-    let mut b = ctx("local", 20, 7);
-    b.caller = CallerContext::local_launch("brl_bbb");
-    // A third caller with no launch at all: a direct API client, an editor
-    // plugin, a spawned sub-agent. It must land in neither bucket.
-    let mut untagged = ctx("local", 100, 100);
-    untagged.caller = CallerContext::local();
-
-    recorder.record(&mut a).await?;
-    recorder.record(&mut b).await?;
-    recorder.record(&mut untagged).await?;
-
-    let a_spend = store
-        .spend_summary_for_launch("brl_aaa", TimeWindow::ThisMonth)
-        .await?;
-    let b_spend = store
-        .spend_summary_for_launch("brl_bbb", TimeWindow::ThisMonth)
-        .await?;
-
-    // 10×2 + 5×10 = 70 µ$ ; 20×2 + 7×10 = 110 µ$
-    assert_eq!(a_spend.requests, 1);
-    assert_eq!(a_spend.spend_micro_usd, 70);
-    assert_eq!(b_spend.requests, 1);
-    assert_eq!(b_spend.spend_micro_usd, 110);
-
-    // Daemon-wide totals are unchanged by the new dimension — the existing
-    // queries must keep seeing everything, including the untagged row.
-    let all = store.spend_summary(TimeWindow::ThisMonth).await?;
-    assert_eq!(all.requests, 3);
-    assert_eq!(all.spend_micro_usd, 70 + 110 + (100 * 2 + 100 * 10));
-
-    // An unknown launch is empty, not an error and not everything.
-    let none = store
-        .spend_summary_for_launch("brl_never", TimeWindow::ThisMonth)
-        .await?;
-    assert_eq!(none.requests, 0);
-    assert_eq!(none.spend_micro_usd, 0);
-    Ok(())
-}
-
 #[tokio::test]
 async fn an_untagged_caller_is_still_recorded_just_not_attributed() -> Result<()> {
     // "Requests made outside a launch are still attributed sanely (not
     // silently dropped)" — the acceptance list's easiest item to break.
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     recorder.record(&mut ctx("brk_direct", 10, 5)).await?;
 
     assert_eq!(
-        store.get_spend("brk_direct", TimeWindow::ThisMonth).await?,
-        70
+        store
+            .get_enforceable_spend("brk_direct", TimeWindow::ThisMonth)
+            .await?,
+        Some(70)
     );
     let rows = store
-        .recent_requests(TimeWindow::ThisMonth, 10, None)
-        .await?;
+        .recent_requests_filtered(TimeWindow::ThisMonth, None, None, 10)
+        .await?
+        .rows;
     assert_eq!(rows.len(), 1, "the row exists");
     Ok(())
 }
@@ -1856,7 +974,7 @@ async fn record_attributed_as(
 async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
 
     // Two controllers whose harnesses happen to report the same session id.
     // Spec §5.5: neither may read the other's spend through it.
@@ -1911,7 +1029,7 @@ async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
 async fn one_caller_never_reads_another_callers_spend() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
 
     let same_claim = |request_id: &str| {
         acp_identity(
@@ -1951,7 +1069,7 @@ async fn one_caller_never_reads_another_callers_spend() -> Result<()> {
 async fn child_agent_spend_counts_toward_its_root_session() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
 
     // Claude (§4.2): the ACP id is the native session id; a subagent keeps
     // it as root and adds its own agent id.
@@ -2051,7 +1169,7 @@ async fn child_agent_spend_counts_toward_its_root_session() -> Result<()> {
 async fn unattributed_rows_never_match_a_session() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
 
     // No identity at all: a direct API client.
     recorder.record(&mut ctx("direct", 100, 100)).await?;
@@ -2090,7 +1208,7 @@ async fn unattributed_rows_never_match_a_session() -> Result<()> {
 async fn acp_session_spend_honours_the_custom_window_end() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
-    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let recorder = MeteringRecorder::new(store.clone());
     record_attributed(
         &recorder,
         "windowed",
@@ -2129,4 +1247,25 @@ async fn acp_session_spend_honours_the_custom_window_end() -> Result<()> {
         .await?;
     assert_eq!((included.requests, included.spend_micro_usd), (1, 70));
     Ok(())
+}
+
+pub(super) async fn stored_rows(
+    store: &MeteringStore,
+) -> Result<Vec<super::entities::requests::Model>> {
+    use sea_orm::{EntityTrait, QueryOrder};
+    super::entities::requests::Entity::find()
+        .order_by_asc(super::entities::requests::Column::RequestId)
+        .all(&store.db)
+        .await
+        .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))
+}
+
+pub(super) fn evidence(
+    row: &super::entities::requests::Model,
+) -> Result<super::pricing::ChargeEvidence> {
+    let json = row.charge_evidence_json.as_deref().ok_or_else(|| {
+        crate::gateway::error::BitrouterError::internal("missing persisted charge evidence")
+    })?;
+    serde_json::from_str(json)
+        .map_err(|error| crate::gateway::error::BitrouterError::internal(error.to_string()))
 }

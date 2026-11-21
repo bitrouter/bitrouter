@@ -620,7 +620,8 @@ impl ContinuationRegistry {
         }
     }
 
-    pub fn database(&self) -> &DatabaseConnection {
+    #[cfg(test)]
+    fn database(&self) -> &DatabaseConnection {
         &self.inner.db
     }
 
@@ -1584,7 +1585,9 @@ impl ContinuationRegistry {
         Ok(updated_row)
     }
 
-    pub async fn bind(
+    /// Seed an already-published continuation for lifecycle fixtures.
+    #[cfg(test)]
+    async fn bind_fixture(
         &self,
         owner_user_id: &str,
         gateway_request_id: &str,
@@ -1601,7 +1604,7 @@ impl ContinuationRegistry {
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
             return self
-                .shared_bind(
+                .shared_bind_fixture(
                     owner_user_id,
                     gateway_request_id,
                     ContinuationBinding {
@@ -2198,24 +2201,12 @@ pub(crate) struct ContinuationRequestPlan {
 struct RejectContinuationPreflight(&'static str);
 
 impl ContinuationRuntime {
-    pub fn new(registry: ContinuationRegistry) -> Self {
-        Self {
-            tenant: None,
-            registry,
-            auth_appliers: AuthAppliers::new(),
-        }
-    }
-
     pub fn with_auth_appliers(registry: ContinuationRegistry, auth_appliers: AuthAppliers) -> Self {
         Self {
             tenant: None,
             registry,
             auth_appliers,
         }
-    }
-
-    pub fn registry(&self) -> &ContinuationRegistry {
-        &self.registry
     }
 
     fn validate_context_rebuild(&self, ctx: &PipelineContext) -> PipelineResult<()> {
@@ -3271,7 +3262,8 @@ mod tests {
     async fn server_nonstream_handler_drop_settles_billing_without_publishing_continuation()
     -> anyhow::Result<()> {
         let registry = registry(43).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let usage = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3339,7 +3331,7 @@ mod tests {
             .single()
             .ok_or_else(|| anyhow::anyhow!("test timestamp is invalid"))?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner-a",
                 "gateway-request-a",
                 "resp-provider-secret",
@@ -3427,7 +3419,7 @@ mod tests {
         let gateway_id = encode_gateway_continuation_id("v1-gateway")?;
         let now = Utc::now();
         registry
-            .bind(
+            .bind_fixture(
                 "v1-owner",
                 &gateway_id,
                 "v1-provider-response",
@@ -3478,7 +3470,7 @@ mod tests {
         assert_eq!(resolved.effective_model, None);
         assert_eq!(resolved.causal_prefix_commitment, None);
 
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut ctx = continuation_context_for_owner(&gateway_id, "v1-owner");
         PreRequestHook::check(&runtime, &mut ctx).await?;
         assert!(
@@ -3499,7 +3491,7 @@ mod tests {
         let registry = registry(78).await?;
         let gateway_id = encode_gateway_continuation_id("current-without-commitment")?;
         registry
-            .bind(
+            .bind_fixture(
                 "current-owner",
                 &gateway_id,
                 "current-provider-response",
@@ -3508,7 +3500,7 @@ mod tests {
                 Utc::now(),
             )
             .await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut ctx = continuation_context_for_owner_with_messages(
             &gateway_id,
             "current-owner",
@@ -3539,7 +3531,7 @@ mod tests {
         let gateway_id = encode_gateway_continuation_id("legacy-gateway")?;
         let now = Utc::now();
         registry
-            .bind(
+            .bind_fixture(
                 "legacy-owner",
                 &gateway_id,
                 "legacy-provider-response",
@@ -3581,7 +3573,7 @@ mod tests {
         assert_eq!(resolved.provider_response_id, "legacy-provider-response");
         assert_eq!(resolved.effective_model, None);
 
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut cross_provider = target("other-credential");
         cross_provider.provider_name = "other".into();
         for candidate in [target("legacy-credential"), cross_provider] {
@@ -3610,7 +3602,7 @@ mod tests {
         let bound_target = target("credential");
         let authority = static_authority("credential");
         let bind = || {
-            registry.bind(
+            registry.bind_fixture(
                 "owner",
                 "gateway",
                 "resp-same",
@@ -3623,7 +3615,7 @@ mod tests {
         left?;
         right?;
         let collision = registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "gateway",
                 "resp-different",
@@ -3651,7 +3643,7 @@ mod tests {
         let tamper_registry = registry(10).await?;
         let now = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
         tamper_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "gateway-tamper",
                 "resp-secret",
@@ -3675,7 +3667,7 @@ mod tests {
 
         let expiry_registry = registry(11).await?;
         expiry_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "gateway-expiry",
                 "resp-expiry",
@@ -3724,7 +3716,7 @@ mod tests {
         let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
         let maintenance_at = created_at + TimeDelta::try_days(31).unwrap();
         stale_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "scrub-race",
                 "provider-old",
@@ -3752,7 +3744,7 @@ mod tests {
             .exec(rebinding_registry.database())
             .await?;
         rebinding_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "scrub-race",
                 "provider-new",
@@ -3783,7 +3775,7 @@ mod tests {
         let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
         let maintenance_at = created_at + TimeDelta::try_days(31).unwrap();
         stale_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "batch-scrub-race",
                 "provider-old",
@@ -3807,7 +3799,7 @@ mod tests {
             .exec(rebinding_registry.database())
             .await?;
         rebinding_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "batch-scrub-race",
                 "provider-new",
@@ -3839,7 +3831,7 @@ mod tests {
         let created_at = Utc.with_ymd_and_hms(2026, 8, 2, 0, 0, 0).single().unwrap();
         let maintenance_at = created_at + TimeDelta::try_days(61).unwrap();
         stale_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "purge-race",
                 "provider-old",
@@ -3863,7 +3855,7 @@ mod tests {
             .exec(rebinding_registry.database())
             .await?;
         rebinding_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "purge-race",
                 "provider-new",
@@ -3895,7 +3887,8 @@ mod tests {
     async fn publication_state_tamper_cannot_turn_provisional_into_resolvable_active()
     -> anyhow::Result<()> {
         let registry = registry(49).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("state-tamper", 407, "provider-state-secret");
         runtime.finalize(&attempt).await?;
         registry
@@ -3933,7 +3926,7 @@ mod tests {
             ("generation-b", "provider-generation-b"),
         ] {
             registry
-                .bind(
+                .bind_fixture(
                     "owner",
                     gateway_id,
                     provider_id,
@@ -3988,7 +3981,7 @@ mod tests {
         let now = Utc::now();
         for gateway_id in ["instance-tamper", "lease-tamper"] {
             registry
-                .bind(
+                .bind_fixture(
                     "owner",
                     gateway_id,
                     &format!("provider-{gateway_id}"),
@@ -4086,7 +4079,7 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("prior-request")?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 &public_id,
                 "resp-final",
@@ -4095,7 +4088,7 @@ mod tests {
                 now,
             )
             .await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut selected_tier = bound.clone();
         selected_tier.service_id = "gpt-5-strong".into();
         let mut chain = vec![selected_tier.clone()];
@@ -4115,7 +4108,7 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("prior-request")?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 &public_id,
                 "resp-final",
@@ -4124,7 +4117,7 @@ mod tests {
                 Utc::now(),
             )
             .await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
 
         let mut endpoint_changed = bound.clone();
         endpoint_changed.api_base = "https://changed.example/v1".into();
@@ -4156,7 +4149,7 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("mixed-prior-request")?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 &public_id,
                 "resp-final",
@@ -4190,7 +4183,7 @@ mod tests {
         let bound = target("credential-a");
         let public_id = encode_gateway_continuation_id("opaque-authority-prior-request")?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 &public_id,
                 "resp-final",
@@ -4315,7 +4308,8 @@ mod tests {
     #[tokio::test]
     async fn missing_gateway_fails_closed_but_native_compatibility_is_pinned() -> anyhow::Result<()>
     {
-        let runtime = ContinuationRuntime::new(registry(13).await?);
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry(13).await?, AuthAppliers::new());
         let mut missing_chain = vec![target("first"), target("fallback")];
         let missing_public = encode_gateway_continuation_id("missing-request")?;
         let error = runtime
@@ -4337,7 +4331,8 @@ mod tests {
 
     #[tokio::test]
     async fn native_continuation_does_not_guess_an_auto_routed_provider() -> anyhow::Result<()> {
-        let runtime = ContinuationRuntime::new(registry(76).await?);
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry(76).await?, AuthAppliers::new());
         let mut auto = continuation_context("provider-native-arbitrary-format");
         auto.set_model("@auto");
 
@@ -4361,7 +4356,8 @@ mod tests {
     #[tokio::test]
     async fn required_finalizer_publishes_native_mapping() -> anyhow::Result<()> {
         let registry = registry(14).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut finalization = finalization_context("gateway-result", 1, "resp-provider-final");
         finalization.causal_prefix_commitment =
             CausalPrefixCommitment::parse(&format!("sha256:{}", "cd".repeat(32)));
@@ -4452,7 +4448,7 @@ mod tests {
         let registry = registry(39).await?;
         let public_id = encode_gateway_continuation_id("existing-active")?;
         registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 &public_id,
                 "provider-existing",
@@ -4461,7 +4457,8 @@ mod tests {
                 Utc::now(),
             )
             .await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("existing-active", 101, "provider-existing");
         runtime.finalize(&attempt).await?;
         runtime.rollback(&attempt).await?;
@@ -4476,7 +4473,8 @@ mod tests {
     async fn second_concurrent_attempt_fails_without_disturbing_first_publication()
     -> anyhow::Result<()> {
         let registry = registry(40).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let first = finalization_context("shared-request", 201, "provider-shared");
         let second = finalization_context("shared-request", 202, "provider-shared");
         runtime.finalize(&first).await?;
@@ -4503,7 +4501,8 @@ mod tests {
     #[tokio::test]
     async fn all_concurrent_attempts_cancel_delete_only_their_new_row() -> anyhow::Result<()> {
         let registry = registry(43).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let first = finalization_context("all-cancelled", 211, "provider-cancelled");
         let second = finalization_context("all-cancelled", 212, "provider-cancelled");
         runtime.finalize(&first).await?;
@@ -4563,7 +4562,8 @@ mod tests {
     async fn cancelled_provisional_mapping_remains_missing_after_registry_restart()
     -> anyhow::Result<()> {
         let registry = registry(41).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("restart-pending", 301, "provider-restart");
         runtime.finalize(&attempt).await?;
         runtime.rollback(&attempt).await?;
@@ -4585,7 +4585,8 @@ mod tests {
     #[tokio::test]
     async fn provisional_row_is_missing_even_without_process_local_marker() -> anyhow::Result<()> {
         let registry = registry(44).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("durable-provisional", 401, "provider-provisional");
         runtime.finalize(&attempt).await?;
 
@@ -4615,7 +4616,7 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, observer_registry) =
             independent_file_registries(53).await?;
-        let runtime = ContinuationRuntime::new(owner_registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(owner_registry, AuthAppliers::new());
         let attempt = finalization_context("cross-registry-ready", 410, "provider-ready");
         runtime.finalize(&attempt).await?;
 
@@ -4663,7 +4664,7 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, observer_registry) =
             independent_file_registries(63).await?;
-        let runtime = ContinuationRuntime::new(owner_registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(owner_registry, AuthAppliers::new());
         let attempt = finalization_context("cross-registry-drop", 419, "provider-early-drop");
         runtime.finalize(&attempt).await?;
 
@@ -4703,7 +4704,7 @@ mod tests {
     async fn dropped_delivery_after_ack_compensates_owned_activation() -> anyhow::Result<()> {
         let (_directory, owner_registry, observer_registry) =
             independent_file_registries(54).await?;
-        let runtime = ContinuationRuntime::new(owner_registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(owner_registry, AuthAppliers::new());
         let attempt = finalization_context("drop-after-ack", 411, "provider-drop-after-ack");
         runtime.finalize(&attempt).await?;
         let public_id = encode_gateway_continuation_id("drop-after-ack")?;
@@ -4748,7 +4749,7 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, observer_registry) =
             independent_file_registries(55).await?;
-        let runtime = ContinuationRuntime::new(owner_registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(owner_registry, AuthAppliers::new());
         let attempt = finalization_context("drop-after-active", 412, "provider-drop-after-active");
         runtime.finalize(&attempt).await?;
         let public_id = encode_gateway_continuation_id("drop-after-active")?;
@@ -4799,7 +4800,7 @@ mod tests {
     {
         let (_directory, owner_registry, observer_registry) =
             independent_file_registries(56).await?;
-        let runtime = ContinuationRuntime::new(owner_registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(owner_registry, AuthAppliers::new());
         let attempt = finalization_context("terminal-committed", 413, "provider-committed");
         runtime.finalize(&attempt).await?;
         let public_id = encode_gateway_continuation_id("terminal-committed")?;
@@ -4844,8 +4845,10 @@ mod tests {
     async fn acknowledged_attempt_never_activates_a_rebound_foreign_generation()
     -> anyhow::Result<()> {
         let (_directory, first_registry, second_registry) = independent_file_registries(62).await?;
-        let first_runtime = ContinuationRuntime::new(first_registry.clone());
-        let second_runtime = ContinuationRuntime::new(second_registry.clone());
+        let first_runtime =
+            ContinuationRuntime::with_auth_appliers(first_registry.clone(), AuthAppliers::new());
+        let second_runtime =
+            ContinuationRuntime::with_auth_appliers(second_registry.clone(), AuthAppliers::new());
         let first = finalization_context("ack-rebind", 417, "provider-ack-rebind");
         let second = finalization_context("ack-rebind", 418, "provider-ack-rebind");
         first_runtime.finalize(&first).await?;
@@ -4911,7 +4914,8 @@ mod tests {
     async fn failed_compensation_keeps_retryable_row_ownership_and_visibility_mask()
     -> anyhow::Result<()> {
         let registry = registry(45).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("rollback-retry", 402, "provider-rollback-retry");
         runtime.finalize(&attempt).await?;
         registry
@@ -4966,7 +4970,8 @@ mod tests {
     async fn active_compensation_failure_remains_owned_for_outer_rollback_retry()
     -> anyhow::Result<()> {
         let registry = registry(46).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("active-rollback-retry", 403, "provider-active-retry");
         runtime.finalize(&attempt).await?;
         registry
@@ -5031,7 +5036,8 @@ mod tests {
     #[tokio::test]
     async fn demoted_delete_failure_remains_owned_for_outer_rollback_retry() -> anyhow::Result<()> {
         let registry = registry(51).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("demoted-delete-retry", 408, "provider-delete-retry");
         runtime.finalize(&attempt).await?;
         registry
@@ -5079,7 +5085,8 @@ mod tests {
     #[tokio::test]
     async fn direct_bind_cannot_promote_another_attempts_provisional_row() -> anyhow::Result<()> {
         let registry = registry(47).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("foreign-provisional", 404, "provider-provisional");
         runtime.finalize(&attempt).await?;
 
@@ -5090,7 +5097,7 @@ mod tests {
             10,
         )?;
         independent
-            .bind(
+            .bind_fixture(
                 "owner",
                 &encode_gateway_continuation_id("foreign-provisional")?,
                 "provider-provisional",
@@ -5125,8 +5132,10 @@ mod tests {
             30,
             10,
         )?;
-        let first_runtime = ContinuationRuntime::new(first_registry.clone());
-        let second_runtime = ContinuationRuntime::new(second_registry);
+        let first_runtime =
+            ContinuationRuntime::with_auth_appliers(first_registry.clone(), AuthAppliers::new());
+        let second_runtime =
+            ContinuationRuntime::with_auth_appliers(second_registry, AuthAppliers::new());
         let first_attempt = finalization_context("independent-owner", 405, "provider-independent");
         let second_attempt = finalization_context("independent-owner", 406, "provider-independent");
         first_runtime.finalize(&first_attempt).await?;
@@ -5165,7 +5174,8 @@ mod tests {
     async fn duplicate_delivery_attempt_id_never_overwrites_existing_ownership()
     -> anyhow::Result<()> {
         let registry = registry(52).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let first = finalization_context("attempt-owner-a", 409, "provider-attempt-a");
         let second = finalization_context("attempt-owner-b", 409, "provider-attempt-b");
         runtime.finalize(&first).await?;
@@ -5223,7 +5233,8 @@ mod tests {
             ),
         ] {
             let registry = registry(70 + index).await?;
-            let runtime = ContinuationRuntime::new(registry.clone());
+            let runtime =
+                ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
             let target = target("credential");
             let routes = Arc::new(StaticRoutingTable::new());
             routes.insert("gpt-5", vec![target.clone()]);
@@ -5333,7 +5344,8 @@ mod tests {
     async fn pipeline_late_duplicate_rollback_preserves_committed_first_invocation()
     -> anyhow::Result<()> {
         let registry = registry(73).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let target = target("credential");
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target.clone()]);
@@ -5406,7 +5418,8 @@ mod tests {
     async fn reused_successful_http_root_never_accumulates_pending_publications()
     -> anyhow::Result<()> {
         let registry = registry(64).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let upstream_target = target("credential");
         let responses = (0..4)
             .map(|index| {
@@ -5484,8 +5497,12 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, contender_registry) =
             independent_file_registries(65).await?;
-        let owner_runtime = ContinuationRuntime::new(owner_registry.clone());
-        let contender_runtime = ContinuationRuntime::new(contender_registry.clone());
+        let owner_runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
+        let contender_runtime = ContinuationRuntime::with_auth_appliers(
+            contender_registry.clone(),
+            AuthAppliers::new(),
+        );
         let owner = finalization_context("foreign-provisional-owner", 417, "provider-owner");
         let contender =
             finalization_context("foreign-provisional-owner", 418, "provider-contender");
@@ -5517,8 +5534,12 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, contender_registry) =
             independent_file_registries(66).await?;
-        let owner_runtime = ContinuationRuntime::new(owner_registry.clone());
-        let contender_runtime = ContinuationRuntime::new(contender_registry.clone());
+        let owner_runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
+        let contender_runtime = ContinuationRuntime::with_auth_appliers(
+            contender_registry.clone(),
+            AuthAppliers::new(),
+        );
         let owner = finalization_context("foreign-delivering-owner", 419, "provider-owner");
         let contender = finalization_context("foreign-delivering-owner", 420, "provider-contender");
         owner_runtime.finalize(&owner).await?;
@@ -5561,7 +5582,8 @@ mod tests {
     #[tokio::test]
     async fn rejected_insert_with_absent_reread_clears_local_marker() -> anyhow::Result<()> {
         let registry = registry(67).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         registry
             .database()
             .execute(Statement::from_string(
@@ -5600,7 +5622,8 @@ mod tests {
     #[tokio::test]
     async fn database_uncertainty_retains_marker_until_rollback_can_decide() -> anyhow::Result<()> {
         let (_directory, registry, database_control) = independent_file_registries(68).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("unknown-owned-generation", 422, "provider-unknown");
         let (committed, release) = registry.inject_ambiguous_insert_after_commit();
         let finalizing_runtime = runtime.clone();
@@ -5660,7 +5683,8 @@ mod tests {
     async fn assembled_http_unknown_publications_reconcile_after_database_recovery()
     -> anyhow::Result<()> {
         let (_directory, registry, database_control) = independent_file_registries(74).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let target = target("credential");
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target.clone()]);
@@ -5752,7 +5776,8 @@ mod tests {
         let inner = Arc::get_mut(&mut registry.inner)
             .ok_or_else(|| anyhow::anyhow!("registry unexpectedly shared before configuration"))?;
         inner.pending_capacity = 1;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let first = finalization_context("capacity-owner-a", 440, "provider-capacity-a");
         let second = finalization_context("capacity-owner-b", 441, "provider-capacity-b");
 
@@ -5784,7 +5809,8 @@ mod tests {
     async fn reserved_bind_is_never_scanned_or_compensated_by_worker() -> anyhow::Result<()> {
         let registry = registry(76).await?;
         registry.start_reconciler();
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("reserved-bind", 442, "provider-reserved");
         let (committed, release) = registry.inject_ambiguous_insert_after_commit();
         let finalizing = tokio::spawn({
@@ -5830,7 +5856,8 @@ mod tests {
         let inner = Arc::get_mut(&mut registry.inner)
             .ok_or_else(|| anyhow::anyhow!("registry unexpectedly shared before configuration"))?;
         inner.pending_capacity = 3;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempts = (0_u64..3)
             .map(|index| {
                 finalization_context(
@@ -5885,7 +5912,8 @@ mod tests {
     async fn reconciler_round_robin_renews_more_than_one_batch_without_self_claim()
     -> anyhow::Result<()> {
         let registry = registry(78).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut attempts = (0_u64..48)
             .map(|index| {
                 finalization_context(
@@ -5964,7 +5992,8 @@ mod tests {
     #[tokio::test]
     async fn graceful_shutdown_drains_more_than_one_recovered_batch() -> anyhow::Result<()> {
         let (_directory, registry, database_control) = independent_file_registries(79).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempts = (0_u64..48)
             .map(|index| {
                 finalization_context(
@@ -6020,7 +6049,8 @@ mod tests {
             owner_registry.inner.instance_id,
             restarted_registry.inner.instance_id
         );
-        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
         let provisional = finalization_context("restart-provisional", 700, "provider-provisional");
         let delivering = finalization_context("restart-delivering", 701, "provider-delivering");
         let raced = finalization_context("restart-raced", 705, "provider-raced");
@@ -6045,7 +6075,7 @@ mod tests {
             )
             .await?;
         owner_registry
-            .bind(
+            .bind_fixture(
                 "owner",
                 "restart-active",
                 "provider-active",
@@ -6150,7 +6180,8 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, restarted_registry) =
             independent_file_registries(81).await?;
-        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("active-unknown-auto", 702, "provider-active-unknown");
         runtime.finalize(&attempt).await?;
         suspend_reconciler_for_test(&owner_registry).await;
@@ -6238,7 +6269,8 @@ mod tests {
     -> anyhow::Result<()> {
         let (_directory, owner_registry, restarted_registry) =
             independent_file_registries(83).await?;
-        let runtime = ContinuationRuntime::new(owner_registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target("credential")]);
         let mut builder = PipelineBuilder::new();
@@ -6347,8 +6379,12 @@ mod tests {
     {
         let (_directory, owner_registry, contender_registry) =
             independent_file_registries(82).await?;
-        let owner_runtime = ContinuationRuntime::new(owner_registry.clone());
-        let contender_runtime = ContinuationRuntime::new(contender_registry.clone());
+        let owner_runtime =
+            ContinuationRuntime::with_auth_appliers(owner_registry.clone(), AuthAppliers::new());
+        let contender_runtime = ContinuationRuntime::with_auth_appliers(
+            contender_registry.clone(),
+            AuthAppliers::new(),
+        );
         let owner = finalization_context("worker-lost-owner", 703, "provider-owner");
         let contender = finalization_context("worker-lost-owner", 704, "provider-contender");
         owner_runtime.finalize(&owner).await?;
@@ -6387,7 +6423,8 @@ mod tests {
     async fn ambiguous_committed_insert_same_generation_retains_rollback_ownership()
     -> anyhow::Result<()> {
         let (_directory, registry, restarted_registry) = independent_file_registries(57).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let attempt = finalization_context("ambiguous-owned", 414, "provider-ambiguous-owned");
         let (committed, release) = registry.inject_ambiguous_insert_after_commit();
         let finalizing_runtime = runtime.clone();
@@ -6430,8 +6467,10 @@ mod tests {
     #[tokio::test]
     async fn ambiguous_insert_never_adopts_rebound_foreign_generation() -> anyhow::Result<()> {
         let (_directory, first_registry, second_registry) = independent_file_registries(58).await?;
-        let first_runtime = ContinuationRuntime::new(first_registry.clone());
-        let second_runtime = ContinuationRuntime::new(second_registry.clone());
+        let first_runtime =
+            ContinuationRuntime::with_auth_appliers(first_registry.clone(), AuthAppliers::new());
+        let second_runtime =
+            ContinuationRuntime::with_auth_appliers(second_registry.clone(), AuthAppliers::new());
         let first = finalization_context("ambiguous-foreign", 415, "provider-ambiguous-foreign");
         let second = finalization_context("ambiguous-foreign", 416, "provider-ambiguous-foreign");
         let (committed, release) = first_registry.inject_ambiguous_insert_after_commit();
@@ -7053,7 +7092,7 @@ mod tests {
         registry: ContinuationRegistry,
         targets: Vec<RoutingTarget>,
     ) -> anyhow::Result<Arc<Pipeline>> {
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", targets);
         let mut builder = PipelineBuilder::new();
@@ -7401,7 +7440,7 @@ mod tests {
         config: crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig,
         tool: Arc<dyn crate::gateway::pipeline::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<Arc<Pipeline>> {
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut upstream_target = target("credential");
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -7448,7 +7487,8 @@ mod tests {
             .mount(&upstream)
             .await;
         let registry = registry(30).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut upstream_target = target("credential");
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -7556,7 +7596,8 @@ mod tests {
             .await;
 
         let registry = registry(16).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut upstream_target = target("credential");
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -7799,7 +7840,8 @@ mod tests {
             .await;
 
         let registry = registry(18).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut upstream_target = target("credential");
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -8068,7 +8110,7 @@ mod tests {
         for (label, scheme, headers) in invalid_cases {
             let root_id = encode_gateway_continuation_id(&format!("wire-auth-root-{label}"))?;
             registry
-                .bind(
+                .bind_fixture(
                     "tool-owner",
                     &root_id,
                     "provider-wire-auth-root",
@@ -8124,7 +8166,7 @@ mod tests {
         ] {
             let root_id = encode_gateway_continuation_id(&format!("wire-auth-root-{label}"))?;
             registry
-                .bind(
+                .bind_fixture(
                     "tool-owner",
                     &root_id,
                     "provider-wire-auth-root",
@@ -8173,7 +8215,7 @@ mod tests {
         .await?;
         let public_id = encode_gateway_continuation_id("trace-mutation-root")?;
 
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let mut builder = PipelineBuilder::new();
@@ -8377,7 +8419,7 @@ mod tests {
         registry: ContinuationRegistry,
         expected_error: &str,
     ) -> anyhow::Result<()> {
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target("credential")]);
         let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
@@ -9129,7 +9171,8 @@ mod tests {
             .await;
 
         let registry = registry(63).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut upstream_target = target(CREDENTIAL_SENTINEL);
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -9219,7 +9262,7 @@ mod tests {
             .await;
 
         let registry = registry(67).await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut upstream_target = target(CREDENTIAL_SENTINEL);
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -9363,7 +9406,7 @@ mod tests {
             .await;
 
         let registry = registry(65).await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut upstream_target = target(CREDENTIAL_SENTINEL);
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -9429,7 +9472,7 @@ mod tests {
             .await;
 
         let registry = registry(66).await?;
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let mut upstream_target = target(CREDENTIAL_SENTINEL);
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -9535,7 +9578,8 @@ mod tests {
             .await;
 
         let registry = registry(62).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let mut upstream_target = target("credential");
         upstream_target.api_base = upstream.uri();
         let routes = Arc::new(StaticRoutingTable::new());
@@ -9625,7 +9669,8 @@ mod tests {
         .enumerate()
         {
             let registry = registry(50 + index as u8).await?;
-            let runtime = ContinuationRuntime::new(registry.clone());
+            let runtime =
+                ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
             let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
             let routes = Arc::new(StaticRoutingTable::new());
             routes.insert("gpt-5", vec![target("credential")]);
@@ -9697,7 +9742,8 @@ mod tests {
     async fn cancelled_finalizer_with_late_db_completion_is_compensated_after_completion()
     -> anyhow::Result<()> {
         let registry = registry(55).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let completed = Arc::new(tokio::sync::Notify::new());
@@ -9866,7 +9912,8 @@ mod tests {
                 30,
                 10,
             )?;
-            let runtime = ContinuationRuntime::new(registry.clone());
+            let runtime =
+                ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
             let signals = Arc::new(PreparationHandoffSignals::default());
             let routes = Arc::new(StaticRoutingTable::new());
             routes.insert("gpt-5", vec![target("credential")]);
@@ -9973,7 +10020,7 @@ mod tests {
         registry: ContinuationRegistry,
         blocker: Option<BlockingRequiredFinalizer>,
     ) -> anyhow::Result<Arc<Pipeline>> {
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target("credential")]);
         let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
@@ -10013,7 +10060,7 @@ mod tests {
         registry: ContinuationRegistry,
         outcomes: Arc<std::sync::Mutex<Vec<&'static str>>>,
     ) -> anyhow::Result<Arc<Pipeline>> {
-        let runtime = ContinuationRuntime::new(registry);
+        let runtime = ContinuationRuntime::with_auth_appliers(registry, AuthAppliers::new());
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![target("credential")]);
         let executor = Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
@@ -10174,7 +10221,8 @@ mod tests {
     async fn disconnect_after_continuation_side_effect_rolls_back_before_publication()
     -> anyhow::Result<()> {
         let registry = registry(38).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let completed = Arc::new(AtomicBool::new(false));
@@ -10266,7 +10314,8 @@ mod tests {
     async fn nonstream_cancellation_during_settlement_rolls_back_provisional_mapping()
     -> anyhow::Result<()> {
         let registry = registry(42).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let routes = Arc::new(StaticRoutingTable::new());
@@ -10339,7 +10388,8 @@ mod tests {
     async fn disconnect_while_on_stream_end_is_blocked_completes_hooks_and_settles()
     -> anyhow::Result<()> {
         let registry = registry(37).await?;
-        let runtime = ContinuationRuntime::new(registry.clone());
+        let runtime =
+            ContinuationRuntime::with_auth_appliers(registry.clone(), AuthAppliers::new());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let completed = Arc::new(AtomicUsize::new(0));
@@ -10487,7 +10537,7 @@ mod tests {
     async fn registry_key_epoch_failure_precedes_stream_success_terminal() -> anyhow::Result<()> {
         let original = registry(18).await?;
         original
-            .bind(
+            .bind_fixture(
                 "tool-owner",
                 "bootstrap",
                 "provider-bootstrap",

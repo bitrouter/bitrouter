@@ -743,7 +743,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
     };
     pricing.configure_endpoint("openai", None, &target.api_base);
     let tariff = pricing.snapshot(&target);
-    let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
+    let recorder = MeteringRecorder::new(metering);
     let request_id = format!("spend-{controller}-{root}");
     let mut settled = SettlementContext {
         operation: bitrouter_ai::types::ModelOperation::Generation,
