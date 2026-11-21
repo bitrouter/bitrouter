@@ -410,4 +410,4 @@ Older versions of this skill mentioned features that **do not exist** in the v1 
 - `bitrouter config reload/show` — `config validate` exists for CI-safe validation; use `bitrouter reload` for the daemon.
 
 
-Native Gemini Generate Content, `google-ai` subscription inference, and Vertex Express are retired. Active configs must explicitly select a supported protocol and endpoint; saved credentials and history remain preserved. `gemini-cli` is no longer a bundled routed client. Antigravity SDK clients may use `LocalOpenAIAgentConfig` against `/v1/chat/completions`; see the retirement progress for validation status.
+Native Gemini Generate Content, `google-ai` subscription inference, and Vertex Express are retired. Active configs must explicitly select a supported protocol and endpoint; saved credentials and history remain preserved. `gemini-cli` is no longer a bundled routed client. Antigravity SDK clients may use `LocalOpenAIAgentConfig` against `/v1/chat/completions`.

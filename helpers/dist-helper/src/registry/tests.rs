@@ -1,4 +1,5 @@
 use super::*;
+use bitrouter_registry::curation::DiscoveryPolicy;
 fn fixture() -> Result<tempfile::TempDir> {
     let root = tempfile::tempdir()?;
     for dir in ["registry/models", "registry/providers"] {
@@ -23,7 +24,7 @@ fn fixture() -> Result<tempfile::TempDir> {
         ),
         (
             "registry/model-discovery.yaml",
-            json!({"families":[],"retired_models":[]}),
+            json!(DiscoveryPolicy::default()),
         ),
     ];
     for (path, value) in values {
@@ -54,6 +55,37 @@ fn deterministic_build_preserves_raw_data_and_recommendation_removal_never_delet
     assert_eq!(after.providers(), document.providers());
     Ok(())
 }
+
+#[test]
+fn discovery_exclusions_remove_recommendations_without_changing_inventory() -> Result<()> {
+    let root = fixture()?;
+    let mut sources = Sources::load(root.path())?;
+    let before = sources.document()?;
+    sources.files.insert(
+        root.path().join("registry/model-discovery.yaml"),
+        json!(DiscoveryPolicy {
+            tombstones: vec![json!({
+                "id": "org/model",
+                "source_url": "https://example.com/evidence",
+                "recorded_at": "2026-10-22T00:00:00Z",
+                "reason": "Publisher withdrew the recommendation"
+            })],
+            ..Default::default()
+        }),
+    );
+    let snapshot = json!({"data": [{"id": "org/model"}]});
+    discovery::apply(
+        &mut sources,
+        &snapshot,
+        &identity_ids(&snapshot)?,
+        Utc::now(),
+    )?;
+    let after = sources.document()?;
+    assert!(after.models().is_empty());
+    assert_eq!(after.providers(), before.providers());
+    Ok(())
+}
+
 #[test]
 fn global_identity_gate_scans_unchanged_inactive_and_noncurated_bindings() -> Result<()> {
     let root = fixture()?;
@@ -335,7 +367,7 @@ fn numeric_retention_uses_eligible_versions_and_trailing_zero_equivalence() -> R
         .parent()
         .context("parent")?
         .join("model-discovery.yaml");
-    sources.files.insert(policy,json!({"families":[{"key":"org/model","pattern":"^org/model(?P<version>[0-9]+(?:\\.[0-9]+)*)$","retain_versions":1}],"retired_models":[]}));
+    sources.files.insert(policy,json!(DiscoveryPolicy { families: vec![json!({"key":"org/model","pattern":"^org/model(?P<version>[0-9]+(?:\\.[0-9]+)*)$","retain_versions":1})], ..Default::default() }));
     let provider_path = root.path().join("registry/providers/test.yaml");
     let provider = sources.files.get_mut(&provider_path).context("provider")?;
     provider["models"] = json!([{"provider_model_id":"old","canonical_id":"org/model9","status":"active","interfaces":[{"protocol":"messages","operation":"generation"}]},{"provider_model_id":"new","canonical_id":"org/model10","status":"withdrawn","interfaces":[{"protocol":"messages","operation":"generation"}]}]);
@@ -480,7 +512,7 @@ fn registered_adapter_discovers_verified_usable_and_curated_new_model() -> Resul
     sources
         .files
         .insert(root.path().join("registry/models/org.yaml"), json!([]));
-    sources.files.insert(root.path().join("registry/model-discovery.yaml"),json!({"families":[{"key":"org/model","pattern":"^org/model(?P<version>[0-9]+)$","retain_versions":1}],"retired_models":[]}));
+    sources.files.insert(root.path().join("registry/model-discovery.yaml"),json!(DiscoveryPolicy { families: vec![json!({"key":"org/model","pattern":"^org/model(?P<version>[0-9]+)$","retain_versions":1})], ..Default::default() }));
     discovery::apply(&mut sources, &snapshot, &ids, Utc::now())?;
     let doc = sources.document()?;
     assert_eq!(doc.models()[0]["id"], "org/model11");
@@ -633,7 +665,7 @@ fn endpoint_removal_retracts_owned_chat_but_missing_evidence_preserves_it() -> R
 }
 
 #[test]
-fn promotion_ordering_accepts_historical_beta_envelopes_without_executing_them() -> Result<()> {
+fn promotion_ordering_reads_unsupported_beta_timestamps_without_executing_them() -> Result<()> {
     let old=br#"{"version":1,"spec_revision":"1.0.0-beta.1","as_of":"2026-10-22T00:00:00Z","obsolete":{"shape":true}}"#;
     assert!(Document::parse(old, &ReaderPolicy::default()).is_err());
     assert_eq!(

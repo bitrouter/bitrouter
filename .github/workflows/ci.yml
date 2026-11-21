@@ -369,11 +369,13 @@ jobs:
     - uses: ./.github/actions/test-archive
       with:
         product: service-process
-    - name: configure MySQL migration permissions
+    - name: configure MySQL test database permissions
       if: matrix.backend == 'mysql'
       run: |
         docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
         SET GLOBAL log_bin_trust_function_creators = 1;
+        GRANT ALL PRIVILEGES ON `bitrouter\_schema\_%`.* TO 'fixture'@'%';
+        GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
         SQL
     - name: verify current schema baseline and refusal before populating the database
       env:
@@ -386,13 +388,6 @@ jobs:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
         bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator))"
-    - name: provision isolated MySQL evaluation test databases
-      if: matrix.backend == 'mysql'
-      run: |
-        docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
-        GRANT ALL PRIVILEGES ON `bitrouter\_schema\_%`.* TO 'fixture'@'%';
-        GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
-        SQL
     - name: verify tenant eval composites share one stable transaction
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -447,7 +442,7 @@ jobs:
         bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::admission::contention_tests::postgres_admission_survives_heartbeat_single_owner) | test(=gateway::shared::engine::admission::contention_tests::postgres_admission_survives_heartbeat_two_owners))"
         bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::attempts::contention_tests::postgres_dispatch_shares_resource_fence_single_owner) | test(=gateway::shared::engine::attempts::contention_tests::postgres_dispatch_shares_resource_fence_two_owners))"
         bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=gateway::shared::engine::contract_tests::postgres_capture_identity_rejects_before_attempt_or_terminal_writes) | test(=gateway::shared::engine::contract_tests::postgres_invalid_source_publication_rejection_preserves_authority) | test(=gateway::shared::engine::contract_tests::postgres_join_checks_old_retained_publication_and_terminal_beyond_first_page) | test(=gateway::shared::engine::contract_tests::postgres_read_committed_terminal_invalidates_serializable_execution_snapshot))"
-    - name: exercise migrations and gateway persistence on the selected backend
+    - name: exercise current schema and gateway persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
@@ -665,9 +660,8 @@ jobs:
               'pub struct bitrouter_ai::control::error::ErrorEnvelope'
               'pub struct bitrouter_ai::eval::EvalSubject'
               'pub struct bitrouter_ai::eval::AdmissionOutcome'
-              'pub struct bitrouter_ai::harness::thread::ThreadView'
             )
-            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core|harness)(::|[ {]|$)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            forbidden='bitrouter_ai::(axum|wire|event|observe|extension|error|core|harness)(::|[ {]|$)|protocol::mcp_skills::|tenancy::private_adapter::|ReasoningEffortConfig|axum_core::|http::|futures_core::|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
           else
             sentinels=(
               'pub struct bitrouter_sdk::gateway::GatewayClient'

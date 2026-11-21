@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "bitrouter",
-      "description": "Configure BitRouter through its CLI: provider setup, background daemon readiness, agent inspection, MCP configuration, local skill directories and native/ACP orchestration. Read the bundled skill for commands, permissions and delivery limits.",
+      "description": "Configure the BitRouter gateway for providers, model routing, daemon operations and upstream MCP. Use the separate BRO CLI for local skills, workspace approvals and native or ACP tasks. Read the bundled skill for commands and permissions.",
       "source": "."
     }
   ]

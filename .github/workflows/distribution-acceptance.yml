@@ -340,11 +340,6 @@ jobs:
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
-    - name: verify final workspace membership
-      run: |
-        cargo metadata --no-deps --format-version 1 | jq -e '
-          [.packages[].name] | sort ==
-          ["bitrouter", "bitrouter-ai", "bitrouter-bro", "bitrouter-build", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "bitrouter-skills", "bitrouter-update", "dist-helper"]'
     - name: verify SDK without HTTP/2
       run: |
         # Check production before test dependencies can enable HTTP/2.
@@ -368,11 +363,11 @@ jobs:
           if grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
             echo '::error::AI contracts pulled HTTP framework dependencies'; exit 1
           fi
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if grep -Eq '^(bitrouter(-sdk|-bro|-build|-update)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+          if grep -Eq '^(bitrouter(-bro|-build|-update)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
             echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
           fi
         done

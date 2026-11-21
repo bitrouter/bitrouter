@@ -10,7 +10,7 @@ credential for local and hosted gateways.
 | --- | --- |
 | `apps/bitrouter` | `bitrouter` executable, service configuration, gateway, server-side MCP, tenant storage, telemetry and operator CLI |
 | `apps/bro` | `bro` executable, local harness, external ACP adapters and local data |
-| `crates/bitrouter-ai` | Lightweight public protocol types, lifecycle, observation and extension contracts |
+| `crates/bitrouter-ai` | Shared public model, routing, Policy, Eval, control and tenancy DTOs |
 | `crates/bitrouter-sdk` | HTTP/SSE clients for inference, control, tenancy and Eval |
 | `crates/bitrouter-registry` | Registry types and source-bound catalog handling |
 | `extensions/regex-checker` | Separately selectable request-check implementation |
@@ -60,10 +60,10 @@ local headless task and `bro thread` operates on persisted local checkpoints.
 
 ### Dependency Logic
 
-**`bitrouter-ai`** owns public model/protocol data, lifecycle and capability
-contracts, observation vocabulary and catalog artifact types. Its default
-production graph contains serde, serde_json and thiserror; `schema` adds
-schemars. Neither default nor all-public-features builds include transport,
+**`bitrouter-ai`** owns shared public model/protocol, artifact, control, routing,
+Policy, Eval and tenancy DTOs with intrinsic validation. Its direct production
+dependencies are serde, serde_json, thiserror and sha2; `schema` adds schemars.
+Neither default nor all-public-features builds include transport,
 provider authentication, an async runtime, a database, terminal UI or OTel.
 
 Application **`gateway::model`** owns protocol codecs, conversion admission,
@@ -196,19 +196,20 @@ metadata and a selected-credential replay proof. Clients echo the entire
 `extra_content`; the gateway removes its proof before upstream dispatch.
 
 
-The matcher depends only on AI capability contracts. The SDK uses explicit
-endpoints and credentials, bounds reads and leaves replay to the caller. See the
+The matcher owns regex configuration and matching without a gateway or SDK
+dependency. The SDK uses explicit endpoints and credentials, bounds reads and
+leaves replay to the caller. See the
 [SDK guide](../../crates/bitrouter-sdk/README.md) for the available methods.
 
-The span names, attribute vocabulary and lifecycle invariants belong to the AI
-observation contract. The committed schema and conformance tests preserve those
-semantics independently of their optional OTLP rendering.
+The gateway owns span names, attribute vocabulary and lifecycle invariants.
+Its committed observation schema and conformance tests preserve those semantics
+independently of their optional OTLP rendering.
 
 Application `telemetry` owns OTLP transport, bearer resolution, batching,
 endpoint configuration, cardinality limiting, span construction and the tracing
-bridge. It consumes AI's observation schema and implements the pipeline's
+bridge. It consumes the gateway's observation schema and implements the pipeline's
 `ObserveHook`. Other observers continue to record essential request facts and
-usage even when OTLP is absent. The contract carries no OTel types. See the committed observation schema for wire behavior.
+usage even when OTLP is absent. Shared AI DTOs carry no telemetry runtime types.
 
 The application declares its spans, attributes, events, metrics and failure invariants in `apps/bitrouter/src/gateway/observability/schema.rs`. It renders the committed `apps/bitrouter/span-schema.json`; regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter committed_artifact`. An ordinary unit test rejects stale output. Application telemetry conformance tests drive real lifecycles against that declaration, using helpers compiled only for tests. Lifecycle events and span attributes live alongside the schema in `gateway::observability`.
 
@@ -290,8 +291,9 @@ Both report `profile: "custom"` in `bitrouter --json build-info`; the default bu
 remains `full` and includes `http2`. Enabling `multi-instance` still requires
 explicit shared-mode configuration before it changes the runtime mode.
 
-AI observation declarations are ungated. Its pure conformance helpers use the
-default-off `testing` feature. The workspace manifests define the feature graph.
+Application observation declarations remain available without OTLP. Conformance
+helpers compile only in application tests. The workspace manifests define the
+feature graph.
 
 BRO uses its own local worker, workspace lock and checkpoint journal. Record
 model or tool dispatch intent before starting an effect, and confirmation before
@@ -446,7 +448,8 @@ and CLI error classification.
 
 Run `bitrouter --help` or `bro --help` to inspect the installed product. The
 [command reference](../CLI.md) documents service management, local BRO
-operations, and the stopped SQLite migration.
+operations, and snapshot, verify and restore for stopped current-format SQLite
+gateway datasets.
 
 ### Observability surface (`bitrouter requests`)
 
@@ -534,11 +537,12 @@ See [build and validation instructions](../SHARED_GATEWAY_DISTRIBUTION.md).
 
 ### Database backend regression
 
-`database_backends` exercises migrations and gateway persistence through the
-application's store APIs. Its ordinary SQLite case uses a temporary database.
+`database_backends` exercises current schema initialization and gateway
+persistence through the application's store APIs. Its ordinary SQLite case
+uses a temporary database.
 The ignored server-backend case requires `BITROUTER_TEST_DATABASE_URL` pointing
-to a dedicated test database; it applies migrations and writes uniquely scoped
-fixture records. It never drops or truncates the database, and repeated runs
+to a dedicated test database; it initializes the current schema and writes
+uniquely scoped fixture records. It never drops or truncates the database, and repeated runs
 retain earlier fixture records. Do not point it at a service database.
 
 ```sh
@@ -572,11 +576,11 @@ Do not regenerate an API baseline merely to conceal an unwanted dependency.
 
 ### Named-router request checks
 
-Named-router entry checks use AI capability types and the application
-`gateway::pipeline::request_checks` runner. The app assembles startup-owned compiled registrations in
-`request_checks`; a custom host supplies callbacks through
-`extension::ExtensionApi`. The official `bitrouter` binary has no custom
-registrations, and there is no request-check inventory or receipt store.
+Named-router entry checks use application-owned callback types and the
+`gateway::pipeline::request_checks` runner. The app assembles compiled registrations
+at startup in `request_checks`; a custom host supplies callbacks through
+`gateway::extensions::registry::ExtensionApi`. The official `bitrouter` binary has
+no custom registrations, and there is no request-check inventory or receipt store.
 
 Authentication and session/continuation normalization precede router binding.
 The logical router/check binding remains fixed through candidate preparation,

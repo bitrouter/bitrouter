@@ -6,7 +6,6 @@ case "$APP_NAME:$2" in
 esac
 owned_bin=$_install_dir/$2
 owned_receipt=$RECEIPT_HOME/$APP_NAME-receipt.json
-old_receipt=${RECEIPT_HOME%/*}/bitrouter/bitrouter-receipt.json
 case "$2" in *.exe) ext=.exe ;; *) ext='' ;; esac
 
 # Keep mkdir locks for older installers. New writers additionally hold kernel
@@ -61,25 +60,6 @@ if [ "$INSTALL_UPDATER" = 1 ]; then
     ensure mkdir -p "$RECEIPT_HOME"
     take_dir "$RECEIPT_HOME/.install-lock" 9
     lock_dir=$RECEIPT_HOME/.install-lock
-fi
-
-# The M0 shell installer used a symlink. Git Bash can encounter a hard link
-# from the PowerShell installer. Confirm both receipt ownership and file identity.
-if [ -f "$old_receipt" ] && [ -f "$_install_dir/bro$ext" ] &&
-    [ "$_install_dir/bitrouter$ext" -ef "$_install_dir/bro$ext" ]; then
-    need_cmd jq
-    old_prefix=$(jq -er --arg bro "bro$ext" --arg alias "bitrouter$ext" '
-        select(.provider.source == "cargo-dist" and .source.owner == "bitrouter"
-          and .source.name == "bitrouter" and .source.app_name == "bitrouter"
-          and .source.release_type == "github" and .binaries == [$bro]
-          and .binary_aliases == {($bro): [$alias]})
-        | if .install_layout == "cargo-home" then .install_prefix + "/bin"
-          elif .install_layout == "flat" then .install_prefix else empty end
-    ' "$old_receipt") || old_prefix=''
-    if is_windows_posix && [ -n "$old_prefix" ]; then old_prefix=$(cygpath -u "$old_prefix"); fi
-    if [ -d "$old_prefix" ] && [ "$old_prefix" -ef "$_install_dir" ]; then
-        err "Verified legacy BitRouter installation. Stop M0, snapshot its data, and move bro$ext, its bitrouter$ext alias and $old_receipt together to a backup. Then run each desired product installer."
-    fi
 fi
 
 # A receipt is global to a user. Check its prefix even if this destination is
