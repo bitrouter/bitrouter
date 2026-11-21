@@ -1624,7 +1624,12 @@ impl ModelSelector for PolicyRuntime {
         #[cfg(not(feature = "multi-instance"))]
         drop(captured);
         if let Some(target) = selected {
-            ctx.set_model(target.model());
+            // Route freezing adopts the canonical prompt. Keep its model in
+            // sync so finalization seals the selected policy target, while the
+            // original selector and named-router identity remain unchanged.
+            let mut prompt = ctx.require_generation_prompt()?.clone();
+            prompt.model = target.model().to_owned();
+            ctx.apply_routing_prompt(prompt)?;
             if let Some(effort) = target.effort() {
                 ctx.set_policy_reasoning_effort(effort)?;
             }
