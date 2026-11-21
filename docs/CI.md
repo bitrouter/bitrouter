@@ -1,23 +1,35 @@
 # Continuous integration
 
-PR CI builds workspace tests on Linux and archives their executables with nextest.
-The archive consumers run gateway behavior, process, capacity and database tests
-against the same revision. BRO tests run with `cargo nextest run -p bitrouter-bro`.
-Use [nextest archives](https://nexte.st/docs/ci-features/archiving/) when reproducing
-an archived test locally.
+The required PR check is **test (ubuntu-latest)**. It always runs and requires
+repository hygiene, formatting, plugin validation, and every check selected
+for the change. A failed or cancelled dependency fails the aggregate check.
+
+CI selects checks from the diff between the event base and the revision under
+test. BRO-local changes build and test BRO on Linux, macOS, and Windows.
+Gateway changes build and test the gateway on those platforms and build the
+Linux BRO executable for the real gateway-to-BRO process test. Changes to
+BRO's gateway client, endpoint wiring, or the two-product test select both full
+product suites. Shared changes, including workspace dependencies and files in
+`docs/specs/`, also run the shared-library tests and public API checks.
+Registry source and public snapshot changes run catalog and generated-artifact
+validation. Package-local snapshots also select the product that embeds them.
+Documentation-only changes still report the aggregate status.
 
 ## Platform and feature coverage
 
-The feature checks compile the service and client configurations independently
-so workspace dev-dependencies cannot mask a missing runtime dependency.
-The all-feature Linux build covers common behavior. Feature-specific jobs
-exercise behavior that this build cannot select, including the gRPC-only OTLP
-exporter. The database jobs use dedicated PostgreSQL and MySQL services.
-macOS and Windows exercise platform-specific control, shutdown and file operations.
+Each product has one build job and one test job definition with native runner
+matrices. Build jobs upload revision- and platform-specific nextest archives
+through GitHub Actions. Test jobs verify the revision and checksums, then run
+the restored tests and process fixtures. BRO's Linux suite requires the workspace
+sandbox. macOS and Windows exercise native process and filesystem behavior.
 
-Documentation-only changes keep the required CI status without building the
-workspace. Registry changes run catalog and generated-artifact validation.
-Changes to compatibility-sensitive files under `docs/specs/` trigger code checks.
+The gateway's Linux job tests the all-feature build, uses PostgreSQL and MySQL
+for the database regressions, and exercises the real BRO and independent AP SDK
+process boundaries. Separate Linux archives cover the minimal, default, shared,
+and gRPC-only gateway configurations. The gateway build checks production
+feature closures independently of dev-dependencies. Use
+[nextest archives](https://nexte.st/docs/ci-features/archiving/) to reproduce
+an archived suite locally.
 
 ## Distribution
 

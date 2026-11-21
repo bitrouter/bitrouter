@@ -1,11 +1,14 @@
-name: Restore Linux test artifacts
-description: Restore the exact build for this revision without running Cargo.
+name: Download test artifacts
+description: Verify the artifacts for this revision and prevent test-time Cargo builds.
 inputs:
   product:
-    description: Product owning the nextest metadata (service, service-process or bro)
-    default: service
-  companion:
-    description: Restore the other product's executables alongside the selected test suite
+    description: Product owning the nextest archives (service or bro)
+    required: true
+  platform:
+    description: Runner label used to build the artifacts
+    required: true
+  bro-companion:
+    description: Download the Linux BRO executable for the gateway process test
     default: 'false'
 runs:
   using: composite
@@ -15,54 +18,40 @@ runs:
         tool: nextest@0.9.114
     - uses: actions/download-artifact@v4
       with:
-        name: linux-tests-${{ inputs.product }}-${{ github.sha }}
-        path: .ci-archive
+        name: tests-${{ inputs.product }}-${{ inputs.platform }}-${{ github.sha }}
+        path: ci-artifacts
     - uses: actions/download-artifact@v4
-      if: inputs.companion == 'true'
+      if: inputs.bro-companion == 'true'
       with:
-        name: linux-tests-${{ inputs.product == 'bro' && 'service-process' || 'bro' }}-${{ github.sha }}
-        path: .ci-companion
-    - name: Verify and extract the test build
+        name: tests-bro-companion-${{ github.sha }}
+        path: ci-companion
+    - name: Verify the test artifacts
       env:
-        PRODUCT: ${{ inputs.product }}
-        COMPANION: ${{ inputs.companion }}
+        BRO_COMPANION: ${{ inputs.bro-companion }}
       shell: bash
       run: |
         set -euo pipefail
-        verify() {
-          test "$(cat "$1/tests.sha")" = "$GITHUB_SHA"
-          test "$(cat "$1/tests.workspace")" = "$GITHUB_WORKSPACE"
-          (cd "$1" && sha256sum -c tests.tar.zst.sha256)
-        }
-        verify .ci-archive
-        tar --zstd -xf .ci-archive/tests.tar.zst
-        case "$PRODUCT" in service|service-process|bro) ;; *) exit 1 ;; esac
-        if [[ "$COMPANION" == true ]]; then
-          verify .ci-companion
-          # Keep nextest metadata from the suite that owns the tests.
-          if [[ "$PRODUCT" == bro ]]; then
-            tar --zstd -xf .ci-companion/tests.tar.zst target/debug/bitrouter
-          else
-            tar --zstd -xf .ci-companion/tests.tar.zst target/debug/bro target/debug/examples/bro_acp_fixture
-          fi
+        test "$(cat ci-artifacts/tests.sha)" = "$GITHUB_SHA"
+        test "$(cat ci-artifacts/tests.workspace)" = "$GITHUB_WORKSPACE"
+        if [[ "$RUNNER_OS" == macOS ]]; then
+          (cd ci-artifacts && shasum -a 256 -c checksums.sha256)
+        else
+          (cd ci-artifacts && sha256sum -c checksums.sha256)
         fi
-        if [[ "$PRODUCT" != bro || "$COMPANION" == true ]]; then
-          target/debug/bitrouter build-info | jq -e --arg sha "$GITHUB_SHA" '
-            .product == "bitrouter" and .source_revision == $sha'
-          echo "BITROUTER_TEST_GATEWAY_BINARY=$PWD/target/debug/bitrouter" >> "$GITHUB_ENV"
-        fi
-        if [[ "$PRODUCT" == bro || "$COMPANION" == true ]]; then
-          target/debug/bro build-info | jq -e --arg sha "$GITHUB_SHA" '
+        if [[ "$BRO_COMPANION" == true ]]; then
+          (cd ci-companion && sha256sum -c checksums.sha256)
+          chmod +x ci-companion/bro ci-artifacts/native-ap-sdk-consumer
+          ci-companion/bro build-info | jq -e --arg sha "$GITHUB_SHA" '
             .product == "bitrouter-bro" and .source_revision == $sha'
-          test -x target/debug/examples/bro_acp_fixture
-          echo "BITROUTER_TEST_BRO=$PWD/target/debug/bro" >> "$GITHUB_ENV"
+          printf 'BITROUTER_TEST_BRO=%s\n' "$GITHUB_WORKSPACE/ci-companion/bro" >> "$GITHUB_ENV"
         fi
-        printf '%s\n' "BITROUTER_TEST_PREBUILT_ONLY=1" \
-          "BITROUTER_TEST_EXAMPLES_DIR=$PWD/target/debug/examples" >> "$GITHUB_ENV"
-        # A consumer must never silently turn a missing artifact into a rebuild.
-        # Keep rustc available: the coding judge verifies tiny temporary Rust
-        # programs as its behavior, without building any workspace crate.
-        mkdir -p "$RUNNER_TEMP/ci-no-build"
-        printf '#!/bin/sh\necho "CI test consumers must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
-        chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
-        printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"
+        # Keep rustc available for BRO's coding judge, which compiles temporary
+        # programs as test behavior. Prevent consumers from rebuilding crates.
+        blocker="$RUNNER_TEMP/ci-no-build"
+        if [[ "$RUNNER_OS" == Windows ]]; then blocker="$(cygpath -u "$blocker")"; fi
+        mkdir -p "$blocker"
+        printf '#!/bin/sh\necho "CI test consumers must use prebuilt artifacts" >&2\nexit 97\n' > "$blocker/cargo"
+        printf '@echo CI test consumers must use prebuilt artifacts >&2\r\n@exit /b 97\r\n' > "$blocker/cargo.cmd"
+        chmod +x "$blocker/cargo"
+        if [[ "$RUNNER_OS" == Windows ]]; then blocker="$(cygpath -w "$blocker")"; fi
+        printf '%s\n' "$blocker" >> "$GITHUB_PATH"

@@ -3,26 +3,33 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
 
-# CI archives the already-built examples as well as the Cargo test executables.
+# CI archives process binaries and examples alongside the Cargo test executables.
+# Each restored product suite verifies the binary for its own platform.
 # https://nexte.st/docs/ci-features/archiving/#adding-extra-files-to-an-archive
 [profile.ci.junit]
 path = "junit.xml"
 
+[profile.ci-service-minimal.junit]
+path = "junit.xml"
+
+[profile.ci-service-default.junit]
+path = "junit.xml"
+
+[profile.ci-service-shared.junit]
+path = "junit.xml"
+
 [profile.ci-service]
 archive.include = [
-    { path = "debug/bitrouter", relative-to = "target", on-missing = "error" },
-    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "error" },
-]
-
-[profile.ci-service-process]
-archive.include = [
-    { path = "debug/bitrouter", relative-to = "target", on-missing = "error" },
+    { path = "debug/bitrouter", relative-to = "target", on-missing = "ignore" },
+    { path = "debug/bitrouter.exe", relative-to = "target", on-missing = "ignore" },
+    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "ignore" },
 ]
 
 [profile.ci-bro]
 archive.include = [
-    { path = "debug/bro", relative-to = "target", on-missing = "error" },
-    { path = "debug/examples/bro_acp_fixture", relative-to = "target", on-missing = "error" },
+    { path = "debug/bro", relative-to = "target", on-missing = "ignore" },
+    { path = "debug/bro.exe", relative-to = "target", on-missing = "ignore" },
+    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "error" },
 ]
 
 # Serialize managed tree and checkpoint workloads while preserving the
