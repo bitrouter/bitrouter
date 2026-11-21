@@ -34,8 +34,7 @@ case "$suite" in
   *) echo "Unknown CI suite: $suite" >&2; exit 1 ;;
 esac
 
-# Reuse the main target cache. Build each alternate closure in scratch space
-# so the single Linux build can release its intermediates before the next suite.
+# Match the target paths used when restoring the independent feature archives.
 case "$suite" in
   service|bro|bro-companion) export CARGO_TARGET_DIR=target ;;
   *) export CARGO_TARGET_DIR="target/$suite" ;;

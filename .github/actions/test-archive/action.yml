@@ -2,7 +2,7 @@ name: Download test artifacts
 description: Verify the artifacts for this revision and prevent test-time Cargo builds.
 inputs:
   product:
-    description: Product owning the nextest archives (service or bro)
+    description: Suite owning the nextest archive (service, service-minimal, service-default, service-shared, service-grpc or bro)
     required: true
   platform:
     description: Runner label used to build the artifacts

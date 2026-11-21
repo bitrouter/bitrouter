@@ -17,24 +17,27 @@ Documentation-only changes still report the aggregate status.
 
 ## Platform and feature coverage
 
-Each product has one build job and one test job definition with native runner
-matrices. Build jobs upload revision- and platform-specific nextest archives
-through GitHub Actions. Test jobs verify the revision and checksums, then restore
+Each product has one build job and one test job definition. The gateway matrix
+builds the Linux full, minimal, default, shared, and gRPC-only profiles in parallel.
+macOS and Windows build the full profile. Each matrix entry uploads its own
+revision- and platform-specific nextest archive through GitHub Actions.
+Test jobs verify the revision and checksums, then restore
 each suite at its original Cargo target path so tests can launch subprocesses
 using paths embedded at compile time. BRO's Linux suite requires the workspace
 sandbox. macOS and Windows exercise native process and filesystem behavior.
 
-The gateway's Linux job tests the all-feature build, uses PostgreSQL and MySQL
-for the database regressions, and exercises the real BRO and independent AP SDK
-process boundaries. Separate Linux archives cover the minimal, default, shared,
-and gRPC-only gateway configurations. The gateway build checks production
-feature closures independently of dev-dependencies. Use
+The gateway's main Linux test job uses the full build for the main suite,
+PostgreSQL and MySQL regressions, and real BRO and independent AP SDK process
+boundaries. Parallel test entries use the matching minimal, default,
+shared, and gRPC-only archives for feature-specific regressions. Production
+feature checks run across the Linux build matrix before test dependencies are
+built. Use
 [nextest archives](https://nexte.st/docs/ci-features/archiving/) to reproduce
 an archived suite locally.
 
 ## Distribution
 
-Distribution acceptance exercises reduced-feature builds, independent SDK
-consumers and installed product behavior. Release jobs build and verify the
-actual artifacts for the supported targets. See [distribution profiles](DISTRIBUTION.md)
+Pushing a version tag runs the Release workflow to build and publish the
+supported distribution targets. Its reusable gateway workflow checks reduced
+profiles and independent SDK consumers. See [distribution profiles](DISTRIBUTION.md)
 and [shared gateway process validation](SHARED_GATEWAY_DISTRIBUTION.md).

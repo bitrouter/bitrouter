@@ -184,9 +184,9 @@ checkout is not a reproducible release merely because its base revision is known
 The reusable `gateway-artifacts.yml` workflow builds the configured targets,
 verifies internal archive checksums, extracts each candidate and runs the
 [independent SDK acceptance](../apps/bitrouter/tests/fixtures/sdk_consumer/README.md).
-Packaging and shared changes in pull requests run Release acceptance. Tags also
-run Release acceptance before publication. The global build assembles the
-manifest after verifying archive bytes against their internal sidecars. GitHub
-Releases publish the resulting manifest with the installers and native archives.
-The sidecars stay in CI artifacts. See the
+The Release workflow runs on version tags and verifies the packages selected by
+the tag before publication. The global build assembles the manifest after
+verifying archive bytes against their internal sidecars. GitHub Releases publish
+the resulting manifest with the installers and native archives. The sidecars
+stay in workflow artifacts. See the
 [shared gateway process checks](SHARED_GATEWAY_DISTRIBUTION.md).

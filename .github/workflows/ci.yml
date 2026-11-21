@@ -155,15 +155,41 @@ jobs:
     - changes
     if: needs.changes.outputs.cargo-args != ''
   build-gateway:
-    name: build gateway (${{ matrix.os }})
+    name: build gateway (${{ matrix.os }}, ${{ matrix.profile }})
     needs: changes
     if: needs.changes.outputs.gateway == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 360 || 60 }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest, windows-latest]
+        include:
+        - os: ubuntu-24.04
+          profile: full
+          suite: service
+          production-features: '["mcp", "server-tools", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
+        - os: ubuntu-24.04
+          profile: minimal
+          suite: service-minimal
+          production-features: '["", "http2"]'
+        - os: ubuntu-24.04
+          profile: default
+          suite: service-default
+          production-features: '["eval-publication", "guardrails"]'
+        - os: ubuntu-24.04
+          profile: shared
+          suite: service-shared
+          production-features: '["db-postgres", "multi-instance", "multi-instance,http2", "db-mysql"]'
+        - os: ubuntu-24.04
+          profile: grpc
+          suite: service-grpc
+          production-features: '["otel-http", "otel-grpc", "otel-http,otel-grpc"]'
+        - os: macos-latest
+          profile: full
+          suite: service
+        - os: windows-latest
+          profile: full
+          suite: service
     defaults:
       run:
         shell: bash
@@ -177,15 +203,15 @@ jobs:
         toolchain: 1.99.1
         cache-on-failure: false
         cache-save-if: ${{ github.event_name != 'pull_request' }}
-        cache-key: ci-gateway-v3
+        cache-key: ci-gateway-${{ matrix.profile }}-v4
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
     - name: Validate the independent SDK consumer lockfile
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
     - name: Check gateway build and test dependency boundaries
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: |
         for flags in '' '--no-default-features' '--no-default-features --features multi-instance,http2' '--all-features'; do
           cargo tree --locked -p bitrouter $flags -e normal,build,dev --prefix none > service-tree.txt
@@ -194,7 +220,7 @@ jobs:
           fi
         done
     - name: Check the default gateway matcher dependency
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.profile == 'default'
       run: |
         cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
         if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
@@ -205,8 +231,7 @@ jobs:
       shell: bash
       env:
         CARGO_TARGET_DIR: target/production-features
-        FEATURES: '["", "http2", "eval-publication", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc",
-          "db-postgres", "multi-instance", "multi-instance,http2", "db-mysql", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
+        FEATURES: ${{ matrix.production-features }}
       run: |
         while IFS= read -r PROFILE_FEATURES; do
         # Keep dev-dependencies out of the production feature closure.
@@ -262,7 +287,7 @@ jobs:
         done < <(jq -r '.[]' <<< "$FEATURES")
         rm -rf "$CARGO_TARGET_DIR"
     - name: Build the independent ordered protocol SDK consumer
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: |
         cargo build --locked \
           --manifest-path apps/bitrouter/tests/fixtures/native_generate_content_ap/Cargo.toml \
@@ -270,14 +295,10 @@ jobs:
         mkdir -p ci-artifacts
         cp target/native-ap-sdk-consumer/debug/native-ap-sdk-consumer ci-artifacts/
         rm -rf target/native-ap-sdk-consumer
-    - name: Build and archive the isolated feature suites
-      if: runner.os == 'Linux'
-      run: |
-        for suite in service-minimal service-default service-shared service-grpc; do
-          bash .github/actions/test-archive/build.sh "$suite"
-        done
-    - name: Build and archive the all-feature gateway suite
-      run: bash .github/actions/test-archive/build.sh service
+    - name: Build and archive the gateway feature suite
+      env:
+        SUITE: ${{ matrix.suite }}
+      run: bash .github/actions/test-archive/build.sh "$SUITE"
     - name: Record the artifact revision and checksums
       run: |
         cd ci-artifacts
@@ -286,13 +307,15 @@ jobs:
         if [[ "$RUNNER_OS" == macOS ]]; then
           shasum -a 256 -- *.tar.zst > checksums.sha256
         elif [[ "$RUNNER_OS" == Linux ]]; then
-          sha256sum -- *.tar.zst native-ap-sdk-consumer > checksums.sha256
+          files=(*.tar.zst)
+          if [[ -f native-ap-sdk-consumer ]]; then files+=(native-ap-sdk-consumer); fi
+          sha256sum -- "${files[@]}" > checksums.sha256
         else
           sha256sum -- *.tar.zst > checksums.sha256
         fi
     - uses: actions/upload-artifact@v4
       with:
-        name: tests-service-${{ matrix.os }}-${{ github.sha }}
+        name: tests-${{ matrix.suite }}-${{ matrix.os }}-${{ github.sha }}
         path: ci-artifacts/
         if-no-files-found: error
         compression-level: 0
@@ -399,20 +422,38 @@ jobs:
         bash .github/scripts/ci-test.sh bro --test-threads 2
 
   test-gateway:
-    name: test gateway (${{ matrix.os }})
+    name: test gateway (${{ matrix.os }}, ${{ matrix.profile }})
     needs: [changes, build-gateway, build-bro]
     if: needs.changes.outputs.gateway == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 240 || 60 }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
         - os: ubuntu-24.04
+          profile: full
+          suite: service
+        - os: ubuntu-24.04
+          profile: minimal
+          suite: service-minimal
+        - os: ubuntu-24.04
+          profile: default
+          suite: service-default
+        - os: ubuntu-24.04
+          profile: shared
+          suite: service-shared
+        - os: ubuntu-24.04
+          profile: grpc
+          suite: service-grpc
         - os: macos-latest
+          profile: full
+          suite: service
           filter: test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket) | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::socket_file_has_owner_only_permissions)
             | test(=tests::host_lifecycle::sigterm_control_error_drains_inflight_inference_before_nonzero_exit) | binary(=mcp_config_pty) | test(/^tests::onboarding_pty::/)
         - os: windows-latest
+          profile: full
+          suite: service
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
             | test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket)
@@ -427,7 +468,7 @@ jobs:
         shell: bash
     services:
       postgres:
-        image: ${{ matrix.os == 'ubuntu-24.04' && 'postgres:17' || '' }}
+        image: ${{ matrix.os == 'ubuntu-24.04' && matrix.profile == 'full' && 'postgres:17' || '' }}
         env:
           POSTGRES_USER: fixture
           POSTGRES_PASSWORD: fixture-password
@@ -435,7 +476,7 @@ jobs:
         ports: ['5432:5432']
         options: --health-cmd "pg_isready -U fixture -d bitrouter_test" --health-interval 5s --health-timeout 5s --health-retries 30
       mysql:
-        image: ${{ matrix.os == 'ubuntu-24.04' && 'mysql:8.4' || '' }}
+        image: ${{ matrix.os == 'ubuntu-24.04' && matrix.profile == 'full' && 'mysql:8.4' || '' }}
         env:
           MYSQL_ROOT_PASSWORD: fixture-password
           MYSQL_USER: fixture
@@ -449,39 +490,39 @@ jobs:
     - id: archives
       uses: ./.github/actions/test-archive
       with:
-        product: service
+        product: ${{ matrix.suite }}
         platform: ${{ matrix.os }}
-        bro-companion: ${{ runner.os == 'Linux' && 'true' || 'false' }}
+        bro-companion: ${{ runner.os == 'Linux' && matrix.profile == 'full' && 'true' || 'false' }}
     - name: Exercise native gateway behavior
       if: runner.os != 'Linux'
       env:
         FILTER: ${{ matrix.filter }}
       run: bash .github/scripts/ci-test.sh service --test-threads 2 -E "$FILTER"
     - name: Run the all-feature gateway module tests
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && matrix.profile == 'full'
       run: bash .github/scripts/ci-test.sh service --test-threads 4 -E 'kind(lib) | kind(bin)'
     - name: Run the all-feature gateway integration tests
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh service --test-threads 2 -E 'kind(test)'
     - name: Install the BRO process-test sandbox
       id: sandbox
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-bro-sandbox.sh
     - name: Run gateway routing through the BRO harness
       if: "!cancelled() && steps.sandbox.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh service --run-ignored only -E 'binary(=product_process)'
     - name: Verify ordered native JSON and SSE with the independent AP SDK
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       env:
         BITROUTER_NATIVE_AP_CLIENT: ${{ github.workspace }}/ci-artifacts/native-ap-sdk-consumer
       run: |
         bash .github/scripts/ci-test.sh service --run-ignored only --test-threads 1 \
           -E 'kind(lib) & test(=tenancy::tests::execution::receipts::ordered::generate_content_native::boundaries::process_consumer::native_generate_content_actual_ap_sdk_consumer_keeps_original_tokens_json_sse_h1_h2)'
     - name: Verify gateway behavior against PostgreSQL
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       run: bash .github/scripts/ci-test.sh database postgres
     - name: Verify gateway behavior against MySQL
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: "!cancelled() && runner.os == 'Linux' && matrix.profile == 'full' && steps.archives.outcome == 'success'"
       env:
         MYSQL_CONTAINER: ${{ job.services.mysql.id }}
       run: |
@@ -491,24 +532,21 @@ jobs:
         GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
         SQL
         bash .github/scripts/ci-test.sh database mysql
-    - name: Test the minimal, default and shared gateway profiles
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
-      run: |
-        result=0
-        for suite in service-minimal service-default service-shared; do
-          bash .github/scripts/ci-test.sh "$suite" --test-threads 2 || result=1
-        done
-        exit "$result"
+    - name: Test the gateway feature profile
+      if: runner.os == 'Linux' && matrix.profile != 'full' && matrix.profile != 'grpc'
+      env:
+        SUITE: ${{ matrix.suite }}
+      run: bash .github/scripts/ci-test.sh "$SUITE" --test-threads 2
     - name: Test the gRPC-only telemetry transport
-      if: "!cancelled() && runner.os == 'Linux' && steps.archives.outcome == 'success'"
+      if: runner.os == 'Linux' && matrix.profile == 'grpc'
       run: |
         bash .github/scripts/ci-test.sh service-grpc --test-threads 1 \
           -E 'test(/^tests::telemetry_grpc_transport::/) | test(/^assemble::telemetry_opt_in_tests::/)'
     - uses: actions/upload-artifact@v4
       if: always() && runner.os == 'Linux'
       with:
-        name: gateway-profile-test-results-${{ github.run_attempt }}
-        path: ci-test-results/service-*.xml
+        name: gateway-profile-test-results-${{ matrix.profile }}-${{ github.run_attempt }}
+        path: ci-test-results/*.xml
 
   test-libraries:
     name: test (contracts, SDK, registry and helpers)

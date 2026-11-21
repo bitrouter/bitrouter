@@ -19,10 +19,10 @@ Set `gateway_state.mode: shared` to select shared PostgreSQL authority.
 
 `distribution-acceptance.yml` calls the reusable `gateway-artifacts.yml` with
 the `dev` compilation profile for scheduled and manual acceptance runs.
-`release.yml` calls it with the distribution profile for packaging and shared
-changes in pull requests and for tags that include the service. The reusable
-workflow builds both gateway distributions on all four supported targets. It
-verifies the archive against its internal sidecar and checks the executable's
+`release.yml` calls it with the distribution profile on release tags that
+include the service. The reusable workflow builds both gateway distributions on
+all four supported targets. It verifies each archive against its internal
+sidecar and checks the executable's
 `build-info` against its embedded manifest. Cargo-dist generates the default
 service and BRO installers.
 
