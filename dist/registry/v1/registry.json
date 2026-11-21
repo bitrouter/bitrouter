@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-11-16T03:29:48.003363751Z",
+  "as_of": "2026-11-21T03:04:56.397784654Z",
   "version": 1,
   "spec_revision": "1.0.0-beta.7",
   "data": {
@@ -366,6 +366,27 @@
         ]
       },
       {
+        "context_window": 1048576,
+        "curation": {
+          "checked_at": "2026-11-19T03:05:02.213569870Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "Gemini 4 Neon is a fast, mid-priced model in the Gemini 4 family from Google, built for coding and agentic work. It is suited for repository and terminal coding, web...",
+        "id": "google/gemini-4-neon",
+        "input_modalities": [
+          "audio",
+          "file",
+          "image",
+          "text",
+          "video"
+        ],
+        "name": "Google: Gemini 4 Neon",
+        "output_modalities": [
+          "text"
+        ]
+      },
+      {
         "curation": {
           "checked_at": "2026-10-22T17:30:00Z",
           "expires_at": "2026-11-23T00:00:00Z",
@@ -562,7 +583,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "expires_at": "2026-12-18T03:32:36.804536810Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -584,7 +606,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "expires_at": "2026-12-18T03:32:36.804536810Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -604,7 +627,8 @@
       },
       {
         "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "expires_at": "2026-12-18T03:32:36.804536810Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -661,6 +685,82 @@
           "text"
         ],
         "release_date": "2026-10-26"
+      },
+      {
+        "context_window": 1050000,
+        "curation": {
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "GPT-6.2 Astra is the flagship model in the GPT-6.2 series from OpenAI, built for the hardest projects. It is suited for real-world engineering, professional work and scientific research, with stronger...",
+        "id": "openai/gpt-6.2-astra",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "name": "OpenAI: GPT-6.2 Astra",
+        "output_modalities": [
+          "text"
+        ]
+      },
+      {
+        "context_window": 1050000,
+        "curation": {
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "GPT-6.2 Astra Pro is the same underlying model as [GPT-6.2 Astra](https://openrouter.ai/openai/gpt-6.2-astra), served with `reasoning.mode` set to `pro` for higher-quality responses on complex tasks. **Cost note:** pro mode spends far more...",
+        "id": "openai/gpt-6.2-astra-pro",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "name": "OpenAI: GPT-6.2 Astra Pro",
+        "output_modalities": [
+          "text"
+        ]
+      },
+      {
+        "context_window": 1050000,
+        "curation": {
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "GPT-6.2 Sol is an upgrade to GPT-6.1 Sol from OpenAI, positioned below the flagship GPT-6.2 Astra in the GPT-6.2 series. It is an efficient, versatile model for everyday work, suited...",
+        "id": "openai/gpt-6.2-sol",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "name": "OpenAI: GPT-6.2 Sol",
+        "output_modalities": [
+          "text"
+        ]
+      },
+      {
+        "context_window": 1050000,
+        "curation": {
+          "checked_at": "2026-11-18T03:32:36.804536810Z",
+          "reason": "Eligible release in approved family retention window",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "description": "GPT-6.2 Sol Pro is the same underlying model as [GPT-6.2 Sol](https://openrouter.ai/openai/gpt-6.2-sol), served with `reasoning.mode` set to `pro` for higher-quality responses on complex tasks. **Cost note:** pro mode spends far more...",
+        "id": "openai/gpt-6.2-sol-pro",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "name": "OpenAI: GPT-6.2 Sol Pro",
+        "output_modalities": [
+          "text"
+        ]
       },
       {
         "curation": {
@@ -953,24 +1053,6 @@
           "text"
         ],
         "release_date": "2026-09-21"
-      },
-      {
-        "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
-          "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-        },
-        "family": "grok",
-        "id": "x-ai/grok-build-0.1",
-        "input_modalities": [
-          "text"
-        ],
-        "max_input_tokens": 256000,
-        "name": "xAI: Grok Build 0.1",
-        "open_weights": false,
-        "output_modalities": [
-          "text"
-        ]
       },
       {
         "curation": {
@@ -1488,6 +1570,16 @@
             },
             "interfaces": [],
             "provider_model_id": "kimi/kimi-k3",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:55:57.303433173Z",
+              "scope": "account",
+              "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
+            },
+            "interfaces": [],
+            "provider_model_id": "mindlab/macaron-v1.1-venti-pro",
             "status": "active"
           },
           {
@@ -3046,6 +3138,16 @@
             },
             "interfaces": [],
             "provider_model_id": "qwen3.8-omni-flash-realtime",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:31.276556174Z",
+              "scope": "account",
+              "source_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models"
+            },
+            "interfaces": [],
+            "provider_model_id": "qwen4-max",
             "status": "active"
           },
           {
@@ -4743,6 +4845,18 @@
             "status": "active"
           },
           {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:21.114948687Z",
+              "scope": "public",
+              "source_url": "https://api.ambient.xyz/v1/models"
+            },
+            "description": "DeepSeek V4.1 Flash 1017 is DeepSeek's October 2026 refresh of V4 Flash, a 763B-parameter sparse MoE reasoning model with a 1M-token context window, served with tool calling and reasoning.",
+            "interfaces": [],
+            "name": "DeepSeek V4.1 Flash 1017",
+            "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+            "status": "active"
+          },
+          {
             "canonical_id": "minimax/minimax-m3",
             "description": "MiniMax M3 - reasoning model with tool calling and structured output. 262K context.",
             "interfaces": [
@@ -5961,6 +6075,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:22.524847481Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "Claude Sonnet 5.5 AWS",
+            "interfaces": [],
+            "name": "Claude Sonnet 5.5 AWS",
+            "provider_model_id": "anthropic/claude-sonnet-5.5-aws",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6381,6 +6507,42 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:29.756662948Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "Gemini 3.5 Flash Lite",
+            "interfaces": [],
+            "name": "Gemini 3.5 Flash Lite",
+            "provider_model_id": "google/gemini-3.5-flash-lite",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:29.756662948Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "Gemini 3.6 Flash",
+            "interfaces": [],
+            "name": "Gemini 3.6 Flash",
+            "provider_model_id": "google/gemini-3.6-flash",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:29.756662948Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "Gemini 3.7 Flash",
+            "interfaces": [],
+            "name": "Gemini 3.7 Flash",
+            "provider_model_id": "google/gemini-3.7-flash",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6461,6 +6623,18 @@
             "interfaces": [],
             "name": "Gemini 4 Hydrogen",
             "provider_model_id": "google/gemini-4-hydrogen",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "Gemini 4 Neon Developer",
+            "interfaces": [],
+            "name": "Gemini 4 Neon Developer",
+            "provider_model_id": "google/gemini-4-neon-developer",
             "status": "active"
           },
           {
@@ -6717,6 +6891,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:22.524847481Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 5.6 Sol Z",
+            "interfaces": [],
+            "name": "GPT 5.6 Sol Z",
+            "provider_model_id": "openai/gpt-5.6-sol-z",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6765,6 +6951,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6 Astra Developer AZ",
+            "interfaces": [],
+            "name": "GPT 6 Astra Developer AZ",
+            "provider_model_id": "openai/gpt-6-astra-developer-az",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6773,6 +6971,18 @@
             "interfaces": [],
             "name": "GPT 6 Astra OAI",
             "provider_model_id": "openai/gpt-6-astra-oai",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:22.524847481Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6 Astra Z",
+            "interfaces": [],
+            "name": "GPT 6 Astra Z",
+            "provider_model_id": "openai/gpt-6-astra-z",
             "status": "active"
           },
           {
@@ -6797,6 +7007,18 @@
             "interfaces": [],
             "name": "GPT 6 Luna Codex",
             "provider_model_id": "openai/gpt-6-luna-codex",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6 Luna Developer AZ",
+            "interfaces": [],
+            "name": "GPT 6 Luna Developer AZ",
+            "provider_model_id": "openai/gpt-6-luna-developer-az",
             "status": "active"
           },
           {
@@ -6837,6 +7059,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6 Sol Developer AZ",
+            "interfaces": [],
+            "name": "GPT 6 Sol Developer AZ",
+            "provider_model_id": "openai/gpt-6-sol-developer-az",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6845,6 +7079,18 @@
             "interfaces": [],
             "name": "GPT 6 Sol OAI",
             "provider_model_id": "openai/gpt-6-sol-oai",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:22.524847481Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6 Sol Z",
+            "interfaces": [],
+            "name": "GPT 6 Sol Z",
+            "provider_model_id": "openai/gpt-6-sol-z",
             "status": "active"
           },
           {
@@ -6873,6 +7119,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:22.524847481Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.1 Terra",
+            "interfaces": [],
+            "name": "GPT 6.1 Terra",
+            "provider_model_id": "openai/gpt-6.1-terra",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:07.164708996Z",
               "scope": "public",
               "source_url": "https://api.atlascloud.ai/v1/models"
@@ -6881,6 +7139,78 @@
             "interfaces": [],
             "name": "GPT 6.1 Terra Codex",
             "provider_model_id": "openai/gpt-6.1-terra-codex",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:35.453736708Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Astra",
+            "interfaces": [],
+            "name": "GPT 6.2 Astra",
+            "provider_model_id": "openai/gpt-6.2-astra",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:35.453736708Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Astra Codex",
+            "interfaces": [],
+            "name": "GPT 6.2 Astra Codex",
+            "provider_model_id": "openai/gpt-6.2-astra-codex",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Astra Developer AZ",
+            "interfaces": [],
+            "name": "GPT 6.2 Astra Developer AZ",
+            "provider_model_id": "openai/gpt-6.2-astra-developer-az",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:35.453736708Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Sol",
+            "interfaces": [],
+            "name": "GPT 6.2 Sol",
+            "provider_model_id": "openai/gpt-6.2-sol",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:35.453736708Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Sol Codex",
+            "interfaces": [],
+            "name": "GPT 6.2 Sol Codex",
+            "provider_model_id": "openai/gpt-6.2-sol-codex",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:01.538495036Z",
+              "scope": "public",
+              "source_url": "https://api.atlascloud.ai/v1/models"
+            },
+            "description": "GPT 6.2 Sol Developer AZ",
+            "interfaces": [],
+            "name": "GPT 6.2 Sol Developer AZ",
+            "provider_model_id": "openai/gpt-6.2-sol-developer-az",
             "status": "active"
           },
           {
@@ -8545,6 +8875,30 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra (Global)",
+            "provider_model_id": "global.openai.gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol (Global)",
+            "provider_model_id": "global.openai.gpt-6.2-sol",
+            "status": "staging"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:08.547365445Z",
               "scope": "public",
               "source_url": "https://models.dev/api.json?type=all"
@@ -9269,6 +9623,30 @@
             "status": "staging"
           },
           {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra",
+            "provider_model_id": "openai.gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol",
+            "provider_model_id": "openai.gpt-6.2-sol",
+            "status": "staging"
+          },
+          {
             "canonical_id": "openai/gpt-oss-120b",
             "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
             "interfaces": [
@@ -9801,6 +10179,30 @@
             "interfaces": [],
             "name": "GPT-6.1 Terra (US)",
             "provider_model_id": "us.openai.gpt-6.1-terra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra (US)",
+            "provider_model_id": "us.openai.gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:36.777116288Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol (US)",
+            "provider_model_id": "us.openai.gpt-6.2-sol",
             "status": "staging"
           },
           {
@@ -11233,6 +11635,30 @@
             "name": "GPT-6.1 Terra",
             "provider_model_id": "gpt-6.1-terra",
             "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:38.090833591Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra",
+            "provider_model_id": "gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:38.090833591Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol",
+            "provider_model_id": "gpt-6.2-sol",
+            "status": "staging"
           },
           {
             "availability": {
@@ -12982,7 +13408,6 @@
               "scope": "public",
               "source_url": "https://api.bitrouter.ai/v1/models"
             },
-            "canonical_id": "x-ai/grok-build-0.1",
             "interfaces": [
               {
                 "operation": "generation",
@@ -14124,6 +14549,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:07.647620611Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "Google's Gemini 4 model for fast, frontier-level coding, knowledge work and science workflows, with four thinking levels and a 1M-token context window",
+            "interfaces": [],
+            "name": "Gemini 4 Neon",
+            "provider_model_id": "gemini-4-neon",
+            "status": "staging"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:12.759128313Z",
               "scope": "public",
               "source_url": "https://models.dev/api.json?type=all"
@@ -14251,6 +14688,30 @@
             "status": "active"
           },
           {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:41.436988049Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra",
+            "provider_model_id": "gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:41.436988049Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol",
+            "provider_model_id": "gpt-6.2-sol",
+            "status": "staging"
+          },
+          {
             "canonical_id": "x-ai/grok-4.5",
             "description": "xAI's Grok model for chat, coding, agentic tools, and lower hallucination risk",
             "interfaces": [
@@ -14323,6 +14784,30 @@
             "interfaces": [],
             "name": "MAI-Code-1.1-Flash",
             "provider_model_id": "mai-code-1.1-flash",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:41.436988049Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "Microsoft's larger agentic coding model for debugging, multi-file changes and repository-wide reasoning",
+            "interfaces": [],
+            "name": "MAI Code 2",
+            "provider_model_id": "mai-code-2",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:41.436988049Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "Microsoft's lightweight coding model for explanations, targeted edits and routine fixes at high volume",
+            "interfaces": [],
+            "name": "MAI Code 2 Flash",
+            "provider_model_id": "mai-code-2-flash",
             "status": "staging"
           }
         ],
@@ -14947,6 +15432,17 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:28.151142970Z",
+              "scope": "account",
+              "source_url": "https://api.gmi-serving.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "Gemini-4-Hydrogen",
+            "provider_model_id": "google/gemini-4-hydrogen",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:13.164289978Z",
               "scope": "account",
               "source_url": "https://api.gmi-serving.com/v1/models"
@@ -15307,6 +15803,17 @@
             "interfaces": [],
             "name": "tencent/hy4",
             "provider_model_id": "tencent/hy4",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:36.040354270Z",
+              "scope": "account",
+              "source_url": "https://api.gmi-serving.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "tencent/hy4-flash",
+            "provider_model_id": "tencent/hy4-flash",
             "status": "active"
           },
           {
@@ -16081,6 +16588,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-19T03:04:42.035653715Z",
+              "scope": "account",
+              "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+            },
+            "description": "Gemini 4 Neon",
+            "interfaces": [],
+            "name": "Gemini 4 Neon",
+            "provider_model_id": "gemini-4-neon",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:13.333157667Z",
               "scope": "account",
               "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
@@ -16257,6 +16776,18 @@
             "interfaces": [],
             "name": "Gemma 4 31B IT",
             "provider_model_id": "gemma-4-31b-it",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:08.459040956Z",
+              "scope": "account",
+              "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+            },
+            "description": "Real-time audio-video generation model",
+            "interfaces": [],
+            "name": "Genie 4",
+            "provider_model_id": "genie-4",
             "status": "active"
           },
           {
@@ -17942,6 +18473,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:19.354581511Z",
+              "scope": "public",
+              "source_url": "https://api.novita.ai/openai/models"
+            },
+            "description": "The Qwen3 series VL models effectively integrates thinking and non-thinking modes, achieving world-leading performance in visual agent capabilities on public benchmark datasets such as OS World. This version features comprehensive upgrades in areas like visual coding, spatial perception, and multimodal reasoning, significantly enhancing visual perception and recognition abilities, and supporting the understanding of ultra-long videos.",
+            "interfaces": [],
+            "name": "Qwen3 VL Plus",
+            "provider_model_id": "qwen/qwen3-vl-plus",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:17.285377385Z",
               "scope": "public",
               "source_url": "https://api.novita.ai/openai/models"
@@ -18134,6 +18677,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:31.347216910Z",
+              "scope": "public",
+              "source_url": "https://api.novita.ai/openai/models"
+            },
+            "description": "Qwen4‑max is the new‑generation MoE flagship model of the Qwen4 family, with 2.4T total parameters and 71B activated parameters. Boasting million‑token context window and native vision capability, it delivers major improvements in coding and office productivity. It can autonomously drive long‑cycle projects and deliver complete outputs in tens of days, supporting hundreds of professional domains such as law, finance, design and scientific research for end‑to‑end production‑grade results. Native visual understanding runs through planning, execution and verification, enabling deep semantic analysis of ultra‑long documents and long‑form videos. Powered by Live‑Delivery mechanism, it performs self‑planning and closed‑loop iteration for long‑horizon tasks, steadily iterating deliverables for real‑world complex workflows。",
+            "interfaces": [],
+            "name": "Qwen4 Max",
+            "provider_model_id": "qwen/qwen4-max",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:17.285377385Z",
               "scope": "public",
               "source_url": "https://api.novita.ai/openai/models"
@@ -18190,6 +18745,18 @@
             "interfaces": [],
             "name": "Hy4",
             "provider_model_id": "tencent/hy4",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:31.347216910Z",
+              "scope": "public",
+              "source_url": "https://api.novita.ai/openai/models"
+            },
+            "description": "Tencent: The official release of Hy4 delivers comprehensive and substantial improvements over Hy4 Preview, with particularly strong gains in agentic capabilities and performance across a wide range of long-horizon, real-world productivity tasks. It also introduces visual understanding for the first time.",
+            "interfaces": [],
+            "name": "Hy4 Flash",
+            "provider_model_id": "tencent/hy4-flash",
             "status": "active"
           },
           {
@@ -19342,6 +19909,30 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:20.646526642Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra",
+            "provider_model_id": "gpt-6.2-astra",
+            "status": "staging"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:20.646526642Z",
+              "scope": "public",
+              "source_url": "https://models.dev/api.json?type=all"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol",
+            "provider_model_id": "gpt-6.2-sol",
+            "status": "staging"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:18.657958334Z",
               "scope": "public",
               "source_url": "https://models.dev/api.json?type=all"
@@ -19867,6 +20458,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:32.686152312Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/go/v1/models"
+            },
+            "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
+            "interfaces": [],
+            "name": "Hy4 flash Free",
+            "provider_model_id": "hy4-flash-free",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:18.740533923Z",
               "scope": "public",
               "source_url": "https://opencode.ai/zen/go/v1/models"
@@ -20199,6 +20802,18 @@
             "interfaces": [],
             "name": "Beam Free",
             "provider_model_id": "beam-free",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Multilingual embedding model combining dense, sparse, and multi-vector retrieval",
+            "interfaces": [],
+            "name": "BGE M3",
+            "provider_model_id": "bge-m3",
             "status": "active"
           },
           {
@@ -20538,6 +21153,42 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Embedding model for code search, retrieval, and code-aware RAG pipelines",
+            "interfaces": [],
+            "name": "Codestral Embed",
+            "provider_model_id": "codestral-embed",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Faster, lighter Embed 5 model sharing Embed 5 Pro's embedding space",
+            "interfaces": [],
+            "name": "Embed 5 Fast",
+            "provider_model_id": "cohere-embed-v5-fast",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Cohere's most capable multimodal embedding model for text, images, and mixed documents",
+            "interfaces": [],
+            "name": "Embed 5 Pro",
+            "provider_model_id": "cohere-embed-v5-pro",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:18.809347795Z",
               "scope": "public",
               "source_url": "https://opencode.ai/zen/v1/models"
@@ -20726,6 +21377,66 @@
             "interfaces": [],
             "name": "Gemini 4 Hydrogen",
             "provider_model_id": "gemini-4-hydrogen",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:47.828286370Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Google's Gemini 4 model for fast, frontier-level coding, knowledge work and science workflows, with four thinking levels and a 1M-token context window",
+            "interfaces": [],
+            "name": "Gemini 4 Neon",
+            "provider_model_id": "gemini-4-neon",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Google's decision model that returns calibrated probabilities for typed yes/no, choice and score questions about text, images, audio, video and PDFs",
+            "interfaces": [],
+            "name": "Gemini Decision 1",
+            "provider_model_id": "gemini-decision-1",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+            "interfaces": [],
+            "name": "Gemini Embedding 001",
+            "provider_model_id": "gemini-embedding-001",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Multimodal embedding model mapping text, images, video, audio, and PDFs into a unified embedding space",
+            "interfaces": [],
+            "name": "Gemini Embedding 2",
+            "provider_model_id": "gemini-embedding-2",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Image model for prompt-driven generation, multi-turn editing, and visual design workflows",
+            "interfaces": [],
+            "name": "Nano Banana 2.1",
+            "provider_model_id": "gemini-nano-banana-2.1",
             "status": "active"
           },
           {
@@ -21166,6 +21877,18 @@
             "status": "active"
           },
           {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "GPT-6 Luna on OpenAI's Decisions API, returning typed yes/no, choice and score answers about text and images",
+            "interfaces": [],
+            "name": "GPT-6 Luna Decision",
+            "provider_model_id": "gpt-6-luna-decision",
+            "status": "active"
+          },
+          {
             "canonical_id": "openai/gpt-6-sol",
             "description": "OpenAI model for complex coding and agentic workflows",
             "interfaces": [
@@ -21213,6 +21936,54 @@
             ],
             "name": "GPT-6.1 Sol",
             "provider_model_id": "gpt-6.1-sol",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.296431905Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+            "interfaces": [],
+            "name": "GPT-6.2 Astra",
+            "provider_model_id": "gpt-6.2-astra",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.296431905Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+            "interfaces": [],
+            "name": "GPT-6.2 Sol",
+            "provider_model_id": "gpt-6.2-sol",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+            "interfaces": [],
+            "name": "GPT Image 2.5 Sunburst",
+            "provider_model_id": "gpt-image-2.5-sunburst",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Full-duplex voice model for natural conversations that delegates reasoning and tools to a backend agent",
+            "interfaces": [],
+            "name": "GPT-Live 1",
+            "provider_model_id": "gpt-live-1",
             "status": "active"
           },
           {
@@ -21288,7 +22059,6 @@
             "status": "active"
           },
           {
-            "canonical_id": "x-ai/grok-build-0.1",
             "description": "Fast Grok coding model tuned for agentic engineering and iterative edits",
             "interfaces": [
               {
@@ -21313,6 +22083,30 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Image model for prompt-driven generation, editing, and visual design workflows",
+            "interfaces": [],
+            "name": "Grok Imagine Image 2.0",
+            "provider_model_id": "grok-imagine-image-2.0",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:32.884281298Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Tencent's lower-cost Hy4 tier for everyday agent and productivity tasks, with image understanding and a 1M-token context window.",
+            "interfaces": [],
+            "name": "Hy4 flash Free",
+            "provider_model_id": "hy4-flash-free",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:18.809347795Z",
               "scope": "public",
               "source_url": "https://opencode.ai/zen/v1/models"
@@ -21333,6 +22127,30 @@
             "interfaces": [],
             "name": "Inkling 2 Small Free",
             "provider_model_id": "inkling-2-small-free",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "System One model for fast, typed probabilistic decisions over text or structured state",
+            "interfaces": [],
+            "name": "Jev 1.13",
+            "provider_model_id": "jev-1.13",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.070242426Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "System One model for fast, typed probabilistic decisions over text or structured state",
+            "interfaces": [],
+            "name": "Jev 1.13 Free",
+            "provider_model_id": "jev-1.13-free",
             "status": "active"
           },
           {
@@ -21505,6 +22323,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Embedding model for semantic search, retrieval, clustering, and ranking pipelines",
+            "interfaces": [],
+            "name": "Mistral Embed",
+            "provider_model_id": "mistral-embed",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:18.809347795Z",
               "scope": "public",
               "source_url": "https://opencode.ai/zen/v1/models"
@@ -21585,6 +22415,18 @@
             "interfaces": [],
             "name": "Nemotron 3.5 Super VL Free",
             "provider_model_id": "nemotron-3.5-super-vl-free",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Multilingual text embedding model for retrieval, code search, classification, and clustering",
+            "interfaces": [],
+            "name": "Qwen3 Embedding 8B",
+            "provider_model_id": "qwen3-embedding-8b",
             "status": "active"
           },
           {
@@ -21671,6 +22513,66 @@
             ],
             "name": "Qwen3.8 Max",
             "provider_model_id": "qwen3.8-max",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Most capable OpenAI embedding model for English and non-English text",
+            "interfaces": [],
+            "name": "text-embedding-3-large",
+            "provider_model_id": "text-embedding-3-large",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Small, efficient OpenAI text embedding model",
+            "interfaces": [],
+            "name": "text-embedding-3-small",
+            "provider_model_id": "text-embedding-3-small",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-19T03:04:47.828286370Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Stealth reasoning model, free for a limited time",
+            "interfaces": [],
+            "name": "Tidepool Alpha Free",
+            "provider_model_id": "tidepool-alpha-free",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "General-purpose and multilingual embedding model balancing retrieval quality and cost",
+            "interfaces": [],
+            "name": "voyage-4",
+            "provider_model_id": "voyage-4",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.582335836Z",
+              "scope": "public",
+              "source_url": "https://opencode.ai/zen/v1/models"
+            },
+            "description": "Code embedding model for code retrieval and coding agents",
+            "interfaces": [],
+            "name": "voyage-code-4",
+            "provider_model_id": "voyage-code-4",
             "status": "active"
           }
         ],
@@ -23478,6 +24380,20 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "baseten/bison-1",
+            "description": "Bison 1 is a 31B decision model from Base Labs, Baseten's research team, built on Gemma 4 31B. Given a state (text, JSON, or images) and typed questions (yes/no, multiple...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Baseten: Bison 1",
+            "provider_model_id": "baseten/bison-1",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -23488,6 +24404,20 @@
             "model_types": [],
             "name": "Baseten: Elephant 1",
             "provider_model_id": "baseten/elephant-1",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "baseten/groundhog-1",
+            "description": "Groundhog 1 is a decision model from Base Labs, Baseten's research team, built on Gemma 4 26B A4B, a mixture-of-experts model with 4B active parameters. Given a state (text, JSON,...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Baseten: Groundhog 1",
+            "provider_model_id": "baseten/groundhog-1",
             "status": "active"
           },
           {
@@ -24018,6 +24948,20 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "bytedance/seedance-2.5-flash",
+            "description": "Seedance 2.5 Flash is a video generation model from ByteDance, the faster and lower-cost tier of Seedance 2.5. It supports text-to-video, image-to-video with first-frame and first-and-last-frame control, multimodal reference-to-video, video...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "ByteDance: Seedance 2.5 Flash",
+            "provider_model_id": "bytedance/seedance-2.5-flash",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -24358,7 +25302,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "cohere/north-mini-code:free",
             "description": "North Mini Code is Cohere's first agentic coding model and the debut of its North family. A sparse mixture-of-experts model with 30B total parameters and 3B active, it is optimized...",
             "interfaces": [
               {
@@ -24534,7 +25477,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -24544,8 +25487,7 @@
               {
                 "capabilities": [
                   "tools",
-                  "structured_outputs",
-                  "logprobs"
+                  "structured_outputs"
                 ],
                 "input_modalities": [
                   "text"
@@ -24819,7 +25761,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -24830,8 +25772,7 @@
                 "capabilities": [
                   "tools",
                   "reasoning",
-                  "structured_outputs",
-                  "logprobs"
+                  "structured_outputs"
                 ],
                 "input_modalities": [
                   "text",
@@ -25555,6 +26496,20 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "google/gemini-2.5-flash-tts",
+            "description": "Gemini 2.5 Flash TTS is a text-to-speech model from Google. It turns text into single-speaker or multi-speaker audio, with style, pace, and tone steered by natural-language instructions in the prompt,...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Google: Gemini 2.5 Flash TTS",
+            "provider_model_id": "google/gemini-2.5-flash-tts",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -25673,6 +26628,20 @@
             ],
             "name": "Google: Gemini 2.5 Pro Preview 06-05",
             "provider_model_id": "google/gemini-2.5-pro-preview",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "google/gemini-2.5-pro-tts",
+            "description": "Gemini 2.5 Pro TTS is a text-to-speech model from Google. It turns text into single-speaker or multi-speaker audio, with style, pace, and tone steered by natural-language instructions in the prompt,...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Google: Gemini 2.5 Pro TTS",
+            "provider_model_id": "google/gemini-2.5-pro-tts",
             "status": "active"
           },
           {
@@ -26445,6 +27414,45 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-19T03:04:48.272434795Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "google/gemini-4-neon",
+            "description": "Gemini 4 Neon is a fast, mid-priced model in the Gemini 4 family from Google, built for coding and agentic work. It is suited for repository and terminal coding, web...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "audio",
+                  "file",
+                  "image",
+                  "text",
+                  "video"
+                ],
+                "limits": {
+                  "context_window": 1048576
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "Google: Gemini 4 Neon",
+            "provider_model_id": "google/gemini-4-neon",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -26962,12 +27970,40 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "heygen/heygen-avatar-6",
+            "description": "HeyGen: Avatar 6 is HeyGen's avatar video model for turning a single photo, a short reference video, or both into an expressive, lip-synced talking video driven by a supplied audio...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "HeyGen: Avatar 6",
+            "provider_model_id": "heygen/heygen-avatar-6",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "heygen/heygen-avatar-6-turbo",
+            "description": "HeyGen: Avatar 6 Turbo is the faster, lower-cost variant of HeyGen's Avatar 6 avatar video model. It turns a single photo, a short reference video, or both into a lip-synced...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "HeyGen: Avatar 6 Turbo",
+            "provider_model_id": "heygen/heygen-avatar-6-turbo",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "heygen/heygen-decision-1",
-            "description": "HeyGen Decision 1 is a decision model from HeyGen. It reads text and images and answers a set of named questions in one request, returning typed answers with probabilities: a...",
+            "description": "HeyGen Decision 1 is a decision model from HeyGen. It reads text, images, and video and answers a set of named questions in one request, returning typed answers with probabilities:...",
             "interfaces": [],
             "model_types": [],
             "name": "HeyGen: HeyGen Decision",
@@ -26976,12 +28012,12 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "heygen/heygen-decision-1-turbo",
-            "description": "HeyGen Decision 1 Turbo is a lower-cost variant of [HeyGen Decision 1](/heygen/heygen-decision-1) from HeyGen, with the same question types (`noul`, `choice`, and `score`) over text and images. It suits high-volume...",
+            "description": "HeyGen Decision 1 Turbo is a lower-cost variant of [HeyGen Decision 1](/heygen/heygen-decision-1) from HeyGen, with the same question types (`noul`, `choice`, and `score`) over text, images, and video. It suits...",
             "interfaces": [],
             "model_types": [],
             "name": "HeyGen: HeyGen Decision Turbo",
@@ -27636,7 +28672,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "liquid/d1",
             "description": "d1 is Liquid AI's structured decision model, served as a System One endpoint. Send a state along with typed questions, and it returns a choice, a score, or a yes/no...",
             "interfaces": [],
             "model_types": [],
@@ -27670,6 +28705,34 @@
             "model_types": [],
             "name": "LiquidAI: d1.1",
             "provider_model_id": "liquid/d1.1",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "liquid/d1.2",
+            "description": "d1.2 is Liquid AI's fast, cost-efficient omnimodal decision model. Built for classification, routing, information extraction, object detection, and automated decision-making at scale.",
+            "interfaces": [],
+            "model_types": [],
+            "name": "LiquidAI: d1.2",
+            "provider_model_id": "liquid/d1.2",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "liquid/d1.2-ultra",
+            "description": "d1.2-ultra is Liquid AI's most capable omnimodal decision model. Designed for complex classification, multimodal understanding, information extraction, and high-stakes automated decision-making.",
+            "interfaces": [],
+            "model_types": [],
+            "name": "LiquidAI: d1.2-ultra",
+            "provider_model_id": "liquid/d1.2-ultra",
             "status": "active"
           },
           {
@@ -28004,7 +29067,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "meta-llama/llama-3.2-1b-instruct",
             "description": "Llama 3.2 1B is a 1-billion-parameter language model focused on efficiently performing natural language tasks, such as summarization, dialogue, and multilingual text analysis. Its smaller size allows it to operate...",
             "interfaces": [
               {
@@ -28632,6 +29694,34 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "microsoft/mai-image-2.7",
+            "description": "MAI-Image-2.7 is an image generation and editing model from Microsoft AI, the precision tier of the MAI-Image-2.7 family alongside the faster [MAI-Image-2.7 Flash](/microsoft/mai-image-2.7-flash). It is suited for design-ready visuals and...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Microsoft AI: MAI-Image-2.7",
+            "provider_model_id": "microsoft/mai-image-2.7",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "microsoft/mai-image-2.7-flash",
+            "description": "MAI-Image-2.7 Flash is the lower-latency, lower-cost member of the [MAI-Image-2.7](/microsoft/mai-image-2.7) family from Microsoft AI, built for latency-sensitive, high-throughput image generation and editing at comparable quality to the precision tier. It...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Microsoft AI: MAI-Image-2.7 Flash",
+            "provider_model_id": "microsoft/mai-image-2.7-flash",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -28726,6 +29816,20 @@
             "model_types": [],
             "name": "Microsoft: Microsoft-Decision-1",
             "provider_model_id": "microsoft/microsoft-decision-1",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "microsoft/microsoft-decision-1.1",
+            "description": "Microsoft-Decision-1.1 is a model from Microsoft built for fast decision-making, and the successor to Microsoft-Decision-1. Instead of generating text, it reads the provided content and returns a calibrated probability for...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Microsoft: Microsoft-Decision-1.1",
+            "provider_model_id": "microsoft/microsoft-decision-1.1",
             "status": "active"
           },
           {
@@ -29989,6 +31093,38 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "mistralai/pixtral-large-2502",
+            "description": "Pixtral Large 2502 is the February 2025 version of Mistral AI's large multimodal model, following [Pixtral Large 2411](https://openrouter.ai/mistralai/pixtral-large-2411). It accepts text and image input, including documents, charts, and natural images,...",
+            "interfaces": [
+              {
+                "capabilities": [],
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "limits": {
+                  "context_window": 128000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "Mistral: Pixtral Large 2502",
+            "provider_model_id": "mistralai/pixtral-large-2502",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -31129,7 +32265,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
             "description": "The Llama Nemotron Embed VL 1B V2 embedding model is optimized for multimodal question-answering retrieval. The model can embed 'documents' in the form of image, text, or image and text...",
             "interfaces": [],
             "model_types": [],
@@ -31143,7 +32278,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
             "description": "Llama Nemotron Rerank VL 1B V2 is a 1.7B multimodal reranking model from NVIDIA. It evaluates the relevance of document images and text against user queries, designed for vision RAG...",
             "interfaces": [],
             "model_types": [],
@@ -31454,7 +32588,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -31472,7 +32606,7 @@
                   "text"
                 ],
                 "limits": {
-                  "context_window": 262144
+                  "context_window": 1048576
                 },
                 "operation": "generation",
                 "output_modalities": [
@@ -34268,6 +35402,154 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "openai/gpt-6.2-astra",
+            "description": "GPT-6.2 Astra is the flagship model in the GPT-6.2 series from OpenAI, built for the hardest projects. It is suited for real-world engineering, professional work and scientific research, with stronger...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "file",
+                  "image",
+                  "text"
+                ],
+                "limits": {
+                  "context_window": 1050000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "OpenAI: GPT-6.2 Astra",
+            "provider_model_id": "openai/gpt-6.2-astra",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "openai/gpt-6.2-astra-pro",
+            "description": "GPT-6.2 Astra Pro is the same underlying model as [GPT-6.2 Astra](https://openrouter.ai/openai/gpt-6.2-astra), served with `reasoning.mode` set to `pro` for higher-quality responses on complex tasks. **Cost note:** pro mode spends far more...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "file",
+                  "image",
+                  "text"
+                ],
+                "limits": {
+                  "context_window": 1050000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "OpenAI: GPT-6.2 Astra Pro",
+            "provider_model_id": "openai/gpt-6.2-astra-pro",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "openai/gpt-6.2-sol",
+            "description": "GPT-6.2 Sol is an upgrade to GPT-6.1 Sol from OpenAI, positioned below the flagship GPT-6.2 Astra in the GPT-6.2 series. It is an efficient, versatile model for everyday work, suited...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "file",
+                  "image",
+                  "text"
+                ],
+                "limits": {
+                  "context_window": 1050000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "OpenAI: GPT-6.2 Sol",
+            "provider_model_id": "openai/gpt-6.2-sol",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:21.661001453Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "openai/gpt-6.2-sol-pro",
+            "description": "GPT-6.2 Sol Pro is the same underlying model as [GPT-6.2 Sol](https://openrouter.ai/openai/gpt-6.2-sol), served with `reasoning.mode` set to `pro` for higher-quality responses on complex tasks. **Cost note:** pro mode spends far more...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "file",
+                  "image",
+                  "text"
+                ],
+                "limits": {
+                  "context_window": 1050000
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "OpenAI: GPT-6.2 Sol Pro",
+            "provider_model_id": "openai/gpt-6.2-sol-pro",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -35171,6 +36453,34 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "perplexity/pplx-embed-v2-context-0.6b",
+            "description": "pplx-embed-v2-context-0.6b is a compact multimodal contextual embedding model from Perplexity for retrieval over text, images, and visual documents. It is the cost-efficient sibling of [pplx-embed-v2-context-9b](https://openrouter.ai/perplexity/pplx-embed-v2-context-9b) and is suited for high-volume...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Perplexity: Embed V2 Context 0.6B",
+            "provider_model_id": "perplexity/pplx-embed-v2-context-0.6b",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "perplexity/pplx-embed-v2-context-9b",
+            "description": "pplx-embed-v2-context-9b is a multimodal contextual embedding model from Perplexity for retrieval over text, images, and visual documents. It is the larger of the two v2 context models and is suited...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Perplexity: Embed V2 Context 9B",
+            "provider_model_id": "perplexity/pplx-embed-v2-context-9b",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -35936,7 +37246,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-16T03:29:37.622809704Z",
+              "checked_at": "2026-11-19T03:04:48.272434795Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -35945,7 +37255,8 @@
             "interfaces": [
               {
                 "capabilities": [
-                  "tools"
+                  "tools",
+                  "structured_outputs"
                 ],
                 "input_modalities": [
                   "text"
@@ -36125,6 +37436,20 @@
             "model_types": [],
             "name": "Qwen3 Reranker 8B",
             "provider_model_id": "qwen/qwen3-reranker-8b",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "qwen/qwen3-tts-1.7b",
+            "description": "Qwen3 TTS is a multilingual text-to-speech model from Alibaba's Qwen team. It converts text to speech across 10 languages — English, Chinese, Japanese, Korean, German, French, Russian, Spanish, Italian, and...",
+            "interfaces": [],
+            "model_types": [],
+            "name": "Qwen: Qwen3 TTS 1.7B",
+            "provider_model_id": "qwen/qwen3-tts-1.7b",
             "status": "active"
           },
           {
@@ -37664,6 +38989,42 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "radixark/daisyrose-27b",
+            "description": "DaisyRose 27B is an open-weight multimodal reasoning model from RadixArk, trained from [Qwen3.8 27B](https://openrouter.ai/qwen/qwen3.8-27b) using reinforcement learning only on long-horizon agent tasks, with no supervised fine-tuning or distillation. It is...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "limits": {
+                  "context_window": 262144
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "RadixArk: DaisyRose 27B",
+            "provider_model_id": "radixark/daisyrose-27b",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:19.269024984Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
@@ -39025,7 +40386,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "tencent/hy3-preview",
             "description": "Hy3 preview is a high-efficiency Mixture-of-Experts model from Tencent designed for agentic workflows and production use. It supports configurable reasoning levels across disabled, low, and high modes, allowing it to...",
             "interfaces": [
               {
@@ -39055,7 +40415,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -39066,7 +40426,8 @@
                 "capabilities": [
                   "tools",
                   "reasoning",
-                  "structured_outputs"
+                  "structured_outputs",
+                  "logprobs"
                 ],
                 "input_modalities": [
                   "text",
@@ -39091,7 +40452,43 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-17T04:24:33.223538646Z",
+              "scope": "public",
+              "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+            },
+            "canonical_id": "tencent/hy4-flash",
+            "description": "Hy4 flash is a cost-efficient variant of [Hy4](https://openrouter.ai/tencent/hy4) from Tencent, served with roughly a quarter of the flagship's parameter count for lower latency and cost. It targets code assistance, agent...",
+            "interfaces": [
+              {
+                "capabilities": [
+                  "tools",
+                  "reasoning",
+                  "structured_outputs"
+                ],
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
+                "limits": {
+                  "context_window": 1048576
+                },
+                "operation": "generation",
+                "output_modalities": [
+                  "text"
+                ],
+                "protocol": "chat_completions"
+              }
+            ],
+            "model_types": [
+              "language"
+            ],
+            "name": "Tencent: Hy4 flash",
+            "provider_model_id": "tencent/hy4-flash",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -39102,8 +40499,7 @@
                 "capabilities": [
                   "tools",
                   "reasoning",
-                  "structured_outputs",
-                  "logprobs"
+                  "structured_outputs"
                 ],
                 "input_modalities": [
                   "text"
@@ -39334,7 +40730,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "thinkingmachines/inkling-2-small:free",
             "description": "Inkling 2 Small is an open-weight multimodal mixture-of-experts reasoning model from Thinking Machines Lab, with 17B active parameters out of 594B total. It is the first model in the second...",
             "interfaces": [
               {
@@ -39945,12 +41340,12 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.20",
-            "description": "Grok 4.20 is a reasoning model from SpaceXAI with industry-leading speed and agentic tool calling capabilities. It combines the lowest hallucination rate on the market with strict prompt adherance, delivering...",
+            "description": "Grok 4.20 is a reasoning model from SpaceXSI with industry-leading speed and agentic tool calling capabilities. It combines the lowest hallucination rate on the market with strict prompt adherance, delivering...",
             "interfaces": [
               {
                 "capabilities": [
@@ -40019,18 +41414,18 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.20",
+            "name": "SpaceXSI: Grok 4.20",
             "provider_model_id": "x-ai/grok-4.20",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.20-multi-agent",
-            "description": "Grok 4.20 Multi-Agent is a variant of SpaceXAI’s Grok 4.20 designed for collaborative, agent-based workflows. Multiple agents operate in parallel to conduct deep research, coordinate tool use, and synthesize information...",
+            "description": "Grok 4.20 Multi-Agent is a variant of SpaceXSI’s Grok 4.20 designed for collaborative, agent-based workflows. Multiple agents operate in parallel to conduct deep research, coordinate tool use, and synthesize information...",
             "interfaces": [
               {
                 "capabilities": [
@@ -40098,18 +41493,18 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.20 Multi-Agent",
+            "name": "SpaceXSI: Grok 4.20 Multi-Agent",
             "provider_model_id": "x-ai/grok-4.20-multi-agent",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.3",
-            "description": "Grok 4.3 is a reasoning model from SpaceXAI. It accepts text and image inputs with text output, and is suited for agentic workflows, instruction-following tasks, and applications requiring high factual...",
+            "description": "Grok 4.3 is a reasoning model from SpaceXSI. It accepts text and image inputs with text output, and is suited for agentic workflows, instruction-following tasks, and applications requiring high factual...",
             "interfaces": [
               {
                 "capabilities": [
@@ -40178,18 +41573,18 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.3",
+            "name": "SpaceXSI: Grok 4.3",
             "provider_model_id": "x-ai/grok-4.3",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.5",
-            "description": "Grok 4.5 is a model from SpaceXAI with frontier performance on coding, knowledge work, and STEM.",
+            "description": "Grok 4.5 is a model from SpaceXSI with frontier performance on coding, knowledge work, and STEM.",
             "interfaces": [
               {
                 "capabilities": [
@@ -40258,18 +41653,18 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.5",
+            "name": "SpaceXSI: Grok 4.5",
             "provider_model_id": "x-ai/grok-4.5",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.6",
-            "description": "Grok 4.6 is a model from SpaceXAI with frontier performance on coding, knowledge work, and STEM. It is succeeded by [Grok 4.7](/x-ai/grok-4.7).",
+            "description": "Grok 4.6 is a model from SpaceXSI with frontier performance on coding, knowledge work, and STEM. It is succeeded by [Grok 4.7](/x-ai/grok-4.7).",
             "interfaces": [
               {
                 "capabilities": [
@@ -40338,18 +41733,18 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.6",
+            "name": "SpaceXSI: Grok 4.6",
             "provider_model_id": "x-ai/grok-4.6",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-4.7",
-            "description": "Grok 4.7 is SpaceXAI's flagship model for coding, agentic tasks, and knowledge work, succeeding Grok 4.6. It is particularly strong at long-running software engineering tasks, verifying its own work, and...",
+            "description": "Grok 4.7 is SpaceXSI's flagship model for coding, agentic tasks, and knowledge work, succeeding Grok 4.6. It is particularly strong at long-running software engineering tasks, verifying its own work, and...",
             "interfaces": [
               {
                 "capabilities": [
@@ -40418,7 +41813,7 @@
             "model_types": [
               "language"
             ],
-            "name": "SpaceXAI: Grok 4.7",
+            "name": "SpaceXSI: Grok 4.7",
             "provider_model_id": "x-ai/grok-4.7",
             "status": "active"
           },
@@ -40428,7 +41823,6 @@
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
-            "canonical_id": "x-ai/grok-build-0.1",
             "description": "Grok Build 0.1 is SpaceXAI’s fast coding model trained specifically for agentic software engineering workflows. It supports text and image inputs with text output, and is optimized for interactive coding...",
             "interfaces": [
               {
@@ -40531,43 +41925,43 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-imagine-video",
-            "description": "Grok Imagine Video is SpaceXAI's fast, text-, image-, and reference-conditioned video generation model. It produces short videos (1–15 seconds, 24 fps) at 480p or 720p across seven aspect ratios -...",
+            "description": "Grok Imagine Video is SpaceXSI's fast, text-, image-, and reference-conditioned video generation model. It produces short videos (1–15 seconds, 24 fps) at 480p or 720p across seven aspect ratios -...",
             "interfaces": [],
             "model_types": [],
-            "name": "SpaceXAI: Grok Imagine Video",
+            "name": "SpaceXSI: Grok Imagine Video",
             "provider_model_id": "x-ai/grok-imagine-video",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-imagine-video-1.5",
-            "description": "Grok Imagine Video 1.5 is a video generation model from SpaceXAI. It creates videos from text prompts, with an optional starting image to guide the scene. It can direct subject...",
+            "description": "Grok Imagine Video 1.5 is a video generation model from SpaceXSI. It creates videos from text prompts, with an optional starting image to guide the scene. It can direct subject...",
             "interfaces": [],
             "model_types": [],
-            "name": "SpaceXAI: Grok Imagine Video 1.5",
+            "name": "SpaceXSI: Grok Imagine Video 1.5",
             "provider_model_id": "x-ai/grok-imagine-video-1.5",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-imagine-video-1.5-lite",
-            "description": "Grok Imagine Video 1.5 Lite is a faster, lower-cost video generation model from SpaceXAI, distilled from [Grok Imagine Video 1.5](/x-ai/grok-imagine-video-1.5). It supports text-to-video and image-to-video, trading some quality for speed...",
+            "description": "Grok Imagine Video 1.5 Lite is a faster, lower-cost video generation model from SpaceXSI, distilled from [Grok Imagine Video 1.5](/x-ai/grok-imagine-video-1.5). It supports text-to-video and image-to-video, trading some quality for speed...",
             "interfaces": [],
             "model_types": [],
-            "name": "SpaceXAI: Grok Imagine Video 1.5 Lite",
+            "name": "SpaceXSI: Grok Imagine Video 1.5 Lite",
             "provider_model_id": "x-ai/grok-imagine-video-1.5-lite",
             "status": "active"
           },
@@ -40586,29 +41980,29 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-stt-2.0",
-            "description": "Grok STT 2.0 is a speech-to-text model from SpaceXAI and the successor to Grok STT 1.0. It is suited for transcription workloads that need word-level timestamps, optional speaker diarization, and...",
+            "description": "Grok STT 2.0 is a speech-to-text model from SpaceXSI and the successor to Grok STT 1.0. It is suited for transcription workloads that need word-level timestamps, optional speaker diarization, and...",
             "interfaces": [],
             "model_types": [],
-            "name": "SpaceXAI: Grok STT 2.0",
+            "name": "SpaceXSI: Grok STT 2.0",
             "provider_model_id": "x-ai/grok-stt-2.0",
             "status": "active"
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-20T02:56:13.352648054Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
             "canonical_id": "x-ai/grok-voice-tts-1.0",
-            "description": "Grok Voice TTS 1.0 is a text-to-speech model from SpaceXAI. It converts text into spoken audio across 20+ languages with automatic language detection, and offers five built-in voices (Eve, Ara,...",
+            "description": "Grok Voice TTS 1.0 is a text-to-speech model from SpaceXSI. It converts text into spoken audio across 20+ languages with automatic language detection, and offers five built-in voices (Eve, Ara,...",
             "interfaces": [],
             "model_types": [],
-            "name": "SpaceXAI: Grok Voice TTS 1.0",
+            "name": "SpaceXSI: Grok Voice TTS 1.0",
             "provider_model_id": "x-ai/grok-voice-tts-1.0",
             "status": "active"
           },
@@ -40694,7 +42088,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-19T03:04:48.272434795Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -40712,7 +42106,7 @@
                   "text"
                 ],
                 "limits": {
-                  "context_window": 1024000
+                  "context_window": 262144
                 },
                 "operation": "generation",
                 "output_modalities": [
@@ -40772,7 +42166,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -40793,7 +42187,7 @@
                   "audio"
                 ],
                 "limits": {
-                  "context_window": 1050000
+                  "context_window": 1048576
                 },
                 "operation": "generation",
                 "output_modalities": [
@@ -40853,7 +42247,7 @@
           },
           {
             "availability": {
-              "checked_at": "2026-11-14T05:57:19.269024984Z",
+              "checked_at": "2026-11-21T03:04:41.951160561Z",
               "scope": "public",
               "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
             },
@@ -40874,7 +42268,7 @@
                   "audio"
                 ],
                 "limits": {
-                  "context_window": 1050000
+                  "context_window": 1048576
                 },
                 "operation": "generation",
                 "output_modalities": [
@@ -42895,6 +44289,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:22.808671098Z",
+              "scope": "public",
+              "source_url": "https://inference.phala.com/v1/models"
+            },
+            "description": "Uncensored variant of DeepSeek V4.1 Flash 1017, built as a lightweight LoRA adapter served unmerged on the official FP8 weights. Refuses far less while keeping the base model's capabilities, tool calling, image input and 1M-token context. Served with SGLang in a TDX-attested enclave with NVIDIA confidential computing. Reasoning is on by default and can be turned off or capped per request.",
+            "interfaces": [],
+            "name": "Phala: DeepSeek V4.1 Flash 1017 Uncensored",
+            "provider_model_id": "phala/deepseek-v4.1-flash-1017-uncensored",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:20.310111018Z",
               "scope": "public",
               "source_url": "https://inference.phala.com/v1/models"
@@ -42927,6 +44333,30 @@
             "interfaces": [],
             "name": "Qwen2.5 7B Instruct",
             "provider_model_id": "qwen/qwen-2.5-7b-instruct",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:22.808671098Z",
+              "scope": "public",
+              "source_url": "https://inference.phala.com/v1/models"
+            },
+            "description": "Qwen3-ASR 0.6B is the smaller, lower-cost open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+            "interfaces": [],
+            "name": "Qwen: Qwen3 ASR 0.6B",
+            "provider_model_id": "qwen/qwen3-asr-0.6b",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:22.808671098Z",
+              "scope": "public",
+              "source_url": "https://inference.phala.com/v1/models"
+            },
+            "description": "Qwen3-ASR 1.7B is the larger open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+            "interfaces": [],
+            "name": "Qwen: Qwen3 ASR 1.7B",
+            "provider_model_id": "qwen/qwen3-asr-1.7b",
             "status": "active"
           },
           {
@@ -44046,6 +45476,18 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:24.635255358Z",
+              "scope": "public",
+              "source_url": "https://api.redpill.ai/v1/models"
+            },
+            "description": "Uncensored variant of DeepSeek V4.1 Flash 1017, built as a lightweight LoRA adapter served unmerged on the official FP8 weights. Refuses far less while keeping the base model's capabilities, tool calling, image input and 1M-token context. Served with SGLang in a TDX-attested enclave with NVIDIA confidential computing. Reasoning is on by default and can be turned off or capped per request.",
+            "interfaces": [],
+            "name": "Phala: DeepSeek V4.1 Flash 1017 Uncensored",
+            "provider_model_id": "phala/deepseek-v4.1-flash-1017-uncensored",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:21.357104013Z",
               "scope": "public",
               "source_url": "https://api.redpill.ai/v1/models"
@@ -44078,6 +45520,30 @@
             "interfaces": [],
             "name": "Qwen2.5 7B Instruct",
             "provider_model_id": "qwen/qwen-2.5-7b-instruct",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:24.635255358Z",
+              "scope": "public",
+              "source_url": "https://api.redpill.ai/v1/models"
+            },
+            "description": "Qwen3-ASR 0.6B is the smaller, lower-cost open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+            "interfaces": [],
+            "name": "Qwen: Qwen3 ASR 0.6B",
+            "provider_model_id": "qwen/qwen3-asr-0.6b",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:24.635255358Z",
+              "scope": "public",
+              "source_url": "https://api.redpill.ai/v1/models"
+            },
+            "description": "Qwen3-ASR 1.7B is the larger open-weight speech recognition model in Alibaba's Qwen3-ASR family, transcribing speech in 30 languages and 22 Chinese dialects with automatic language detection. Served on Phala GPU TEE. It returns plain text for audio up to 10 minutes and does not return timestamps.",
+            "interfaces": [],
+            "name": "Qwen: Qwen3 ASR 1.7B",
+            "provider_model_id": "qwen/qwen3-asr-1.7b",
             "status": "active"
           },
           {
@@ -45720,7 +47186,6 @@
             "status": "active"
           },
           {
-            "canonical_id": "x-ai/grok-build-0.1",
             "interfaces": [
               {
                 "capabilities": [
@@ -46210,6 +47675,17 @@
             "interfaces": [],
             "name": "Hy4",
             "provider_model_id": "hy4",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:38.686000844Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "Hy4 flash",
+            "provider_model_id": "hy4-flash",
             "status": "active"
           },
           {
@@ -46761,6 +48237,28 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-18T03:32:28.886742330Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "MiniMax-Video-H3-Highspeed",
+            "provider_model_id": "minimax-video-h3-highspeed",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:28.886742330Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "MiniMax-Video-H3-Lite",
+            "provider_model_id": "minimax-video-h3-lite",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:26.456132256Z",
               "scope": "account",
               "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
@@ -46860,6 +48358,17 @@
           },
           {
             "availability": {
+              "checked_at": "2026-11-19T03:04:54.141007605Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "PixVerse-Video-v6-max",
+            "provider_model_id": "pixverse-video-v6.0-max",
+            "status": "active"
+          },
+          {
+            "availability": {
               "checked_at": "2026-11-14T05:57:26.456132256Z",
               "scope": "account",
               "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
@@ -46889,6 +48398,17 @@
             "interfaces": [],
             "name": "Seedream-Image-v5.0-pro",
             "provider_model_id": "seedream-image-v5.0-pro",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-18T03:32:28.886742330Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "Seedream-Image-v5.5",
+            "provider_model_id": "seedream-image-v5.5",
             "status": "active"
           },
           {
@@ -46944,6 +48464,28 @@
             "interfaces": [],
             "name": "Tripo-3D-P1",
             "provider_model_id": "tripo-3d-p1",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-20T02:56:19.704253622Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "Tripo-3D-P2",
+            "provider_model_id": "tripo-3d-p2",
+            "status": "active"
+          },
+          {
+            "availability": {
+              "checked_at": "2026-11-21T03:04:48.493040165Z",
+              "scope": "account",
+              "source_url": "https://tokenhub-intl.tencentcloudmaas.com/v1/models"
+            },
+            "interfaces": [],
+            "name": "Tripo-3D-Retopology",
+            "provider_model_id": "tripo-3d-retopology",
             "status": "active"
           },
           {
@@ -47629,6 +49171,18 @@
             "status": "active"
           },
           {
+            "availability": {
+              "checked_at": "2026-11-17T04:24:40.218134938Z",
+              "scope": "public",
+              "source_url": "https://inference.tinfoil.sh/v1/models"
+            },
+            "description": "Thinking Machines Lab's multimodal MoE model with variable reasoning effort, strong agentic coding, and image understanding",
+            "interfaces": [],
+            "name": "Inkling 2 Small",
+            "provider_model_id": "inkling-2-small",
+            "status": "active"
+          },
+          {
             "canonical_id": "moonshotai/kimi-k3",
             "description": "Moonshot's flagship multimodal MoE model with hybrid attention for long-context reasoning, coding, and agentic workflows",
             "interfaces": [
@@ -48131,7 +49685,6 @@
             "status": "active"
           },
           {
-            "canonical_id": "x-ai/grok-build-0.1",
             "interfaces": [
               {
                 "capabilities": [

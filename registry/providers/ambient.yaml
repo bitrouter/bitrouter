@@ -95,6 +95,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-17T04:24:21.114948687Z",
+        "scope": "public",
+        "source_url": "https://api.ambient.xyz/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash 1017 is DeepSeek's October 2026 refresh of V4 Flash, a 763B-parameter sparse MoE reasoning model with a 1M-token context window, served with tool calling and reasoning.",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "minimax/minimax-m3",
       "description": "MiniMax M3 - reasoning model with tool calling and structured output. 262K context.",
       "interfaces": [

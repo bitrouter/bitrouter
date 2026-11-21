@@ -1,7 +1,6 @@
 {
   "access": "local_oauth",
   "api_base": "https://api.x.ai/v1",
-  "status": "active",
   "auth": {
     "handler": "supergrok",
     "kind": "oauth",
@@ -13,7 +12,6 @@
       "token_endpoint": "https://auth.x.ai/oauth2/token"
     }
   },
-  "name": "supergrok",
   "billing": "subscription",
   "display_name": "SuperGrok (subscription)",
   "kind": "first_party",
@@ -27,147 +25,148 @@
   },
   "models": [
     {
+      "canonical_id": "x-ai/grok-4.5",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-4.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.5"
+      "status": "active"
     },
     {
+      "canonical_id": "x-ai/grok-4.20-multi-agent",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-4.20-multi-agent",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.20-multi-agent"
+      "status": "active"
     },
     {
+      "canonical_id": "x-ai/grok-4.20",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-4.20",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.20"
+      "status": "active"
     },
     {
+      "canonical_id": "x-ai/grok-4.3",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-4.3",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ]
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.3"
+      "status": "active"
     },
     {
+      "interfaces": [
+        {
+          "capabilities": [
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "capabilities": [
+            "tools"
+          ],
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-build-0.1",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation",
-          "capabilities": [
-            "tools"
-          ]
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "tools"
-          ]
-        }
-      ],
-      "canonical_id": "x-ai/grok-build-0.1"
+      "status": "active"
     },
     {
+      "canonical_id": "x-ai/grok-4.6",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "responses"
+        },
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
       "provider_model_id": "grok-4.6",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "responses",
-          "operation": "generation"
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.6"
+      "status": "active"
     },
     {
-      "provider_model_id": "grok-4.7",
-      "status": "active",
+      "canonical_id": "x-ai/grok-4.7",
       "interfaces": [
         {
-          "protocol": "responses",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "responses"
         },
         {
-          "protocol": "chat_completions",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "x-ai/grok-4.7"
+      "provider_model_id": "grok-4.7",
+      "status": "active"
     }
-  ]
+  ],
+  "name": "supergrok",
+  "status": "active"
 }

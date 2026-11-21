@@ -1050,6 +1050,19 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "baseten/bison-1",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "baseten/bison-1",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "baseten/elephant-1",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -1057,6 +1070,19 @@
     ],
     "canonical_id": "baseten/elephant-1",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "baseten/groundhog-1",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "baseten/groundhog-1",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -1421,6 +1447,19 @@
     ],
     "canonical_id": "bytedance/seedance-2.5",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "bytedance/seedance-2.5-flash",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-17T04:24:33.223538646Z"
+      }
+    ],
+    "canonical_id": "bytedance/seedance-2.5-flash",
+    "observed_at": "2026-11-17T04:24:33.223538646Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -2294,6 +2333,19 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "google/gemini-2.5-flash-tts",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-20T02:56:13.352648054Z"
+      }
+    ],
+    "canonical_id": "google/gemini-2.5-flash-tts",
+    "observed_at": "2026-11-20T02:56:13.352648054Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "google/gemini-2.5-pro",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -2320,6 +2372,19 @@
     ],
     "canonical_id": "google/gemini-2.5-pro-preview",
     "observed_at": "2026-10-22T17:30:00Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "google/gemini-2.5-pro-tts",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-20T02:56:13.352648054Z"
+      }
+    ],
+    "canonical_id": "google/gemini-2.5-pro-tts",
+    "observed_at": "2026-11-20T02:56:13.352648054Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -2690,6 +2755,19 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "google/gemini-4-neon",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-19T03:04:48.272434795Z"
+      }
+    ],
+    "canonical_id": "google/gemini-4-neon",
+    "observed_at": "2026-11-19T03:04:48.272434795Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "google/gemini-decision-1",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-11-14T05:57:19.269024984Z"
@@ -2983,6 +3061,32 @@
     ],
     "canonical_id": "heygen/avatar-iv",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "heygen/heygen-avatar-6",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "heygen/heygen-avatar-6",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "heygen/heygen-avatar-6-turbo",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "heygen/heygen-avatar-6-turbo",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -3418,6 +3522,32 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "liquid/d1.2",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-17T04:24:33.223538646Z"
+      }
+    ],
+    "canonical_id": "liquid/d1.2",
+    "observed_at": "2026-11-17T04:24:33.223538646Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "liquid/d1.2-ultra",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-17T04:24:33.223538646Z"
+      }
+    ],
+    "canonical_id": "liquid/d1.2-ultra",
+    "observed_at": "2026-11-17T04:24:33.223538646Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "liquid/lfm-2.5-2.6b",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -3821,6 +3951,32 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "microsoft/mai-image-2.7",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "microsoft/mai-image-2.7",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "microsoft/mai-image-2.7-flash",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "microsoft/mai-image-2.7-flash",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "microsoft/mai-transcribe-1.5",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -3906,6 +4062,19 @@
     ],
     "canonical_id": "microsoft/microsoft-decision-1",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "microsoft/microsoft-decision-1.1",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "microsoft/microsoft-decision-1.1",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -4545,6 +4714,19 @@
     ],
     "canonical_id": "mistralai/mixtral-8x22b-instruct",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "mistralai/pixtral-large-2502",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-20T02:56:13.352648054Z"
+      }
+    ],
+    "canonical_id": "mistralai/pixtral-large-2502",
+    "observed_at": "2026-11-20T02:56:13.352648054Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -6614,6 +6796,58 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.2-astra",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "openai/gpt-6.2-astra",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.2-astra-pro",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "openai/gpt-6.2-astra-pro",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.2-sol",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "openai/gpt-6.2-sol",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.2-sol-pro",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-18T03:32:21.661001453Z"
+      }
+    ],
+    "canonical_id": "openai/gpt-6.2-sol-pro",
+    "observed_at": "2026-11-18T03:32:21.661001453Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "openai/gpt-audio",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -7158,6 +7392,32 @@
     "bindings": [
       {
         "provider": "openrouter",
+        "provider_model_id": "perplexity/pplx-embed-v2-context-0.6b",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "perplexity/pplx-embed-v2-context-0.6b",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "perplexity/pplx-embed-v2-context-9b",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "perplexity/pplx-embed-v2-context-9b",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
         "provider_model_id": "perplexity/sonar",
         "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
         "verified_at": "2026-10-31T18:49:26.697912Z"
@@ -7607,6 +7867,19 @@
     ],
     "canonical_id": "qwen/qwen3-reranker-8b",
     "observed_at": "2026-10-31T18:49:26.697912Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "qwen/qwen3-tts-1.7b",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "qwen/qwen3-tts-1.7b",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -8258,6 +8531,19 @@
     ],
     "canonical_id": "qwen/qwen4-max",
     "observed_at": "2026-11-16T03:29:37.622809704Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "radixark/daisyrose-27b",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-21T03:04:41.951160561Z"
+      }
+    ],
+    "canonical_id": "radixark/daisyrose-27b",
+    "observed_at": "2026-11-21T03:04:41.951160561Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {
@@ -9103,6 +9389,19 @@
     ],
     "canonical_id": "tencent/hy4",
     "observed_at": "2026-11-14T05:57:19.269024984Z",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+  },
+  {
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "tencent/hy4-flash",
+        "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+        "verified_at": "2026-11-17T04:24:33.223538646Z"
+      }
+    ],
+    "canonical_id": "tencent/hy4-flash",
+    "observed_at": "2026-11-17T04:24:33.223538646Z",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
   },
   {

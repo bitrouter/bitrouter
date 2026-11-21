@@ -311,6 +311,26 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-17T04:24:40.218134938Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Thinking Machines Lab's multimodal MoE model with variable reasoning effort, strong agentic coding, and image understanding",
+      "interfaces": [],
+      "name": "Inkling 2 Small",
+      "provider_model_id": "inkling-2-small",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "owner": "catalog"
+      }
+    },
+    {
       "canonical_id": "moonshotai/kimi-k3",
       "description": "Moonshot's flagship multimodal MoE model with hybrid attention for long-context reasoning, coding, and agentic workflows",
       "interfaces": [
@@ -343,23 +363,23 @@
       }
     },
     {
-      "provider_model_id": "kimi-k3-1-pro",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:28.378138374Z",
+        "scope": "public",
+        "source_url": "https://inference.tinfoil.sh/v1/models"
+      },
+      "description": "Moonshot's flagship multimodal MoE model, post-trained from Kimi K3 for long-horizon coding, agentic workflows, and knowledge work",
       "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "kimi-k3-1-pro",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/description": "catalog",
           "/name": "catalog",
           "/status": "catalog"
-        }
-      },
-      "description": "Moonshot's flagship multimodal MoE model, post-trained from Kimi K3 for long-horizon coding, agentic workflows, and knowledge work",
-      "name": "Kimi K3.1 Pro",
-      "status": "active",
-      "availability": {
-        "source_url": "https://inference.tinfoil.sh/v1/models",
-        "checked_at": "2026-11-14T05:57:28.378138374Z",
-        "scope": "public"
+        },
+        "owner": "catalog"
       }
     },
     {

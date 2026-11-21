@@ -1616,7 +1616,6 @@
         "scope": "public",
         "source_url": "https://api.bitrouter.ai/v1/models"
       },
-      "canonical_id": "x-ai/grok-build-0.1",
       "interfaces": [
         {
           "operation": "generation",

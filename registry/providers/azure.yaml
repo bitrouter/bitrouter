@@ -152,23 +152,23 @@
       }
     },
     {
-      "provider_model_id": "claude-fable-5-2",
+      "availability": {
+        "checked_at": "2026-11-14T05:57:09.926609639Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [],
+      "name": "Claude Fable 5.2",
+      "provider_model_id": "claude-fable-5-2",
+      "status": "staging",
       "sync": {
-        "owner": "directory",
         "field_owners": {
           "/description": "directory",
           "/name": "directory",
           "/status": "directory"
-        }
-      },
-      "description": "Claude model for demanding reasoning and long-horizon agentic work",
-      "name": "Claude Fable 5.2",
-      "status": "staging",
-      "availability": {
-        "source_url": "https://models.dev/api.json?type=all",
-        "checked_at": "2026-11-14T05:57:09.926609639Z",
-        "scope": "public"
+        },
+        "owner": "directory"
       }
     },
     {
@@ -1679,6 +1679,46 @@
           "/description": "directory",
           "/name": "directory"
         }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:38.090833591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "A frontier reasoning model for coding, computer use, and professional work such as slides, spreadsheets, and documents.",
+      "interfaces": [],
+      "name": "GPT-6.2 Astra",
+      "provider_model_id": "gpt-6.2-astra",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-19T03:04:38.090833591Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "An efficient reasoning model for everyday work, multistep agentic workflows, and coding.",
+      "interfaces": [],
+      "name": "GPT-6.2 Sol",
+      "provider_model_id": "gpt-6.2-sol",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "owner": "directory"
       }
     },
     {
