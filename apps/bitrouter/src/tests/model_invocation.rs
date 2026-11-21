@@ -182,6 +182,22 @@ fn protocols() -> [ApiProtocol; 3] {
     ]
 }
 
+fn assert_public_error(error: &ModelError, status: u16, code: &str) -> TestResult {
+    let ModelError::HttpResponse {
+        status: actual,
+        body,
+        ..
+    } = error
+    else {
+        return Err(io::Error::other(format!("expected HTTP error, got {error}")).into());
+    };
+    assert_eq!(*actual, status, "{error}");
+    assert!(!body.contains("selected-secret"), "{error}");
+    let envelope: Value = serde_json::from_str(body)?;
+    assert_eq!(envelope["error"]["code"], code, "{error}");
+    Ok(())
+}
+
 #[test]
 fn retry_after_accepts_seconds_http_date_and_rejects_invalid_values() -> TestResult {
     let seconds = reqwest::header::HeaderValue::from_static("42");
@@ -308,40 +324,39 @@ async fn codex_generate_rejects_truncated_failed_and_post_terminal_streams() -> 
     let terminal = event(
         json!({"type":"response.completed","response":{"id":"response","status":"completed","output":[]}}),
     );
-    for (body, provider_error) in [
-        (delta.clone(), false),
+    for (body, status, code) in [
+        (delta.clone(), 502, "upstream_invalid_response"),
         (
             delta.clone()
                 + &event(
                     json!({"type":"response.failed","response":{"id":"response","status":"failed","output":[],"error":{"type":"rate_limit_error","message":"late selected-secret failure"}}}),
                 ),
-            true,
+            429,
+            "upstream_rate_limited",
         ),
         (
             delta.clone()
                 + &event(
                     json!({"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"missing terminal identity"}}}),
                 ),
-            false,
+            502,
+            "upstream_invalid_response",
         ),
-        (delta.clone() + &terminal + &delta, false),
+        (
+            delta.clone() + &terminal + &delta,
+            502,
+            "upstream_invalid_response",
+        ),
     ] {
         let mut server = fixture(200, body, true, None).await?;
         let mut selected = target(&server.base, ApiProtocol::Responses);
         selected.provider_name = "openai-codex".into();
-        let result = client
+        let error = client
             .generate(&selected, &prompt()?, &CancellationToken::new())
-            .await;
-        if provider_error {
-            assert!(
-                matches!(result, Err(ModelError::HttpResponse { status: 502, ref body, .. }) if !body.contains("selected-secret"))
-            );
-        } else {
-            assert!(matches!(
-                result,
-                Err(ModelError::HttpResponse { status: 502, .. })
-            ));
-        }
+            .await
+            .err()
+            .ok_or_else(|| io::Error::other("invalid Responses stream was accepted"))?;
+        assert_public_error(&error, status, code)?;
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
     }
     Ok(())
@@ -521,16 +536,31 @@ async fn http_failures_use_public_status_and_hide_provider_credentials() -> Test
 #[tokio::test]
 async fn invalid_success_and_responses_terminal_contract_are_typed() -> TestResult {
     let client = HttpGateway::new(HttpTimeouts::default())?;
-    for (protocol, body) in [
-        (ApiProtocol::ChatCompletions, "not json".into()),
-        (ApiProtocol::Messages, "{}".into()),
+    for (protocol, body, status, code) in [
+        // A decode failure exhausts this fixture's route and maps to unavailable.
+        (
+            ApiProtocol::ChatCompletions,
+            "not json".into(),
+            503,
+            "upstream_unavailable",
+        ),
+        (
+            ApiProtocol::Messages,
+            "{}".into(),
+            502,
+            "upstream_invalid_response",
+        ),
         (
             ApiProtocol::Responses,
             json!({"id":"resp_fixture","status":"failed","output":[]}).to_string(),
+            502,
+            "upstream_invalid_response",
         ),
         (
             ApiProtocol::Responses,
             json!({"status":"completed","output":[]}).to_string(),
+            502,
+            "upstream_invalid_response",
         ),
     ] {
         let server = fixture(200, body, false, None).await?;
@@ -543,10 +573,7 @@ async fn invalid_success_and_responses_terminal_contract_are_typed() -> TestResu
             .await
             .err()
             .ok_or_else(|| io::Error::other("invalid success was accepted"))?;
-        assert!(
-            matches!(error, ModelError::HttpResponse { status: 502, .. }),
-            "{error}"
-        );
+        assert_public_error(&error, status, code)?;
     }
     Ok(())
 }
@@ -636,9 +663,31 @@ async fn responses_stream_rejects_mismatched_id_and_post_terminal_data() -> Test
 
 #[tokio::test]
 async fn cancellation_and_missing_credentials_prevent_dispatch() -> TestResult {
-    let client = HttpGateway::new(HttpTimeouts::default())?;
-    let mut server = fixture(200, "{}".into(), false, None).await?;
-    let mut selected = target(&server.base, ApiProtocol::ChatCompletions);
+    use crate::gateway::providers::{
+        auth::{
+            AuthAppliers,
+            oauth::{REFRESH_WINDOW, RefreshGrant},
+            store::{OAuthSession, memory_fixture::MemoryCredentialStore},
+        },
+        codex::{OpenAiCodexAuthApplier, PROVIDER_ID},
+    };
+
+    let mut server = fixture(200, response_stream(&ApiProtocol::Responses), true, None).await?;
+    // Credential requirements belong to the selected provider's authentication
+    // implementation; an unregistered custom transport may be anonymous.
+    let auth = OpenAiCodexAuthApplier::new(OAuthSession::new(
+        Arc::new(MemoryCredentialStore::default()),
+        Arc::new(RefreshGrant::new(
+            reqwest::Client::new(),
+            format!("{}/token", server.base),
+            "fixture-client",
+        )),
+        REFRESH_WINDOW,
+    ));
+    let client = HttpGateway::new(HttpTimeouts::default())?
+        .with_auth_appliers(AuthAppliers::new().with(PROVIDER_ID, Arc::new(auth)));
+    let mut selected = target(&server.base, ApiProtocol::Responses);
+    selected.provider_name = PROVIDER_ID.into();
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(matches!(
@@ -646,12 +695,12 @@ async fn cancellation_and_missing_credentials_prevent_dispatch() -> TestResult {
         Err(ModelError::Cancelled)
     ));
     selected.api_key.clear();
-    assert!(matches!(
-        client
-            .generate(&selected, &prompt()?, &CancellationToken::new())
-            .await,
-        Err(ModelError::HttpResponse { status: 500, .. })
-    ));
+    let error = client
+        .generate(&selected, &prompt()?, &CancellationToken::new())
+        .await
+        .err()
+        .ok_or_else(|| io::Error::other("missing subscription credential was accepted"))?;
+    assert_public_error(&error, 502, "upstream_bad_gateway")?;
     assert!(matches!(
         server.received.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
