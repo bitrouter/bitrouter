@@ -496,9 +496,9 @@ fn idempotent_on_second_application() {
 #[test]
 fn prediction_confidence_ppm_clamps_a_literal_edge_case_table() {
     let cases = [
-        (f32::NAN, 0),
-        (f32::INFINITY, 1_000_000),
-        (f32::NEG_INFINITY, 0),
+        (f64::NAN, 0),
+        (f64::INFINITY, 1_000_000),
+        (f64::NEG_INFINITY, 0),
         (-0.25, 0),
         (0.0, 0),
         (0.9, 900_000),
@@ -511,10 +511,10 @@ fn prediction_confidence_ppm_clamps_a_literal_edge_case_table() {
 }
 
 #[test]
-fn latest_user_turn_routes_by_predictive_role_not_stale_tool_state() {
+fn latest_user_turn_routes_by_semantic_role() {
     let assessment = semantic_fixture(TaskFamily::CodeGeneration, NextStep::Implement);
     // The decisive new user instruction routes to implementation instead
-    // of consulting the stale observed read-tool projection.
+    // of consulting the preceding read-tool call.
     let routed = route(
         "inbound",
         vec![

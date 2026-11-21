@@ -23,7 +23,6 @@ pub enum TrajectoryEventKind {
     RequestStarted,
     RouteIntentRecorded,
     RequestSettled,
-    GuardActivated,
     EpisodeClosed,
 }
 
@@ -43,7 +42,7 @@ pub struct TrajectoryEvidence {
     pub digests: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_measurement: Option<RouteDecisionMeasurement>,
-    /// Shared classification and exact plan receipts, only on settlement.
+    /// Shared semantic classification receipts, only on settlement.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routing_evidence: Vec<bitrouter_ai::eval::EvidenceItem>,
 }
@@ -65,8 +64,8 @@ pub struct TrajectoryEvent {
 
 /// An already-keyed, HMAC-shaped correlation token.
 ///
-/// This constructor validates a Task-2-compatible wire shape without ever
-/// accepting or hashing message content in the Task 1 ledger.
+/// This constructor validates the keyed digest wire shape without ever
+/// accepting or hashing message content in the ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct KeyedDigest {
@@ -128,7 +127,7 @@ impl From<KeyedDigest> for String {
 #[serde(deny_unknown_fields)]
 pub struct EpisodeStart {
     pub episode_id: String,
-    /// Opaque, already-keyed correlation material. Task 1 never hashes it.
+    /// Opaque correlation material already keyed before ledger admission.
     pub correlation_digest: KeyedDigest,
     pub correlation_key_id: String,
     pub correlation_source: String,
@@ -232,9 +231,6 @@ pub struct TrajectoryHealth {
     pub latest_projection: Option<String>,
     pub same_projection_streak: u64,
     pub same_selected_tier_streak: u64,
-    pub consecutive_unprotected_requests: u64,
-    pub recovery_count: u64,
-    pub requests_since_recovery: Option<u64>,
     pub context_growth_ppm: Option<u64>,
     pub total_tokens: Option<u64>,
     pub settled_cost_micro_usd: Option<u64>,
@@ -246,7 +242,6 @@ pub struct TrajectorySnapshot {
     pub episode_id: String,
     pub through_sequence: u64,
     pub health: TrajectoryHealth,
-    pub active_hold_remaining: u64,
     pub evidence_digest: String,
 }
 
@@ -256,7 +251,6 @@ impl TrajectorySnapshot {
             episode_id: &self.episode_id,
             through_sequence: self.through_sequence,
             health: &self.health,
-            active_hold_remaining: self.active_hold_remaining,
         })
     }
 }
@@ -266,7 +260,6 @@ struct TrajectorySnapshotDigestInput<'a> {
     episode_id: &'a str,
     through_sequence: u64,
     health: &'a TrajectoryHealth,
-    active_hold_remaining: u64,
 }
 
 impl TrajectoryEvent {
@@ -582,17 +575,13 @@ mod tests {
                 settled_request_count: 1,
                 unsettled_request_count: 0,
                 elapsed_ms: 2_000,
-                latest_projection: Some("agent_trace/v2|edit|normal".into()),
+                latest_projection: Some("code:generation|implement|normal".into()),
                 same_projection_streak: 1,
                 same_selected_tier_streak: 1,
-                consecutive_unprotected_requests: 1,
-                recovery_count: 0,
-                requests_since_recovery: None,
                 context_growth_ppm: Some(0),
                 total_tokens: Some(0),
                 settled_cost_micro_usd: Some(0),
             },
-            active_hold_remaining: 0,
             evidence_digest: String::new(),
         };
         let digest = snapshot.semantic_digest()?;

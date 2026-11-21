@@ -1,11 +1,9 @@
-use std::collections::BTreeSet;
-
 use anyhow::Result;
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::Human;
-use crate::trajectory::guard::{RouteIntentClauseDisposition, validate_persisted_route_intent};
+
 use crate::trajectory::health::reduce;
 use crate::trajectory::store::PruneSummary;
 use crate::trajectory::store::{EpisodeAudit, TrajectoryStore};
@@ -32,17 +30,8 @@ pub struct TrajectoryRouteIntentReport {
     pub request_id: Option<String>,
     pub policy: Option<String>,
     pub projection: Option<String>,
-    pub workflow_state: Option<String>,
     pub candidate_tier: Option<String>,
     pub selected_tier: Option<String>,
-    pub selected_is_protected: Option<bool>,
-    pub clauses: Vec<TrajectoryClauseReport>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TrajectoryClauseReport {
-    pub clause_id: String,
-    pub disposition: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,25 +178,12 @@ fn route_intents(events: &[TrajectoryEvent]) -> Result<Vec<TrajectoryRouteIntent
         .iter()
         .filter(|event| event.kind == TrajectoryEventKind::RouteIntentRecorded)
         .map(|event| {
-            let clauses = validate_persisted_route_intent(event)?
-                .into_iter()
-                .flatten()
-                .map(|(clause_id, disposition)| TrajectoryClauseReport {
-                    clause_id,
-                    disposition: disposition_name(disposition).to_owned(),
-                })
-                .collect();
             Ok(TrajectoryRouteIntentReport {
                 sequence: event.sequence,
                 event_id: event.event_id.clone(),
                 request_id: event.request_id.clone(),
                 policy: event.evidence.categorical.get("route.policy").cloned(),
                 projection: event.evidence.categorical.get("route.projection").cloned(),
-                workflow_state: event
-                    .evidence
-                    .categorical
-                    .get("route.workflow_state")
-                    .cloned(),
                 candidate_tier: event
                     .evidence
                     .categorical
@@ -218,12 +194,6 @@ fn route_intents(events: &[TrajectoryEvent]) -> Result<Vec<TrajectoryRouteIntent
                     .categorical
                     .get("route.selected_tier")
                     .cloned(),
-                selected_is_protected: event
-                    .evidence
-                    .structural
-                    .get("route.selected_is_protected")
-                    .map(|value| *value == 1),
-                clauses,
             })
         })
         .collect()
@@ -242,7 +212,7 @@ fn latest_checkpoint(events: &[TrajectoryEvent]) -> Result<Option<TrajectoryDige
         .get("route.health_snapshot")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("trajectory checkpoint lost its live digest"))?;
-    let replayed = reduce(&events[..index], &BTreeSet::new())?;
+    let replayed = reduce(&events[..index])?;
     let replayed_digest = replayed.evidence_digest;
     Ok(Some(TrajectoryDigestComparison {
         event_id: route.event_id.clone(),
@@ -272,15 +242,7 @@ fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
         TrajectoryEventKind::RequestStarted => "request_started",
         TrajectoryEventKind::RouteIntentRecorded => "route_intent_recorded",
         TrajectoryEventKind::RequestSettled => "request_settled",
-        TrajectoryEventKind::GuardActivated => "guard_activated",
         TrajectoryEventKind::EpisodeClosed => "episode_closed",
-    }
-}
-
-fn disposition_name(disposition: RouteIntentClauseDisposition) -> &'static str {
-    match disposition {
-        RouteIntentClauseDisposition::Applied => "applied",
-        RouteIntentClauseDisposition::Skipped => "skipped",
     }
 }
 
@@ -302,10 +264,8 @@ impl CliReport for TrajectoryInspectReport {
             self.correlation_source, self.completeness
         ))?;
         human.line(&format!(
-            "health {} (sequence {}, active hold {})",
-            self.current.evidence_digest,
-            self.current.through_sequence,
-            self.current.active_hold_remaining
+            "health {} (sequence {})",
+            self.current.evidence_digest, self.current.through_sequence
         ))?;
         for route in &self.route_intents {
             human.line(&format!(
@@ -376,14 +336,13 @@ impl CliReport for TrajectoryPruneReport {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
 
     use super::{inspect_report, replay_from_audit, replay_report};
-    use crate::gateway::routing::workflow::ir::RouteProjection;
+
     use crate::output::{Format, Output};
-    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
+
     use crate::trajectory::store::{
-        CorrelateAndBegin, EpisodeAudit, GuardedRouteInput, TrajectoryStore,
+        CorrelateAndBegin, EpisodeAudit, RecordedRouteInput, TrajectoryStore,
     };
     use crate::trajectory::types::{HistoryCompleteness, StoredEpisode};
 
@@ -393,7 +352,7 @@ mod tests {
     #[tokio::test]
     async fn inspect_and_replay_reports_are_stable_structural_and_digest_equal()
     -> anyhow::Result<()> {
-        let store = guarded_store().await?;
+        let store = recorded_store().await?;
         let inspect = inspect_report(&store, "episode-report").await?;
         let value = serde_json::to_value(&inspect)?;
         assert_eq!(value["action"], "inspect");
@@ -401,15 +360,12 @@ mod tests {
         assert_eq!(value["correlation_source"], "explicit_root");
         assert_eq!(value["completeness"], "complete");
         assert_eq!(value["current"]["through_sequence"], 2);
-        assert_eq!(value["current"]["active_hold_remaining"], 0);
         assert_eq!(value["route_intents"][0]["policy"], "coding");
         assert_eq!(value["route_intents"][0]["candidate_tier"], "economy");
         assert_eq!(value["route_intents"][0]["selected_tier"], "economy");
         assert_eq!(
-            value["route_intents"][0]["clauses"]
-                .as_array()
-                .map(Vec::len),
-            Some(9)
+            value["route_intents"][0]["projection"],
+            "unknown|orchestrate|normal"
         );
         assert_eq!(
             value["events"]
@@ -475,7 +431,7 @@ mod tests {
         Ok(())
     }
 
-    async fn guarded_store() -> anyhow::Result<TrajectoryStore> {
+    async fn recorded_store() -> anyhow::Result<TrajectoryStore> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let store = TrajectoryStore::new(db);
@@ -499,37 +455,22 @@ mod tests {
                     canonical_input_bytes: 64,
                     protocol: "chat_completions".into(),
                     captured_at: "2026-08-01T00:00:00Z".into(),
-                    guarded_route: Some(GuardedRouteInput {
+                    recorded_route: Some(RecordedRouteInput {
                         route_event_id: "route-report".into(),
-                        guard_event_id: "guard-report".into(),
                         policy_name: "coding".into(),
-                        route_projection: "unknown|orchestrate|normal".into(),
-                        request_key: "agent_trace/v2|opening|normal".into(),
+                        route_class: bitrouter_ai::policy::RouteClass::parse_key(
+                            "unknown|orchestrate|normal",
+                        )
+                        .unwrap_or_else(|| unreachable!()),
+                        request_key: "unknown|orchestrate|normal".into(),
                         baseline_tier: Some("strong".into()),
                         baseline_effort: None,
                         tier_efforts: Default::default(),
                         preset: Some("coding".into()),
-                        projection: RouteProjection::parse_key("agent_trace/v2|opening|normal")
-                            .ok_or_else(|| anyhow::anyhow!("invalid fixture projection"))?,
                         candidate_tier: Some("economy".into()),
+                        selected_tier: Some("economy".into()),
                         policy_digest: POLICY_DIGEST.into(),
-                        experiment: None,
                         route_measurement: None,
-                        policy: ProgressGuardPolicy {
-                            escalation_tier: "strong".into(),
-                            protected_tiers: BTreeSet::from(["strong".into()]),
-                            max_consecutive_unprotected: Some(3),
-                            max_same_projection_unprotected: Some(3),
-                            max_recovery_count: Some(2),
-                            max_episode_requests: Some(4),
-                            max_episode_elapsed_ms: None,
-                            max_episode_cost_micro_usd: None,
-                            hold_for_requests: 2,
-                            incomplete_history: IncompleteHistoryAction::Observe,
-                        },
-                        carries_tools: false,
-                        tool_use_tier: Some("strong".into()),
-                        tool_safe_tiers: BTreeSet::from(["strong".into()]),
                     }),
                 },
             )

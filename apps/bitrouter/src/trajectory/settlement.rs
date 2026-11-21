@@ -313,7 +313,7 @@ fn digest_hex(digest: &str) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
     #[cfg(feature = "eval-publication")]
     use std::sync::Arc;
 
@@ -346,14 +346,14 @@ mod tests {
     use crate::gateway::observability::prediction::{ObservedActionClass, PredictionObservation};
     #[cfg(feature = "eval-publication")]
     use crate::gateway::observability::settlement::PolicySettlementRecorder;
-    use crate::gateway::routing::workflow::ir::RouteProjection;
+
     use crate::metering::MeteringSettlementEvent;
     use crate::output::reports::trajectory::{inspect_report, replay_report};
     use crate::output::{Format, Output};
     use crate::trajectory::canonical::{Canonicalizer, CorrelationKey};
     use crate::trajectory::correlation::TrajectoryRuntime;
-    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
+
+    use crate::trajectory::store::{CorrelateAndBegin, RecordedRouteInput, TrajectoryStore};
     use crate::trajectory::types::{
         HistoryCompleteness, KeyedDigest, RequestStatus, StoredRequest, TRAJECTORY_SCHEMA_VERSION,
         TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, canonical_digest,
@@ -487,7 +487,7 @@ mod tests {
         let mut current = prefix.clone();
         current.push(first.event.clone());
         current.push(later);
-        crate::trajectory::health::reduce(&current, &BTreeSet::new())?;
+        crate::trajectory::health::reduce(&current)?;
 
         let replay = build_from_evidence(
             "owner-a",
@@ -615,16 +615,15 @@ mod tests {
         };
         start.content_digest = start.semantic_digest()?;
         let route_input = input
-            .guarded_route
+            .recorded_route
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("fixture route missing"))?;
-        let batch = crate::trajectory::store::build_guarded_route_batch(
+        let batch = crate::trajectory::store::build_recorded_route_batch(
             &[],
             &start,
             HistoryCompleteness::Complete,
             route_input,
         )?;
-        assert!(batch.guard_event.is_none());
         let mut route = batch.route_event;
         route.captured_at = head_at.into();
         route.content_digest = route.semantic_digest()?;
@@ -655,7 +654,7 @@ mod tests {
         );
 
         let stored_request = identity_key.request_identity("owner-a", "external-request")?;
-        begin_guarded(&store, &stored_request, "episode-observed").await?;
+        begin_recorded(&store, &stored_request, "episode-observed").await?;
         let mut settlement = context("external-request");
         assert_eq!(
             recorder.record_if_tracked(&settlement, None).await?,
@@ -694,9 +693,9 @@ mod tests {
             terminal
                 .evidence
                 .categorical
-                .get("routing.task_family_reason_codes")
+                .get("routing.predicted_task_family")
                 .map(String::as_str),
-            Some("task_code_review")
+            Some("code:review")
         );
         let evaluation = build_operational_evaluation(&events)?;
         let evidence = evaluation
@@ -715,16 +714,16 @@ mod tests {
         assert_eq!(
             evidence
                 .attributes
-                .get("task_family_reason_codes")
+                .get("predicted_task_family")
                 .map(String::as_str),
-            Some("task_code_review")
+            Some("code:review")
         );
         Ok(())
     }
 
     #[cfg(feature = "eval-publication")]
     #[tokio::test]
-    async fn independent_observation_settles_and_publishes_one_episode_without_guard_intent()
+    async fn independent_observation_settles_and_publishes_one_episode_without_route_intent()
     -> anyhow::Result<()> {
         use crate::metering::{
             pricing::PricingTable, recorder::MeteringRecorder, store::MeteringStore,
@@ -739,7 +738,7 @@ mod tests {
             system_provider_metadata: BTreeMap::new(),
             messages: vec![Message::text(
                 Role::User,
-                "Observe this request without a guard.",
+                "Observe this request without a policy decision.",
             )],
             tools: Vec::new(),
             params: GenerationParams::default(),
@@ -852,7 +851,7 @@ mod tests {
         let eval_store = EvalStore::new(db.clone());
         let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let stored_request = identity_key.request_identity("owner-a", "external-request")?;
-        begin_guarded(&store, &stored_request, "episode-observed").await?;
+        begin_recorded(&store, &stored_request, "episode-observed").await?;
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
             eval_store.clone(),
@@ -940,7 +939,7 @@ mod tests {
     #[tokio::test]
     async fn settlement_and_typed_outbox_survive_restart_and_publish() -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        begin_recorded(&store, "request-1", "episode-1").await?;
         let metering = metering("request-1");
         store
             .settle_request_from_current_head(
@@ -993,7 +992,7 @@ mod tests {
     async fn publisher_records_the_successful_admission_time_not_outbox_creation_time()
     -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        begin_guarded(&store, "request-delivery-time", "episode-delivery-time").await?;
+        begin_recorded(&store, "request-delivery-time", "episode-delivery-time").await?;
         let metering = metering("request-delivery-time");
         store
             .settle_request_from_current_head(
@@ -1037,7 +1036,7 @@ mod tests {
     async fn exact_settlement_retry_is_idempotent_and_changed_authority_conflicts()
     -> anyhow::Result<()> {
         let (_db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        begin_recorded(&store, "request-1", "episode-1").await?;
         let metering = metering("request-1");
         for _ in 0..2 {
             store
@@ -1095,7 +1094,7 @@ mod tests {
         let db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&db).await?;
         let store = TrajectoryStore::new(db.clone());
-        begin_guarded(&store, &request_id, "episode-1").await?;
+        begin_recorded(&store, &request_id, "episode-1").await?;
         #[cfg(feature = "eval-publication")]
         let publisher = TrajectoryOutboxPublisher::new(
             store.clone(),
@@ -1263,7 +1262,7 @@ mod tests {
         let (db, store) = store().await?;
         let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "external-request-current")?;
-        begin_guarded(&store, &request_id, "episode-current").await?;
+        begin_recorded(&store, &request_id, "episode-current").await?;
         let current_metering = routing_failure_metering("external-request-current", 100);
         store
             .settle_request_from_current_head(
@@ -1411,7 +1410,7 @@ mod tests {
         let (_db, store) = store().await?;
         let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "request-1")?;
-        begin_guarded(&store, &request_id, "episode-1").await?;
+        begin_recorded(&store, &request_id, "episode-1").await?;
         let recorder = TrajectorySettlementRecorder::new(store.clone(), None, identity_key);
 
         assert_eq!(
@@ -1435,7 +1434,7 @@ mod tests {
     async fn unknown_usage_and_price_remain_absent_in_settlement_and_evaluation()
     -> anyhow::Result<()> {
         let (_db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        begin_recorded(&store, "request-1", "episode-1").await?;
         let mut unknown = metering("request-1");
         unknown.usage_origin = UsageOrigin::Unknown;
         unknown.prompt_tokens = None;
@@ -1493,7 +1492,7 @@ mod tests {
     async fn routing_failure_without_target_is_terminal_and_keeps_evidence_absent()
     -> anyhow::Result<()> {
         let (_db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        begin_recorded(&store, "request-1", "episode-1").await?;
         let mut unknown = metering("request-1");
         unknown.provider_id.clear();
         unknown.model_id.clear();
@@ -1572,18 +1571,18 @@ mod tests {
         let runtime =
             TrajectoryRuntime::new(store.clone(), Canonicalizer::new(identity_key.clone()));
         let first_input = correlate_input("privacy-first", "unused-episode");
-        let first_guarded_route = first_input
-            .guarded_route
-            .ok_or_else(|| anyhow::anyhow!("privacy fixture lost its guarded route"))?;
+        let first_recorded_route = first_input
+            .recorded_route
+            .ok_or_else(|| anyhow::anyhow!("privacy fixture lost its recorded route"))?;
         let prompt = adversarial_prompt(&SENTINELS);
         let (first, _) = runtime
-            .begin_guarded_request(
+            .begin_recorded_request(
                 "owner-a",
                 SENTINELS[6],
                 ApiProtocol::Responses,
                 &prompt,
                 "2026-08-01T00:00:00Z",
-                first_guarded_route,
+                first_recorded_route,
             )
             .await?;
         let mut continuation_prompt = adversarial_prompt(&SENTINELS);
@@ -1592,17 +1591,17 @@ mod tests {
             serde_json::json!(SENTINELS[6]),
         );
         let second_input = correlate_input("privacy-second", "unused-episode");
-        let second_guarded_route = second_input
-            .guarded_route
-            .ok_or_else(|| anyhow::anyhow!("privacy continuation lost its guarded route"))?;
+        let second_recorded_route = second_input
+            .recorded_route
+            .ok_or_else(|| anyhow::anyhow!("privacy continuation lost its recorded route"))?;
         let (correlated, _) = runtime
-            .begin_guarded_request(
+            .begin_recorded_request(
                 "owner-a",
                 SENTINELS[7],
                 ApiProtocol::Responses,
                 &continuation_prompt,
                 "2026-08-01T00:00:01Z",
-                second_guarded_route,
+                second_recorded_route,
             )
             .await?;
         assert_eq!(correlated.episode_id, first.episode_id);
@@ -1723,7 +1722,7 @@ mod tests {
     #[tokio::test]
     async fn poison_outbox_does_not_block_later_item_or_shutdown_drain() -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        begin_guarded(&store, "request-poison", "episode-poison").await?;
+        begin_recorded(&store, "request-poison", "episode-poison").await?;
         let poison_metering = metering("request-poison");
         store
             .settle_request_from_current_head(
@@ -1747,7 +1746,7 @@ mod tests {
                 },
             )
             .await?;
-        begin_guarded(&store, "request-valid", "episode-valid").await?;
+        begin_recorded(&store, "request-valid", "episode-valid").await?;
         let valid_metering = metering("request-valid");
         store
             .settle_request_from_current_head(
@@ -1796,7 +1795,7 @@ mod tests {
     #[tokio::test]
     async fn retry_after_admission_before_mark_is_idempotent() -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        begin_guarded(&store, "request-1", "episode-1").await?;
+        begin_recorded(&store, "request-1", "episode-1").await?;
         let metering = metering("request-1");
         store
             .settle_request_from_current_head(
@@ -1871,7 +1870,7 @@ mod tests {
         for index in 0..24 {
             let request_id = format!("request-{index:02}");
             let episode_id = format!("episode-{index:02}");
-            begin_guarded(&store, &request_id, &episode_id).await?;
+            begin_recorded(&store, &request_id, &episode_id).await?;
             let metering = metering(&request_id);
             store
                 .settle_request_from_current_head(
@@ -1917,7 +1916,7 @@ mod tests {
         let (db, store) = store().await?;
         let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
-        begin_guarded(&store, &request_id, "episode-1").await?;
+        begin_recorded(&store, &request_id, "episode-1").await?;
         let recorder = TrajectorySettlementRecorder::new(store, None, identity_key);
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
@@ -1998,7 +1997,7 @@ mod tests {
         }
     }
 
-    async fn begin_guarded(
+    async fn begin_recorded(
         store: &TrajectoryStore,
         request_id: &str,
         episode_id: &str,
@@ -2006,7 +2005,7 @@ mod tests {
         let result = store
             .correlate_and_begin("owner-a", correlate_input(request_id, episode_id))
             .await?;
-        assert!(result.guarded_route.is_some());
+        assert!(result.recorded_route.is_some());
         Ok(())
     }
 
@@ -2025,37 +2024,22 @@ mod tests {
             canonical_input_bytes: 10,
             protocol: "chat_completions".into(),
             captured_at: "2026-08-01T00:00:00Z".into(),
-            guarded_route: Some(GuardedRouteInput {
+            recorded_route: Some(RecordedRouteInput {
                 route_event_id: format!("route-{request_id}"),
-                guard_event_id: format!("guard-{request_id}"),
                 policy_name: "auto:cost".into(),
-                route_projection: "code:generation|implement|normal".into(),
-                request_key: "agent_trace/v2|edit|normal".into(),
+                route_class: bitrouter_ai::policy::RouteClass::parse_key(
+                    "code:generation|implement|normal",
+                )
+                .unwrap_or_else(|| unreachable!()),
+                request_key: "code:generation|implement|normal".into(),
                 baseline_tier: Some("reference".into()),
                 baseline_effort: None,
                 tier_efforts: Default::default(),
                 preset: Some("auto:cost".into()),
-                projection: RouteProjection::parse_key("agent_trace/v2|edit|normal")
-                    .unwrap_or_else(|| unreachable!()),
                 candidate_tier: Some("economy".into()),
+                selected_tier: Some("economy".into()),
                 policy_digest: POLICY_DIGEST.into(),
-                experiment: None,
                 route_measurement: None,
-                policy: ProgressGuardPolicy {
-                    escalation_tier: "strong".into(),
-                    protected_tiers: BTreeSet::from(["strong".into()]),
-                    max_consecutive_unprotected: None,
-                    max_same_projection_unprotected: None,
-                    max_recovery_count: None,
-                    max_episode_requests: None,
-                    max_episode_elapsed_ms: None,
-                    max_episode_cost_micro_usd: None,
-                    hold_for_requests: 2,
-                    incomplete_history: IncompleteHistoryAction::Observe,
-                },
-                carries_tools: false,
-                tool_use_tier: Some("strong".into()),
-                tool_safe_tiers: BTreeSet::from(["strong".into()]),
             }),
         }
     }
@@ -2112,13 +2096,12 @@ mod tests {
             decision_id: format!("decision-{request_id}"),
             policy: "auto:cost".into(),
             policy_digest: POLICY_DIGEST.into(),
-            route_projection: "agent_trace/v2|edit|normal".into(),
-            request_key: "agent_trace/v2|edit|normal".into(),
+            route_projection: "code:generation|implement|normal".into(),
+            request_key: "code:generation|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
-            experiment: None,
             route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
@@ -2128,14 +2111,8 @@ mod tests {
             continuation_adjustment: None,
             predicted_role: Some("implement".into()),
             predicted_task_family: Some("code:review".into()),
-            predicted_action: Some("mutate".into()),
             prediction_confidence_ppm: Some(900_000),
             task_family_confidence_ppm: Some(800_000),
-            task_family_reason_codes: vec![
-                "task_code_review".into(),
-                "customer_secret".into(),
-                "task_code_review".into(),
-            ],
             predictor_contract_digest: Some(
                 "sha256:7483fb5fa02c0141f568b82287234895c666fef426789e32783bdd3a00cea3ec".into(),
             ),

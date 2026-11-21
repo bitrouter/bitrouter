@@ -265,7 +265,7 @@ pub struct ControlConfig {
     pub enabled: bool,
     /// Loopback `host:port` to listen on.
     pub listen: String,
-    /// Explicit operator credentials. Empty keeps the legacy read-only token.
+    /// Explicit operator credentials. Empty uses the configured read-only token.
     pub credentials: Vec<ControlCredentialConfig>,
 }
 
@@ -484,22 +484,21 @@ pub struct McpConfig {
 /// `mcp.upstream_protocol` — the startup lifecycle and protocol version the
 /// gateway uses when dialing upstream MCP servers.
 ///
-/// `auto` (the default) starts with modern `server/discover` and uses rmcp's
-/// classified legacy fallback. `latest` forces the legacy `initialize` path;
-/// `2026-07-28` is the explicit spelling of the modern preference.
+/// `auto` (the default) starts with `server/discover` and uses rmcp's classified
+/// fallback to `initialize`. `latest` starts with `initialize`;
+/// `2026-07-28` explicitly selects the discovery preference.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpUpstreamProtocol {
-    /// Prefer `server/discover` and `2026-07-28`, falling back through rmcp's
-    /// compatibility path when the upstream identifies itself as legacy.
+    /// Prefer `server/discover` and `2026-07-28`, falling back to `initialize`
+    /// when rmcp classifies the upstream as requiring that lifecycle.
     #[default]
     Auto,
-    /// Use the legacy `initialize` lifecycle with the latest version the MCP
-    /// SDK treats as current — today `2025-11-25`.
+    /// Use `initialize` with the MCP SDK's default negotiated protocol version.
     Latest,
-    /// Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls
+    /// Use `server/discover` and the `2026-07-28` lifecycle. rmcp falls
     /// back after its discovery timeout or a correlated JSON-RPC error it
-    /// classifies as legacy; transport failures, malformed or uncorrelated
+    /// classifies as requiring `initialize`; transport failures, malformed or uncorrelated
     /// responses, and modern rejection codes fail the connection. Opting in
     /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
     /// Tasks `task` handle; neither is a shape this gateway can carry, so both
@@ -1012,8 +1011,7 @@ impl ProviderConfig {
 
     /// Whether a concrete model positively advertises `capability`.
     ///
-    /// This intentionally distinguishes an explicit declaration from legacy
-    /// model entries whose capability list is empty/unknown. Callers that
+    /// An empty capability list does not establish support. Callers that
     /// grant a policy exception (for example, a tool-safe economy tier) must
     /// use positive evidence rather than treating unknown as supported.
     pub fn model_supports_capability(
@@ -1137,7 +1135,7 @@ pub struct ProviderModel {
 
     /// Features this concrete provider/model route explicitly advertises.
     /// An empty list means unknown, not unsupported. Runtime routing preserves
-    /// legacy unknown entries; policy code that grants a capability-specific
+    /// entries with unknown support; policy code that grants a capability-specific
     /// exception requires a positive declaration.
     #[serde(default)]
     pub capabilities: Vec<bitrouter_ai::types::Capability>,
@@ -1207,7 +1205,7 @@ pub enum VirtualModelStrategy {
     /// preceding one fails with a retryable error. Routing preferences
     /// (`sort` / `only` / `ignore`) do **not** reorder or filter the chain:
     /// the operator's declared priority is authoritative. This is the
-    /// default and matches the historical (pre-typed-`strategy`) behaviour.
+    /// default strategy.
     #[default]
     Priority,
     /// Endpoints are treated as an unordered candidate set and **re-ordered by
@@ -1331,8 +1329,7 @@ where
                 }
                 None => {
                     // No closing brace anywhere — emit `$` literally and keep
-                    // scanning (the `{` and following chars copy normally),
-                    // matching the historical passthrough of a dangling `${`.
+                    // scanning; the `{` and following chars copy normally.
                     out.push('$');
                     after_ws = false;
                     continue;

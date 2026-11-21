@@ -82,13 +82,13 @@ pub struct TenancyConfig {
     pub enabled: bool,
     /// Startup-only runtime budgets, independent of the stored directory size.
     pub capacity: capacity::CapacityConfig,
-    /// Maximum candidates in an explicit ordered v2 submission, from 1 through
-    /// 64. This is a per-execution work budget; ordinary v1 stays bounded at 8.
+    /// Maximum candidates in an explicit ordered submission, from 1 through
+    /// 64. This is a per-execution work budget; strict dispatch is bounded at 8.
     #[schemars(range(min = 1, max = 64))]
     pub ordered_attempt_limit: u8,
     /// Accept explicitly opted-in provider-native controls on ordered requests.
     /// Provider state may be shared by principals using the same upstream account;
-    /// this policy does not establish historical tenant ownership of opaque IDs.
+    /// this policy does not establish tenant ownership of opaque IDs.
     pub ordered_native_controls: bool,
     /// Optional private adapter reached through an ordered, profiled route.
     pub private_adapter: Option<PrivateAdapterConfig>,

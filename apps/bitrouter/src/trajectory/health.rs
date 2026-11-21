@@ -1,21 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
-use super::guard::{validate_persisted_guard_activation, validate_persisted_route_intent};
+use super::route::validate_recorded_route;
 use super::types::{
     HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectoryHealth,
     TrajectorySnapshot, validate_event,
 };
-use crate::gateway::routing::workflow::ir::{RouteProjection, WorkflowStateKind};
+use bitrouter_ai::policy::RouteClass;
 
 const PPM_SCALE: u64 = 1_000_000;
-const MAX_HOLD_REQUESTS: u64 = u32::MAX as u64;
 
 enum RequestPhase {
     Started,
     Routed,
-    RoutedGuarded,
     Settled,
 }
 
@@ -31,37 +29,13 @@ struct SnapshotFacts<'a> {
     latest_projection: Option<&'a str>,
     same_projection_streak: u64,
     same_selected_tier_streak: u64,
-    consecutive_unprotected_requests: u64,
-    recovery_count: u64,
-    requests_since_recovery: Option<u64>,
     first_canonical_bytes: Option<u64>,
     latest_canonical_bytes: Option<u64>,
     total_tokens: Option<u64>,
     settled_cost_micro_usd: Option<u64>,
-    active_hold_remaining: u64,
 }
 
-pub(crate) enum PrefixReduction {
-    Complete(Box<TrajectorySnapshot>),
-    AwaitingGuardActivation,
-}
-
-pub fn reduce(
-    events: &[TrajectoryEvent],
-    protected_tiers: &BTreeSet<String>,
-) -> Result<TrajectorySnapshot> {
-    match reduce_prefix(events, protected_tiers)? {
-        PrefixReduction::Complete(snapshot) => Ok(*snapshot),
-        PrefixReduction::AwaitingGuardActivation => {
-            anyhow::bail!("guarded route trigger is missing its guard activation")
-        }
-    }
-}
-
-pub(crate) fn reduce_prefix(
-    events: &[TrajectoryEvent],
-    protected_tiers: &BTreeSet<String>,
-) -> Result<PrefixReduction> {
+pub fn reduce(events: &[TrajectoryEvent]) -> Result<TrajectorySnapshot> {
     let first = events
         .first()
         .ok_or_else(|| anyhow::anyhow!("trajectory reduction requires at least one event"))?;
@@ -75,23 +49,17 @@ pub(crate) fn reduce_prefix(
     let mut previous_timestamp = first_timestamp;
     let mut last_timestamp = first_timestamp;
     let mut requests = BTreeMap::<String, RequestPhase>::new();
-    let mut guarded_route_digests = BTreeMap::<String, (String, String)>::new();
-    let mut pending_guard_activation: Option<String> = None;
     let mut completeness = HistoryCompleteness::Complete;
     let mut request_count = 0_u64;
     let mut settled_request_count = 0_u64;
     let mut same_projection_streak = 0_u64;
     let mut same_selected_tier_streak = 0_u64;
-    let mut consecutive_unprotected_requests = 0_u64;
-    let mut recovery_count = 0_u64;
-    let mut requests_since_recovery = None;
     let mut total_tokens = None;
     let mut settled_cost_micro_usd = None;
     let mut first_canonical_bytes = None;
     let mut latest_canonical_bytes = None;
     let mut previous_projection: Option<String> = None;
     let mut previous_selected_tier: Option<String> = None;
-    let mut active_hold_remaining = 0_u64;
     let mut closed = false;
 
     for (index, event) in events.iter().enumerate() {
@@ -121,20 +89,12 @@ pub(crate) fn reduce_prefix(
         previous_timestamp = captured_at;
         last_timestamp = captured_at;
 
-        if let Some(request_id) = pending_guard_activation.as_deref()
-            && (event.kind != TrajectoryEventKind::GuardActivated
-                || event.request_id.as_deref() != Some(request_id))
-        {
-            anyhow::bail!("guarded route trigger must be followed by its guard activation")
-        }
-
         match event.kind {
             TrajectoryEventKind::RequestStarted => {
                 let request_id = required_request_id(event)?;
                 if requests.contains_key(request_id) {
                     anyhow::bail!("trajectory request '{request_id}' starts more than once")
                 }
-                active_hold_remaining = active_hold_remaining.saturating_sub(1);
                 let canonical_input_bytes = event
                     .evidence
                     .structural
@@ -161,22 +121,11 @@ pub(crate) fn reduce_prefix(
             }
             TrajectoryEventKind::RouteIntentRecorded => {
                 let request_id = required_request_id(event)?;
-                let persisted_guarded_route = validate_persisted_route_intent(event)?;
-                if let Some(clauses) = &persisted_guarded_route {
-                    let policy = event
-                        .evidence
-                        .digests
-                        .get("route.policy_lock")
-                        .ok_or_else(|| anyhow::anyhow!("guarded route lost its policy digest"))?;
-                    let health = event
-                        .evidence
-                        .digests
-                        .get("route.health_snapshot")
-                        .ok_or_else(|| anyhow::anyhow!("guarded route lost its health digest"))?;
+                if let Some(health) = validate_recorded_route(event)? {
                     let factual_prefix = snapshot_from_facts(SnapshotFacts {
                         episode_id,
                         through_sequence: event.sequence.checked_sub(1).ok_or_else(|| {
-                            anyhow::anyhow!("guarded route has no factual event prefix")
+                            anyhow::anyhow!("recorded route has no factual event prefix")
                         })?,
                         completeness,
                         has_started_request: requests
@@ -189,28 +138,15 @@ pub(crate) fn reduce_prefix(
                         latest_projection: previous_projection.as_deref(),
                         same_projection_streak,
                         same_selected_tier_streak,
-                        consecutive_unprotected_requests,
-                        recovery_count,
-                        requests_since_recovery,
                         first_canonical_bytes,
                         latest_canonical_bytes,
                         total_tokens,
                         settled_cost_micro_usd,
-                        active_hold_remaining,
                     })?;
-                    if health != &factual_prefix.evidence_digest {
+                    if health != factual_prefix.evidence_digest {
                         anyhow::bail!(
-                            "guarded route health digest disagrees with its factual pre-intent trajectory snapshot"
+                            "recorded route health digest disagrees with its factual pre-intent trajectory snapshot"
                         )
-                    }
-                    guarded_route_digests
-                        .insert(request_id.to_owned(), (policy.clone(), health.clone()));
-                    if clauses.iter().any(|(id, disposition)| {
-                        *disposition == super::guard::RouteIntentClauseDisposition::Applied
-                            && id.starts_with("progress_guard.")
-                            && id != "progress_guard.active_hold"
-                    }) {
-                        pending_guard_activation = Some(request_id.to_owned());
                     }
                 }
                 let phase = requests.get_mut(request_id).ok_or_else(|| {
@@ -218,7 +154,7 @@ pub(crate) fn reduce_prefix(
                 })?;
                 match phase {
                     RequestPhase::Started => *phase = RequestPhase::Routed,
-                    RequestPhase::Routed | RequestPhase::RoutedGuarded => anyhow::bail!(
+                    RequestPhase::Routed => anyhow::bail!(
                         "trajectory request '{request_id}' has duplicate route intent"
                     ),
                     RequestPhase::Settled => anyhow::bail!(
@@ -227,39 +163,15 @@ pub(crate) fn reduce_prefix(
                 }
 
                 let projection = event.evidence.categorical.get("route.projection");
-                let workflow_state = event.evidence.categorical.get("route.workflow_state");
                 let selected_tier = event.evidence.categorical.get("route.selected_tier");
-                let parsed_projection = projection
-                    .map(|value| {
-                        RouteProjection::parse_key(value).ok_or_else(|| {
-                            anyhow::anyhow!("route intent has invalid canonical projection")
-                        })
-                    })
-                    .transpose()?;
-                let parsed_workflow_state = workflow_state
-                    .map(|value| {
-                        RouteProjection::parse_key(&format!("agent_trace/v2|{value}|normal"))
-                            .map(|projection| projection.state_kind)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("route intent has invalid generic workflow state")
-                            })
-                    })
-                    .transpose()?;
-                if let (Some(projection), Some(workflow_state)) =
-                    (&parsed_projection, &parsed_workflow_state)
-                    && projection.state_kind != *workflow_state
+                if let Some(projection) = projection
+                    && RouteClass::parse_key(projection).is_none()
                 {
-                    anyhow::bail!("route intent projection and workflow state disagree")
+                    anyhow::bail!("route intent has invalid semantic classification")
                 }
-                if projection.is_none() || workflow_state.is_none() || selected_tier.is_none() {
+                if projection.is_none() || selected_tier.is_none() {
                     completeness = merge_completeness(completeness, HistoryCompleteness::Unknown);
                 }
-
-                let previous_was_recovery = previous_projection
-                    .as_deref()
-                    .and_then(RouteProjection::parse_key)
-                    .is_some_and(|projection| projection.state_kind == WorkflowStateKind::Recovery);
-
                 same_projection_streak = update_streak(
                     &mut previous_projection,
                     projection.map(String::as_str),
@@ -272,39 +184,6 @@ pub(crate) fn reduce_prefix(
                     same_selected_tier_streak,
                     "same selected tier streak",
                 )?;
-                let selected_is_protected = if let Some(value) = event
-                    .evidence
-                    .structural
-                    .get("route.selected_is_protected")
-                    .copied()
-                {
-                    match value {
-                        0 => false,
-                        1 => true,
-                        _ => anyhow::bail!(
-                            "guarded route has an invalid selected-tier protection fact"
-                        ),
-                    }
-                } else {
-                    selected_tier.is_some_and(|tier| protected_tiers.contains(tier))
-                };
-                consecutive_unprotected_requests = match selected_tier {
-                    Some(_) if selected_is_protected => 0,
-                    Some(_) => checked_increment(
-                        consecutive_unprotected_requests,
-                        "consecutive unprotected request count",
-                    )?,
-                    None => 0,
-                };
-                if parsed_workflow_state == Some(WorkflowStateKind::Recovery) {
-                    if !previous_was_recovery {
-                        recovery_count = checked_increment(recovery_count, "recovery count")?;
-                    }
-                    requests_since_recovery = Some(0);
-                } else if let Some(count) = requests_since_recovery {
-                    requests_since_recovery =
-                        Some(checked_increment(count, "requests since recovery count")?);
-                }
             }
             TrajectoryEventKind::RequestSettled => {
                 let request_id = required_request_id(event)?;
@@ -312,8 +191,8 @@ pub(crate) fn reduce_prefix(
                     anyhow::anyhow!("settlement references unknown request '{request_id}'")
                 })?;
                 match phase {
-                    RequestPhase::Started | RequestPhase::Routed | RequestPhase::RoutedGuarded => {
-                        // Independent observers need no Policy/guard decision to
+                    RequestPhase::Started | RequestPhase::Routed => {
+                        // Independent observers need no policy decision to
                         // retain the real request's authoritative settlement.
                         *phase = RequestPhase::Settled;
                     }
@@ -337,67 +216,6 @@ pub(crate) fn reduce_prefix(
                 settled_request_count =
                     checked_increment(settled_request_count, "settled request count")?;
             }
-            TrajectoryEventKind::GuardActivated => {
-                let request_id = required_request_id(event)?;
-                if validate_persisted_guard_activation(event)? {
-                    if pending_guard_activation.as_deref() != Some(request_id) {
-                        anyhow::bail!(
-                            "guard activation has no immediately preceding new guard trigger"
-                        )
-                    }
-                    let route_digests = guarded_route_digests.get(request_id).ok_or_else(|| {
-                        anyhow::anyhow!("guard activation has no guarded route intent")
-                    })?;
-                    let guard_policy =
-                        event
-                            .evidence
-                            .digests
-                            .get("guard.policy_lock")
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("guard activation lost its policy digest")
-                            })?;
-                    let guard_health = event
-                        .evidence
-                        .digests
-                        .get("guard.health_snapshot")
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("guard activation lost its health digest")
-                        })?;
-                    if route_digests != &(guard_policy.clone(), guard_health.clone()) {
-                        anyhow::bail!(
-                            "guard activation policy/health digests disagree with route intent"
-                        )
-                    }
-                    pending_guard_activation = None;
-                } else if guarded_route_digests.contains_key(request_id) {
-                    anyhow::bail!("guarded route requires typed guard activation evidence")
-                }
-                let phase = requests.get_mut(request_id).ok_or_else(|| {
-                    anyhow::anyhow!("guard activation references unknown request '{request_id}'")
-                })?;
-                match phase {
-                    RequestPhase::Started => {
-                        anyhow::bail!("guard activation requires a recorded route intent")
-                    }
-                    RequestPhase::Routed => *phase = RequestPhase::RoutedGuarded,
-                    RequestPhase::RoutedGuarded => anyhow::bail!(
-                        "trajectory request '{request_id}' has duplicate guard activation"
-                    ),
-                    RequestPhase::Settled => anyhow::bail!(
-                        "trajectory request '{request_id}' activates guard after settlement"
-                    ),
-                }
-                let hold = event
-                    .evidence
-                    .structural
-                    .get("guard.hold_for_requests")
-                    .copied()
-                    .ok_or_else(|| anyhow::anyhow!("guard activation is missing hold length"))?;
-                if hold == 0 || hold > MAX_HOLD_REQUESTS {
-                    anyhow::bail!("guard hold length must be in 1..=u32::MAX")
-                }
-                active_hold_remaining = hold;
-            }
             TrajectoryEventKind::EpisodeClosed => {
                 if event.request_id.is_some() {
                     anyhow::bail!("episode close event cannot identify a request")
@@ -407,39 +225,29 @@ pub(crate) fn reduce_prefix(
         }
     }
 
-    if pending_guard_activation.is_some() {
-        return Ok(PrefixReduction::AwaitingGuardActivation);
-    }
-
     let through_sequence = events
         .last()
         .map(|event| event.sequence)
         .ok_or_else(|| anyhow::anyhow!("trajectory reduction lost its final event"))?;
-    Ok(PrefixReduction::Complete(Box::new(snapshot_from_facts(
-        SnapshotFacts {
-            episode_id,
-            through_sequence,
-            completeness,
-            has_started_request: requests
-                .values()
-                .any(|phase| matches!(phase, RequestPhase::Started)),
-            request_count,
-            settled_request_count,
-            first_timestamp: &first_timestamp,
-            last_timestamp: &last_timestamp,
-            latest_projection: previous_projection.as_deref(),
-            same_projection_streak,
-            same_selected_tier_streak,
-            consecutive_unprotected_requests,
-            recovery_count,
-            requests_since_recovery,
-            first_canonical_bytes,
-            latest_canonical_bytes,
-            total_tokens,
-            settled_cost_micro_usd,
-            active_hold_remaining,
-        },
-    )?)))
+    snapshot_from_facts(SnapshotFacts {
+        episode_id,
+        through_sequence,
+        completeness,
+        has_started_request: requests
+            .values()
+            .any(|phase| matches!(phase, RequestPhase::Started)),
+        request_count,
+        settled_request_count,
+        first_timestamp: &first_timestamp,
+        last_timestamp: &last_timestamp,
+        latest_projection: previous_projection.as_deref(),
+        same_projection_streak,
+        same_selected_tier_streak,
+        first_canonical_bytes,
+        latest_canonical_bytes,
+        total_tokens,
+        settled_cost_micro_usd,
+    })
 }
 
 fn snapshot_from_facts(facts: SnapshotFacts<'_>) -> Result<TrajectorySnapshot> {
@@ -470,9 +278,6 @@ fn snapshot_from_facts(facts: SnapshotFacts<'_>) -> Result<TrajectorySnapshot> {
         latest_projection: facts.latest_projection.map(ToOwned::to_owned),
         same_projection_streak: facts.same_projection_streak,
         same_selected_tier_streak: facts.same_selected_tier_streak,
-        consecutive_unprotected_requests: facts.consecutive_unprotected_requests,
-        recovery_count: facts.recovery_count,
-        requests_since_recovery: facts.requests_since_recovery,
         context_growth_ppm,
         total_tokens: facts.total_tokens,
         settled_cost_micro_usd: facts.settled_cost_micro_usd,
@@ -481,7 +286,6 @@ fn snapshot_from_facts(facts: SnapshotFacts<'_>) -> Result<TrajectorySnapshot> {
         episode_id: facts.episode_id.to_owned(),
         through_sequence: facts.through_sequence,
         health,
-        active_hold_remaining: facts.active_hold_remaining,
         evidence_digest: String::new(),
     };
     snapshot.evidence_digest = snapshot.semantic_digest()?;
@@ -588,7 +392,7 @@ fn context_growth_ppm(first: Option<u64>, latest: Option<u64>) -> Result<Option<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use super::reduce;
     use crate::trajectory::types::{
@@ -601,26 +405,29 @@ mod tests {
 
     #[test]
     fn hand_literal_episode_reduces_every_health_field() -> anyhow::Result<()> {
-        let events = vec![
+        let mut events = vec![
             start(1, "r1", 100, "complete", "explicit_root")?,
-            intent(2, "r1", "planning", "economy")?,
+            intent(2, "r1", "orchestrate", "economy")?,
             settled(3, "r1", Some(0), Some(0))?,
             start(4, "r2", 150, "complete", "canonical_prefix")?,
-            intent(5, "r2", "planning", "economy")?,
+            intent(5, "r2", "orchestrate", "economy")?,
             start(6, "r3", 200, "complete", "canonical_prefix")?,
-            intent(7, "r3", "recovery", "protected")?,
+            intent(7, "r3", "implement", "protected")?,
             settled(8, "r2", Some(20), None)?,
-            guard(9, "r3", 2)?,
-            settled(10, "r3", Some(30), Some(10))?,
-            start(11, "r4", 250, "complete", "canonical_prefix")?,
-            intent(12, "r4", "recovery", "economy")?,
-            settled(13, "r4", None, Some(0))?,
+            settled(9, "r3", Some(30), Some(10))?,
+            start(10, "r4", 250, "complete", "canonical_prefix")?,
+            intent(11, "r4", "implement", "economy")?,
+            settled(12, "r4", None, Some(0))?,
         ];
 
-        let snapshot = reduce(&events, &BTreeSet::from(["protected".to_owned()]))?;
+        for (index, event) in events.iter_mut().enumerate().skip(8) {
+            event.captured_at = format!("2026-08-01T00:00:{:02}Z", index + 1);
+            resign(event)?;
+        }
+        let snapshot = reduce(&events)?;
 
         assert_eq!(snapshot.episode_id, "episode-1");
-        assert_eq!(snapshot.through_sequence, 13);
+        assert_eq!(snapshot.through_sequence, 12);
         assert_eq!(
             snapshot.health,
             TrajectoryHealth {
@@ -629,18 +436,14 @@ mod tests {
                 settled_request_count: 4,
                 unsettled_request_count: 0,
                 elapsed_ms: 12_000,
-                latest_projection: Some("agent_trace/v2|recovery|normal".to_string()),
+                latest_projection: Some("code:generation|implement|normal".to_string()),
                 same_projection_streak: 2,
                 same_selected_tier_streak: 1,
-                consecutive_unprotected_requests: 1,
-                recovery_count: 1,
-                requests_since_recovery: Some(0),
                 context_growth_ppm: Some(1_500_000),
                 total_tokens: None,
                 settled_cost_micro_usd: None,
             }
         );
-        assert_eq!(snapshot.active_hold_remaining, 1);
         assert!(snapshot.evidence_digest.starts_with("sha256:"));
         assert_eq!(snapshot.evidence_digest.len(), 71);
         Ok(())
@@ -650,11 +453,11 @@ mod tests {
     fn explicit_zero_totals_remain_known_and_failure_settlements_count() -> anyhow::Result<()> {
         let events = vec![
             start(1, "r1", 40, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "economy")?,
+            intent(2, "r1", "orchestrate", "economy")?,
             settled_with_outcome(3, "r1", Some(0), Some(0), "failed")?,
         ];
 
-        let snapshot = reduce(&events, &BTreeSet::new())?;
+        let snapshot = reduce(&events)?;
 
         assert_eq!(snapshot.health.settled_request_count, 1);
         assert_eq!(snapshot.health.unsettled_request_count, 0);
@@ -667,14 +470,14 @@ mod tests {
     fn missing_settlement_evidence_permanently_poisons_totals() -> anyhow::Result<()> {
         let events = vec![
             start(1, "r1", 40, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "economy")?,
+            intent(2, "r1", "orchestrate", "economy")?,
             settled(3, "r1", None, None)?,
             start(4, "r2", 80, "complete", "canonical_prefix")?,
-            intent(5, "r2", "planning", "economy")?,
+            intent(5, "r2", "orchestrate", "economy")?,
             settled(6, "r2", Some(100), Some(200))?,
         ];
 
-        let snapshot = reduce(&events, &BTreeSet::new())?;
+        let snapshot = reduce(&events)?;
 
         assert_eq!(snapshot.health.settled_request_count, 2);
         assert_eq!(snapshot.health.total_tokens, None);
@@ -686,19 +489,22 @@ mod tests {
     fn unmatched_start_is_temporarily_unknown_and_valid_intent_clears_it() -> anyhow::Result<()> {
         let started = vec![start(1, "r1", 40, "complete", "explicit_root")?];
         assert_eq!(
-            reduce(&started, &BTreeSet::new())?.health.completeness,
+            reduce(&started)?.health.completeness,
             HistoryCompleteness::Unknown
         );
-        let before_intent = reduce(&started, &BTreeSet::new())?;
+        let before_intent = reduce(&started)?;
         assert_eq!(before_intent.health.request_count, 1);
         assert_eq!(before_intent.health.settled_request_count, 0);
         assert_eq!(before_intent.health.unsettled_request_count, 1);
         assert_eq!(before_intent.health.total_tokens, None);
         assert_eq!(before_intent.health.settled_cost_micro_usd, None);
 
-        let routed = vec![started[0].clone(), intent(2, "r1", "opening", "economy")?];
+        let routed = vec![
+            started[0].clone(),
+            intent(2, "r1", "orchestrate", "economy")?,
+        ];
         assert_eq!(
-            reduce(&routed, &BTreeSet::new())?.health.completeness,
+            reduce(&routed)?.health.completeness,
             HistoryCompleteness::Complete
         );
         Ok(())
@@ -714,12 +520,12 @@ mod tests {
         resign(&mut missing_source)?;
         let events = vec![
             missing_source,
-            intent(2, "r1", "opening", "economy")?,
+            intent(2, "r1", "orchestrate", "economy")?,
             start(3, "r2", 80, "incomplete", "unresolved")?,
-            intent(4, "r2", "planning", "economy")?,
+            intent(4, "r2", "orchestrate", "economy")?,
         ];
 
-        let snapshot = reduce(&events, &BTreeSet::new())?;
+        let snapshot = reduce(&events)?;
 
         assert_eq!(
             snapshot.health.completeness,
@@ -729,8 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn route_streaks_reset_on_switch_and_missing_tier_is_not_unprotected() -> anyhow::Result<()> {
-        let mut missing_tier = intent(8, "r4", "test", "economy")?;
+    fn route_streaks_reset_on_switch_and_missing_tier() -> anyhow::Result<()> {
+        let mut missing_tier = intent(8, "r4", "verify", "economy")?;
         missing_tier
             .evidence
             .categorical
@@ -738,61 +544,20 @@ mod tests {
         resign(&mut missing_tier)?;
         let events = vec![
             start(1, "r1", 100, "complete", "explicit_root")?,
-            intent(2, "r1", "planning", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             start(3, "r2", 110, "complete", "canonical_prefix")?,
-            intent(4, "r2", "planning", "low")?,
+            intent(4, "r2", "orchestrate", "low")?,
             start(5, "r3", 120, "complete", "canonical_prefix")?,
-            intent(6, "r3", "test", "high")?,
+            intent(6, "r3", "verify", "high")?,
             start(7, "r4", 130, "complete", "canonical_prefix")?,
             missing_tier,
         ];
 
-        let snapshot = reduce(&events, &BTreeSet::from(["high".to_owned()]))?;
+        let snapshot = reduce(&events)?;
 
         assert_eq!(snapshot.health.same_projection_streak, 2);
         assert_eq!(snapshot.health.same_selected_tier_streak, 0);
-        assert_eq!(snapshot.health.consecutive_unprotected_requests, 0);
         assert_eq!(snapshot.health.completeness, HistoryCompleteness::Unknown);
-        Ok(())
-    }
-
-    #[test]
-    fn recovery_is_exact_and_requests_since_recovery_advance_on_intents() -> anyhow::Result<()> {
-        let events = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "recovery", "low")?,
-            start(3, "r2", 20, "complete", "canonical_prefix")?,
-            intent(4, "r2", "planning", "low")?,
-            start(5, "r3", 30, "complete", "canonical_prefix")?,
-            intent(6, "r3", "review", "low")?,
-        ];
-
-        let snapshot = reduce(&events, &BTreeSet::new())?;
-
-        assert_eq!(snapshot.health.recovery_count, 1);
-        assert_eq!(snapshot.health.requests_since_recovery, Some(2));
-        Ok(())
-    }
-
-    #[test]
-    fn consecutive_recovery_projections_count_one_recovery_edge() -> anyhow::Result<()> {
-        let events = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
-            start(3, "r2", 20, "complete", "canonical_prefix")?,
-            intent(4, "r2", "recovery", "high")?,
-            start(5, "r3", 30, "complete", "canonical_prefix")?,
-            intent(6, "r3", "recovery", "high")?,
-            start(7, "r4", 40, "complete", "canonical_prefix")?,
-            intent(8, "r4", "recovery", "high")?,
-            start(9, "r5", 50, "complete", "canonical_prefix")?,
-            intent(10, "r5", "review", "low")?,
-        ];
-
-        let snapshot = reduce(&events, &BTreeSet::from(["high".to_owned()]))?;
-
-        assert_eq!(snapshot.health.recovery_count, 1);
-        assert_eq!(snapshot.health.requests_since_recovery, Some(1));
         Ok(())
     }
 
@@ -806,28 +571,20 @@ mod tests {
         resign(&mut missing)?;
         let events = vec![
             start(1, "r1", 200, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             missing,
-            intent(4, "r2", "planning", "low")?,
+            intent(4, "r2", "orchestrate", "low")?,
             start(5, "r3", 100, "complete", "canonical_prefix")?,
-            intent(6, "r3", "test", "low")?,
+            intent(6, "r3", "verify", "low")?,
         ];
 
-        assert_eq!(
-            reduce(&events, &BTreeSet::new())?.health.context_growth_ppm,
-            Some(0)
-        );
+        assert_eq!(reduce(&events)?.health.context_growth_ppm, Some(0));
 
         let zero_first = vec![
             start(1, "r1", 0, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
         ];
-        assert_eq!(
-            reduce(&zero_first, &BTreeSet::new())?
-                .health
-                .context_growth_ppm,
-            None
-        );
+        assert_eq!(reduce(&zero_first)?.health.context_growth_ppm, None);
 
         let mut missing_first = start(1, "r1", 1, "complete", "explicit_root")?;
         missing_first
@@ -837,16 +594,11 @@ mod tests {
         resign(&mut missing_first)?;
         let missing_first = vec![
             missing_first,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             start(3, "r2", 100, "complete", "canonical_prefix")?,
-            intent(4, "r2", "planning", "low")?,
+            intent(4, "r2", "orchestrate", "low")?,
         ];
-        assert_eq!(
-            reduce(&missing_first, &BTreeSet::new())?
-                .health
-                .context_growth_ppm,
-            None
-        );
+        assert_eq!(reduce(&missing_first)?.health.context_growth_ppm, None);
 
         let mut missing_latest = start(3, "r2", 1, "complete", "canonical_prefix")?;
         missing_latest
@@ -856,41 +608,11 @@ mod tests {
         resign(&mut missing_latest)?;
         let missing_latest = vec![
             start(1, "r1", 100, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             missing_latest,
-            intent(4, "r2", "planning", "low")?,
+            intent(4, "r2", "orchestrate", "low")?,
         ];
-        assert_eq!(
-            reduce(&missing_latest, &BTreeSet::new())?
-                .health
-                .context_growth_ppm,
-            None
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn hold_counts_exactly_subsequent_request_starts() -> anyhow::Result<()> {
-        let events = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "protected")?,
-            guard(3, "r1", 2)?,
-        ];
-        assert_eq!(reduce(&events, &BTreeSet::new())?.active_hold_remaining, 2);
-
-        let mut one_later = events;
-        one_later.push(start(4, "r2", 20, "complete", "canonical_prefix")?);
-        assert_eq!(
-            reduce(&one_later, &BTreeSet::new())?.active_hold_remaining,
-            1
-        );
-
-        one_later.push(intent(5, "r2", "planning", "protected")?);
-        one_later.push(start(6, "r3", 30, "complete", "canonical_prefix")?);
-        assert_eq!(
-            reduce(&one_later, &BTreeSet::new())?.active_hold_remaining,
-            0
-        );
+        assert_eq!(reduce(&missing_latest)?.health.context_growth_ppm, None);
         Ok(())
     }
 
@@ -898,32 +620,32 @@ mod tests {
     fn reducer_rejects_sequence_identity_digest_and_terminal_corruption() -> anyhow::Result<()> {
         let base = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
         ];
 
         let mut gap = base.clone();
         gap[1].sequence = 3;
         resign(&mut gap[1])?;
-        assert!(reduce(&gap, &BTreeSet::new()).is_err());
+        assert!(reduce(&gap).is_err());
 
         let mut duplicate = base.clone();
         duplicate[1].sequence = 1;
         resign(&mut duplicate[1])?;
-        assert!(reduce(&duplicate, &BTreeSet::new()).is_err());
+        assert!(reduce(&duplicate).is_err());
 
         let mut owner = base.clone();
         owner[1].owner_user_id = "owner-2".to_owned();
         resign(&mut owner[1])?;
-        assert!(reduce(&owner, &BTreeSet::new()).is_err());
+        assert!(reduce(&owner).is_err());
 
         let mut episode = base.clone();
         episode[1].episode_id = "episode-2".to_owned();
         resign(&mut episode[1])?;
-        assert!(reduce(&episode, &BTreeSet::new()).is_err());
+        assert!(reduce(&episode).is_err());
 
         let mut digest = base.clone();
         digest[1].content_digest = format!("sha256:{}", "0".repeat(64));
-        assert!(reduce(&digest, &BTreeSet::new()).is_err());
+        assert!(reduce(&digest).is_err());
 
         let closed = vec![
             base[0].clone(),
@@ -937,7 +659,7 @@ mod tests {
             )?,
             start(4, "r2", 20, "complete", "canonical_prefix")?,
         ];
-        assert!(reduce(&closed, &BTreeSet::new()).is_err());
+        assert!(reduce(&closed).is_err());
         Ok(())
     }
 
@@ -950,149 +672,89 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
         )?];
-        assert!(reduce(&close_only, &BTreeSet::new()).is_err());
+        assert!(reduce(&close_only).is_err());
 
-        assert!(reduce(&[settled(1, "r1", Some(1), Some(1))?], &BTreeSet::new()).is_err());
+        assert!(reduce(&[settled(1, "r1", Some(1), Some(1))?]).is_err());
 
         let duplicate_settlement = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             settled(3, "r1", Some(1), Some(1))?,
             settled(4, "r1", Some(2), Some(1))?,
         ];
-        assert!(reduce(&duplicate_settlement, &BTreeSet::new()).is_err());
+        assert!(reduce(&duplicate_settlement).is_err());
 
-        assert!(reduce(&[intent(1, "r1", "opening", "low")?], &BTreeSet::new()).is_err());
+        assert!(reduce(&[intent(1, "r1", "orchestrate", "low")?]).is_err());
 
         let duplicate_route = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
-            intent(3, "r1", "planning", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
+            intent(3, "r1", "orchestrate", "low")?,
         ];
-        assert!(reduce(&duplicate_route, &BTreeSet::new()).is_err());
+        assert!(reduce(&duplicate_route).is_err());
 
         let settlement_for_unknown_request = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
             settled(2, "r2", Some(1), Some(1))?,
         ];
-        assert!(reduce(&settlement_for_unknown_request, &BTreeSet::new()).is_err());
+        assert!(reduce(&settlement_for_unknown_request).is_err());
 
         let intent_after_settlement = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             settled(3, "r1", Some(1), Some(1))?,
-            intent(4, "r1", "planning", "low")?,
+            intent(4, "r1", "orchestrate", "low")?,
         ];
-        assert!(reduce(&intent_after_settlement, &BTreeSet::new()).is_err());
+        assert!(reduce(&intent_after_settlement).is_err());
 
-        let guard_before_intent = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            guard(2, "r1", 1)?,
-        ];
-        assert!(reduce(&guard_before_intent, &BTreeSet::new()).is_err());
-
-        let duplicate_guard = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
-            guard(3, "r1", 1)?,
-            guard(4, "r1", 1)?,
-        ];
-        assert!(reduce(&duplicate_guard, &BTreeSet::new()).is_err());
-
-        let guard_after_settlement = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
-            settled(3, "r1", Some(1), Some(1))?,
-            guard(4, "r1", 1)?,
-        ];
-        assert!(reduce(&guard_after_settlement, &BTreeSet::new()).is_err());
-
-        assert!(reduce(&[guard(1, "r1", 2)?], &BTreeSet::new()).is_err());
         Ok(())
     }
 
     #[test]
-    fn reducer_rejects_timestamp_regression_invalid_hold_and_overflow() -> anyhow::Result<()> {
+    fn reducer_rejects_timestamp_regression_and_overflow() -> anyhow::Result<()> {
         let mut regressed = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
         ];
         regressed[1].captured_at = "2026-07-31T23:59:59Z".to_owned();
         resign(&mut regressed[1])?;
-        assert!(reduce(&regressed, &BTreeSet::new()).is_err());
-
-        for hold in [0, u64::from(u32::MAX) + 1] {
-            let events = vec![
-                start(1, "r1", 10, "complete", "explicit_root")?,
-                intent(2, "r1", "opening", "low")?,
-                guard(3, "r1", hold)?,
-            ];
-            assert!(reduce(&events, &BTreeSet::new()).is_err());
-        }
+        assert!(reduce(&regressed).is_err());
 
         let total_overflow = vec![
             start(1, "r1", 10, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             settled(3, "r1", Some(u64::MAX), Some(0))?,
             start(4, "r2", 20, "complete", "canonical_prefix")?,
-            intent(5, "r2", "planning", "low")?,
+            intent(5, "r2", "orchestrate", "low")?,
             settled(6, "r2", Some(1), Some(0))?,
         ];
-        assert!(reduce(&total_overflow, &BTreeSet::new()).is_err());
+        assert!(reduce(&total_overflow).is_err());
 
         let ppm_overflow = vec![
             start(1, "r1", 1, "complete", "explicit_root")?,
-            intent(2, "r1", "opening", "low")?,
+            intent(2, "r1", "orchestrate", "low")?,
             start(3, "r2", u64::MAX, "complete", "canonical_prefix")?,
-            intent(4, "r2", "planning", "low")?,
+            intent(4, "r2", "orchestrate", "low")?,
         ];
-        assert!(reduce(&ppm_overflow, &BTreeSet::new()).is_err());
+        assert!(reduce(&ppm_overflow).is_err());
         Ok(())
     }
 
     #[test]
-    fn reducer_rejects_mismatched_or_untyped_route_evidence() -> anyhow::Result<()> {
-        let mut mismatch = intent(2, "r1", "planning", "low")?;
-        mismatch
-            .evidence
-            .categorical
-            .insert("route.workflow_state".to_owned(), "recovery".to_owned());
-        resign(&mut mismatch)?;
-        let events = vec![start(1, "r1", 10, "complete", "explicit_root")?, mismatch];
-        assert!(reduce(&events, &BTreeSet::new()).is_err());
-
-        let mut failure_text = intent(2, "r1", "planning", "low")?;
-        failure_text.evidence.categorical.insert(
-            "route.workflow_state".to_owned(),
-            "retry after failure".to_owned(),
-        );
-        resign(&mut failure_text)?;
-        let events = vec![
-            start(1, "r1", 10, "complete", "explicit_root")?,
-            failure_text,
-        ];
-        assert!(reduce(&events, &BTreeSet::new()).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn typed_route_protection_is_historical_across_policy_reload() -> anyhow::Result<()> {
-        let mut events = vec![start(1, "r1", 10, "complete", "explicit_root")?];
-        let first = typed_intent(&events, 2, "r1", "planning", "shared", true)?;
-        events.push(first);
-        events.push(start(3, "r2", 20, "complete", "canonical_prefix")?);
-        let second = typed_intent(&events, 4, "r2", "planning", "shared", false)?;
-        events.push(second);
-
-        let replay_with_old_policy = reduce(&events, &BTreeSet::from(["shared".to_owned()]))?;
-        let replay_with_new_policy = reduce(&events, &BTreeSet::new())?;
-        assert_eq!(
-            replay_with_old_policy
-                .health
-                .consecutive_unprotected_requests,
-            1
-        );
-        assert_eq!(replay_with_old_policy, replay_with_new_policy);
+    fn reducer_rejects_invalid_semantic_route_evidence() -> anyhow::Result<()> {
+        for value in [
+            "code:generation|invalid|normal",
+            "retry after failure",
+            "code:generation|implement|normal|extra",
+        ] {
+            let mut route = intent(2, "r1", "implement", "low")?;
+            route
+                .evidence
+                .categorical
+                .insert("route.projection".into(), value.into());
+            resign(&mut route)?;
+            assert!(reduce(&[start(1, "r1", 10, "complete", "explicit_root")?, route]).is_err());
+        }
         Ok(())
     }
 
@@ -1129,66 +791,11 @@ mod tests {
             BTreeMap::from([
                 (
                     "route.projection".to_owned(),
-                    format!("agent_trace/v2|{state}|normal"),
+                    format!("code:generation|{state}|normal"),
                 ),
                 ("route.selected_tier".to_owned(), tier.to_owned()),
-                ("route.workflow_state".to_owned(), state.to_owned()),
             ]),
         )
-    }
-
-    fn typed_intent(
-        prefix: &[TrajectoryEvent],
-        sequence: u64,
-        request_id: &str,
-        state: &str,
-        tier: &str,
-        selected_is_protected: bool,
-    ) -> anyhow::Result<TrajectoryEvent> {
-        let snapshot = reduce(prefix, &BTreeSet::new())?;
-        let mut route = intent(sequence, request_id, state, tier)?;
-        route
-            .evidence
-            .structural
-            .insert("route.applied_clause_count".to_owned(), 0);
-        route.evidence.structural.insert(
-            "route.selected_is_protected".to_owned(),
-            u64::from(selected_is_protected),
-        );
-        route
-            .evidence
-            .digests
-            .insert("route.policy_lock".to_owned(), TEST_DIGEST.to_owned());
-        route
-            .evidence
-            .digests
-            .insert("route.health_snapshot".to_owned(), snapshot.evidence_digest);
-        for (index, clause_id) in [
-            "progress_guard.active_hold",
-            "progress_guard.incomplete_history",
-            "progress_guard.max_consecutive_unprotected",
-            "progress_guard.max_same_projection_unprotected",
-            "progress_guard.max_recovery_count",
-            "progress_guard.max_episode_requests",
-            "progress_guard.max_episode_elapsed_ms",
-            "progress_guard.max_episode_cost_micro_usd",
-            "tool_safety.floor",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let prefix = format!("route.clause_{index:02}");
-            route
-                .evidence
-                .categorical
-                .insert(format!("{prefix}.id"), clause_id.to_owned());
-            route
-                .evidence
-                .categorical
-                .insert(format!("{prefix}.disposition"), "skipped".to_owned());
-        }
-        resign(&mut route)?;
-        Ok(route)
     }
 
     fn settled(
@@ -1220,16 +827,6 @@ mod tests {
             TrajectoryEventKind::RequestSettled,
             structural,
             BTreeMap::from([("settlement.outcome".to_owned(), outcome.to_owned())]),
-        )
-    }
-
-    fn guard(sequence: u64, request_id: &str, hold: u64) -> anyhow::Result<TrajectoryEvent> {
-        event(
-            sequence,
-            Some(request_id),
-            TrajectoryEventKind::GuardActivated,
-            BTreeMap::from([("guard.hold_for_requests".to_owned(), hold)]),
-            BTreeMap::new(),
         )
     }
 

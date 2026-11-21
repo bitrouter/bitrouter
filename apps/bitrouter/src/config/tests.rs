@@ -291,9 +291,8 @@ fn provider_headers_reject_invalid_reserved_and_duplicate_names() {
 }
 
 #[test]
-fn named_policy_accepts_explicit_model_effort_context_actions() -> crate::gateway::error::Result<()>
-{
-    let config = parse_named_table(
+fn named_policy_accepts_explicit_model_and_effort() -> anyhow::Result<()> {
+    let config = serde_saphyr::from_str::<bitrouter_ai::policy::Policy>(
         r#"
   tiers:
     strong:
@@ -321,8 +320,8 @@ fn named_policy_accepts_explicit_model_effort_context_actions() -> crate::gatewa
 }
 
 #[test]
-fn policy_table_rejects_unknown_compound_target_fields() -> crate::gateway::error::Result<()> {
-    let error = parse_named_table(
+fn policy_table_rejects_unknown_compound_target_fields() -> anyhow::Result<()> {
+    let error = serde_saphyr::from_str::<bitrouter_ai::policy::Policy>(
         r#"
   tiers:
     strong:
@@ -512,8 +511,8 @@ fn continuation_config_rejects_unbounded_operational_values() {
 
 #[test]
 fn trajectory_config_is_opt_in_round_trippable_and_schema_visible() {
-    let legacy = parse_with("server:\n  listen: 127.0.0.1:4356\n", |_| None).unwrap();
-    assert!(!legacy.trajectory.enabled);
+    let defaults = parse_with("server:\n  listen: 127.0.0.1:4356\n", |_| None).unwrap();
+    assert!(!defaults.trajectory.enabled);
 
     let config = parse_with(
         "trajectory:\n  enabled: true\n  retention_days: 45\n  outbox_batch_size: 250\n",
@@ -814,7 +813,7 @@ providers:
 
 #[test]
 fn pricing_without_tiers_parses_flat() {
-    // Back-compat: a model priced the old way has no tiers.
+    // Flat pricing has no context-dependent tiers.
     let yaml = r#"
 providers:
   openai:
@@ -1389,8 +1388,8 @@ fn mcp_upstream_protocol_defaults_to_auto() {
 fn mcp_upstream_protocol_opts_in_by_version_string() {
     let auto = parse("mcp:\n  upstream_protocol: auto\n").expect("parse auto");
     assert_eq!(auto.mcp.upstream_protocol, McpUpstreamProtocol::Auto);
-    let legacy = parse("mcp:\n  upstream_protocol: latest\n").expect("parse latest");
-    assert_eq!(legacy.mcp.upstream_protocol, McpUpstreamProtocol::Latest);
+    let latest = parse("mcp:\n  upstream_protocol: latest\n").expect("parse latest");
+    assert_eq!(latest.mcp.upstream_protocol, McpUpstreamProtocol::Latest);
 
     let cfg = parse("mcp:\n  upstream_protocol: \"2026-07-28\"\n").expect("parse");
     assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::V2026_07_28);

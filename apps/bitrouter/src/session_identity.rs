@@ -1,4 +1,4 @@
-//! ACP/native request-session normalization.
+//! Request-session attribution independent of semantic model selection.
 
 use std::sync::Arc;
 
@@ -8,10 +8,6 @@ use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook};
 use async_trait::async_trait;
 use bitrouter_ai::types::ApiProtocol;
 use serde::Serialize;
-
-use crate::gateway::routing::workflow::extractors::{ExtractorInput, parse_compatibility_harness};
-use crate::gateway::routing::workflow::ir::ProtocolKind;
-use crate::gateway::routing::workflow::session::resolve_session_signal;
 
 const EVIDENCE_HEADERS: &[&str] = &[
     "x-bitrouter-request-id",
@@ -37,7 +33,7 @@ const EVIDENCE_HEADERS: &[&str] = &[
     "x-bitrouter-inbound-protocol",
 ];
 
-/// Whether request identity came from the legacy model API path or declared
+/// Whether request identity came from a model API request or declared
 /// ACP harness correlation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +66,7 @@ pub struct IdentityEvidence {
     pub transport: String,
     /// Exact transport field or parsed semantic sub-field.
     pub field: String,
-    /// Signal family (`bitrouter`, `claude_code`, `codex`, or `legacy`).
+    /// Signal family (`bitrouter`, `claude_code`, `codex`, or `session`).
     pub source: String,
     /// Whether this exact evidence value participated in route lookup.
     pub used_for_route_match: bool,
@@ -121,7 +117,7 @@ pub struct RequestSessionContext {
     pub acp_session_id: Option<String>,
     /// Native Claude/Codex identity.
     pub native: NativeSessionIdentity,
-    /// Existing pure model API compatibility projection.
+    /// Observed session key; this grants no routing or continuation authority.
     pub legacy_workflow_session_id: Option<String>,
     /// Provider-side Responses continuation identity.
     pub api_continuation_id: Option<String>,
@@ -180,8 +176,8 @@ impl PipelineEvent for SessionIdentityObserved {
     }
 }
 
-/// Post-auth hook that normalizes identity and applies an API-principal-scoped
-/// route lease without changing legacy pure API behavior.
+/// Post-auth hook that records API-principal-scoped session identity
+/// without changing the selected model.
 /// The default retains request identity without an ACP route-lease runtime.
 #[derive(Default)]
 pub struct SessionContextHook {}
@@ -212,27 +208,20 @@ impl PreRequestHook for SessionContextHook {
         let mut evidence = Vec::new();
         let mut conflicts = Vec::new();
         let native = extract_native(ctx, &mut evidence, &mut conflicts);
-        let body = canonical_extra_body(ctx);
-        let legacy = resolve_session_signal(&ExtractorInput {
-            harness_hint: header_value(ctx, "x-bitrouter-harness")
-                .and_then(|value| parse_compatibility_harness(&value)),
-            protocol_hint: protocol_kind(ctx.inbound_protocol()),
-            headers: ctx.headers(),
-            raw_body: &body,
-            prompt: ctx.require_generation_prompt()?,
-        });
+        let session = session_signal(ctx, &native);
         // Shared evidence may change the first visible user message. Its inferred
         // fingerprint is an observation, not an authoritative session identity;
         // retain the original observation while still checking declared identity.
-        let inferred_legacy = legacy.signal.source.as_deref()
+        let inferred_session = session.as_ref().map(|(_, source)| *source)
             == Some("prompt.first_user_message_sha256")
             && frozen.evidence.iter().any(|evidence| {
                 evidence.transport == "derived"
-                    && evidence.source == "legacy"
+                    && evidence.source == "session"
                     && evidence.field == "prompt.first_user_message_sha256"
             });
         if native != frozen.native
-            || (legacy.signal.key != frozen.legacy_workflow_session_id && !inferred_legacy)
+            || (session.as_ref().map(|(key, _)| key) != frozen.legacy_workflow_session_id.as_ref()
+                && !inferred_session)
         {
             return Err(crate::gateway::error::BitrouterError::bad_request(
                 "context rebuild changed session attribution",
@@ -255,34 +244,6 @@ impl PreRequestHook for SessionContextHook {
         let acp_session_id = header_value(ctx, "x-bitrouter-acp-session-id");
         let mut conflicts = Vec::new();
         let mut evidence = header_evidence(ctx);
-        let raw_body = canonical_extra_body(ctx);
-        let protocol_kind = protocol_kind(ctx.inbound_protocol());
-        let harness_hint = header_value(ctx, "x-bitrouter-harness")
-            .and_then(|value| parse_compatibility_harness(&value));
-        let legacy = ctx.generation_prompt().map(|prompt| {
-            resolve_session_signal(&ExtractorInput {
-                harness_hint,
-                protocol_hint: protocol_kind,
-                headers: ctx.headers(),
-                raw_body: &raw_body,
-                prompt,
-            })
-        });
-        for legacy_evidence in legacy
-            .as_ref()
-            .into_iter()
-            .flat_map(|legacy| &legacy.evidence)
-        {
-            evidence.push(IdentityEvidence {
-                transport: "derived".to_string(),
-                field: legacy_evidence.value.clone(),
-                source: "legacy".to_string(),
-                used_for_route_match: false,
-                value_representation: "presence_only".to_string(),
-                value: None,
-            });
-        }
-
         let api_continuation_id = extra_string(ctx, "previous_response_id");
         if let Some(value) = &api_continuation_id {
             evidence.push(body_evidence(
@@ -294,6 +255,17 @@ impl PreRequestHook for SessionContextHook {
         }
 
         let mut native = extract_native(ctx, &mut evidence, &mut conflicts);
+        let session = session_signal(ctx, &native);
+        if let Some((_, source)) = &session {
+            evidence.push(IdentityEvidence {
+                transport: "derived".into(),
+                field: (*source).into(),
+                source: "session".into(),
+                used_for_route_match: false,
+                value_representation: "presence_only".into(),
+                value: None,
+            });
+        }
         if let (Some(dynamic), Some(root)) =
             (acp_session_id.as_deref(), native.root_session_id.as_deref())
             && dynamic != root
@@ -314,7 +286,7 @@ impl PreRequestHook for SessionContextHook {
             claimed_controller_instance_id: claimed_controller,
             acp_session_id,
             native: std::mem::take(&mut native),
-            legacy_workflow_session_id: legacy.and_then(|legacy| legacy.signal.key),
+            legacy_workflow_session_id: session.map(|(key, _)| key),
             api_continuation_id,
             evidence,
             conflicts,
@@ -582,28 +554,48 @@ fn body_evidence(
     }
 }
 
-fn canonical_extra_body(ctx: &PipelineContext) -> serde_json::Value {
-    serde_json::Value::Object(
-        ctx.generation_prompt()
-            .map(|prompt| {
-                prompt
-                    .params
-                    .extra
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    )
-}
-
-fn protocol_kind(protocol: Option<ApiProtocol>) -> ProtocolKind {
-    match protocol {
-        Some(ApiProtocol::ChatCompletions) => ProtocolKind::ChatCompletions,
-        Some(ApiProtocol::Messages) => ProtocolKind::Messages,
-        Some(ApiProtocol::Responses) => ProtocolKind::Responses,
-        _ => ProtocolKind::Unknown,
+/// Session attribution is observational and never enters semantic route selection.
+fn session_signal(
+    ctx: &PipelineContext,
+    native: &NativeSessionIdentity,
+) -> Option<(String, &'static str)> {
+    if let Some(value) = header_value(ctx, "x-bitrouter-workflow-session") {
+        return Some((value, "header.x-bitrouter-workflow-session"));
     }
+    if let Some(value) = native
+        .agent_thread_id
+        .as_ref()
+        .or(native.root_session_id.as_ref())
+    {
+        return Some((value.clone(), "native.session"));
+    }
+    if let Some(value) = extra_string(ctx, "previous_response_id") {
+        return Some((value, "previous_response_id"));
+    }
+    use bitrouter_ai::types::{Content, Role};
+    use sha2::{Digest, Sha256};
+    let text = ctx
+        .generation_prompt()?
+        .messages
+        .iter()
+        .find(|message| message.role == Role::User)?
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            Content::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let digest = Sha256::digest(text.as_bytes());
+    Some((
+        format!("prompt:{}", hex::encode(&digest[..12])),
+        "prompt.first_user_message_sha256",
+    ))
 }
 
 fn header_value(ctx: &PipelineContext, name: &str) -> Option<String> {
@@ -840,7 +832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pure_model_api_keeps_the_legacy_workflow_projection() {
+    async fn explicit_session_attribution_preserves_the_requested_model() {
         let mut context = context(
             "gpt-5",
             ApiProtocol::Responses,
