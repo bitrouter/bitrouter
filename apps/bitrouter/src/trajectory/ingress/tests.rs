@@ -27,8 +27,7 @@ impl Drop for ServerTask {
 }
 
 #[tokio::test]
-async fn http_preserves_usage_absence_and_zero_and_captures_fresh_trajectories()
--> anyhow::Result<()> {
+async fn http_preserves_policy_evaluation_alongside_factual_trajectories() -> anyhow::Result<()> {
     for enabled in [false, true] {
         exercise_http(enabled).await?;
     }
@@ -48,7 +47,7 @@ async fn exercise_http(enabled: bool) -> anyhow::Result<()> {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_partial_json(
-                json!({"messages":[{"role":"user","content":private_text(known)}]}),
+                json!({"messages":[{"role":"user","content":private_text(known)}],"reasoning_effort":"low"}),
             ))
             .respond_with(
                 ResponseTemplate::new(200)
@@ -78,6 +77,9 @@ providers:
       - "*": chat_completions
     models:
       - id: economy
+        capabilities: [reasoning]
+        reasoning_effort:
+          levels: [low]
 routers:
   coding:
     selection:
@@ -89,7 +91,10 @@ routers:
         ),
         |_| None,
     )?;
-    tokio::fs::write(home.path().join("policy.yaml"), "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers:\n      economy: {model: vendor:economy}\n    default_tier: economy\n").await?;
+    let policy = "spec_version: policy/1.0.0-beta.1\npolicies:\n  coding:\n    tiers:\n      economy: {model: vendor:economy, effort: low}\n    default_tier: economy\n";
+    tokio::fs::write(home.path().join("policy.yaml"), policy).await?;
+    #[cfg(feature = "eval-publication")]
+    let policy_digest = crate::model_policy::source_digest(&crate::model_policy::decode(policy)?)?;
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
     let router = build_router_with_options(
         AppState {
@@ -217,33 +222,86 @@ routers:
                     .store()
                     .list_subjects_for_owner(owner)
                     .await?;
-                let subject = if let Some(key) = &correlation_key {
+                let request_subject = subjects
+                    .iter()
+                    .find(|subject| subject.subject_id == request_id)
+                    .ok_or_else(|| anyhow::anyhow!("HTTP policy request evaluation is missing"))?;
+                assert_eq!(
+                    request_subject.scope,
+                    bitrouter_ai::eval::EvalScope::Request
+                );
+                assert_eq!(request_subject.eval_id, format!("request:{request_id}"));
+                assert_eq!(request_subject.decisions.len(), 1);
+                let decision = &request_subject.decisions[0];
+                assert_eq!(decision.decision_id, format!("{request_id}:coding"));
+                assert_eq!(decision.policy, "coding");
+                assert_eq!(decision.policy_digest, policy_digest);
+                assert_eq!(decision.selected_tier, "economy");
+                assert_eq!(
+                    decision.selected_effort,
+                    Some(bitrouter_ai::types::ReasoningEffort::Low)
+                );
+                let evidence = request_subject
+                    .evidence
+                    .iter()
+                    .find(|item| item.kind == "request.outcome")
+                    .ok_or_else(|| anyhow::anyhow!("missing request outcome evidence"))?;
+                assert_eq!(
+                    evidence.attributes.get("usage_origin").map(String::as_str),
+                    Some(expected_origin)
+                );
+                assert_eq!(
+                    evidence
+                        .attributes
+                        .get("reasoning_effort")
+                        .map(String::as_str),
+                    Some("low")
+                );
+                for name in ["prompt_tokens", "completion_tokens", "reasoning_tokens"] {
+                    assert_eq!(
+                        evidence.attributes.get(name).map(String::as_str),
+                        known.then_some("0")
+                    );
+                }
+                assert!(
+                    assembled
+                        .eval_service
+                        .store()
+                        .results_for_subject(&request_subject.eval_id)
+                        .await?
+                        .is_empty()
+                );
+                if let Some(key) = &correlation_key {
                     let identity = key.request_identity(owner, &request_id)?;
                     let request = store
                         .request(owner, &identity)
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("missing request"))?;
-                    subjects
+                    let episode_subject = subjects
                         .iter()
                         .find(|subject| subject.subject_id == request.episode_id)
-                } else {
-                    subjects
-                        .iter()
-                        .find(|subject| subject.subject_id == request_id)
-                }
-                .ok_or_else(|| {
-                    anyhow::anyhow!("actual HTTP settlement did not close evaluation")
-                })?;
-                if enabled {
-                    assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Episode);
-                    assert!(subject.decisions.is_empty());
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("HTTP factual episode evaluation is missing")
+                        })?;
+                    assert_ne!(episode_subject.eval_id, request_subject.eval_id);
+                    assert_eq!(
+                        episode_subject.scope,
+                        bitrouter_ai::eval::EvalScope::Episode
+                    );
+                    assert!(episode_subject.decisions.is_empty());
                     let results = assembled
                         .eval_service
                         .store()
-                        .results_for_subject(&subject.eval_id)
+                        .results_for_subject(&episode_subject.eval_id)
                         .await?;
                     assert_eq!(results.len(), 1);
+                    assert_eq!(
+                        results[0].result.verdict,
+                        bitrouter_ai::eval::EvalVerdict::Inconclusive
+                    );
+                    assert!(results[0].result.decision_credit.is_empty());
                     let metrics = &results[0].result.metrics;
+                    assert!(!metrics.contains_key("quality.pass"));
                     assert!(metrics["latency.ms"].value >= 30);
                     assert_eq!(
                         metrics
@@ -251,25 +309,6 @@ routers:
                             .map(|value| value.value),
                         known.then_some(0)
                     );
-                } else {
-                    assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
-                    assert_eq!(subject.decisions.len(), 1);
-                    assert_eq!(subject.decisions[0].selected_tier, "economy");
-                    let evidence = subject
-                        .evidence
-                        .iter()
-                        .find(|item| item.kind == "request.outcome")
-                        .ok_or_else(|| anyhow::anyhow!("missing outcome evidence"))?;
-                    assert_eq!(
-                        evidence.attributes.get("usage_origin").map(String::as_str),
-                        Some(expected_origin)
-                    );
-                    for name in ["prompt_tokens", "completion_tokens", "reasoning_tokens"] {
-                        assert_eq!(
-                            evidence.attributes.get(name).map(String::as_str),
-                            known.then_some("0")
-                        );
-                    }
                 }
                 assert!(
                     assembled
@@ -289,7 +328,7 @@ routers:
                 .list_subjects_for_owner(owner)
                 .await?
                 .len(),
-            2
+            if enabled { 4 } else { 2 }
         );
     }
     assert!(assembled.pending_eval_decisions.is_empty());

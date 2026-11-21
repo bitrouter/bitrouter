@@ -1,4 +1,4 @@
-//! Gateway-owned terminal evidence, with an optional untracked-request consumer.
+//! Gateway-owned trajectory evidence and independent request evaluation.
 
 #[cfg(feature = "eval-publication")]
 use std::sync::Arc;
@@ -18,20 +18,20 @@ pub(crate) struct PolicySettlementRecorder {
     pending: PendingEvalDecisionStore,
     trajectory: Option<TrajectorySettlementRecorder>,
     #[cfg(feature = "eval-publication")]
-    untracked: Option<Arc<dyn SettlementRecorder>>,
+    evaluation: Option<Arc<dyn SettlementRecorder>>,
 }
 
 impl PolicySettlementRecorder {
     pub(crate) fn new(
         pending: PendingEvalDecisionStore,
         trajectory: Option<TrajectorySettlementRecorder>,
-        #[cfg(feature = "eval-publication")] untracked: Option<Arc<dyn SettlementRecorder>>,
+        #[cfg(feature = "eval-publication")] evaluation: Option<Arc<dyn SettlementRecorder>>,
     ) -> Self {
         Self {
             pending,
             trajectory,
             #[cfg(feature = "eval-publication")]
-            untracked,
+            evaluation,
         }
     }
 }
@@ -56,19 +56,15 @@ impl SettlementRecorder for PolicySettlementRecorder {
                 .map_err(|error| {
                     BitrouterError::internal(format!("persisting trajectory settlement: {error}"))
                 })? {
-                TrajectorySettlementDisposition::Untracked => {}
                 TrajectorySettlementDisposition::AwaitingAuthoritativeMetering => return Ok(()),
-                TrajectorySettlementDisposition::Persisted
-                | TrajectorySettlementDisposition::AlreadyTerminal => {
-                    if let Some(invocation) = &invocation {
-                        self.pending.remove(invocation, context.caller.user_id());
-                    }
-                    return Ok(());
-                }
+                TrajectorySettlementDisposition::Untracked
+                | TrajectorySettlementDisposition::Persisted
+                | TrajectorySettlementDisposition::AlreadyTerminal => {}
             }
         }
+        // Episode persistence does not consume the independent request policy decision.
         #[cfg(feature = "eval-publication")]
-        if let Some(consumer) = &self.untracked {
+        if let Some(consumer) = &self.evaluation {
             if let Some(invocation) = &invocation {
                 // Preserve this lookup even if its cache entry expires or is evicted
                 // while trajectory storage is awaited. A missing snapshot stays missing.
