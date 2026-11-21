@@ -1,4 +1,4 @@
-//! Authenticated, bounded capture of model request facts before prompt mutation.
+//! Admitted, bounded capture of model request facts before policy selection.
 
 use std::{io, sync::Arc, time::Duration};
 

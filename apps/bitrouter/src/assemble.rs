@@ -1382,9 +1382,6 @@ async fn assemble_app(
                 AuthHook::new(db_for_hooks.clone()).with_tenancy(tenancy_enabled),
                 OperationScope::Both,
             );
-            if let Some(capture) = trajectory_for_ingress {
-                lm.pre_resolution_hook(capture);
-            }
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
             if let Some(runtime) = continuation_for_pre_request {
                 lm.pre_resolution_hook(runtime);
@@ -1399,6 +1396,11 @@ async fn assemble_app(
             }
             if let Some(binding) = canonical_binding {
                 lm.router_preparation_hook(binding);
+            }
+            // Capture only after the request identity is admitted. Early route
+            // failures and duplicate caller IDs cannot create unowned ledgers.
+            if let Some(capture) = trajectory_for_ingress {
+                lm.router_preparation_hook(capture);
             }
             lm.pre_request_hook_for(
                 PolicyHook::new(
