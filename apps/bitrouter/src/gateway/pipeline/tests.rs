@@ -2668,6 +2668,7 @@ async fn nonstream_observation_carries_finish_reason() {
     );
 
     pipeline.execute(request()).await.expect("request succeeds");
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -2887,6 +2888,7 @@ async fn non_stream_request_duration_includes_pre_request_pipeline_time() {
     );
 
     pipeline.execute(request()).await.expect("request succeeds");
+    pipeline.drain_pending_settlements().await;
 
     let snapshots = captured.lock().unwrap();
     let snapshot = snapshots.first().expect("settlement snapshot");
@@ -4901,6 +4903,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
             .prompt_tokens,
         6
     );
+    pipeline.drain_pending_settlements().await;
     let snapshots = captured.lock().unwrap();
     assert_eq!(
         snapshots
