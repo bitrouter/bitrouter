@@ -124,9 +124,15 @@ The product receipt is `<config>/<package>/<package>-receipt.json`. Its staged
 successor is `<config>/<package>/.install-lock/receipt`. The guards compare both
 receipts' product and prefix bindings with the destination and select the one
 whose SHA-256 matches the executable. On Windows, if the running image was
-relocated before the replacement arrived, rerun the guarded PowerShell installer.
-It restores `.install-lock/previous.exe` when its digest matches the previous
-published receipt.
+relocated before the replacement arrived, rerun the guarded PowerShell installer
+for a PowerShell-managed installation. For a gateway installed with
+`bro core install`, run `bro core update`. Use `--prefix <absolute-bin-directory>`
+to select its original installation explicitly. Recovery restores
+`.install-lock/previous.exe` when its SHA-256 matches the published receipt.
+`bro core status` and `bro core update --check` report `recovery_required` while
+the gateway image is missing. When `bro core update` reports `recovered`, it has
+restored the previously installed version. Run it again with any desired
+`--tag` or `--stable` option to apply a release update.
 
 For an unmarked lock or conflicting evidence:
 
