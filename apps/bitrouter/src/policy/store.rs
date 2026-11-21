@@ -49,6 +49,7 @@ impl PolicyStore {
     }
 
     /// Build a store from a list of policies.
+    #[cfg(any(feature = "multi-instance", test))]
     pub fn from_policies(policies: impl IntoIterator<Item = Policy>) -> Self {
         let store = Self::new();
         {

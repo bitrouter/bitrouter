@@ -16,7 +16,9 @@ pub mod operations;
 pub mod policy;
 pub mod requests;
 pub mod routing;
+#[cfg(any(feature = "multi-instance", test))]
 pub mod shared;
+#[cfg(feature = "mcp")]
 pub mod tools;
 pub mod trajectory;
 pub mod update;
