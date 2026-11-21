@@ -940,15 +940,12 @@ async fn assemble_app(
                         BearerPlan::StaticOnly => None,
                     };
                     #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
-                    if bearer_plan == BearerPlan::MissingStaticBearer {
+                    let otel_config = otel_config.with_env_overrides();
+                    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+                    if let Some(warning) = grpc_account_warning(&otel_config, bearer_plan) {
                         // The host emits startup diagnostics after installing
                         // its subscriber; logging here would lose the warning.
-                        ignored_config.push(
-                            "telemetry: attribution=account requires an explicit static bearer \
-                             for OTLP/gRPC; configure telemetry.bearer_token or \
-                             BITROUTER_TELEMETRY_TOKEN; the signed-in session is HTTP-only"
-                                .to_owned(),
-                        );
+                        ignored_config.push(warning.to_owned());
                     }
                     match OtelExporter::new(
                         otel_config,
@@ -2108,8 +2105,8 @@ enum BearerPlan {
     /// the "exporting anonymously" warning when the source resolves to `None`.
     #[cfg(feature = "otel-http")]
     LiveSource { warn_if_unmet: bool },
-    /// gRPC account attribution needs an explicit static bearer. Report the
-    /// missing token through startup diagnostics without reading credentials.
+    /// gRPC account attribution has no explicit token. Check effective headers
+    /// before reporting missing credentials through startup diagnostics.
     #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
     MissingStaticBearer,
     /// No live source — static `Authorization` header (or anonymous). The
@@ -2240,6 +2237,28 @@ fn telemetry_bearer_plan(_: TelemetryAttribution, _: bool) -> BearerPlan {
     BearerPlan::StaticOnly
 }
 
+/// Inspect the same resolved headers the gRPC transport sends. Account lookup
+/// is unnecessary; the host emits any returned diagnostic after tracing starts.
+#[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+fn grpc_account_warning(config: &OtelConfig, bearer_plan: BearerPlan) -> Option<&'static str> {
+    if bearer_plan != BearerPlan::MissingStaticBearer {
+        return None;
+    }
+    let has_authorization = config.effective_headers().iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization")
+            && http::HeaderValue::from_str(value).is_ok_and(|value| !value.is_empty())
+    });
+    if has_authorization {
+        None
+    } else {
+        Some(
+            "telemetry: attribution=account requires static Authorization credentials for \
+             OTLP/gRPC; configure telemetry.bearer_token, BITROUTER_TELEMETRY_TOKEN, or \
+             OTEL_EXPORTER_OTLP_HEADERS; the signed-in session is HTTP-only",
+        )
+    }
+}
+
 /// BitRouter's first-party telemetry endpoint. A neutral, overridable default
 /// used when the telemetry opt-in is enabled without an explicit `endpoint`.
 pub(crate) const DEFAULT_TELEMETRY_ENDPOINT: &str = "https://telemetry.bitrouter.ai";
@@ -2258,15 +2277,15 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when an explicit `bearer_token` is available, or with
-    /// OTLP/HTTP when a `bitrouter cloud login` session is available; anonymous
+    /// Account-attributed when explicit Authorization credentials are available,
+    /// or with OTLP/HTTP when a `bitrouter cloud login` session is available; anonymous
     /// otherwise. Signing in upgrades HTTP attribution without a config change.
     #[default]
     Auto,
-    /// Request account attribution: use an explicit bearer or, with OTLP/HTTP,
-    /// the signed-in session. gRPC requires a static bearer. If no usable bearer
-    /// is available, export still proceeds anonymously with a warning; missing
-    /// attribution must not drop telemetry.
+    /// Request account attribution: use explicit Authorization credentials or,
+    /// with OTLP/HTTP, the signed-in session. gRPC requires static credentials.
+    /// If none are available, export still proceeds anonymously with a warning;
+    /// missing attribution must not drop telemetry.
     Account,
     /// Always anonymous — never attach a bearer, even when signed in or a
     /// `bearer_token` is configured. The opt-out for users who want telemetry
@@ -2571,6 +2590,101 @@ mod telemetry_opt_in_tests {
                 );
             }
         }
+    }
+
+    #[cfg(all(feature = "otel-grpc", not(feature = "otel-http")))]
+    #[test]
+    fn grpc_account_warning_uses_effective_authorization() {
+        for name in ["Authorization", "authorization", "aUtHoRiZaTiOn"] {
+            let config = OtelConfig {
+                headers: [(name.into(), "Bearer private-header".into())].into(),
+                ..OtelConfig::default()
+            };
+            let account = telemetry_bearer_plan(TelemetryAttribution::Account, false);
+            assert!(grpc_account_warning(&config, account).is_none());
+        }
+    }
+
+    #[cfg(all(unix, feature = "otel-grpc", not(feature = "otel-http")))]
+    #[tokio::test]
+    async fn grpc_account_startup_diagnostic_is_emitted_only_without_credentials()
+    -> anyhow::Result<()> {
+        for (attribution, token, headers, warns) in [
+            ("account", None, None, true),
+            ("account", Some("private-token"), None, false),
+            (
+                "account",
+                None,
+                Some("aUtHoRiZaTiOn=Bearer private-header"),
+                false,
+            ),
+            ("auto", None, None, false),
+            ("anonymous", None, None, false),
+        ] {
+            let home = tempfile::tempdir()?;
+            let occupied = std::net::TcpListener::bind("127.0.0.1:0")?;
+            let config_path = home.path().join("bitrouter.yaml");
+            let config = serde_json::json!({
+                "inherit_defaults": false,
+                "registry": { "enabled": false },
+                "server": { "listen": occupied.local_addr()?.to_string(), "log_level": "warn" },
+                "database": { "url": "sqlite::memory:" },
+                "plugins": { "bitrouter-telemetry": { "telemetry": {
+                    "enabled": true,
+                    "endpoint": "http://127.0.0.1:1",
+                    "attribution": attribution,
+                    "bearer_token": token
+                } } }
+            });
+            std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
+            // Reuse the real host child: it installs tracing, emits startup
+            // diagnostics, then exits at the intentionally occupied listener.
+            let mut command = tokio::process::Command::new(std::env::current_exe()?);
+            command
+                .args([
+                    "--exact",
+                    "tests::extension_host::extension_host_child",
+                    "--nocapture",
+                ])
+                .env("BITROUTER_TEST_EXTENSION_HOST_CONFIG", &config_path)
+                .env("BITROUTER_TEST_EXTENSION_HOST_MODE", "missing")
+                .env("BITROUTER_HOME", home.path())
+                .env(
+                    "BITROUTER_CONTROL_TOKEN",
+                    "grpc-warning-test-control-token-at-least-32-bytes",
+                )
+                .env("RUST_LOG", "warn")
+                .env("OTEL_TRACES_SAMPLER", "always_off")
+                .env_remove("BITROUTER_API_KEY")
+                .env_remove("BITROUTER_WORKFLOW_TRACE_JSONL")
+                .env_remove("BITROUTER_TELEMETRY_TOKEN")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_HEADERS")
+                .kill_on_drop(true);
+            if let Some(headers) = headers {
+                command.env("OTEL_EXPORTER_OTLP_HEADERS", headers);
+            }
+            let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+                .await
+                .context("telemetry warning host did not exit")??;
+            let logs = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!output.status.success());
+            assert!(logs.contains("bind inference listener"), "{logs}");
+            let diagnostic = "telemetry: attribution=account requires static Authorization credentials for OTLP/gRPC";
+            assert_eq!(
+                logs.matches(diagnostic).count(),
+                usize::from(warns),
+                "{logs}"
+            );
+            assert!(!logs.contains("cloud login"), "{logs}");
+            assert!(!logs.contains("private-token"));
+            assert!(!logs.contains("private-header"));
+        }
+        Ok(())
     }
 
     #[test]
