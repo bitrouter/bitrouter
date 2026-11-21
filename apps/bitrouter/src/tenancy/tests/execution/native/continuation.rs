@@ -6,6 +6,7 @@ use crate::gateway::pipeline::{
 };
 use crate::managed_contract::evidence::{NativeContinuationInput, NativeContinuationOutput};
 use crate::tenancy::store::StoredResponse;
+use crate::tenancy::tests::execution::provision_protocol_with_fixture;
 use bitrouter_ai::types::GenerateResult;
 
 #[derive(Clone)]

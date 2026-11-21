@@ -1,5 +1,5 @@
 //! Real HTTP consumers: no synthetic finalization context can mint a mapping.
-use super::{Fixture, MODEL, draft, failure, headers, provision_protocol};
+use super::{Fixture, MODEL, draft, failure, headers, provision_protocol_with_fixture};
 use anyhow::{Context, Result, ensure};
 use axum::{
     Json, Router,
