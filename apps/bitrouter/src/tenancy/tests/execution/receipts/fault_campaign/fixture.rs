@@ -200,7 +200,10 @@ impl Harness {
                 fixture.db.clone(),
                 Some(owner),
                 snapshot,
-                Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
+                Arc::new(Resources::with_key(
+                    fixture.installation.clone(),
+                    fixture.wrapping_key,
+                )?),
             )
             .await?;
         }

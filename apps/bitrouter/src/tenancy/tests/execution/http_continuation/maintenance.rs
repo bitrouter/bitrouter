@@ -67,7 +67,7 @@ async fn restart_removes_stale_and_purged_rows_and_keeps_authenticated_tombstone
         initial,
         Arc::new(Resources::with_key(
             ready.fixture.installation.clone(),
-            [29; 32],
+            ready.fixture.wrapping_key,
         )?),
     )
     .await?;

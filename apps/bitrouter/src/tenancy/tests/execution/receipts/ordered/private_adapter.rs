@@ -11,8 +11,6 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
-pub(super) const KEY: [u8; 32] = [19; 32];
-
 #[derive(Clone, Copy)]
 enum Reply {
     Signed,
@@ -25,6 +23,7 @@ enum Reply {
 }
 
 pub(super) struct FixtureAdapter {
+    pub(super) key: [u8; 32],
     pub(super) ordinal: usize,
     reply: Reply,
     proofs: Mutex<Vec<Attempt>>,
@@ -54,7 +53,7 @@ async fn reply(
     let (payload, tag) = wire.split_once('.').context("envelope")?;
     let tag = URL_SAFE_NO_PAD.decode(tag)?;
     let payload = URL_SAFE_NO_PAD.decode(payload)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&adapter.key)?;
     mac.update(ATTEMPT_DOMAIN);
     mac.update(&payload);
     mac.verify_slice(&tag)
@@ -105,7 +104,7 @@ async fn reply(
         status: status.as_u16(),
         retry_after,
     })?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(&adapter.key)?;
     mac.update(OUTCOME_DOMAIN);
     mac.update(&tag);
     mac.update(&payload);
@@ -145,6 +144,7 @@ async fn reply(
 
 async fn setup(ordinal: usize, reply: Reply) -> Result<(OrderedHarness, Arc<FixtureAdapter>)> {
     let adapter = Arc::new(FixtureAdapter {
+        key: rand::random(),
         ordinal,
         reply,
         proofs: Mutex::new(Vec::new()),

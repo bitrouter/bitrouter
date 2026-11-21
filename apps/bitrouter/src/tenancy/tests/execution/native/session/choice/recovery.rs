@@ -114,6 +114,7 @@ impl Spec {
             })
             .collect::<Result<HeaderMap>>()?;
         let fixture = Fixture {
+            wrapping_key: Fixture::wrapping_key_from_env(KEY)?,
             db,
             service,
             operator: crate::tenancy::model::Caller::Installation(

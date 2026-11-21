@@ -15,7 +15,7 @@ fn route(endpoint: &str, headers: serde_json::Value) -> Result<compiler::RouteEn
 
 #[test]
 fn approved_origin_is_exact_and_cannot_be_overridden_by_headers() -> Result<()> {
-    let mut resources = Resources::with_key("installation".try_into()?, [43; 32])?;
+    let mut resources = Resources::with_key("installation".try_into()?, rand::random())?;
     resources.approved_origins = vec!["https://example.com".into()];
     let caller = Caller::Credential("tenant-key".try_into()?);
     let allowed = route(
@@ -61,7 +61,7 @@ fn approved_origin_is_exact_and_cannot_be_overridden_by_headers() -> Result<()> 
 
 #[test]
 fn endpoints_never_embed_secrets_even_for_operator_authored_routes() -> Result<()> {
-    let resources = Resources::with_key("installation".try_into()?, [43; 32])?;
+    let resources = Resources::with_key("installation".try_into()?, rand::random())?;
     let operator = Caller::Installation("operator".try_into()?);
     for endpoint in [
         "https://user:secret@example.com/v1",

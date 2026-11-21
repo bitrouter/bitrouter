@@ -73,8 +73,12 @@ async fn provision_protocol_observed(
     fixture.service.shutdown().await?;
     use super::super::resources::Resources;
     let resources = match wrapping_key_env {
-        Some(name) => Resources::fixture_key(&fixture.installation, Some(name))?,
-        None => Resources::with_key(fixture.installation.clone(), [29; 32])?,
+        Some(name) => {
+            let resources = Resources::fixture_key(&fixture.installation, Some(name))?;
+            fixture.wrapping_key = Fixture::wrapping_key_from_env(name)?;
+            resources
+        }
+        None => Resources::with_key(fixture.installation.clone(), fixture.wrapping_key)?,
     };
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {

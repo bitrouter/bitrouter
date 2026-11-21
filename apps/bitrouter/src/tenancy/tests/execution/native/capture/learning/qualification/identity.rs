@@ -141,6 +141,7 @@ pub(super) async fn tenant_b(a: &mut Ready, subject: &str, judge: &str) -> Resul
             .map_err(failure)?,
     )?;
     let fixture = Fixture {
+        wrapping_key: a.fixture.wrapping_key,
         service: a.fixture.service.clone(),
         db: a.fixture.db.clone(),
         operator: a.fixture.operator.clone(),

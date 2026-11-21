@@ -588,6 +588,7 @@ pub(in crate::tenancy::tests) async fn second_tenant(first: &Fixture) -> Result<
             .map_err(failure)?,
     )?;
     Ok(Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),

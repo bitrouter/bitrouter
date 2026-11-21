@@ -150,6 +150,7 @@ async fn second_tenant(
         _ => anyhow::bail!("second binding"),
     };
     let other = Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),

@@ -341,7 +341,10 @@ async fn two_turn_resume_survives_caller_rotation_and_restart_without_import_sou
         };
         fixture.service.shutdown().await?;
         // Fresh resources and cache, same explicit key, no import path/environment.
-        let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
+        let resources = Arc::new(Resources::with_key(
+            fixture.installation.clone(),
+            fixture.wrapping_key,
+        )?);
         let initial = store::load(&fixture.db, chrono::Utc::now()).await?;
         fixture.service =
             Service::start_prepared(fixture.db.clone(), None, initial, resources).await?;
@@ -676,7 +679,10 @@ async fn chain(
     separate: bool,
 ) -> Result<ResourceRef> {
     fixture.service.shutdown().await?;
-    let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
+    let resources = Arc::new(Resources::with_key(
+        fixture.installation.clone(),
+        fixture.wrapping_key,
+    )?);
     let mut route = route.clone();
     route.revision_id = "chain-v1".try_into()?;
     let mut other_slot = slot.clone();

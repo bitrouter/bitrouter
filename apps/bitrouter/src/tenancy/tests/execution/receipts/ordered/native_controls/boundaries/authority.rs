@@ -199,6 +199,7 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
     let stopped = tokio::time::timeout(TIMEOUT, &mut h._gateway).await?;
     ensure!(stopped.is_err_and(|error| error.is_cancelled()));
     let Fixture {
+        wrapping_key,
         service,
         db,
         operator,
@@ -252,6 +253,7 @@ async fn restart(mut h: OrderedHarness) -> Result<OrderedHarness> {
     )
     .await?;
     h.fixture = Fixture {
+        wrapping_key,
         service,
         db,
         operator,

@@ -172,7 +172,7 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
             snapshot,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 h.fixture.installation.clone(),
-                [29; 32],
+                h.fixture.wrapping_key,
             )?),
             crate::tenancy::Provisioning {
                 import: None,
@@ -404,6 +404,7 @@ pub(super) async fn aggregate_cross_tenant_capacity() -> Result<()> {
         _ => anyhow::bail!("binding"),
     };
     let second = Fixture {
+        wrapping_key: h.fixture.wrapping_key,
         service: h.fixture.service.clone(),
         db: h.fixture.db.clone(),
         operator: h.fixture.operator.clone(),

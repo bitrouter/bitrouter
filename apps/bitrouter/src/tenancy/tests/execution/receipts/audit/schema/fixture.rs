@@ -52,6 +52,7 @@ async fn second(first: &Fixture) -> Result<Fixture> {
         _ => anyhow::bail!("expected upper-case binding operation"),
     };
     Ok(Fixture {
+        wrapping_key: first.wrapping_key,
         service: first.service.clone(),
         db: first.db.clone(),
         operator: first.operator.clone(),
@@ -94,7 +95,8 @@ pub(super) async fn source(
         // Preserve the original file Lease through all test-only prepared Services.
         // This fixture does not claim native startup/recovery provenance.
         let (fixture, route, slot) = super::super::super::super::provision_protocol_with_fixture(
-            Fixture { service: initial.service.clone(), db: db.clone(), operator: initial.operator.clone(),
+            Fixture { wrapping_key: initial.wrapping_key,
+                    service: initial.service.clone(), db: db.clone(), operator: initial.operator.clone(),
                 installation: initial.installation.clone(), tenant: initial.tenant.clone(),
                 principal: initial.principal.clone(), binding: initial.binding.clone(), binding_result: initial.binding_result.clone() },
             &upstream, "chat_completions", &mut |_| {},

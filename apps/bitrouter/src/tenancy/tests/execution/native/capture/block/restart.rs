@@ -137,6 +137,7 @@ async fn actual_block_restart_child() -> Result<()> {
     )
     .await?;
     let fixture = Fixture {
+        wrapping_key: Fixture::wrapping_key_from_env(KEY)?,
         service,
         db,
         operator: crate::tenancy::Caller::Installation(

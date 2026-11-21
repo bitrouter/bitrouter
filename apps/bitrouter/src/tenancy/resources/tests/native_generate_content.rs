@@ -64,7 +64,7 @@ fn native_generate_content_compiler_retains_exact_four_roots_and_new_format() ->
         definition: import.definition,
         envelope: Some(prepared),
     };
-    let resources = Resources::with_key("installation".try_into()?, [7; 32])?;
+    let resources = Resources::with_key("installation".try_into()?, rand::random())?;
     let stored = storage::seal(&resources, &artifact)?;
     assert_eq!(stored.compiler_version, NATIVE_COMPILER_VERSION);
     let restored = storage::authenticate(&resources, stored)?;
