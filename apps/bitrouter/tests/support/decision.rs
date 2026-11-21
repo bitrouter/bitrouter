@@ -7,11 +7,9 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-/// Pin only the installed classifier identity; public source has no certificates.
-/// Callers author the source's class keys directly, without an IR-key prefix.
+/// Bind public route classes to the installed semantic classifier contract.
 pub fn pin_classifier(source: &mut Document) {
-    let digest = bitrouter::gateway::routing::workflow::predictive::compiled_predictor_contract()
-        .config_digest;
+    let digest = bitrouter::gateway::routing::assessment::contract_digest();
     for policy in source.policies.values_mut() {
         policy.classifier_digest = (!policy.routes.is_empty()).then(|| digest.clone());
     }
