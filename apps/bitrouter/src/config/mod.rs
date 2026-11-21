@@ -616,8 +616,8 @@ pub struct UpstreamConfig {
 
 /// Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset
 /// field inherits the level above — a provider override inherits the resolved
-/// global value, and an unset global inherits the built-in default
-/// ([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒
+/// global value, and an unset global inherits the built-in default.
+/// `total_secs` is opt-in at every level: unset ⇒
 /// no overall wall-clock cap (the right default for long agentic streams).
 ///
 /// Used both as the top-level `upstream.timeouts` block and as the per-provider

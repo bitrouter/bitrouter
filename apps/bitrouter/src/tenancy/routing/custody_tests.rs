@@ -181,6 +181,7 @@ async fn caller_revoke_preserves_admitted_observations_but_denies_another_send()
                 .into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
+                #[cfg(feature = "server-tools")]
                 server_tool_calls: Vec::new(),
             };
             for hook in &pipeline.observe_hooks {

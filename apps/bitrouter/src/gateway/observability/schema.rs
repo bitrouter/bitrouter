@@ -1132,7 +1132,7 @@ pub fn is_reserved_attribute_key(key: &str) -> bool {
 /// every gate while `span-schema.json` kept promising `int` to anyone
 /// implementing against it.
 ///
-#[cfg(test)]
+#[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
 pub fn value_type_matches(declared: AttrType, observed: &str) -> bool {
     matches!(
         (declared, observed),

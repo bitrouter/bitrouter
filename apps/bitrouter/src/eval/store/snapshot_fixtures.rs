@@ -11,10 +11,12 @@ impl EvalStore {
         self.persist_snapshot_scoped(&snapshot, None, &mut budget)
             .await
     }
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn materialize_snapshot(&self, frozen_at: &str) -> Result<EvalSnapshot> {
         self.materialize_snapshot_scoped(frozen_at, None, None, &mut Budget::new(self))
             .await
     }
+    #[cfg(feature = "eval-publication")]
     pub(crate) async fn persist_snapshot(&self, snapshot: &EvalSnapshot) -> Result<EvalSnapshot> {
         self.persist_snapshot_scoped(snapshot, None, &mut Budget::new(self))
             .await

@@ -1449,7 +1449,7 @@ impl Pipeline {
             .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
-            #[cfg(any(test, feature = "server-tools"))]
+            #[cfg(feature = "server-tools")]
             server_tool_calls: Vec::new(),
         });
         self.observe_after(Phase::Execution, &ctx).await;
