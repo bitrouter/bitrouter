@@ -461,7 +461,7 @@ jobs:
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(binary(=database_backends)) & (test(=server_database_behaviors))"
+        bash .github/scripts/ci-test.sh --test-threads 1 --run-ignored only -E "(kind(lib)) & (test(=tests::database_backends::server_database_behaviors))"
     - name: Verify continuation and inventory across reconnect
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -807,18 +807,18 @@ jobs:
         - os: macos-latest
           package: bitrouter
           timeout-minutes: 45
-          targets: --test daemon --test host_lifecycle --test mcp_config_pty --test onboarding_pty
-          filter: (binary(=daemon) & (test(=status_route_and_stop_roundtrip_over_the_control_socket) | test(=concurrent_clients_are_all_served) | test(=socket_file_has_owner_only_permissions)))
-            | (binary(=host_lifecycle) & test(=sigterm_control_error_drains_inflight_inference_before_nonzero_exit)) | binary(=mcp_config_pty) | binary(=onboarding_pty)
+          targets: --lib --test mcp_config_pty
+          filter: test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket) | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::socket_file_has_owner_only_permissions)
+            | test(=tests::host_lifecycle::sigterm_control_error_drains_inflight_inference_before_nonzero_exit) | binary(=mcp_config_pty) | test(/^tests::onboarding_pty::/)
         - os: windows-latest
           package: bitrouter
           # Leave time for the test suite after the all-features MSVC build.
           timeout-minutes: 60
-          targets: --lib --test daemon --test invocation
+          targets: --lib --test invocation
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
-            | test(=status_route_and_stop_roundtrip_over_the_control_socket)
-            | test(=concurrent_clients_are_all_served) | test(=probe_status_reports_none_when_nothing_listens) | test(=client_fails_clearly_when_no_daemon_is_listening)
+            | test(=tests::daemon::status_route_and_stop_roundtrip_over_the_control_socket)
+            | test(=tests::daemon::concurrent_clients_are_all_served) | test(=tests::daemon::probe_status_reports_none_when_nothing_listens) | test(=tests::daemon::client_fails_clearly_when_no_daemon_is_listening)
             | (binary(=invocation) & test(=gateway_update_delegates_for_the_installed_profile_and_channel))
             | test(=daemon_locator::tests::config_identity_survives_file_deletion_and_recreation)
             | test(=policy_source::files_tests::current_source_history_cas_and_exact_rollback)
@@ -844,6 +844,16 @@ jobs:
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
+    - name: Build the platform gateway process
+      if: matrix.package == 'bitrouter'
+      shell: bash
+      run: |
+        cargo build --locked -p bitrouter --all-features --bin bitrouter --jobs 2
+        gateway_binary="$GITHUB_WORKSPACE/target/debug/bitrouter"
+        if [[ "$RUNNER_OS" == Windows ]]; then gateway_binary+=.exe; fi
+        test -f "$gateway_binary"
+        printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$gateway_binary" >> "$GITHUB_ENV"
+        printf 'BITROUTER_TEST_PREBUILT_ONLY=1\n' >> "$GITHUB_ENV"
     - name: Build platform fixtures
       if: runner.os == 'macOS' && matrix.package == 'bitrouter'
       run: cargo build --locked -p bitrouter --all-features --example onboarding_fixture --jobs 2

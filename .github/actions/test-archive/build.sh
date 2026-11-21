@@ -11,7 +11,7 @@ case "$product" in
     package=bitrouter
     binary=bitrouter
     fixtures=()
-    targets=(--lib --test database_backends --test product_process)
+    targets=(--lib --test product_process)
     ;;
   *) exit 1 ;;
 esac
