@@ -8,13 +8,10 @@ use serde::{Deserialize, Serialize};
 pub struct ControlActionSpec {
     pub action: Action,
     pub id: &'static str,
-    pub shared_id: Option<&'static str>,
     pub version: u32,
-    pub method: &'static str,
     pub path: &'static str,
     pub scope: ControlScope,
     pub cli_leaf: &'static str,
-    pub dashboard: &'static str,
     pub requires_administration: bool,
     pub requires_reload: bool,
     pub input_schema: fn() -> serde_json::Value,
@@ -45,17 +42,14 @@ fn output_schema<T: JsonSchema>() -> serde_json::Value {
 }
 
 macro_rules! action {
-    ($variant:ident, $shared:expr, $method:literal, $path:literal, $cli:literal, $panel:literal, $admin:literal, $input:ty, $output:ty) => {
+    ($variant:ident, $path:literal, $cli:literal, $admin:literal, $input:ty, $output:ty) => {
         ControlActionSpec {
             action: Action::$variant,
             id: Action::$variant.id(),
-            shared_id: $shared,
             version: Action::$variant.version(),
-            method: $method,
             path: concat!("/control/v1", $path),
             scope: Action::$variant.required_scope(),
             cli_leaf: $cli,
-            dashboard: $panel,
             requires_administration: $admin,
             requires_reload: false,
             input_schema: input_schema::<$input>,
@@ -68,13 +62,10 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ControlActionSpec {
         action: Action::Reload,
         id: Action::Reload.id(),
-        shared_id: None,
         version: Action::Reload.version(),
-        method: "POST",
         path: "/control/v1/reload",
         scope: Action::Reload.required_scope(),
         cli_leaf: "reload",
-        dashboard: "reload",
         requires_administration: false,
         requires_reload: true,
         input_schema: input_schema::<bitrouter_ai::control::reload::ReloadInput>,
@@ -82,21 +73,15 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     },
     action!(
         Status,
-        Some("status"),
-        "GET",
         "/status",
         "status",
-        "overview",
         false,
         EmptyInput,
         bitrouter_ai::control::status::StatusReport
     ),
     action!(
         Models,
-        Some("list_models"),
-        "GET",
         "/models",
-        "models",
         "models",
         false,
         ModelsInput,
@@ -104,21 +89,15 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Route,
-        Some("route"),
-        "POST",
         "/route/preview",
         "route",
-        "preview",
         false,
         bitrouter_ai::control::route::RouteInput,
         bitrouter_ai::control::route::RouteReport
     ),
     action!(
         Requests,
-        None,
-        "GET",
         "/requests",
-        "requests",
         "requests",
         false,
         bitrouter_ai::control::requests::RequestFilters,
@@ -126,64 +105,45 @@ pub const ACTIONS: &[ControlActionSpec] = &[
     ),
     action!(
         Providers,
-        None,
-        "GET",
         "/providers",
         "providers list",
-        "providers",
         true,
         EmptyInput,
         bitrouter_ai::control::administration::ProvidersReport
     ),
     action!(
         Observe,
-        None,
-        "GET",
         "/observe/status",
         "observe status",
-        "telemetry",
         true,
         EmptyInput,
         bitrouter_ai::control::administration::ObserveReport
     ),
     action!(
         PolicyStatus,
-        None,
-        "GET",
         "/policy/status",
         "policy status",
-        "policy",
         true,
         bitrouter_ai::control::administration::PolicyInput,
         bitrouter_ai::control::administration::PolicyReport
     ),
     action!(
         PolicyShow,
-        None,
-        "GET",
         "/policy/show",
         "policy show",
-        "policy",
         true,
         bitrouter_ai::control::administration::PolicyInput,
         bitrouter_ai::control::administration::PolicyReport
     ),
     action!(
         Agents,
-        None,
-        "GET",
         "/agents",
         "agents list",
-        "agents",
         true,
         EmptyInput,
         bitrouter_ai::control::administration::AgentsReport
     ),
 ];
-
-pub fn by_id(id: &str) -> Option<&'static ControlActionSpec> {
-    ACTIONS.iter().find(|row| row.id == id)
-}
 
 pub fn by_cli(leaf: &str) -> Option<&'static ControlActionSpec> {
     ACTIONS.iter().find(|row| row.cli_leaf == leaf)
@@ -227,22 +187,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn exposure_reuses_shared_identity() -> anyhow::Result<()> {
+    fn exposure_has_unique_paths_and_valid_schemas() {
         let mut paths = BTreeSet::new();
         let mut ids = BTreeSet::new();
         for row in ACTIONS {
-            assert!(paths.insert((row.method, row.path)));
+            assert!(paths.insert(row.path));
             assert!(ids.insert(row.id));
             assert!((row.input_schema)().is_object());
             assert!((row.output_schema)().is_object());
-            if let Some(shared_id) = row.shared_id {
-                let shared = crate::actions::ACTIONS
-                    .iter()
-                    .find(|shared| shared.id == shared_id)
-                    .ok_or_else(|| anyhow::anyhow!("missing shared action"))?;
-                assert_eq!(row.id, shared.id);
-            }
         }
-        Ok(())
     }
 }
