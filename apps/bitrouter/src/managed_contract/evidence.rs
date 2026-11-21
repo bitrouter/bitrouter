@@ -1,6 +1,5 @@
-//! Provider-attempt evidence carried by the managed core protocol.
-//! These are observations, not authority to dispatch, restore ownership, execute
-//! tools or settle a bill. Verification and provider adaptation remain in the service.
+//! Route facts and continuation diagnostics shared by application components.
+//! Verification and provider adaptation remain in the service.
 
 use bitrouter_ai::types::Capability;
 use serde::{Deserialize, Serialize};

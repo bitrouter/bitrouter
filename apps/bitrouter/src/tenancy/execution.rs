@@ -38,7 +38,6 @@ use crate::gateway::{
 };
 
 pub(super) mod cached;
-mod continuation;
 pub(crate) mod deadline;
 mod generation_defaults;
 pub(crate) mod http_continuation;
@@ -144,7 +143,6 @@ pub(crate) struct TenantExecution {
     entered: AtomicBool,
     #[cfg(feature = "eval-publication")]
     observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
-    continuation: Option<Arc<continuation::Policy>>,
     receipt: std::sync::OnceLock<Arc<super::receipts::owner::Owner>>,
     receipt_ticket: std::sync::OnceLock<lifecycle::AdmissionTicket>,
 }
@@ -490,23 +488,10 @@ impl Service {
             .try_into()
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
         lease.bind_execution(&id).map_err(Failure::from)?;
-        let continuation = self
-            .native_continuation
-            .clone()
-            .filter(|_| !route.is_ordered())
-            .map(|crypto| {
-                Arc::new(continuation::Policy::new(
-                    crypto,
-                    &submission,
-                    &id,
-                    route.clone(),
-                ))
-            });
         let execution = Arc::new(TenantExecution {
             service: self.clone(),
             submission,
             id,
-            continuation,
             route,
             #[cfg(feature = "eval-publication")]
             learning,
@@ -659,14 +644,6 @@ impl TenantExecution {
         #[cfg(all(test, unix))]
         self.service.technical_io.after_receipt_ack(&self.id).await;
         Ok(())
-    }
-    pub(crate) fn record_native_source(
-        &self,
-        proof: crate::gateway::pipeline::executor::tenancy::native::Proof,
-    ) {
-        if let Some(policy) = &self.continuation {
-            policy.record(proof);
-        }
     }
 
     #[cfg(feature = "eval-publication")]
