@@ -118,7 +118,7 @@ async fn persist_intent(db: &DatabaseConnection, intent: &Intent) -> Result<()> 
 fn profiled_final_intent_serializer_is_bounded_and_mode_is_identity() -> Result<()> {
     use bitrouter_ai::tenancy::admission::AdmissionMode;
     use serde_json::json;
-    for (count, expected) in [(1, 1826), (8, 1854), (9, 1860), (64, 2082)] {
+    for (count, expected) in [(1, 1823), (8, 1851), (9, 1857), (64, 2079)] {
         let selected = AcceptedSelection {
             generation_defaults_digest: None,
             admission_mode: AdmissionMode::Profiled,
@@ -780,7 +780,22 @@ async fn provider_technical_facts_read_ordered_attempts_1_8_9_64_without_receipt
             let saved: Option<
                 bitrouter_ai::tenancy::provider_technical_facts::ProviderTechnicalFacts,
             > = serde_json::from_slice(&bytes)?;
-            ensure!(saved == Some(facts));
+            let saved = saved.context("ordered technical facts")?;
+            ensure!(saved == facts);
+            let receipt_bytes = read::body(
+                &db,
+                &installation,
+                &identity.tenant,
+                &Request::One(identity.execution.clone()),
+                failure,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("receipt read failed: {:?}", error.0.code))?;
+            ensure!(receipt_bytes == before.0.as_bytes());
+            let receipt: ExecutionReceipt = serde_json::from_slice(&receipt_bytes)?;
+            receipt.validate()?;
+            saved.validate_against(&receipt)?;
+            value.evidence.document.validate_against(&receipt)?;
             let loaded =
                 store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
                     .await?
@@ -789,17 +804,6 @@ async fn provider_technical_facts_read_ordered_attempts_1_8_9_64_without_receipt
                 loaded.json() == before.0
                     && loaded.private_json() == before.1
                     && loaded.digest() == before.2
-            );
-            ensure!(
-                read::body(
-                    &db,
-                    &installation,
-                    &identity.tenant,
-                    &Request::One(identity.execution.clone()),
-                    failure
-                )
-                .await
-                .is_err()
             );
         }
         Ok(())
