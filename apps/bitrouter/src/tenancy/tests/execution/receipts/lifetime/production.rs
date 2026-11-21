@@ -100,10 +100,10 @@ async fn configured_provider_idle_child() -> Result<()> {
         }
         Ok::<_, anyhow::Error>(bytes)
     });
-    tokio::task::yield_now().await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(3)).await;
-    tokio::time::resume();
+    // Real HTTP and SQLite workers are outside Tokio's paused clock. Advancing
+    // that clock can expire receipt-finalization deadlines while their I/O is
+    // still pending. Keep the configured two-second idle timer on real time;
+    // TIMEOUT remains below the transport's unconfigured default.
     let bytes = tokio::time::timeout(TIMEOUT, reader).await???;
     // Chat Completions also terminates error streams with [DONE]. Require the
     // error frame itself and reject a successful finish reason.
@@ -122,7 +122,8 @@ async fn configured_provider_idle_child() -> Result<()> {
             },
         )
         .await
-        .map_err(failure)?;
+        .map_err(failure)
+        .context("read receipt after configured provider idle")?;
     let page: ExecutionPage = serde_json::from_slice(&bytes)?;
     ensure!(page.execution_ids.len() == 1 && calls.load(Ordering::SeqCst) == 1);
     let receipt = store::lookup(
