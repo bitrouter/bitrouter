@@ -1,4 +1,4 @@
-//! Actual private ingress, explicit resource-v3 publication and paired mixed sends.
+//! Actual private ingress, current resource publication and paired mixed sends.
 //! Loopback peers implement the operator contract; this is not a provider-cloud test.
 use super::*;
 use crate::managed_contract::private_adapter::{
@@ -327,7 +327,7 @@ impl Harness {
             .await
             .context("native resource status")?;
         let command: ResourcePut = serde_json::from_value(
-            json!({"format":3,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
+            json!({"format":1,"operation_id":"native-publish","installation_id":ordered.fixture.installation,"key":ordered.route.key(),"expected_revision":status.head_revision,"definition":definition}),
         )?;
         let published = control
             .put_resource(&ordered.fixture.tenant, &command)
