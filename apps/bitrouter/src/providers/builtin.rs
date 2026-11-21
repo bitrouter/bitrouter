@@ -59,12 +59,9 @@ pub fn load_builtins() -> Result<Vec<ProviderEntry>, LoadError> {
     Ok(vec![bitrouter])
 }
 
-/// Derive a [`ProviderEntry`] (auth + transport shape) from a registry provider
-/// — the same mapping the built-ins once used, now applied to a fetched-or-
-/// cached registry entry. Used where a consumer needs the auth shape of a
-/// registry-sourced provider without it being compiled in (e.g. `bitrouter
-/// login <provider>` resolving an OAuth handler + its public params). An omitted
-/// `auth` block uses the registry's conventional Bearer credential env var.
+/// Derive application defaults and login inputs from registry metadata.
+/// An omitted auth block uses the provider's conventional bearer environment
+/// variable. The full registry auth declaration remains with the transport.
 pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadError> {
     let auth = match &p.auth {
         Some(auth) => map_auth(&p.name, auth)?,
@@ -84,20 +81,15 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
         api_protocol: derive_protocol_mapping(p),
         protocol_endpoints: p.protocol_endpoints.clone().unwrap_or_default(),
         auth,
-        doc_url: p.doc_url.clone().unwrap_or_default(),
         class: Some(derive_class(p)),
     })
 }
 
-/// Map the registry's structured auth declaration onto the OSS [`AuthScheme`].
-/// Only public config travels (names/handlers); OAuth/native handler *impls*
-/// stay in the OSS, keyed by the handler name. OAuth `params` ARE carried onto
-/// the entry: PKCE providers (anthropic, openai-codex) ignore them (the OSS
-/// `crate::gateway::providers::login` holds their client config), but device-code providers
-/// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
-/// `token_endpoint` / `scope` ONLY here, so dropping them breaks
-/// `bitrouter providers login github-copilot`. JSON values that TOML cannot represent
-/// (e.g. `null`) are skipped — login then surfaces a clear "missing param".
+/// Project credential discovery and CLI login inputs from registry auth.
+/// Required header and handler declarations remain validated, while runtime
+/// transports retain the complete registry declaration. Device-code login needs
+/// the client id, endpoints and scope in `params`; values TOML cannot represent
+/// are omitted so login can report a missing parameter.
 fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError> {
     let missing = |field: &str| LoadError::Snapshot {
         message: format!(
@@ -110,32 +102,36 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
         RegistryAuthKind::Bearer => Ok(AuthScheme::Bearer {
             env: auth.env.clone().ok_or_else(|| missing("env"))?,
         }),
-        RegistryAuthKind::Header => Ok(AuthScheme::Header {
-            header: auth.header.clone().ok_or_else(|| missing("header"))?,
-            env: auth.env.clone().ok_or_else(|| missing("env"))?,
-            extra_headers: auth.extra_headers.clone().unwrap_or_default(),
-        }),
-        RegistryAuthKind::Oauth => Ok(AuthScheme::Oauth {
-            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
-            params: auth
-                .params
-                .as_ref()
-                .map(|params| {
-                    params
-                        .iter()
-                        // serde_json::Value → toml::Value via serde; drop any
-                        // value TOML can't represent (e.g. JSON null) rather
-                        // than fail the whole snapshot load.
-                        .filter_map(|(k, v)| {
-                            toml::Value::try_from(v).ok().map(|tv| (k.clone(), tv))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        }),
-        RegistryAuthKind::Native => Ok(AuthScheme::Native {
-            handler: auth.handler.clone().ok_or_else(|| missing("handler"))?,
-        }),
+        RegistryAuthKind::Header => {
+            auth.header.as_ref().ok_or_else(|| missing("header"))?;
+            Ok(AuthScheme::Header {
+                env: auth.env.clone().ok_or_else(|| missing("env"))?,
+            })
+        }
+        RegistryAuthKind::Oauth => {
+            auth.handler.as_ref().ok_or_else(|| missing("handler"))?;
+            Ok(AuthScheme::Oauth {
+                params: auth
+                    .params
+                    .as_ref()
+                    .map(|params| {
+                        params
+                            .iter()
+                            // serde_json::Value → toml::Value via serde; drop any
+                            // value TOML can't represent (e.g. JSON null) rather
+                            // than fail the whole snapshot load.
+                            .filter_map(|(k, v)| {
+                                toml::Value::try_from(v).ok().map(|tv| (k.clone(), tv))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        }
+        RegistryAuthKind::Native => {
+            auth.handler.as_ref().ok_or_else(|| missing("handler"))?;
+            Ok(AuthScheme::Native)
+        }
     }
 }
 
@@ -222,10 +218,10 @@ mod tests {
         let entry = find("bitrouter").context("`bitrouter` must be compiled in")?;
         assert_eq!(entry.api_base, "https://api.bitrouter.ai/v1");
         assert_eq!(entry.auth.env_var(), Some("BITROUTER_API_KEY"));
-        assert_eq!(
-            entry.api_protocol.resolve("gpt-4o"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
+        let ProtocolMapping::Single(protocols) = &entry.api_protocol else {
+            anyhow::bail!("expected one protocol set");
+        };
+        assert_eq!(protocols.as_slice(), &[ApiProtocol::ChatCompletions]);
         assert_eq!(entry.class, Some(ProviderClass::BitrouterCloud));
         Ok(())
     }
@@ -290,19 +286,22 @@ mod tests {
         let entry = entry_from_registry(&provider).context("maps")?;
         assert_eq!(entry.id, "github-copilot");
         assert_eq!(entry.class, Some(ProviderClass::GatewaySubscription));
-        // Provider-level globs resolve per model.
-        assert_eq!(
-            entry.api_protocol.resolve("claude-sonnet-4.6"),
-            Some(vec![ApiProtocol::Messages])
-        );
-        assert_eq!(
-            entry.api_protocol.resolve("gpt-5.5-codex"),
-            Some(vec![ApiProtocol::Responses])
-        );
-        assert_eq!(
-            entry.api_protocol.resolve("gpt-4o"),
-            Some(vec![ApiProtocol::ChatCompletions])
-        );
+        let ProtocolMapping::PerModel(protocols) = &entry.api_protocol else {
+            anyhow::bail!("expected per-model protocol projection");
+        };
+        for (pattern, protocol) in [
+            ("claude-*", ApiProtocol::Messages),
+            ("gpt-5.5-codex", ApiProtocol::Responses),
+            ("*", ApiProtocol::ChatCompletions),
+        ] {
+            assert_eq!(
+                protocols
+                    .get(pattern)
+                    .context("protocol pattern")?
+                    .as_slice(),
+                &[protocol]
+            );
+        }
         let AuthScheme::Oauth { params, .. } = &entry.auth else {
             anyhow::bail!("github-copilot must use an OAuth scheme");
         };
@@ -331,9 +330,12 @@ mod tests {
         let entry = entry_from_registry(&provider).context("maps")?;
         assert_eq!(entry.auth.env_var(), Some("OPENAI_API_KEY"));
         assert_eq!(entry.class, Some(ProviderClass::FirstPartyApi));
+        let ProtocolMapping::Single(protocols) = &entry.api_protocol else {
+            anyhow::bail!("expected collapsed protocol set");
+        };
         assert_eq!(
-            entry.api_protocol.resolve("gpt-5.5"),
-            Some(vec![ApiProtocol::ChatCompletions, ApiProtocol::Responses])
+            protocols.as_slice(),
+            &[ApiProtocol::ChatCompletions, ApiProtocol::Responses]
         );
         Ok(())
     }

@@ -431,7 +431,7 @@ fn available_methods(entry: &crate::providers::entry::ProviderEntry) -> Vec<Auth
             // Codex backend literally rejects sk-… credentials), so
             // there's no API-key fallback to offer.
         }
-        AuthScheme::None | AuthScheme::Native { .. } => {}
+        AuthScheme::None | AuthScheme::Native => {}
     }
     methods
 }
