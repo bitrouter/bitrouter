@@ -602,37 +602,6 @@ impl PipelineContext {
         self.completed_decision_failure.load(Ordering::Acquire)
     }
 
-    /// Test fixture for retaining an ordered subset of prepared messages.
-    #[cfg(test)]
-    pub(crate) fn replace_managed_messages(
-        &mut self,
-        messages: Vec<bitrouter_ai::types::Message>,
-    ) -> Result<()> {
-        let prompt = self
-            .input
-            .generation_prompt_mut()
-            .ok_or_else(|| BitrouterError::bad_request("managed context requires generation"))?;
-        if messages.len() >= prompt.messages.len() {
-            return Err(BitrouterError::bad_request(
-                "managed context rebuild must reduce history",
-            ));
-        }
-        let mut retained = messages.iter();
-        let mut next = retained.next();
-        for original in &prompt.messages {
-            if next == Some(original) {
-                next = retained.next();
-            }
-        }
-        if next.is_some() {
-            return Err(BitrouterError::bad_request(
-                "managed context rebuild rewrote or reordered prepared messages",
-            ));
-        }
-        prompt.messages = messages;
-        Ok(())
-    }
-
     /// The inbound wire protocol the request arrived on, if known. Route
     /// resolution uses it to prefer a native (same-protocol) upstream.
     pub fn inbound_protocol(&self) -> Option<ApiProtocol> {

@@ -89,20 +89,19 @@ async fn dispatch_rejects_changed_routing_and_policy_before_upstream_send() -> R
 }
 
 #[tokio::test]
-async fn context_revalidation_rejects_stale_fences_without_rewriting_execution() -> Result<()> {
+async fn http_context_revalidation_rejects_stale_fences_without_rewriting_execution() -> Result<()>
+{
     for change in [Change::Routing, Change::Policy, Change::ReservationLost] {
         let fixture = fixture(Failure::None).await?;
-        let mut ctx = PipelineContext::new(request("stale", true)?);
-        let retained = ctx.require_generation_prompt()?.messages.clone();
-        let mut initial = ctx.require_generation_prompt()?.clone();
-        initial
-            .messages
-            .insert(0, Message::text(Role::User, "old history"));
-        ctx.apply_routing_prompt(initial)?;
+        let mut request = request("stale", true)?;
+        request.inbound_protocol = Some(bitrouter_ai::types::ApiProtocol::ChatCompletions);
+        let mut ctx = PipelineContext::new(request);
+        let prompt = serde_json::to_value(ctx.require_generation_prompt()?)?;
+        let delivery_attempt = ctx.delivery_attempt_id();
         NormalizedScope.check(&mut ctx).await?;
         fixture.tracker.check(&mut ctx).await?;
         fixture.binding.check(&mut ctx).await?;
-        ctx.replace_managed_messages(retained)?;
+        let observation = serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?;
         ChangeAfterAdmission {
             change,
             db: fixture.db.clone(),
@@ -122,6 +121,20 @@ async fn context_revalidation_rejects_stale_fences_without_rewriting_execution()
             RouteHook::revalidate_context(&fixture.binding, &[], &ctx)
                 .await
                 .is_err()
+        );
+        assert_eq!(ctx.request_id(), "stale");
+        assert_eq!(ctx.delivery_attempt_id(), delivery_attempt);
+        assert_eq!(
+            serde_json::to_value(ctx.require_generation_prompt()?)?,
+            prompt
+        );
+        assert_eq!(
+            ctx.inbound_protocol(),
+            Some(bitrouter_ai::types::ApiProtocol::ChatCompletions)
+        );
+        assert_eq!(
+            serde_json::to_value(ctx.get_event::<GatewayRequestObserved>())?,
+            observation
         );
         assert_eq!(
             serde_json::to_value(inventory.request("scope", "stale").await?)?,

@@ -400,9 +400,6 @@ mod tests {
         TrajectoryEvidence, TrajectoryHealth,
     };
 
-    const TEST_DIGEST: &str =
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
     #[test]
     fn hand_literal_episode_reduces_every_health_field() -> anyhow::Result<()> {
         let mut events = vec![

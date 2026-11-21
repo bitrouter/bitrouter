@@ -491,10 +491,6 @@ pub(super) fn resolution_capacity(
     Ok((count, bytes))
 }
 
-pub(super) fn target_value(target: &RoutingTarget) -> Result<Value> {
-    target_value_scoped(target, false)
-}
-
 // Only the explicit native route compiler admits the paired bridge identity.
 // Ordinary import/projection callers retain their closed custom-protocol fence.
 fn qualified_protocol(protocol: &ApiProtocol, native_route: bool) -> bool {
