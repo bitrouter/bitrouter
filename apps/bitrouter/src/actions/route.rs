@@ -382,9 +382,6 @@ fn policy_selection(d: &PolicyDecision) -> PolicySelection {
         selected_tier: d.selected_tier.clone(),
         selected_model: d.selected_model.clone(),
         selected_effort: d.selected_effort,
-        pinned: d.pinned,
-        locked: d.locked,
-        trialed: d.trialed,
     }
 }
 
