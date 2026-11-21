@@ -3,7 +3,7 @@
 This guide describes the current author and host interfaces. Serialized router
 and checker configuration belongs to the
 [configuration spec](../specs/configuration/README.md); operator setup and
-breaking import migration are in the [guardrails guide](../GUARDRAILS_EXTENSION.md).
+custom-host registration are in the [guardrails guide](../GUARDRAILS_EXTENSION.md).
 
 ## Author and host ownership
 
@@ -12,7 +12,7 @@ check through `bitrouter::gateway::extensions::registry::ExtensionApi` and
 `request_check(id, revision, callback)`. Callback value types live in
 `bitrouter::gateway::extensions::request_check`. Registration collects implementations;
 a configured named router decides which bindings execute. Neither registration
-nor a Cargo feature alone activates a callback. The default `bro` binary does
+nor a Cargo feature alone activates a callback. The default `bitrouter` binary does
 not contain custom registrations.
 
 Use `bitrouter::host::serve_with_extensions` to share foreground service startup,
@@ -29,7 +29,7 @@ There is no remote extension protocol, dynamic loader or permission sandbox.
 Changing linked code requires rebuilding the same custom host; changing
 startup-bound code/rules or bindings requires its explicit restart. An official
 CLI restart must not replace a custom executable and silently lose its
-registrations. Legacy application Plugin/global/output hooks retain their own
+registrations. Application Plugin/global/output hooks retain their own
 explicit host assembly and are not replaced by input-only request checks.
 
 ## Request entry and checking

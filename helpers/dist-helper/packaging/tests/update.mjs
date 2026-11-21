@@ -158,23 +158,6 @@ function fromArchives(dir) {
   }
   return { tag: plan.tag, version, inventory, output, binaries, entry: release(plan.tag, assets, version.includes('-')) };
 }
-function legacyRelease() {
-  const version = '0.9.0', tag = 'v' + version;
-  const work = join(root, 'M0');
-  const run = (cmd, args) => execFileSync(cmd, args, { cwd: work, encoding: 'utf8', env: { ...process.env, CARGO_TARGET_DIR: join(work, 'target') } });
-  write(join(work, 'Cargo.toml'), '[workspace]\nmembers=["bitrouter"]\nresolver="3"\n[profile.dist]\ninherits="release"\n');
-  write(join(work, 'bitrouter/Cargo.toml'), `[package]\nname="bitrouter"\nversion="${version}"\nedition="2024"\nrepository="https://github.com/bitrouter/bitrouter"\n[[bin]]\nname="bro"\npath="src/main.rs"\n`);
-  write(join(work, 'bitrouter/src/main.rs'), 'fn main() {}');
-  const cfg = readFileSync(join(scripts, '../../../dist-workspace.toml'), 'utf8').replace('[dist]', '[dist]\nsource-tarball = false');
-  write(join(work, 'dist-workspace.toml'), cfg + '\n[dist.bin-aliases]\nbro=["bitrouter"]\n');
-  run('git', ['init', '-q']);
-  run('git', ['remote', 'add', 'origin', 'https://github.com/bitrouter/bitrouter.git']);
-  const manifest = JSON.parse(run(process.env.DIST || 'dist', ['build', '--artifacts=global', '--tag', tag, '-o', 'json']));
-  assert.equal(manifest.releases[0].app_name, 'bitrouter');
-  const files = manifest.upload_files.filter(f => f.endsWith('-installer.sh') || f.endsWith('-installer.ps1'));
-  assert.ok(files.length);
-  return release(tag, files.map(f => resolve(work, f)), false);
-}
 async function update(pkg, flags, refusal) {
   const env = { ...safeEnv, BITROUTER_INSTALLER_GHE_BASE_URL: base, BITROUTER_BRO_INSTALLER_GHE_BASE_URL: base };
   const command = exec(bin(pkg), ['--json', 'update', ...flags], { env, cwd: root });
@@ -296,18 +279,20 @@ try {
     assert.equal((await update(pkg, ['--tag', tag, '--check'])).target_version, next.version);
     await update(peer, ['--tag', tag, '-y'], /not a release for this product/);
   }
-  const m0 = legacyRelease();
+  const incomplete = release('v1.0.0', next.entry.assets
+    .filter(asset => asset.name !== 'distribution-plan.json')
+    .map(asset => join(next.output, asset.name)), false);
   for (const pkg of Object.keys(names)) {
     const unchanged = state(pkg);
-    await update(pkg, ['--tag', m0.tag_name, '-y'], /distribution-plan.json/);
+    await update(pkg, ['--tag', incomplete.tag_name, '-y'], /distribution-plan.json/);
     assert.deepEqual(state(pkg), unchanged);
   }
-  // A stable legacy release can win latest selection for the service. Reject
-  // it before any legacy installer or executable is requested.
+  // A release without a distribution plan may win stable selection. Reject
+  // it before downloading any installer or executable.
   const serviceBefore = state('bitrouter');
   await update('bitrouter', ['--stable', '-y'], /distribution-plan.json/);
   assert.deepEqual(state('bitrouter'), serviceBefore);
-  assert.ok(!requests.some(path => path.startsWith('/' + m0.tag_name + '/')));
+  assert.ok(!requests.some(path => path.startsWith('/' + incomplete.tag_name + '/')));
   assert.ok(!existsSync(safeEnv.BRO_HOME));
   console.log('Passed both CLI upgrades, pinned rollbacks, peer isolation and release/receipt refusal checks.');
 } finally {

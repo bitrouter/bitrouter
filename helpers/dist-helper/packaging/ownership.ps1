@@ -60,23 +60,6 @@ try {
     [IO.Directory]::CreateDirectory($receipt_home) | Out-Null
     $receiptLease = Enter-InstallerLock $receiptLock $true
   }
-  $legacyFile = Join-Path (Split-Path $receipt_home) 'bitrouter\bitrouter-receipt.json'
-  $aliasFile = Get-Item -LiteralPath (Join-Path $dest_dir 'bitrouter.exe') -Force -ErrorAction SilentlyContinue
-  if ($aliasFile -and ($aliasFile.LinkType -in 'HardLink','SymbolicLink') -and (Test-Path -LiteralPath $legacyFile)) {
-    $legacy = Get-Content -Raw -LiteralPath $legacyFile | ConvertFrom-Json -ErrorAction Stop
-    $legacyBin = switch ($legacy.install_layout) {
-      'cargo-home' { Join-Path $legacy.install_prefix 'bin' }
-      'flat' { $legacy.install_prefix }
-    }
-    $broFile = [IO.Path]::GetFullPath((Join-Path $dest_dir 'bro.exe'))
-    if ($legacyBin -and [IO.Path]::GetFullPath($legacyBin) -eq [IO.Path]::GetFullPath($dest_dir) -and
-        $legacy.provider.source -eq 'cargo-dist' -and $legacy.source.app_name -eq 'bitrouter' -and
-        $legacy.source.owner -eq 'bitrouter' -and $legacy.source.name -eq 'bitrouter' -and
-        $legacy.source.release_type -eq 'github' -and ($legacy.binaries -join ',') -eq 'bro.exe' -and
-        ($legacy.binary_aliases.'bro.exe' -join ',') -eq 'bitrouter.exe' -and $aliasFile.Target -contains $broFile) {
-      throw "Verified legacy BitRouter installation. Stop M0, snapshot its data, and move bro.exe, its bitrouter.exe alias and $legacyFile together to a backup. Then run each desired product installer."
-    }
-  }
   $existing = Get-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue
   $record = Get-Item -LiteralPath $receiptFile -Force -ErrorAction SilentlyContinue
   $pending = Join-Path $receiptLock 'receipt'

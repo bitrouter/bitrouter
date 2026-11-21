@@ -651,9 +651,22 @@ fn binding_report(
             }
         }
     }
-    Ok(
-        json!({"outcome":if mismatches.is_empty(){"passed"}else{"invalid_ids"},"checked_references":references,"distinct_checked_ids":distinct.len(),"unbound_offers":unbound,"mismatches":mismatches,"historical_ids":ids.iter().filter(|id|current.is_some_and(|set|!set.contains(**id))).collect::<Vec<_>>()}),
-    )
+    Ok(json!(bitrouter_registry::curation::IdentityAudit {
+        outcome: if mismatches.is_empty() {
+            "passed"
+        } else {
+            "invalid_ids"
+        },
+        checked_references: references,
+        distinct_checked_ids: distinct.len(),
+        unbound_offers: unbound,
+        mismatches,
+        unobserved_ids: ids
+            .iter()
+            .copied()
+            .filter(|id| current.is_some_and(|set| !set.contains(*id)))
+            .collect(),
+    }))
 }
 fn identity_ids(snapshot: &Value) -> Result<BTreeSet<String>> {
     Ok(bitrouter_registry::openrouter::identities(snapshot)?)

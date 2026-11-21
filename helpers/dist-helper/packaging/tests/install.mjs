@@ -142,24 +142,20 @@ function testInstalls() {
     install(p, first, next, /digest mismatch/);
     assert.equal(readFileSync(binary(p, first), 'utf8'), 'manual replacement');
   }
-  const p = prefix('legacy');
+  const p = prefix('linked-products');
+  for (const pkg of Object.keys(names)) install(p, pkg, old);
   const bro = binary(p, 'bitrouter-bro');
-  const alias = binary(p, 'bitrouter');
-  write(bro, 'legacy combined binary');
-  if (windows) linkSync(bro, alias); else symlinkSync(names['bitrouter-bro'], alias);
-  const legacy = { source: { app_name: 'bitrouter', name: 'bitrouter', owner: 'bitrouter', release_type: 'github' },
-    provider: { source: 'cargo-dist', version: '0.31.0' }, binaries: ['bro' + ext],
-    binary_aliases: { ['bro' + ext]: ['bitrouter' + ext] }, version: old,
-    install_layout: 'cargo-home', install_prefix: join(p.base, 'cargo') };
-  write(receipt(p, 'bitrouter'), JSON.stringify(legacy));
+  const service = binary(p, 'bitrouter');
+  const records = Object.fromEntries(Object.keys(names).map(pkg => [pkg, readFileSync(receipt(p, pkg))]));
+  const original = readFileSync(service);
+  rmSync(bro);
+  if (windows) linkSync(service, bro); else symlinkSync(names.bitrouter, bro);
   for (const pkg of Object.keys(names)) {
-    install(p, pkg, next, /Verified legacy BitRouter installation/);
-    assert.equal(readFileSync(alias, 'utf8'), 'legacy combined binary');
-    assert.equal(readFileSync(receipt(p, 'bitrouter'), 'utf8'), JSON.stringify(legacy));
+    install(p, pkg, next, /[Rr]efusing.*linked/);
+    assert.deepEqual(readFileSync(service), original);
+    assert.deepEqual(readFileSync(bro), original);
+    for (const peer of Object.keys(names)) assert.deepEqual(readFileSync(receipt(p, peer)), records[peer]);
   }
-  write(receipt(p, 'bitrouter'), JSON.stringify({ ...legacy, install_prefix: root }));
-  install(p, 'bitrouter', next, /[Rr]efusing|Refusing to replace linked/);
-  assert.equal(readFileSync(alias, 'utf8'), 'legacy combined binary');
 
   // A manual archive (including an extracted reduced service) has no receipt.
   const manual = prefix('manual');
