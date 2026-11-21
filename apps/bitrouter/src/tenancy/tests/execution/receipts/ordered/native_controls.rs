@@ -6,7 +6,6 @@ use bitrouter_ai::tenancy::{
 };
 
 mod boundaries;
-mod predecessor;
 
 pub(super) fn provider_reply(
     controls: &ProviderControls,

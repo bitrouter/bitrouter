@@ -37,7 +37,6 @@ mod defaults;
 mod envelope;
 mod generate_content_native;
 mod native_controls;
-mod predecessor;
 mod private_adapter;
 mod profiled;
 
