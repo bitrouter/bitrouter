@@ -273,9 +273,10 @@ async function testCombinedInstallers() {
     const custom = join(p.base, 'separate-core');
     const other = prefix('windows-custom-core');
     const override = { BITROUTER_INSTALL_DIR: custom };
-    install({ ...other, bin: custom }, 'bitrouter', version, undefined, undefined, [], override);
+    const customBin = join(custom, 'bin');
+    install({ ...other, bin: customBin }, 'bitrouter', version, undefined, undefined, [], override);
     install(other, 'bitrouter-bro', next, undefined, undefined, [], override);
-    assert.equal(JSON.parse(execFileSync(join(custom, 'bitrouter.exe'))).version, next);
+    assert.equal(JSON.parse(execFileSync(join(customBin, 'bitrouter.exe'))).version, next);
     assert.ok(!existsSync(binary(other, 'bitrouter')));
   }
 
