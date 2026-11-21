@@ -11,10 +11,9 @@ use super::read::read_page;
 #[cfg(unix)]
 use super::read::{directory_name, sort_directory_entries};
 use super::*;
-use bitrouter_ai::harness::agent::ToolMode;
-use bitrouter_ai::harness::runtime::EffectStatus;
 #[cfg(unix)]
-use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
+use crate::harness::RunEvent;
+use crate::harness::{EffectStatus, ToolMode};
 
 fn success(output: ToolResultOutput) -> Result<ToolResultOutput, String> {
     if let ToolResultOutput::ErrorJson { value } = &output {
@@ -31,7 +30,7 @@ fn text_output(output: ToolResultOutput) -> Result<String, Box<dyn std::error::E
 }
 
 #[tokio::test]
-async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
+async fn registry_profiles_reject_unknown_names_and_invalid_arguments()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     for mode in [ToolMode::ReadOnly, ToolMode::Coding] {
@@ -58,7 +57,7 @@ async fn registry_profiles_reject_legacy_names_and_invalid_arguments()
             assert!(tools.authorize(name).is_err());
             assert!(WorkspaceTools::validate(name, "{}").is_err());
             let (output, effect) = tools
-                .execute_with_effect(name, "{}", &CancellationToken::new(), "legacy", None)
+                .execute_with_effect(name, "{}", &CancellationToken::new(), "unknown", None)
                 .await;
             assert!(output.is_error());
             assert_eq!(effect, EffectStatus::NotExecuted);

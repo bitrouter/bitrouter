@@ -4,9 +4,9 @@ mod wire;
 
 use super::handler::{manager_input, rejection};
 use crate::checkpoint::{Home, Thread};
+use crate::harness::ToolMode;
 use agent_client_protocol_schema::{v1, v2};
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_sdk::gateway::GatewayClient;
 use serde::Deserialize;
 use serde_json::{Value, json};

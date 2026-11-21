@@ -7,8 +7,8 @@ use std::{
     sync::Arc,
 };
 
+use crate::harness::EffectStatus;
 use anyhow::{Context, Result, ensure};
-use bitrouter_ai::harness::runtime::EffectStatus;
 
 use super::{MAX_FILE_BYTES, WorkspaceTools, validate_relative};
 use crate::workspace::children::{Access, Parent, regular};

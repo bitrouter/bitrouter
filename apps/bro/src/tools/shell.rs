@@ -16,8 +16,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{MAX_LIVE_CHUNKS, MAX_OUTPUT_BYTES, MAX_SHELL_SECONDS, ShellArgs, WorkspaceTools};
-use bitrouter_ai::harness::runtime::EffectStatus;
-use bitrouter_ai::harness::turn::TurnEventPayload as RunEvent;
+use crate::harness::{EffectStatus, RunEvent};
 
 #[derive(Clone)]
 pub(super) struct Interpreter {

@@ -81,24 +81,26 @@ fn unknown_paid_execution_fences_overlapping_grants_across_processes() -> Result
         assert!(String::from_utf8_lossy(&refused.stderr).contains("BRO data directory"));
     }
     assert!(run(&sibling, &["thread", "create"])?.status.success());
-    // Old checkpoints stored a terminal denial for the very same response.
-    let mut legacy = history;
-    legacy["turns"][0]["steps"][0]["state"] = json!({"record":"gateway_denied"});
-    legacy["turns"][0]["outcome"]["status"] = json!("failed");
-    fs::write(
-        home.join("threads").join(format!("{id}.json")),
-        serde_json::to_vec(&legacy)?,
-    )?;
-    assert_eq!(
-        event(&run(&work, &["thread", "show", id])?)?["status"],
-        "recovery_required"
-    );
-    assert!(
-        !run(&work, &["thread", "start", id, "retry"])?
-            .status
-            .success()
-    );
-    assert!(!run(&nested, &["thread", "create"])?.status.success());
+    // An unsupported record cannot prove that the paid execution is settled.
+    let mut unsupported = history;
+    unsupported["turns"][0]["steps"][0]["state"] = json!({"record":"gateway_denied"});
+    unsupported["turns"][0]["outcome"]["status"] = json!("failed");
+    let checkpoint = home.join("threads").join(format!("{id}.json"));
+    let bytes = serde_json::to_vec(&unsupported)?;
+    fs::write(&checkpoint, &bytes)?;
+    for args in [
+        vec!["thread", "show", id],
+        vec!["thread", "resume", id, "--turn", turn],
+        vec!["thread", "start", id, "retry"],
+    ] {
+        let refused = run(&work, &args)?;
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("unsupported local checkpoint"));
+    }
+    for path in [&parent, &work, &nested] {
+        assert!(!run(path, &["thread", "create"])?.status.success());
+    }
+    assert_eq!(fs::read(checkpoint)?, bytes);
     assert_eq!(mock.join()?.len(), 1);
     Ok(())
 }

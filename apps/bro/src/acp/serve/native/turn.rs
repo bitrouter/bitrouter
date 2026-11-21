@@ -1,8 +1,8 @@
 use super::{Connection, wire};
 use crate::checkpoint::{ModelState, Thread};
+use crate::harness::RunEvent;
 use crate::runner::{self, Journal};
 use anyhow::{Context, Result};
-use bitrouter_ai::harness::turn::TurnEventPayload;
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -48,9 +48,9 @@ impl Journal for Manager<'_> {
         }
         Ok(())
     }
-    fn live(&self, session: Uuid, _turn: Uuid, event: TurnEventPayload) -> Result<()> {
+    fn live(&self, session: Uuid, _turn: Uuid, event: RunEvent) -> Result<()> {
         match event {
-            TurnEventPayload::AssistantDelta { item_id, text } => {
+            RunEvent::AssistantDelta { item_id, text } => {
                 let id = Uuid::parse_str(&item_id)?;
                 if self.version == 2 && self.message.replace(Some(id)) != Some(id) {
                     let head = json!({"sessionUpdate":"agent_message","messageId":id,"content":[]});
@@ -61,12 +61,11 @@ impl Journal for Manager<'_> {
                     wire::message(self.version, "agent", id, &text, false),
                 );
             }
-            TurnEventPayload::ToolOutputDelta { id, source, text } => {
+            RunEvent::ToolOutputDelta { id, source, text } => {
                 let update = json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"in_progress",
                     "_meta":{"bitrouter":{"outputDelta":{"source":source,"text":text}}}});
                 self.connection.update(session, update);
             }
-            _ => {}
         }
         Ok(())
     }

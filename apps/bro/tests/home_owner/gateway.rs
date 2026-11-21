@@ -132,7 +132,7 @@ pub(super) async fn refuses(gateway: &OsStr, home: &Path, work: &Path) -> Result
     Ok(())
 }
 
-pub(super) async fn ordinary_and_legacy(gateway: &OsStr, fixture: &Path) -> Result<()> {
+pub(super) async fn ordinary_and_unmarked(gateway: &OsStr, fixture: &Path) -> Result<()> {
     let home = fixture.join("ordinary");
     let work = fixture.join("tools");
     fs::create_dir(&work)?;
@@ -160,8 +160,8 @@ pub(super) async fn ordinary_and_legacy(gateway: &OsStr, fixture: &Path) -> Resu
         fs::read(&marker)? == b"bro\n",
         "ordinary home missing owner marker"
     );
-    for legacy in [false, true] {
-        if legacy {
+    for unmarked in [false, true] {
+        if unmarked {
             fs::remove_file(&marker)?;
         }
         refuses(gateway, &home, fixture).await?;

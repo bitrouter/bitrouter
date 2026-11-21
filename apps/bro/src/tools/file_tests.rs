@@ -2,12 +2,12 @@
 use super::WorkspaceTools;
 #[cfg(unix)]
 use super::files::{Node, contents};
+use crate::harness::{EffectStatus, ToolMode};
 use crate::workspace::children::Parent;
 use crate::workspace::publish::StagedFile;
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{Result, ensure};
-use bitrouter_ai::harness::{agent::ToolMode, runtime::EffectStatus};
 use std::ffi::OsStr;
 use std::fs;
 use tempfile::tempdir;
